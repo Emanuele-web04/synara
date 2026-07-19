@@ -147,3 +147,29 @@ export function isLatestPinMutation<TId>(input: {
 }): boolean {
   return input.latestMutationVersionById.get(input.id) === input.requestVersion;
 }
+
+// Drop optimistic entries once the server agrees or the item disappears. Entries whose
+// server value still disagrees remain pending so the optimistic UI does not flicker backward.
+export function reconcileOptimisticPinState<TId>(input: {
+  readonly optimisticPinnedStateById: ReadonlyMap<TId, boolean>;
+  readonly serverPinnedStateById: ReadonlyMap<TId, boolean>;
+}): {
+  readonly optimisticPinnedStateById: ReadonlyMap<TId, boolean>;
+  readonly settledIds: readonly TId[];
+} {
+  let next: Map<TId, boolean> | null = null;
+  const settledIds: TId[] = [];
+  for (const [id, desiredPinned] of input.optimisticPinnedStateById) {
+    const serverPinned = input.serverPinnedStateById.get(id);
+    if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+      continue;
+    }
+    next ??= new Map(input.optimisticPinnedStateById);
+    next.delete(id);
+    settledIds.push(id);
+  }
+  return {
+    optimisticPinnedStateById: next ?? input.optimisticPinnedStateById,
+    settledIds,
+  };
+}

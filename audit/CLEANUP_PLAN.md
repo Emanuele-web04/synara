@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-012 complete
+> Status: in progress — CLN-013 complete; CLN-014 next
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -43,23 +43,23 @@ Explicitly out of scope:
 
 ### Monoliths with stable seams
 
-| Pri | File | LOC | Demonstrated responsibilities / intended boundary |
-|---|---|---:|---|
-| P0 | `apps/web/src/components/ChatView.tsx` | 11,971 | One 10,857-line component owns provider catalog, voice, automation setup, composer persistence, send/queue/steer, transcript following, terminal control, dialogs, and layout. Adopt existing provider/voice hooks first, then extract responsibility controllers without moving list scroll ownership. |
-| P0 | `apps/web/src/components/Sidebar.tsx` | 7,940 | Navigation, pins, archive/delete, project-run lifecycle, drag/drop, PR queries, and duplicated thread rows. Extract one row owner and controller hooks while preserving selector granularity. |
-| P0 | `apps/web/src/composerDraftStore.ts` | 5,185 | Types/schema, model/draft normalization, blob persistence/migration, Zustand actions, and hooks. Preserve one public facade/storage key; split pure migration, attachments, model selection, and actions. |
-| P0 | `apps/web/src/store.ts` | 4,714 | Persistence, snapshot normalization, projections, event reduction, sync actions, and React wiring. Preserve pure reducer/facade APIs. |
-| P0 | `apps/desktop/src/main.ts` | 3,722 | Logging, updater, backend supervision, protocol/static serving, IPC, windows, and lifecycle. Keep bootstrap in `main.ts`; extract a few existing controllers. |
-| P0 | `apps/desktop/src/browserManager.ts` | 2,149 | OAuth/popups, tab commands, runtime lifecycle, suspension, and state synchronization. Keep a facade; extract popup, tab-runtime, and state operations after characterization. |
-| P1 | `apps/server/src/provider/Layers/ClaudeAdapter.ts` | 5,590 | Pure error/token/request/message mapping plus a 3,900-line live session implementation. Move pure Claude modules first; keep Layer/service exports stable. |
-| P1 | `apps/server/src/provider/Layers/OpenCodeAdapter.ts` | 4,733 | Runtime event mapping, model inventory/catalog normalization, and live orchestration. Extract the two pure owners before touching lifecycle. |
-| P1 | `apps/server/src/codexAppServerManager.ts` | 3,684 | Session/process lifecycle, transport/routing, discovery/catalog, recovery, and event projection. Keep the manager API; extract discovery and transport collaborators. |
-| P1 | `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` | 3,728 | Pure event/activity mapping, payload bounding, delivery buffers, worker recovery, and replay. Extract mapping/bounding first; keep replay/lifecycle in the Effect Layer and preserve one-way transcript behavior. |
-| P1 | `apps/web/src/components/chat/MessagesTimeline.tsx` | 3,847 | List follow/scroll ownership plus user, work, and tool row renderers. Keep LegendList and bottom-stick ownership together; extract memoized row views and transition hooks. |
-| P1 | `apps/web/src/routes/_chat.settings.tsx` | 3,801 | One component subscribes to and renders every settings domain. Move existing panel seams into panel-owned components and migrate bespoke disclosure UI to the shared motion primitives. |
-| P1 | `packages/contracts/src/orchestration.ts` | 2,291 | Read models, commands, events, and RPC/projection schemas. Split by schema family while preserving the current public export surface. |
-| P1 | `apps/server/src/git/Layers/GitCore.ts` | 2,911 | Execution/locks, status/remotes, commit/push/pull, and branch/worktree/stash. Extract private factories behind the existing GitCore service. |
-| P1 | `apps/server/src/terminal/Layers/Manager.ts` | 2,569 | Process inspection, stream/title parsing, PTY lifecycle/backpressure, and history persistence. Extract pure process/parser modules then history storage; keep the manager service. |
+| Pri | File                                                               |    LOC | Demonstrated responsibilities / intended boundary                                                                                                                                                                                                                                                       |
+| --- | ------------------------------------------------------------------ | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0  | `apps/web/src/components/ChatView.tsx`                             | 11,971 | One 10,857-line component owns provider catalog, voice, automation setup, composer persistence, send/queue/steer, transcript following, terminal control, dialogs, and layout. Adopt existing provider/voice hooks first, then extract responsibility controllers without moving list scroll ownership. |
+| P0  | `apps/web/src/components/Sidebar.tsx`                              |  7,940 | Navigation, pins, archive/delete, project-run lifecycle, drag/drop, PR queries, and duplicated thread rows. Extract one row owner and controller hooks while preserving selector granularity.                                                                                                           |
+| P0  | `apps/web/src/composerDraftStore.ts`                               |  5,185 | Types/schema, model/draft normalization, blob persistence/migration, Zustand actions, and hooks. Preserve one public facade/storage key; split pure migration, attachments, model selection, and actions.                                                                                               |
+| P0  | `apps/web/src/store.ts`                                            |  4,714 | Persistence, snapshot normalization, projections, event reduction, sync actions, and React wiring. Preserve pure reducer/facade APIs.                                                                                                                                                                   |
+| P0  | `apps/desktop/src/main.ts`                                         |  3,722 | Logging, updater, backend supervision, protocol/static serving, IPC, windows, and lifecycle. Keep bootstrap in `main.ts`; extract a few existing controllers.                                                                                                                                           |
+| P0  | `apps/desktop/src/browserManager.ts`                               |  2,149 | OAuth/popups, tab commands, runtime lifecycle, suspension, and state synchronization. Keep a facade; extract popup, tab-runtime, and state operations after characterization.                                                                                                                           |
+| P1  | `apps/server/src/provider/Layers/ClaudeAdapter.ts`                 |  5,590 | Pure error/token/request/message mapping plus a 3,900-line live session implementation. Move pure Claude modules first; keep Layer/service exports stable.                                                                                                                                              |
+| P1  | `apps/server/src/provider/Layers/OpenCodeAdapter.ts`               |  4,733 | Runtime event mapping, model inventory/catalog normalization, and live orchestration. Extract the two pure owners before touching lifecycle.                                                                                                                                                            |
+| P1  | `apps/server/src/codexAppServerManager.ts`                         |  3,684 | Session/process lifecycle, transport/routing, discovery/catalog, recovery, and event projection. Keep the manager API; extract discovery and transport collaborators.                                                                                                                                   |
+| P1  | `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` |  3,728 | Pure event/activity mapping, payload bounding, delivery buffers, worker recovery, and replay. Extract mapping/bounding first; keep replay/lifecycle in the Effect Layer and preserve one-way transcript behavior.                                                                                       |
+| P1  | `apps/web/src/components/chat/MessagesTimeline.tsx`                |  3,847 | List follow/scroll ownership plus user, work, and tool row renderers. Keep LegendList and bottom-stick ownership together; extract memoized row views and transition hooks.                                                                                                                             |
+| P1  | `apps/web/src/routes/_chat.settings.tsx`                           |  3,801 | One component subscribes to and renders every settings domain. Move existing panel seams into panel-owned components and migrate bespoke disclosure UI to the shared motion primitives.                                                                                                                 |
+| P1  | `packages/contracts/src/orchestration.ts`                          |  2,291 | Read models, commands, events, and RPC/projection schemas. Split by schema family while preserving the current public export surface.                                                                                                                                                                   |
+| P1  | `apps/server/src/git/Layers/GitCore.ts`                            |  2,911 | Execution/locks, status/remotes, commit/push/pull, and branch/worktree/stash. Extract private factories behind the existing GitCore service.                                                                                                                                                            |
+| P1  | `apps/server/src/terminal/Layers/Manager.ts`                       |  2,569 | Process inspection, stream/title parsing, PTY lifecycle/backpressure, and history persistence. Extract pure process/parser modules then history storage; keep the manager service.                                                                                                                      |
 
 Large but currently cohesive and deliberately not scheduled: `providerRuntime.ts`, `rpc.ts`,
 `contracts/model.ts`, `shared/terminalThreads.ts`, `toolCallLabel.ts`, and `whatsNew/entries.ts`.
@@ -127,31 +127,31 @@ scan returns zero without underscore-renaming unused values.
 
 Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 
-| ID | Pri | Status | Workstream | Primary validation |
-|---|---|---|---|---|
-| CLN-001 | P0 | DONE | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values. | focused Oxlint unused scan; affected unit tests |
-| CLN-002 | P0 | DONE | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import. | web/server focused tests; repo-wide reference scan |
-| CLN-003 | P0 | DONE | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
-| CLN-004 | P1 | DONE | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
-| CLN-005 | P1 | DONE | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
-| CLN-010 | P0 | DONE | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
-| CLN-011 | P0 | DONE | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
-| CLN-012 | P0 | DONE | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners. | ChatView logic/browser suites and hook tests |
-| CLN-013 | P0 | TODO | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged. | Sidebar logic/UI/import plus new row characterization |
-| CLN-014 | P1 | TODO | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics. | timeline unit/browser suites; session logic tests |
-| CLN-015 | P1 | TODO | Split settings route into panel-owned components with local subscriptions. | focused settings render/disclosure tests |
-| CLN-020 | P1 | TODO | Decompose Claude and OpenCode adapters along pure mapper/catalog seams; split their tests in lockstep. | adapter and runtime suites |
-| CLN-021 | P1 | TODO | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping. | manager and transport suites |
-| CLN-022 | P1 | TODO | Decompose ProviderRuntimeIngestion into pure activity mapping, bounded payload helpers, state/buffer coordinator, and Layer/replay owner. | ingestion/buffer/projection suites |
-| CLN-023 | P1 | TODO | Split GitCore and Terminal Manager behind existing service facades. | GitCore and terminal manager/parser/history suites |
-| CLN-024 | P2 | TODO | Share projection message row decoding and profile token-attribution SQL without changing query shape. | snapshot/repository/profile suites |
-| CLN-030 | P0 | TODO | Decompose Electron `main.ts` into logging, updater, backend supervision, static protocol, and window controllers; keep lifecycle/bootstrap. | add characterization, then desktop focused suites/smoke |
-| CLN-031 | P0 | TODO | Split BrowserManager into popup, tab-runtime, and state operations behind its facade. | new manager characterization + browser session tests |
-| CLN-032 | P1 | TODO | Split AppSnap persistence, resumable download policy/engine/adapter, and desktop artifact build phases. | existing AppSnap/download/build tests |
-| CLN-033 | P1 | TODO | Split contracts orchestration schema families and consolidate shared thread/browser API fields while preserving exports. | contracts orchestration/rpc/ws tests; desktop preload/web API tests |
-| CLN-034 | P2 | TODO | Split shared subagent decoding from identity indexing and centralize alias-key readers. | shared subagent tests |
-| CLN-035 | P2 | TODO | Split native AppSnap capture only after a deterministic Swift characterization/smoke gate exists. | native build/smoke plus selection/limit checks |
-| CLN-040 | P2 | TODO | Final reference/duplicate/unused rescan; reassess `timelineHeight.ts`; update before/after metrics. | focused suites, then optional heavyweight pass only with user authorization |
+| ID      | Pri | Status | Workstream                                                                                                                                                                                   | Primary validation                                                          |
+| ------- | --- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| CLN-001 | P0  | DONE   | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values.                                                                                   | focused Oxlint unused scan; affected unit tests                             |
+| CLN-002 | P0  | DONE   | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import.                                                                                 | web/server focused tests; repo-wide reference scan                          |
+| CLN-003 | P0  | DONE   | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper.                              | existing owner tests plus affected caller tests                             |
+| CLN-004 | P1  | DONE   | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon.                     | web unit/browser tests and disclosure tests                                 |
+| CLN-005 | P1  | DONE   | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites                                                    |
+| CLN-010 | P0  | DONE   | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade.                                                                            | `apps/web/src/store.test.ts` and selector tests                             |
+| CLN-011 | P0  | DONE   | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility.                                               | composer draft/store tests                                                  |
+| CLN-012 | P0  | DONE   | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners.                            | ChatView logic/browser suites and hook tests                                |
+| CLN-013 | P0  | DONE   | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged.                                                             | Sidebar logic/UI/import plus new row characterization                       |
+| CLN-014 | P1  | TODO   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
+| CLN-015 | P1  | TODO   | Split settings route into panel-owned components with local subscriptions.                                                                                                                   | focused settings render/disclosure tests                                    |
+| CLN-020 | P1  | TODO   | Decompose Claude and OpenCode adapters along pure mapper/catalog seams; split their tests in lockstep.                                                                                       | adapter and runtime suites                                                  |
+| CLN-021 | P1  | TODO   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
+| CLN-022 | P1  | TODO   | Decompose ProviderRuntimeIngestion into pure activity mapping, bounded payload helpers, state/buffer coordinator, and Layer/replay owner.                                                    | ingestion/buffer/projection suites                                          |
+| CLN-023 | P1  | TODO   | Split GitCore and Terminal Manager behind existing service facades.                                                                                                                          | GitCore and terminal manager/parser/history suites                          |
+| CLN-024 | P2  | TODO   | Share projection message row decoding and profile token-attribution SQL without changing query shape.                                                                                        | snapshot/repository/profile suites                                          |
+| CLN-030 | P0  | TODO   | Decompose Electron `main.ts` into logging, updater, backend supervision, static protocol, and window controllers; keep lifecycle/bootstrap.                                                  | add characterization, then desktop focused suites/smoke                     |
+| CLN-031 | P0  | TODO   | Split BrowserManager into popup, tab-runtime, and state operations behind its facade.                                                                                                        | new manager characterization + browser session tests                        |
+| CLN-032 | P1  | TODO   | Split AppSnap persistence, resumable download policy/engine/adapter, and desktop artifact build phases.                                                                                      | existing AppSnap/download/build tests                                       |
+| CLN-033 | P1  | TODO   | Split contracts orchestration schema families and consolidate shared thread/browser API fields while preserving exports.                                                                     | contracts orchestration/rpc/ws tests; desktop preload/web API tests         |
+| CLN-034 | P2  | TODO   | Split shared subagent decoding from identity indexing and centralize alias-key readers.                                                                                                      | shared subagent tests                                                       |
+| CLN-035 | P2  | TODO   | Split native AppSnap capture only after a deterministic Swift characterization/smoke gate exists.                                                                                            | native build/smoke plus selection/limit checks                              |
+| CLN-040 | P2  | TODO   | Final reference/duplicate/unused rescan; reassess `timelineHeight.ts`; update before/after metrics.                                                                                          | focused suites, then optional heavyweight pass only with user authorization |
 
 ## Ordered execution and safety gates
 
@@ -273,3 +273,18 @@ For every tracker item:
   Combined verification passed across **25 files / 547 tests** (unit/support 475, shared overlay
   browser 2, full `ChatView` browser 70); no import cycle was introduced, repo unused diagnostics
   remain **0 across 1,843 files**, and `git diff --check` passed.
+- 2026-07-20 — CLN-013 started from the 7,675-line post-row-consolidation Sidebar. Selector
+  granularity, project/thread optimistic reconciliation, disclosure motion, route activation, and
+  context-menu behavior are characterization constraints; wrapper-only and god-hook moves are
+  rejected.
+- 2026-07-20 — CLN-013 complete: `Sidebar.tsx` shrank from **7,675 → 6,555 LOC**. Thread pin,
+  archive/undo, single/batch delete, and split-view reconciliation moved into a focused **714 LOC**
+  controller; project script discovery, server attribution, run lifecycle, and dialog state moved
+  into a **299 LOC** controller. Sidebar and Kanban active-thread deletion sequencing moved from
+  **2 implementations → 1** shared **121 LOC** owner; optimistic pin reconciliation moved from
+  **2 loops → 1** pure helper; and two render-only forwarding functions were deleted. The resulting
+  production family is **7,689 LOC**, including boundary overhead, and retains narrow store
+  selectors rather than one broad controller subscription. Combined focused verification passed
+  across **16 files / 208 unit tests** and **2 files / 3 browser tests**; default targeted Oxlint,
+  repo unused diagnostics across **1,850 files**, and `git diff --check` all passed. Disclosure
+  motion and transcript-follow behavior were untouched.
