@@ -5,7 +5,10 @@
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { isProviderUsageSnapshotNonOk } from "./providerUsageSnapshot";
+import {
+  createUnavailableProviderUsageSnapshot,
+  isProviderUsageSnapshotNonOk,
+} from "./providerUsageSnapshot";
 
 function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProviderUsageSnapshot {
   return {
@@ -19,6 +22,14 @@ function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProvi
 }
 
 describe("providerUsageSnapshot", () => {
+  it("creates unavailable placeholders with explicit provenance", () => {
+    expect(createUnavailableProviderUsageSnapshot("codex", "test")).toMatchObject({
+      provider: "codex",
+      source: "test",
+      status: "error",
+    });
+  });
+
   it("only treats explicit non-ok live statuses as fallback blockers", () => {
     expect(isProviderUsageSnapshotNonOk(null)).toBe(false);
     expect(isProviderUsageSnapshotNonOk(undefined)).toBe(false);

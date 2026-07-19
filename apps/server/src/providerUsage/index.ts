@@ -10,6 +10,7 @@ import type {
   ServerListProviderUsageResult,
   ServerProviderUsageSnapshot,
 } from "@synara/contracts";
+import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import { Effect } from "effect";
 
 import { ServerConfig } from "../config";
@@ -74,18 +75,25 @@ async function enrichWithLocalUsage(
   return { ...snapshot, usageLines: [...snapshot.usageLines, ...localLines] };
 }
 
-/** Plain async batch fetch for supported providers. Never throws. */
+/** Plain async batch fetch for providers with machine-readable account usage. Never throws. */
 export async function collectProviderUsageSnapshots(
   ctx: ProviderUsageContext,
-  options: { forceRefresh?: boolean; provider?: ProviderKind } = {},
+  options: {
+    forceRefresh?: boolean;
+    includeLocalUsage?: boolean;
+    provider?: ProviderKind;
+  } = {},
 ): Promise<ServerProviderUsageSnapshot[]> {
   const providers = options.provider
     ? ([options.provider] as ProviderKind[])
-    : (Object.keys(PROVIDER_USAGE_FETCHERS) as ProviderKind[]);
+    : [...PROVIDER_USAGE_PROVIDERS];
   const settled = await Promise.allSettled(
     providers.map(async (provider) => {
       const snapshot = await fetchProviderUsage(provider, ctx);
-      return snapshot ? enrichWithLocalUsage(snapshot, ctx) : null;
+      if (!snapshot || options.includeLocalUsage === false) {
+        return snapshot;
+      }
+      return enrichWithLocalUsage(snapshot, ctx);
     }),
   );
 
@@ -105,6 +113,7 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
         },
         {
           forceRefresh: input.forceRefresh === true,
+          includeLocalUsage: input.includeLocalUsage !== false,
           ...(input.provider ? { provider: input.provider } : {}),
         },
       ),

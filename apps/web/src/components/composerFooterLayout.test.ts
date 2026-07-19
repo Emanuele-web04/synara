@@ -5,6 +5,7 @@ import {
   COMPOSER_FOOTER_MAX_TIER,
   COMPOSER_FOOTER_TIER_PROMOTION_SLACK_PX,
   COMPOSER_FOOTER_WIDE_ACTIONS_COMPACT_BREAKPOINT_PX,
+  composerFooterMaxTier,
   composerFooterPlanForTier,
   resolveNextComposerFooterTier,
   shouldUseCompactComposerFooter,
@@ -39,33 +40,59 @@ describe("shouldUseCompactComposerFooter", () => {
 });
 
 describe("composerFooterPlanForTier", () => {
-  it("maps tiers to the degradation order: meter, traits label, model label, relocation", () => {
-    expect(composerFooterPlanForTier(0, true)).toEqual({
+  it("maps tiers to the degradation order: context, reset, quota, traits, model, relocation", () => {
+    expect(composerFooterPlanForTier(0, true, true)).toEqual({
       showContextMeter: true,
+      showProviderUsageReset: true,
+      showProviderUsage: true,
       showTraitsLabel: true,
       showModelLabel: true,
       relocateLeadingControls: false,
     });
-    expect(composerFooterPlanForTier(1, true)).toEqual({
+    expect(composerFooterPlanForTier(1, true, true)).toEqual({
       showContextMeter: false,
+      showProviderUsageReset: true,
+      showProviderUsage: true,
       showTraitsLabel: true,
       showModelLabel: true,
       relocateLeadingControls: false,
     });
-    expect(composerFooterPlanForTier(2, true)).toEqual({
+    expect(composerFooterPlanForTier(2, true, true)).toEqual({
       showContextMeter: false,
+      showProviderUsageReset: false,
+      showProviderUsage: true,
+      showTraitsLabel: true,
+      showModelLabel: true,
+      relocateLeadingControls: false,
+    });
+    expect(composerFooterPlanForTier(3, true, true)).toEqual({
+      showContextMeter: false,
+      showProviderUsageReset: false,
+      showProviderUsage: false,
+      showTraitsLabel: true,
+      showModelLabel: true,
+      relocateLeadingControls: false,
+    });
+    expect(composerFooterPlanForTier(4, true, true)).toEqual({
+      showContextMeter: false,
+      showProviderUsageReset: false,
+      showProviderUsage: false,
       showTraitsLabel: false,
       showModelLabel: true,
       relocateLeadingControls: false,
     });
-    expect(composerFooterPlanForTier(3, true)).toEqual({
+    expect(composerFooterPlanForTier(5, true, true)).toEqual({
       showContextMeter: false,
+      showProviderUsageReset: false,
+      showProviderUsage: false,
       showTraitsLabel: false,
       showModelLabel: false,
       relocateLeadingControls: false,
     });
-    expect(composerFooterPlanForTier(COMPOSER_FOOTER_MAX_TIER, true)).toEqual({
+    expect(composerFooterPlanForTier(COMPOSER_FOOTER_MAX_TIER, true, true)).toEqual({
       showContextMeter: false,
+      showProviderUsageReset: false,
+      showProviderUsage: false,
       showTraitsLabel: false,
       showModelLabel: false,
       relocateLeadingControls: true,
@@ -74,6 +101,59 @@ describe("composerFooterPlanForTier", () => {
 
   it("never shows the context meter when the thread has none", () => {
     expect(composerFooterPlanForTier(0, false).showContextMeter).toBe(false);
+  });
+
+  it("never reserves quota tiers when the active provider has no usage capability", () => {
+    expect(
+      Array.from({ length: 5 }, (_, tier) => composerFooterPlanForTier(tier, true, false)),
+    ).toEqual([
+      {
+        showContextMeter: true,
+        showProviderUsage: false,
+        showProviderUsageReset: false,
+        showTraitsLabel: true,
+        showModelLabel: true,
+        relocateLeadingControls: false,
+      },
+      {
+        showContextMeter: false,
+        showProviderUsage: false,
+        showProviderUsageReset: false,
+        showTraitsLabel: true,
+        showModelLabel: true,
+        relocateLeadingControls: false,
+      },
+      {
+        showContextMeter: false,
+        showProviderUsage: false,
+        showProviderUsageReset: false,
+        showTraitsLabel: false,
+        showModelLabel: true,
+        relocateLeadingControls: false,
+      },
+      {
+        showContextMeter: false,
+        showProviderUsage: false,
+        showProviderUsageReset: false,
+        showTraitsLabel: false,
+        showModelLabel: false,
+        relocateLeadingControls: false,
+      },
+      {
+        showContextMeter: false,
+        showProviderUsage: false,
+        showProviderUsageReset: false,
+        showTraitsLabel: false,
+        showModelLabel: false,
+        relocateLeadingControls: true,
+      },
+    ]);
+    expect(composerFooterMaxTier(true, false)).toBe(4);
+  });
+
+  it("does not reserve a tier for a missing context meter", () => {
+    expect(composerFooterPlanForTier(1, false, true).showProviderUsageReset).toBe(false);
+    expect(composerFooterMaxTier(false, true)).toBe(5);
   });
 });
 
@@ -116,6 +196,24 @@ describe("resolveNextComposerFooterTier", () => {
     expect(tier).toBe(COMPOSER_FOOTER_MAX_TIER);
   });
 
+  it("stops at the active control set's max tier", () => {
+    let demotionWidths: ReadonlyArray<number | undefined> = [];
+    let tier = 0;
+    const maxTier = composerFooterMaxTier(false, false);
+    for (let pass = 0; pass < COMPOSER_FOOTER_MAX_TIER; pass += 1) {
+      const step = resolveNextComposerFooterTier({
+        currentTier: tier,
+        clientWidth: 300,
+        isOverflowing: true,
+        demotionWidths,
+        maxTier,
+      });
+      tier = step.tier;
+      demotionWidths = step.demotionWidths;
+    }
+    expect(tier).toBe(3);
+  });
+
   it("promotes back only after clearing the recorded width plus slack", () => {
     const demotionWidths = [400];
     const tooNarrow = resolveNextComposerFooterTier({
@@ -139,7 +237,7 @@ describe("resolveNextComposerFooterTier", () => {
       currentTier: COMPOSER_FOOTER_MAX_TIER,
       clientWidth: 900,
       isOverflowing: false,
-      demotionWidths: [400, 360, 320, 300],
+      demotionWidths: [400, 380, 360, 340, 320, 300],
     });
     expect(step.tier).toBe(0);
   });

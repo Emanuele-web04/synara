@@ -162,6 +162,7 @@ export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsage
 // (including needs-auth/error) so the UI can render a row each.
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
+  includeLocalUsage: Schema.optional(Schema.Boolean),
   provider: Schema.optional(ProviderKind),
 });
 export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.Type;

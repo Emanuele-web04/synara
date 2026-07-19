@@ -783,6 +783,15 @@ describe("AppSettingsSchema", () => {
     ).toBe(true);
   });
 
+  it("shows provider usage in the composer by default and preserves an explicit opt-out", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode("{}").showComposerProviderUsage).toBe(true);
+    expect(
+      decode(JSON.stringify({ showComposerProviderUsage: false })).showComposerProviderUsage,
+    ).toBe(false);
+  });
+
   it("fills decoding defaults for persisted settings that predate newer keys", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 

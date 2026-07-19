@@ -1,7 +1,7 @@
 // FILE: ProviderUsageSettingsPanel.tsx
 // Purpose: Settings → Usage panel. One card per supported provider showing live remaining
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
-// Usage is fetched read-only from each CLI's stored credentials by the server.
+// Only providers with a machine-readable account-quota source are included.
 
 import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import {
@@ -16,12 +16,21 @@ import { useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
-import { SettingsCard } from "~/components/settings/SettingsPanelPrimitives";
+import {
+  ProviderUsagePlanPill,
+  PROVIDER_USAGE_PILL_CLASS_NAME,
+} from "~/components/ProviderUsagePanelContent";
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from "~/components/settings/SettingsPanelPrimitives";
 import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
-import { deriveAccountRateLimits, type ProviderRateLimit } from "~/lib/rateLimits";
+import { createUnavailableProviderUsageSnapshot } from "~/lib/providerUsageSnapshot";
 import {
   fetchAllProviderUsage,
   serverAllProviderUsageQueryOptions,
@@ -32,10 +41,6 @@ import {
   SETTINGS_PANEL_SECTION_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
 } from "~/settingsPanelStyles";
-import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
-
-const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-[11px] font-medium leading-none";
 
 interface StatusPill {
   label: string;
@@ -50,7 +55,10 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
       };
     case "unsupported":
-      return { label: "Unsupported", className: "bg-muted text-muted-foreground" };
+      return {
+        label: "Unsupported",
+        className: "bg-muted text-muted-foreground",
+      };
     case "error":
       return { label: "Unavailable", className: "bg-red-500/12 text-red-600 dark:text-red-400" };
     default:
@@ -58,22 +66,14 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
   }
 }
 
-function ProviderUsageCard({
-  snapshot,
-  threadRateLimits,
-  codexHomePath,
-}: {
-  snapshot: ServerProviderUsageSnapshot;
-  threadRateLimits: ReadonlyArray<ProviderRateLimit>;
-  codexHomePath: string | null;
-}) {
+function ProviderUsageCard({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
   const usageSummary = useProviderUsageSummary({
     provider,
-    threadRateLimits,
-    codexHomePath,
     providerSnapshot: snapshot,
+    fetchProviderData: false,
+    includeSupplementalData: false,
   });
   const meterRows = useMemo(
     () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
@@ -97,11 +97,9 @@ function ProviderUsageCard({
             </span>
           </div>
           {status === "ok" && snapshot.planName ? (
-            <span className={cn(PILL_CLASS_NAME, "bg-muted text-muted-foreground")}>
-              {snapshot.planName}
-            </span>
+            <ProviderUsagePlanPill planName={snapshot.planName} />
           ) : pill ? (
-            <span className={cn(PILL_CLASS_NAME, pill.className)}>{pill.label}</span>
+            <span className={cn(PROVIDER_USAGE_PILL_CLASS_NAME, pill.className)}>{pill.label}</span>
           ) : null}
         </div>
 
@@ -139,45 +137,28 @@ function ProviderUsageCard({
 }
 
 function missingSnapshot(provider: ProviderKind): ServerProviderUsageSnapshot {
-  return {
-    provider,
-    updatedAt: new Date(0).toISOString(),
-    limits: [],
-    usageLines: [],
-    source: "unavailable",
-    status: "error",
-    detail: "Usage is currently unavailable.",
-  };
+  return createUnavailableProviderUsageSnapshot(provider, "provider-usage-query");
 }
 
-function mergeProviderUsageRefresh(
-  previous: readonly ServerProviderUsageSnapshot[] | undefined,
+export function completeProviderUsageRefresh(
   next: readonly ServerProviderUsageSnapshot[],
 ): readonly ServerProviderUsageSnapshot[] {
-  if (!previous) {
-    return next;
-  }
-  const previousByProvider = new Map(previous.map((snapshot) => [snapshot.provider, snapshot]));
   const nextByProvider = new Map(next.map((snapshot) => [snapshot.provider, snapshot]));
   return PROVIDER_USAGE_PROVIDERS.map(
-    (provider) => nextByProvider.get(provider) ?? previousByProvider.get(provider),
-  ).filter((snapshot): snapshot is ServerProviderUsageSnapshot => snapshot !== undefined);
+    (provider) => nextByProvider.get(provider) ?? missingSnapshot(provider),
+  );
 }
 
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
-  const { settings } = useAppSettings();
-  const codexHomePath = settings.codexHomePath || null;
-  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
-  // Account/thread fallback rows are shared by every provider card; derive them once per panel.
-  const threadRateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
+  const { settings, updateSettings } = useAppSettings();
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
     onSuccess: (data) => {
       queryClient.setQueryData<readonly ServerProviderUsageSnapshot[]>(
         serverQueryKeys.allProviderUsage(),
-        (previous) => mergeProviderUsageRefresh(previous, data),
+        completeProviderUsageRefresh(data),
       );
     },
   });
@@ -185,13 +166,7 @@ export function ProviderUsageSettingsPanel() {
   // Always render a card per supported provider, ordered consistently, even if the batch
   // omitted one (e.g. a transient server error) — fall back to an "unavailable" placeholder.
   const cards = useMemo(() => {
-    const byProvider = new Map<ProviderKind, ServerProviderUsageSnapshot>();
-    for (const snapshot of usageQuery.data ?? []) {
-      byProvider.set(snapshot.provider, snapshot);
-    }
-    return PROVIDER_USAGE_PROVIDERS.map(
-      (provider) => byProvider.get(provider) ?? missingSnapshot(provider),
-    );
+    return completeProviderUsageRefresh(usageQuery.data ?? []);
   }, [usageQuery.data]);
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
@@ -199,43 +174,58 @@ export function ProviderUsageSettingsPanel() {
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 
   return (
-    <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
-      <div className="flex items-center justify-between gap-2">
-        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Provider usage</h2>
-        <Button
-          size="xs"
-          variant="outline"
-          className="shrink-0"
-          disabled={isRefreshing}
-          onClick={() => refreshMutation.mutate()}
-        >
-          <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-          Refresh
-        </Button>
-      </div>
-
-      {showInitialLoading ? (
-        <SettingsCard>
-          <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
-        </SettingsCard>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {cards.map((snapshot) => (
-            <ProviderUsageCard
-              key={snapshot.provider}
-              snapshot={snapshot}
-              threadRateLimits={threadRateLimits}
-              codexHomePath={codexHomePath}
+    <>
+      <SettingsSection title="Composer">
+        <SettingsRow
+          title="Show provider quota in composer"
+          description="Show the selected provider's remaining account allowance beside the model controls. Context usage remains separate."
+          control={
+            <Switch
+              checked={settings.showComposerProviderUsage}
+              onCheckedChange={(checked) =>
+                updateSettings({ showComposerProviderUsage: Boolean(checked) })
+              }
+              aria-label="Show provider quota in composer"
             />
-          ))}
-        </div>
-      )}
+          }
+        />
+      </SettingsSection>
 
-      <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-        Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. OAuth providers may refresh short-lived tokens through their official
-        token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
-      </p>
-    </section>
+      <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Provider usage</h2>
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            disabled={isRefreshing}
+            onClick={() => refreshMutation.mutate()}
+          >
+            <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+
+        {showInitialLoading ? (
+          <SettingsCard>
+            <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
+          </SettingsCard>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {cards.map((snapshot) => (
+              <ProviderUsageCard key={snapshot.provider} snapshot={snapshot} />
+            ))}
+          </div>
+        )}
+
+        <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+          Synara includes only providers with a machine-readable account-quota source. Other
+          providers require additional work and may be added in a future release. Synara reads the
+          included provider CLIs&apos; stored credentials and requests quota directly from the
+          providers. OAuth providers may refresh short-lived tokens through their official token
+          endpoint. If a provider shows “Not signed in”, re-authenticate with its CLI.
+        </p>
+      </section>
+    </>
   );
 }

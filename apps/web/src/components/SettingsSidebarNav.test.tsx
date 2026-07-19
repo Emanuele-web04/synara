@@ -35,6 +35,16 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);
   });
 
+  it("finds the composer provider-usage preference by quota terminology", () => {
+    const results = rankSettingsSearchEntries("quota", 12);
+    const entry = results.find((candidate) => candidate.id === "usage:composer-usage");
+
+    expect(entry).toBeDefined();
+    expect(entry ? settingsSearchEntryTarget(entry) : null).toBe(
+      "setting-show-provider-quota-in-composer",
+    );
+  });
+
   it("surfaces every row in a section when searching the section label", () => {
     const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);
