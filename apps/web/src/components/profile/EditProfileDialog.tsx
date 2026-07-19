@@ -4,7 +4,7 @@
 // locally and only committed on Save.
 // Layer: web profile feature (all changes persist to localStorage via the parent hooks).
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import {

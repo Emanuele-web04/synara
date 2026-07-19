@@ -1687,10 +1687,8 @@ export default function Sidebar() {
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
-  const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const selectSidebarTreeThreads = useMemo(() => createSidebarTreeThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
-  const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
@@ -1701,13 +1699,6 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
       [sidebarThreads, studioProjectIdSet],
     );
-  const {
-    nonStudioThreads: nonStudioSidebarDisplayThreads,
-    studioThreads: studioSidebarDisplayThreads,
-  } = useMemo(
-    () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
-    [sidebarDisplayThreads, studioProjectIdSet],
-  );
   const { nonStudioThreads: nonStudioSidebarTreeThreads, studioThreads: studioSidebarTreeThreads } =
     useMemo(
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),

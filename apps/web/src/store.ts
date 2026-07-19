@@ -4,7 +4,6 @@
 
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
-  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationPendingInteraction,

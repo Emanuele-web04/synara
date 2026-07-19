@@ -19,7 +19,6 @@ import {
   CommandId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
-  type OrchestrationThreadShell,
   ThreadId,
   type ProviderKind,
   type ServerProviderStatus,

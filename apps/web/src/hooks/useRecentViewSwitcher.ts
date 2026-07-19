@@ -3,7 +3,7 @@
 // Layer: UI hook
 // Exports: useRecentViewSwitcher
 
-import { ThreadId, type ProjectId } from "@synara/contracts";
+import { ThreadId } from "@synara/contracts";
 import type { ResolvedTerminalVisualIdentity } from "@synara/shared/terminalThreads";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";

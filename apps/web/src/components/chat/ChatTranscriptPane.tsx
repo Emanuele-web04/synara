@@ -7,7 +7,6 @@ import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
-  useRef,
   useState,
   type ComponentProps,
   type CSSProperties,

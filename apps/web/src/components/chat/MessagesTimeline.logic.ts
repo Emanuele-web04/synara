@@ -856,15 +856,6 @@ function collapsedTurnItemsEqual(
   });
 }
 
-function shallowEqualEntryArray<T>(
-  left: ReadonlyArray<T> | undefined,
-  right: ReadonlyArray<T> | undefined,
-) {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return left.length === right.length && left.every((entry, index) => entry === right[index]);
-}
-
 function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean {
   if (a.kind !== b.kind || a.id !== b.id) return false;
 

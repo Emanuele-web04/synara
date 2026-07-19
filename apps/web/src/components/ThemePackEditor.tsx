@@ -23,7 +23,6 @@ import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
 import { SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
-import { SettingResetButton } from "./settings/SettingControls";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";

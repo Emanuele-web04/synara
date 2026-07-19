@@ -108,7 +108,6 @@ describe("resolveProjectCwdForKind", () => {
 
 describe("resolveThreadWorkspaceCwd", () => {
   const projectId = ProjectId.makeUnsafe("project-1");
-  const threadId = ThreadId.makeUnsafe("thread-1");
 
   it("resolves undefined for a chat-kind thread with no worktree", () => {
     expect(

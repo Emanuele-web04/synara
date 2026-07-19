@@ -676,7 +676,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const path = yield* Path.Path;
     const { worktreesDir } = yield* ServerConfig;
 
-    const buildGeneratedDetachedWorktreePath = (cwd: string) =>
+    const buildGeneratedDetachedWorktreePath = () =>
       Effect.gen(function* () {
         // Keep auto-generated detached worktrees short and opaque so the
         // filesystem path stays stable-looking regardless of the source ref.
@@ -2356,7 +2356,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const worktreePath =
           input.path ??
-          (yield* buildGeneratedDetachedWorktreePath(input.cwd).pipe(
+          (yield* buildGeneratedDetachedWorktreePath().pipe(
             Effect.mapError((cause: unknown) =>
               createGitCommandError(
                 "GitCore.createDetachedWorktree",

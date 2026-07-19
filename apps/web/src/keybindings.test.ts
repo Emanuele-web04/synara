@@ -1465,19 +1465,16 @@ describe("formatShortcutLabel", () => {
 });
 
 describe("isTerminalClearShortcut", () => {
-  it("matches Ctrl+L on all platforms", () => {
-    assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true }), "Linux"));
-    assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true }), "MacIntel"));
+  it("matches Ctrl+L", () => {
+    assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true })));
   });
 
   it("does not match Cmd+K (reserved for sidebar search)", () => {
-    assert.isFalse(isTerminalClearShortcut(event({ key: "k", metaKey: true }), "MacIntel"));
+    assert.isFalse(isTerminalClearShortcut(event({ key: "k", metaKey: true })));
   });
 
   it("ignores non-keydown events", () => {
-    assert.isFalse(
-      isTerminalClearShortcut(event({ type: "keyup", key: "l", ctrlKey: true }), "Linux"),
-    );
+    assert.isFalse(isTerminalClearShortcut(event({ type: "keyup", key: "l", ctrlKey: true })));
   });
 });
 

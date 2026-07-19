@@ -856,14 +856,6 @@ describe("store pure functions", () => {
   });
 
   it("drops descendant thread state when a shell project removal arrives", () => {
-    const initialThread = makeThread({
-      id: ThreadId.makeUnsafe("thread-project-1"),
-      projectId: ProjectId.makeUnsafe("project-shell"),
-    });
-    const untouchedThread = makeThread({
-      id: ThreadId.makeUnsafe("thread-project-2"),
-      projectId: ProjectId.makeUnsafe("project-other"),
-    });
     const initialState = syncServerReadModel(
       {
         projects: [

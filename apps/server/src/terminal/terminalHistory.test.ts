@@ -8,8 +8,6 @@ import {
   type HistoryLimits,
 } from "./terminalHistory";
 
-const HUGE_LINES = 1_000_000;
-
 describe("capHistoryBytes", () => {
   it("returns history unchanged when already under the byte limit", () => {
     const history = "hello world";

@@ -699,7 +699,6 @@ function SettingsRouteView() {
   const removeDeletedThreadFromClientState = useStore(
     (store) => store.removeDeletedThreadFromClientState,
   );
-  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   // Shell-level subscription on purpose: the full-thread selector invalidates on every
   // streaming message/activity tick, which would re-render this whole route while a

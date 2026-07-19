@@ -5,7 +5,6 @@ import {
   AgentGatewayOperationRepository,
   type AgentGatewayOperationRecord,
   type AgentGatewayOperationRepositoryShape,
-  type ReserveAgentGatewayOperationInput,
   type ReserveAgentGatewayOperationResult,
 } from "../Services/AgentGatewayOperationRepository.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
