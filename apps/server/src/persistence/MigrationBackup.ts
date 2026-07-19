@@ -48,6 +48,28 @@ type MigrationBackupPlan = {
   readonly targetVersion: number;
 };
 
+export type MigrationBackupFileOperations = {
+  readonly open?: typeof fs.open;
+};
+
+type MigrationFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+export type MigrationRecoveryFileOperations = {
+  readonly open?: typeof fs.open;
+  readonly writeFile?: (
+    handle: MigrationFileHandle,
+    contents: string,
+    filePath: string,
+  ) => Promise<void>;
+  readonly copyFile?: typeof fs.copyFile;
+  readonly rename?: typeof fs.rename;
+  readonly unlink?: typeof fs.unlink;
+  readonly syncFile?: (handle: MigrationFileHandle, filePath: string) => Promise<void>;
+  readonly closeFile?: (handle: MigrationFileHandle, filePath: string) => Promise<void>;
+  readonly syncDirectory?: (directoryPath: string) => Promise<void>;
+  readonly validateTemporary?: (filePath: string) => Promise<void>;
+};
+
 export type MigrationBackupResult = MigrationBackupPlan & {
   readonly backupPath: string;
 };
@@ -56,6 +78,82 @@ const attemptPromise = <A>(tryPromise: () => Promise<A>) =>
   Effect.tryPromise({ try: tryPromise, catch: (cause) => cause });
 
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+const UUID_V4_PATTERN_SOURCE =
+  "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+
+function escapeRegExp(value: string): string {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function exclusiveWritableFileFlags(): number {
+  return (
+    fsConstants.O_CREAT |
+    fsConstants.O_EXCL |
+    fsConstants.O_RDWR |
+    (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW)
+  );
+}
+
+function syncableFileFlags(): number {
+  return process.platform === "win32"
+    ? fsConstants.O_RDWR
+    : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+}
+
+function withSecondaryFailures(
+  primary: unknown,
+  secondary: ReadonlyArray<unknown>,
+  message: string,
+): unknown {
+  return secondary.length === 0
+    ? primary
+    : new AggregateError([primary, ...secondary], message, { cause: primary });
+}
+
+async function useAndCloseFileHandle<A>(
+  handle: MigrationFileHandle,
+  filePath: string,
+  fileOperations: MigrationRecoveryFileOperations,
+  use: (handle: MigrationFileHandle) => Promise<A>,
+): Promise<A> {
+  let completed = false;
+  let value: A | undefined;
+  let primary: unknown;
+  try {
+    value = await use(handle);
+    completed = true;
+  } catch (cause) {
+    primary = cause;
+  }
+
+  try {
+    await (fileOperations.closeFile ?? ((current) => current.close()))(handle, filePath);
+  } catch (closeCause) {
+    if (!completed) {
+      throw withSecondaryFailures(
+        primary,
+        [closeCause],
+        `Migration recovery file operation and close both failed: ${filePath}`,
+      );
+    }
+    throw closeCause;
+  }
+
+  if (!completed) throw primary;
+  return value as A;
+}
+
+async function removeOwnedTemporaryFile(
+  filePath: string,
+  fileOperations: MigrationRecoveryFileOperations,
+  failures: Array<unknown>,
+): Promise<void> {
+  try {
+    await (fileOperations.unlink ?? fs.unlink)(filePath);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") failures.push(cause);
+  }
+}
 
 export const inspectMigrationBackupPlan = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -165,22 +263,51 @@ async function ensurePrivateRegularFile(filePath: string) {
 async function removeStaleRegularFiles(
   directory: string,
   matches: (name: string) => boolean,
+  unlink: (filePath: string) => Promise<void> = fs.unlink,
 ): Promise<void> {
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch((cause) => {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw cause;
   });
   const cutoff = Date.now() - STALE_RECOVERY_ARTIFACT_AGE_MS;
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && matches(entry.name))
-      .map(async (entry) => {
-        const artifactPath = path.join(directory, entry.name);
-        const stat = await fs.lstat(artifactPath);
-        if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) {
-          await fs.unlink(artifactPath);
-        }
-      }),
+  for (const entry of entries) {
+    if (!entry.isFile() || !matches(entry.name)) continue;
+    const artifactPath = path.join(directory, entry.name);
+    let stat;
+    try {
+      stat = await fs.lstat(artifactPath);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw cause;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.mtimeMs >= cutoff) continue;
+    try {
+      await unlink(artifactPath);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+    }
+  }
+}
+
+function generatedMarkerPartialNamePattern(dbPath: string): RegExp {
+  const markerBasename = escapeRegExp(path.basename(migrationRecoveryMarkerPath(dbPath)));
+  return new RegExp(`^${markerBasename}\\.${UUID_V4_PATTERN_SOURCE}\\.partial$`, "u");
+}
+
+function generatedRestoreTemporaryNamePattern(dbPath: string): RegExp {
+  const databaseBasename = escapeRegExp(path.basename(dbPath));
+  return new RegExp(`^${databaseBasename}\\.${UUID_V4_PATTERN_SOURCE}\\.restore$`, "u");
+}
+
+async function removeStaleMarkerPartials(
+  dbPath: string,
+  fileOperations: MigrationRecoveryFileOperations,
+): Promise<void> {
+  const markerPattern = generatedMarkerPartialNamePattern(dbPath);
+  await removeStaleRegularFiles(
+    path.dirname(dbPath),
+    (name) => markerPattern.test(name),
+    fileOperations.unlink,
   );
 }
 
@@ -263,7 +390,11 @@ export const pruneMigrationBackups = (dbPath: string, retention = MIGRATION_BACK
     );
   });
 
-export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan) =>
+export const createMigrationBackup = (
+  dbPath: string,
+  plan: MigrationBackupPlan,
+  fileOperations: MigrationBackupFileOperations = {},
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const backupDirectory = migrationBackupDirectory(dbPath);
@@ -284,25 +415,34 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
       Effect.tapError(() => attemptPromise(() => fs.unlink(temporaryPath)).pipe(Effect.ignore)),
     );
     yield* attemptPromise(async () => {
-      await ensurePrivateRegularFile(temporaryPath);
-      const flags =
-        process.platform === "win32"
-          ? fsConstants.O_RDONLY
-          : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-      const handle = await fs.open(temporaryPath, flags);
       try {
-        await handle.sync();
-      } finally {
-        await handle.close();
+        await ensurePrivateRegularFile(temporaryPath);
+        const flags =
+          process.platform === "win32"
+            ? fsConstants.O_RDWR
+            : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+        const handle = await (fileOperations.open ?? fs.open)(temporaryPath, flags);
+        try {
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await fs.rename(temporaryPath, backupPath);
+        await syncDirectory(backupDirectory);
+      } catch (cause) {
+        await fs.unlink(temporaryPath).catch(() => undefined);
+        throw cause;
       }
-      await fs.rename(temporaryPath, backupPath);
-      await syncDirectory(backupDirectory);
     });
     yield* pruneMigrationBackups(dbPath);
     return { ...plan, backupPath } satisfies MigrationBackupResult;
   });
 
-const writeRecoveryMarker = (dbPath: string, backup: MigrationBackupResult) =>
+const writeRecoveryMarker = (
+  dbPath: string,
+  backup: MigrationBackupResult,
+  fileOperations: MigrationRecoveryFileOperations,
+) =>
   attemptPromise(async () => {
     const markerPath = migrationRecoveryMarkerPath(dbPath);
     const temporaryPath = `${markerPath}.${randomUUID()}.partial`;
@@ -316,28 +456,37 @@ const writeRecoveryMarker = (dbPath: string, backup: MigrationBackupResult) =>
       recovery:
         "Synara will refuse to open this database until an operator stops every Synara process and runs the explicit migration-backup restore command.",
     };
+    let ownsTemporaryPath = false;
     try {
-      await fs.writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
+      const handle = await (fileOperations.open ?? fs.open)(
+        temporaryPath,
+        exclusiveWritableFileFlags(),
+        0o600,
+      );
+      ownsTemporaryPath = true;
+      await useAndCloseFileHandle(handle, temporaryPath, fileOperations, async (current) => {
+        await (
+          fileOperations.writeFile ??
+          ((target, contents) => target.writeFile(contents, { encoding: "utf8" }))
+        )(current, `${JSON.stringify(payload, null, 2)}\n`, temporaryPath);
+        await ensurePrivateRegularFile(temporaryPath);
+        await (fileOperations.syncFile ?? ((target) => target.sync()))(current, temporaryPath);
       });
-      await ensurePrivateRegularFile(temporaryPath);
-      const markerFlags =
-        process.platform === "win32"
-          ? fsConstants.O_RDONLY
-          : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-      const handle = await fs.open(temporaryPath, markerFlags);
-      try {
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await fs.rename(temporaryPath, markerPath);
-      await syncDirectory(path.dirname(markerPath));
+      await (fileOperations.rename ?? fs.rename)(temporaryPath, markerPath);
+      // A successful rename publishes durable recovery evidence. Never treat the
+      // final marker as temporary, even if the following directory sync fails.
+      ownsTemporaryPath = false;
+      await (fileOperations.syncDirectory ?? syncDirectory)(path.dirname(markerPath));
     } catch (cause) {
-      await fs.unlink(temporaryPath).catch(() => undefined);
-      throw cause;
+      const cleanupFailures: Array<unknown> = [];
+      if (ownsTemporaryPath) {
+        await removeOwnedTemporaryFile(temporaryPath, fileOperations, cleanupFailures);
+      }
+      throw withSecondaryFailures(
+        cause,
+        cleanupFailures,
+        `Migration recovery marker failure and temporary cleanup both failed: ${temporaryPath}`,
+      );
     }
   });
 
@@ -350,15 +499,20 @@ const removeRecoveryMarker = (dbPath: string) =>
 export const runWithPreMigrationBackup = <A, E, R>(
   dbPath: string,
   migration: Effect.Effect<A, E, R>,
+  fileOperations: MigrationRecoveryFileOperations = {},
 ) =>
   Effect.gen(function* () {
+    // Production startup invokes this while holding the database lifecycle lock.
+    // Sweep before plan inspection so an already-current database still removes
+    // interrupted marker publication debris.
+    yield* attemptPromise(() => removeStaleMarkerPartials(dbPath, fileOperations));
     const plan = yield* inspectMigrationBackupPlan;
     const backup = plan ? yield* createMigrationBackup(dbPath, plan) : null;
     if (backup) {
       // This write-ahead marker must be durable before migrations can mutate
       // the live database. A later startup will fail closed until an operator
       // explicitly restores the known-good snapshot.
-      yield* writeRecoveryMarker(dbPath, backup);
+      yield* writeRecoveryMarker(dbPath, backup, fileOperations);
     }
     const result = yield* migration;
     if (backup) {
@@ -372,65 +526,109 @@ export const runWithPreMigrationBackup = <A, E, R>(
  * process using the database first; stale WAL/SHM files are moved aside with
  * the failed main database so they cannot replay into the restored snapshot.
  */
-const restoreSqliteMigrationBackup = (input: {
-  readonly dbPath: string;
-  readonly backupPath: string;
-}) =>
+const restoreSqliteMigrationBackup = (
+  input: {
+    readonly dbPath: string;
+    readonly backupPath: string;
+  },
+  fileOperations: MigrationRecoveryFileOperations,
+) =>
   attemptPromise(async () => {
     await validateSqliteMigrationBackup(input.backupPath);
     const dbDirectory = path.dirname(input.dbPath);
-    const dbBasename = path.basename(input.dbPath);
+    const restoreTemporaryPattern = generatedRestoreTemporaryNamePattern(input.dbPath);
     await removeStaleRegularFiles(
       dbDirectory,
-      (name) => name.startsWith(`${dbBasename}.`) && name.endsWith(".restore"),
+      (name) => restoreTemporaryPattern.test(name),
+      fileOperations.unlink,
     );
     const restoredTemporaryPath = `${input.dbPath}.${randomUUID()}.restore`;
-    await fs.copyFile(input.backupPath, restoredTemporaryPath, fsConstants.COPYFILE_EXCL);
-    await ensurePrivateRegularFile(restoredTemporaryPath);
-    const restoredFlags =
-      process.platform === "win32"
-        ? fsConstants.O_RDONLY
-        : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-    const restoredHandle = await fs.open(restoredTemporaryPath, restoredFlags);
-    try {
-      await restoredHandle.sync();
-    } finally {
-      await restoredHandle.close();
-    }
-
     const failedSuffix = `.failed-migration-${compactTimestamp(new Date())}-${randomUUID()}`;
     const moved: Array<readonly [string, string]> = [];
+    let ownsRestoredTemporaryPath = false;
+    let restoredDatabaseInstalled = false;
     try {
+      const reservationHandle = await (fileOperations.open ?? fs.open)(
+        restoredTemporaryPath,
+        exclusiveWritableFileFlags(),
+        0o600,
+      );
+      ownsRestoredTemporaryPath = true;
+      await useAndCloseFileHandle(
+        reservationHandle,
+        restoredTemporaryPath,
+        fileOperations,
+        async () => undefined,
+      );
+
+      // COPYFILE_EXCL cannot target the reservation we already own. A normal
+      // copy is safe here because the exact UUID path was exclusively created by
+      // this operation and remains under its cleanup ownership.
+      await (fileOperations.copyFile ?? fs.copyFile)(input.backupPath, restoredTemporaryPath);
+      await ensurePrivateRegularFile(restoredTemporaryPath);
+      await (fileOperations.validateTemporary ?? validateSqliteMigrationBackup)(
+        restoredTemporaryPath,
+      );
+      const restoredHandle = await (fileOperations.open ?? fs.open)(
+        restoredTemporaryPath,
+        syncableFileFlags(),
+      );
+      await useAndCloseFileHandle(
+        restoredHandle,
+        restoredTemporaryPath,
+        fileOperations,
+        async (current) => {
+          await (fileOperations.syncFile ?? ((target) => target.sync()))(
+            current,
+            restoredTemporaryPath,
+          );
+        },
+      );
+
       for (const suffix of ["", "-wal", "-shm"]) {
         const source = `${input.dbPath}${suffix}`;
         const destination = `${input.dbPath}${failedSuffix}${suffix}`;
         try {
-          await fs.rename(source, destination);
+          await (fileOperations.rename ?? fs.rename)(source, destination);
           moved.push([source, destination]);
         } catch (cause) {
           if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
         }
       }
-      await fs.rename(restoredTemporaryPath, input.dbPath);
+      await (fileOperations.rename ?? fs.rename)(restoredTemporaryPath, input.dbPath);
+      restoredDatabaseInstalled = true;
+      ownsRestoredTemporaryPath = false;
     } catch (cause) {
-      // Rollback is valid only before the restored main database is installed.
-      await fs.unlink(restoredTemporaryPath).catch(() => undefined);
-      for (const [source, destination] of moved.reverse()) {
-        await fs.rename(destination, source).catch(() => undefined);
+      const cleanupFailures: Array<unknown> = [];
+      if (!restoredDatabaseInstalled) {
+        if (ownsRestoredTemporaryPath) {
+          await removeOwnedTemporaryFile(restoredTemporaryPath, fileOperations, cleanupFailures);
+        }
+        for (const [source, destination] of moved.reverse()) {
+          try {
+            await (fileOperations.rename ?? fs.rename)(destination, source);
+          } catch (rollbackCause) {
+            cleanupFailures.push(rollbackCause);
+          }
+        }
       }
-      throw cause;
+      throw withSecondaryFailures(
+        cause,
+        cleanupFailures,
+        `Migration restore failure and rollback both failed: ${input.dbPath}`,
+      );
     }
 
     // Make the database/WAL/SHM swap durable before clearing the marker. A
     // crash or cleanup failure before the final unlink therefore remains an
     // explicit, retryable recovery state.
-    await syncDirectory(path.dirname(input.dbPath));
+    await (fileOperations.syncDirectory ?? syncDirectory)(path.dirname(input.dbPath));
     await pruneFailedMigrationBundles(input.dbPath);
-    await syncDirectory(path.dirname(input.dbPath));
+    await (fileOperations.syncDirectory ?? syncDirectory)(path.dirname(input.dbPath));
     await fs.unlink(migrationRecoveryMarkerPath(input.dbPath)).catch((cause) => {
       if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
     });
-    await syncDirectory(path.dirname(input.dbPath));
+    await (fileOperations.syncDirectory ?? syncDirectory)(path.dirname(input.dbPath));
   });
 
 async function validateSqliteMigrationBackup(backupPath: string): Promise<void> {
@@ -472,7 +670,7 @@ type MigrationRecoveryMarker = {
 };
 
 function generatedBackupNamePattern(dbPath: string): RegExp {
-  const escapedBasename = path.basename(dbPath).replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const escapedBasename = escapeRegExp(path.basename(dbPath));
   return new RegExp(
     `^${escapedBasename}\\.pre-migration-[A-Za-z0-9_-]+-to-v\\d+-\\d{8}T\\d{9}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.sqlite$`,
     "iu",
@@ -572,7 +770,10 @@ export const requireNoPendingMigrationRecovery = (dbPath: string) =>
  * Explicit one-shot recovery path. The operator must stop every Synara process
  * before invoking it; startup itself deliberately never calls this function.
  */
-export const restoreMarkedMigrationBackup = (dbPath: string) =>
+export const restoreMarkedMigrationBackup = (
+  dbPath: string,
+  fileOperations: MigrationRecoveryFileOperations = {},
+) =>
   withDatabaseLifecycleLock(
     dbPath,
     attemptPromise(async () => {
@@ -583,7 +784,7 @@ export const restoreMarkedMigrationBackup = (dbPath: string) =>
         );
       }
       await Effect.runPromise(
-        restoreSqliteMigrationBackup({ dbPath, backupPath: marker.backupPath }),
+        restoreSqliteMigrationBackup({ dbPath, backupPath: marker.backupPath }, fileOperations),
       );
     }),
   );
