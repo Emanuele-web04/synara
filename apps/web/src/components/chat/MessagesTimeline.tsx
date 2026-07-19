@@ -1220,8 +1220,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                       {canRevertAgentWork ? (
                         <MessageActionButton
-                          label="Revert to this message"
-                          tooltip="Revert to this message"
+                          label="Revert conversation and workspace to before this message"
+                          tooltip="Revert conversation and workspace to before this message"
                           disabled={isRevertingCheckpoint || isWorking}
                           className={cn(
                             MESSAGE_HOVER_REVEAL_CLASS_NAME,
@@ -1583,7 +1583,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {(() => {
-                  // Hold the end-of-turn changes card (Undo / Review) until the
+                  // Hold the end-of-turn changes card (Revert turn / Review) until the
                   // turn settles. While the turn is live the composer's own
                   // live-changes strip owns this surface; showing the card too
                   // would duplicate it and pre-empt the strip mid-turn.
@@ -1692,11 +1692,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           {canUndo && (
                             <button
                               type="button"
-                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:text-muted-foreground/35"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onUndoTurnFiles(checkpointTurnCounts)}
+                              title="Revert conversation and workspace to before this turn"
+                              aria-label="Revert conversation and workspace to before this turn"
+                              disabled={isRevertingCheckpoint || isWorking}
+                              onClick={() => onUndoTurnFiles?.(checkpointTurnCounts)}
                             >
-                              Undo
+                              Revert turn
                               <Undo2Icon className="size-3" />
                             </button>
                           )}

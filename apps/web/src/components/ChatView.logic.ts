@@ -1,6 +1,7 @@
 import {
   ProjectId,
   ThreadId,
+  type MessageId,
   type ModelSelection,
   type ModelSlug,
   type ProviderApprovalDecision,
@@ -8,6 +9,7 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
+  type TurnId,
 } from "@synara/contracts";
 import { normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
@@ -39,6 +41,7 @@ import {
 import {
   hasLiveTurnTailWork,
   isProviderFileEditWorkLogEntry,
+  type TimelineEntry,
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
@@ -1326,4 +1329,81 @@ export function enrichSubagentWorkEntries(
       subagents,
     };
   });
+}
+
+/**
+ * Checkpoint after turn N maps to revert target N-1 (keep through turn N-1).
+ * Target 0 clears the whole conversation.
+ */
+export function checkpointTurnCountToRevertTarget(checkpointTurnCount: number): number {
+  return Math.max(0, checkpointTurnCount - 1);
+}
+
+export function buildRevertTurnCountByUserMessageId(input: {
+  timelineEntries: ReadonlyArray<TimelineEntry>;
+  turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
+  inferredCheckpointTurnCountByTurnId: Readonly<Partial<Record<TurnId, number>>>;
+}): Map<MessageId, number> {
+  const byUserMessageId = new Map<MessageId, number>();
+  for (let index = 0; index < input.timelineEntries.length; index += 1) {
+    const entry = input.timelineEntries[index];
+    if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
+      continue;
+    }
+
+    for (let nextIndex = index + 1; nextIndex < input.timelineEntries.length; nextIndex += 1) {
+      const nextEntry = input.timelineEntries[nextIndex];
+      if (!nextEntry || nextEntry.kind !== "message") {
+        continue;
+      }
+      if (nextEntry.message.role === "user") {
+        break;
+      }
+      const summary = input.turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
+      if (!summary) {
+        continue;
+      }
+      const turnCount =
+        summary.checkpointTurnCount ?? input.inferredCheckpointTurnCountByTurnId[summary.turnId];
+      if (typeof turnCount !== "number") {
+        break;
+      }
+      byUserMessageId.set(entry.message.id, checkpointTurnCountToRevertTarget(turnCount));
+      break;
+    }
+  }
+
+  return byUserMessageId;
+}
+
+/**
+ * Confirm copy for checkpoint revert.
+ * Filesystem restore is workspace-wide (git restore/clean), not thread-scoped.
+ * turnCount 0 clears the whole chat; target may be a turn-zero ref or HEAD fallback.
+ */
+export function buildCheckpointRevertConfirmMessage(turnCount: number): string {
+  if (turnCount === 0) {
+    return [
+      "Clear this conversation and restore the entire workspace to its initial Synara checkpoint, or to the repository's current HEAD if that checkpoint is unavailable?",
+      "The workspace will be overwritten to that state. Current tracked changes and non-ignored untracked files may be lost, including work created outside this conversation.",
+      "This cannot be undone.",
+    ].join("\n");
+  }
+
+  return [
+    `Revert this conversation and workspace to the end of turn ${turnCount}?`,
+    "All later messages and workspace changes will be discarded, including changes made outside this conversation and untracked files.",
+    "This cannot be undone.",
+  ].join("\n");
+}
+
+/** Confirm gate → dispatch payload for checkpoint revert (null when cancelled). */
+export function checkpointRevertCommandAfterConfirm(
+  turnCount: number,
+  confirmed: boolean,
+): { type: "thread.checkpoint.revert"; turnCount: number } | null {
+  if (!confirmed) {
+    return null;
+  }
+  return { type: "thread.checkpoint.revert", turnCount };
 }

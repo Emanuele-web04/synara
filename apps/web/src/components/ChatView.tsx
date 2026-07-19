@@ -186,6 +186,9 @@ import {
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
+  buildCheckpointRevertConfirmMessage,
+  buildRevertTurnCountByUserMessageId,
+  checkpointRevertCommandAfterConfirm,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -6805,17 +6808,12 @@ export default function ChatView({
       if (!api || !activeThread || isRevertingCheckpoint) return;
 
       if (hasLiveTurn || isSendBusy || isConnecting) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+        setThreadError(activeThread.id, "Interrupt the current turn before reverting.");
         return;
       }
-      const confirmed = await api.dialogs.confirm(
-        [
-          `Revert this thread to checkpoint ${turnCount}?`,
-          "This will discard newer messages and turn diffs in this thread.",
-          "This action cannot be undone.",
-        ].join("\n"),
-      );
-      if (!confirmed) {
+      const confirmed = await api.dialogs.confirm(buildCheckpointRevertConfirmMessage(turnCount));
+      const command = checkpointRevertCommandAfterConfirm(turnCount, confirmed);
+      if (!command) {
         return;
       }
 
@@ -6823,7 +6821,7 @@ export default function ChatView({
       setThreadError(activeThread.id, null);
       try {
         await api.orchestration.dispatchCommand({
-          type: "thread.checkpoint.revert",
+          ...command,
           commandId: newCommandId(),
           threadId: activeThread.id,
           turnCount,
