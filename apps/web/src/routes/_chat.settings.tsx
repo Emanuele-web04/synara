@@ -100,6 +100,7 @@ import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsage
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
+import { IntegrationsSettingsSection } from "../components/settings/IntegrationsSettingsSection";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -2473,6 +2474,8 @@ function SettingsRouteView() {
           ariaLabel: "Wrap diff lines by default",
         })}
       </SettingsSection>
+
+      <IntegrationsSettingsSection />
 
       <SettingsSection title="Safety confirmations">
         {renderBooleanSettingRow({

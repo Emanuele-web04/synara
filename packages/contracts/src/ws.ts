@@ -117,6 +117,11 @@ import {
   PullRequestSetPinnedInput,
   PullRequestsListInput,
 } from "./pullRequests";
+import {
+  WorkItemsAuthStatusInput,
+  WorkItemsGetInput,
+  WorkItemsSearchInput,
+} from "./workItemReferences";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -176,6 +181,11 @@ export const WS_METHODS = {
   pullRequestsAction: "pullRequests.action",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsSetPinned: "pullRequests.setPinned",
+
+  // Composer work-item references (Linear / GitHub issue / PR)
+  workItemsSearch: "workItems.search",
+  workItemsGet: "workItems.get",
+  workItemsAuthStatus: "workItems.authStatus",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -339,6 +349,11 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
   tagRequestBody(WS_METHODS.pullRequestsComment, PullRequestCommentInput),
   tagRequestBody(WS_METHODS.pullRequestsSetPinned, PullRequestSetPinnedInput),
+
+  // Composer work-item references
+  tagRequestBody(WS_METHODS.workItemsSearch, WorkItemsSearchInput),
+  tagRequestBody(WS_METHODS.workItemsGet, WorkItemsGetInput),
+  tagRequestBody(WS_METHODS.workItemsAuthStatus, WorkItemsAuthStatusInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

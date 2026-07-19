@@ -34,6 +34,7 @@ async function mountMenu(props?: {
     assistantSelections: [],
     terminalContexts: [],
     fileComments: [],
+    workItemReferences: [],
     pastedTexts: [],
     skills: [],
     mentions: [],
