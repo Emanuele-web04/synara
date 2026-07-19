@@ -155,6 +155,7 @@ import {
   acknowledgedRiskIdsForDraft,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
+  updateAutomationDraftWarningAcknowledgement,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
   warningIdsForAcknowledgedRisks,
@@ -360,6 +361,8 @@ import {
   formatTerminalContextLabel,
   insertInlineTerminalContextPlaceholder,
   removeInlineTerminalContextPlaceholder,
+  syncTerminalContextsByIds,
+  terminalContextIdListsEqual,
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
@@ -1001,23 +1004,6 @@ function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   }
   console.warn(`[voice] ${event}`);
 }
-
-const syncTerminalContextsByIds = (
-  contexts: ReadonlyArray<TerminalContextDraft>,
-  ids: ReadonlyArray<string>,
-): TerminalContextDraft[] => {
-  const contextsById = new Map(contexts.map((context) => [context.id, context]));
-  return ids.flatMap((id) => {
-    const context = contextsById.get(id);
-    return context ? [context] : [];
-  });
-};
-
-const terminalContextIdListsEqual = (
-  contexts: ReadonlyArray<TerminalContextDraft>,
-  ids: ReadonlyArray<string>,
-): boolean =>
-  contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
 function ComposerControlSkeleton(props: { widthClassName: string }) {
   return (
@@ -6953,15 +6939,9 @@ export default function ChatView({
   }, [pendingAutomationConversation, setComposerDraftPrompt, threadId]);
 
   const toggleAutomationWarning = useCallback((id: AutomationDraftWarningId, checked: boolean) => {
-    setAcknowledgedAutomationWarnings((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
+    setAcknowledgedAutomationWarnings((current) =>
+      updateAutomationDraftWarningAcknowledgement(current, id, checked),
+    );
   }, []);
 
   const updateAutomationDraftForm = useCallback(

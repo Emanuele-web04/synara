@@ -23,6 +23,8 @@ import {
   materializeInlineTerminalContextPrompt,
   removeInlineTerminalContextPlaceholder,
   stripInlineTerminalContextPlaceholders,
+  syncTerminalContextsByIds,
+  terminalContextIdListsEqual,
   type TerminalContextDraft,
 } from "./terminalContext";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
@@ -44,6 +46,21 @@ function makeContext(overrides?: Partial<TerminalContextDraft>): TerminalContext
 }
 
 describe("terminalContext", () => {
+  it("syncs terminal contexts to editor ids while dropping missing ones", () => {
+    const first = { id: "first", text: "one" };
+    const second = { id: "second", text: "two" };
+
+    expect(syncTerminalContextsByIds([first, second], ["second", "missing"])).toEqual([second]);
+  });
+
+  it("compares terminal context ids in order", () => {
+    const contexts = [{ id: "first" }, { id: "second" }];
+
+    expect(terminalContextIdListsEqual(contexts, ["first", "second"])).toBe(true);
+    expect(terminalContextIdListsEqual(contexts, ["second", "first"])).toBe(false);
+    expect(terminalContextIdListsEqual(contexts, ["first"])).toBe(false);
+  });
+
   it("formats terminal labels with line ranges", () => {
     expect(formatTerminalContextLabel(makeContext())).toBe("Terminal 1 lines 12-13");
     expect(

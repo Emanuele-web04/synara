@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-003 next
+> Status: in progress — CLN-004 next
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -129,7 +129,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 |---|---|---|---|---|
 | CLN-001 | P0 | DONE | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values. | focused Oxlint unused scan; affected unit tests |
 | CLN-002 | P0 | DONE | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import. | web/server focused tests; repo-wide reference scan |
-| CLN-003 | P0 | TODO | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
+| CLN-003 | P0 | DONE | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
 | CLN-004 | P1 | TODO | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
 | CLN-005 | P1 | TODO | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
 | CLN-010 | P0 | TODO | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
@@ -201,3 +201,10 @@ For every tracker item:
   fixture name `attachmentUploadSequence` remains. Unused diagnostics remain at zero. Focused live
   owner verification passed: profile/timeline 51/51, attachment route 6/6, and managed attachment
   repository 12/12; `git diff --check` passed.
+- 2026-07-19 — CLN-003 started from the exact-duplication owners identified in the audit.
+- 2026-07-19 — CLN-003 complete: project normalization **2 → 1**; terminal-context sync/equality
+  **2 each → 1 each**; automation warning mutation **3 → 1**; persistence SQL/decode mapper
+  **9 → 1**; duplicate profile selector modules remain deleted. The change removed **109 net code
+  lines**. Focused verification passed across 11 unique test files (web 290 tests, server repository
+  gates 11 tests, and the added snapshot-query gate 10 tests); unused diagnostics and
+  `git diff --check` passed.

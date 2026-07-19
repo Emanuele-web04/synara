@@ -27,6 +27,7 @@ import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import {
   automationApprovalGaps,
   hasBlockingAutomationDraftWarnings,
+  updateAutomationDraftWarningAcknowledgement,
   warningIdsForAcknowledgedRisks,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
@@ -317,15 +318,9 @@ function AutomationDetailView() {
   };
 
   const toggleWarning = (id: AutomationDraftWarningId, checked: boolean) => {
-    setAcknowledgedWarningIds((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
+    setAcknowledgedWarningIds((current) =>
+      updateAutomationDraftWarningAcknowledgement(current, id, checked),
+    );
   };
 
   const submitForm = () => {

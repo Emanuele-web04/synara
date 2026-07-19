@@ -17,7 +17,7 @@ import { Effect, Layer, Schema, Stream } from "effect";
 import {
   PersistenceDecodeError,
   toPersistenceDecodeError,
-  toPersistenceSqlError,
+  toPersistenceSqlOrDecodeError,
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
 import {
@@ -314,13 +314,6 @@ function inferActorKind(
     return "server";
   }
   return "client";
-}
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): OrchestrationEventStoreError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
 }
 
 const makeEventStore = Effect.gen(function* () {

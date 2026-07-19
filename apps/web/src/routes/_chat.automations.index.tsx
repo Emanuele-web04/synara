@@ -14,6 +14,7 @@ import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import {
   hasBlockingAutomationDraftWarnings,
+  updateAutomationDraftWarningAcknowledgement,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
 } from "~/lib/automationDraft";
@@ -187,15 +188,9 @@ function AutomationsRouteView() {
   };
 
   const toggleWarning = (id: AutomationDraftWarningId, checked: boolean) => {
-    setAcknowledgedWarningIds((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
+    setAcknowledgedWarningIds((current) =>
+      updateAutomationDraftWarningAcknowledgement(current, id, checked),
+    );
   };
 
   const openCreateDialog = () => {

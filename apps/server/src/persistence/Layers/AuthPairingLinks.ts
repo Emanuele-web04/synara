@@ -3,9 +3,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
-  toPersistenceDecodeError,
-  toPersistenceSqlError,
-  type AuthPairingLinkRepositoryError,
+  toPersistenceSqlOrDecodeError,
 } from "../Errors";
 import {
   AuthPairingLinkRecord,
@@ -17,13 +15,6 @@ import {
   ListActiveAuthPairingLinksInput,
   RevokeAuthPairingLinkInput,
 } from "../Services/AuthPairingLinks";
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): AuthPairingLinkRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
 
 function toIsoDateTime(value: unknown): string {
   if (typeof value === "string") return value;

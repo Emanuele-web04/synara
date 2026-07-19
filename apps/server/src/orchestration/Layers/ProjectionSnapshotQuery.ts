@@ -44,6 +44,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import {
   isPersistenceError,
   toPersistenceDecodeError,
+  toPersistenceSqlOrDecodeError,
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
@@ -703,13 +704,6 @@ function computeSnapshotSequence(
   }
 
   return Number.isFinite(minSequence) ? minSequence : 0;
-}
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): ProjectionRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
 }
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
