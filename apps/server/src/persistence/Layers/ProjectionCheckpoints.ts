@@ -3,7 +3,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema, Struct } from "effect";
 
-import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
+import { toPersistenceSqlOrDecodeError } from "../Errors.ts";
 import {
   DeleteByThreadIdInput,
   GetByThreadAndTurnCountInput,
@@ -18,13 +18,6 @@ const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
   }),
 );
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown) =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
 
 const makeProjectionCheckpointRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

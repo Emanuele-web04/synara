@@ -3,11 +3,7 @@ import { DateTime, Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-import {
-  toPersistenceDecodeError,
-  toPersistenceSqlError,
-  type AuthSessionRepositoryError,
-} from "../Errors";
+import { toPersistenceSqlOrDecodeError } from "../Errors";
 import {
   AuthSessionRecord,
   AuthSessionRepository,
@@ -56,13 +52,6 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): typeof AuthSess
     lastConnectedAt: row.lastConnectedAt,
     revokedAt: row.revokedAt,
   };
-}
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): AuthSessionRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
 }
 
 function toIsoDateTime(value: unknown): string {

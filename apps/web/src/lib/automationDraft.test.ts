@@ -12,7 +12,9 @@ import {
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
   maxIterationsForFastIntervalApproval,
+  updateAutomationDraftWarningAcknowledgement,
   warningIdsForAcknowledgedRisks,
+  type AutomationDraftWarningId,
 } from "./automationDraft";
 
 describe("automation draft warnings", () => {
@@ -106,6 +108,20 @@ describe("automation draft warnings", () => {
         warningIdsForAcknowledgedRisks(["fast-interval", "full-access", "local-checkout"]),
       ),
     ).toEqual(["fast-recurring-interval", "full-access", "local-checkout"]);
+  });
+
+  it("immutably updates warning acknowledgements", () => {
+    const initial = new Set<AutomationDraftWarningId>(["full-access"]);
+    const added = updateAutomationDraftWarningAcknowledgement(
+      initial,
+      "local-checkout",
+      true,
+    );
+    const removed = updateAutomationDraftWarningAcknowledgement(added, "full-access", false);
+
+    expect(Array.from(initial)).toEqual(["full-access"]);
+    expect(Array.from(added)).toEqual(["full-access", "local-checkout"]);
+    expect(Array.from(removed)).toEqual(["local-checkout"]);
   });
 
   it("blocks submission until required warning acknowledgements are present", () => {

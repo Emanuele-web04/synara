@@ -79,6 +79,26 @@ export function filterTerminalContextsWithText<T extends { text: string }>(
   return contexts.filter((context) => hasTerminalContextText(context));
 }
 
+export function syncTerminalContextsByIds<T extends { id: string }>(
+  contexts: ReadonlyArray<T>,
+  ids: ReadonlyArray<string>,
+): T[] {
+  const contextsById = new Map(contexts.map((context) => [context.id, context]));
+  return ids.flatMap((id) => {
+    const context = contextsById.get(id);
+    return context ? [context] : [];
+  });
+}
+
+export function terminalContextIdListsEqual<T extends { id: string }>(
+  contexts: ReadonlyArray<T>,
+  ids: ReadonlyArray<string>,
+): boolean {
+  return (
+    contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index])
+  );
+}
+
 function previewTerminalContextText(text: string): string {
   const normalized = normalizeTerminalContextText(text);
   if (normalized.length === 0) {

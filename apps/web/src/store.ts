@@ -77,6 +77,18 @@ type ReadModelThread = OrchestrationReadModel["threads"][number];
 type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][number];
 type ShellSnapshotProject = OrchestrationShellSnapshot["projects"][number];
 type ShellSnapshotThread = OrchestrationShellSnapshot["threads"][number];
+type ProjectNormalizationInput = Pick<
+  ReadModelProject,
+  | "id"
+  | "kind"
+  | "title"
+  | "workspaceRoot"
+  | "defaultModelSelection"
+  | "scripts"
+  | "isPinned"
+  | "createdAt"
+  | "updatedAt"
+>;
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 type ThreadActivityAppendedEvent = Extract<
   OrchestrationEvent,
@@ -621,62 +633,8 @@ function normalizeProjectScripts(
   return arraysShallowEqual(previous, nextScripts) ? previous : nextScripts;
 }
 
-function normalizeProjectFromReadModel(
-  incoming: ReadModelProject,
-  previous: Project | undefined,
-): Project {
-  const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
-  const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
-  const localName = previous?.localName ?? persistedProjectNamesByCwd.get(workspaceRootKey) ?? null;
-  const defaultModelSelection =
-    incoming.defaultModelSelection === null
-      ? null
-      : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
-  const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
-  const expanded =
-    previous?.expanded ??
-    (persistedExpandedProjectCwds.size > 0
-      ? persistedExpandedProjectCwds.has(workspaceRootKey)
-      : true);
-
-  if (
-    previous &&
-    previous.id === incoming.id &&
-    previous.kind === incoming.kind &&
-    previous.name === (localName ?? incoming.title) &&
-    previous.remoteName === incoming.title &&
-    previous.folderName === folderName &&
-    previous.localName === localName &&
-    previous.cwd === incoming.workspaceRoot &&
-    previous.defaultModelSelection === defaultModelSelection &&
-    previous.expanded === expanded &&
-    (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
-    previous.createdAt === incoming.createdAt &&
-    previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
-  ) {
-    return previous;
-  }
-
-  return {
-    id: incoming.id,
-    kind: incoming.kind ?? "project",
-    name: localName ?? incoming.title,
-    remoteName: incoming.title,
-    folderName,
-    localName,
-    cwd: incoming.workspaceRoot,
-    defaultModelSelection,
-    expanded,
-    isPinned: incoming.isPinned ?? false,
-    createdAt: incoming.createdAt,
-    updatedAt: incoming.updatedAt,
-    scripts,
-  } satisfies Project;
-}
-
-function normalizeProjectFromShell(
-  incoming: ShellSnapshotProject,
+function normalizeProject(
+  incoming: ProjectNormalizationInput,
   previous: Project | undefined,
 ): Project {
   const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
@@ -734,7 +692,7 @@ function upsertProjectFromReadModel(state: AppState, incoming: ReadModelProject)
     return state;
   }
   const existingProject = state.projects.find((project) => project.id === incoming.id);
-  const nextProject = normalizeProjectFromReadModel(incoming, existingProject);
+  const nextProject = normalizeProject(incoming, existingProject);
 
   if (existingProject) {
     if (existingProject === nextProject) {
@@ -763,7 +721,7 @@ function upsertProjectFromShell(state: AppState, incoming: ShellSnapshotProject)
     state.projects.find(
       (project) => projectCwdKey(project.cwd) === projectCwdKey(incoming.workspaceRoot),
     );
-  const nextProject = normalizeProjectFromShell(incoming, existingProject);
+  const nextProject = normalizeProject(incoming, existingProject);
 
   if (existingProject) {
     if (existingProject === nextProject) {
@@ -1946,7 +1904,7 @@ function mapProjectsFromReadModel(
     .map((project) => {
       const existing =
         previousById.get(project.id) ?? previousByCwd.get(projectCwdKey(project.workspaceRoot));
-      return normalizeProjectFromReadModel(project, existing);
+      return normalizeProject(project, existing);
     })
     .map((project, incomingIndex) => {
       const previousIndex =
@@ -1991,7 +1949,7 @@ function mapProjectsFromShellSnapshot(
     .map((project) => {
       const existing =
         previousById.get(project.id) ?? previousByCwd.get(projectCwdKey(project.workspaceRoot));
-      return normalizeProjectFromShell(project, existing);
+      return normalizeProject(project, existing);
     })
     .map((project, incomingIndex) => {
       const previousIndex =
