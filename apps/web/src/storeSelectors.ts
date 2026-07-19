@@ -4,7 +4,7 @@
 
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 
-import type { AppState } from "./store";
+import type { AppState } from "./storeState";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import type { Project, SidebarThreadSummary, Thread, ThreadShell } from "./types";
 

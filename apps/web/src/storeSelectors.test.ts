@@ -4,6 +4,7 @@ import type { MessageId, ProjectId, ThreadId } from "@synara/contracts";
 
 import type { AppState } from "./store";
 import {
+  createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
@@ -76,6 +77,31 @@ describe("createThreadShellsSelector", () => {
 
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("createAllThreadsSelector", () => {
+  it("preserves the untouched thread identity when another thread shell changes", () => {
+    const selectThreads = createAllThreadsSelector();
+    const threadIds = [threadIdA, threadIdB];
+    const before = selectThreads(
+      makeState({
+        threadIds,
+        threadShellById: { [threadIdA]: shellA, [threadIdB]: shellB },
+      }),
+    );
+    const after = selectThreads(
+      makeState({
+        threadIds,
+        threadShellById: {
+          [threadIdA]: { ...shellA, title: "renamed" },
+          [threadIdB]: shellB,
+        },
+      }),
+    );
+
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
   });
 });
 

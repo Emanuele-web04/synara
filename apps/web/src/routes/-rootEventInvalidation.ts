@@ -10,7 +10,7 @@ import {
 } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
-import type { AppState } from "../store";
+import type { AppState } from "../storeState";
 import { getThreadFromState } from "../threadDerivation";
 
 const FILE_CHANGE_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([

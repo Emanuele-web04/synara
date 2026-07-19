@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-005 complete
+> Status: in progress — CLN-010 complete
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -134,7 +134,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-003 | P0 | DONE | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
 | CLN-004 | P1 | DONE | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
 | CLN-005 | P1 | DONE | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
-| CLN-010 | P0 | TODO | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
+| CLN-010 | P0 | DONE | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
 | CLN-011 | P0 | TODO | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
 | CLN-012 | P0 | TODO | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners. | ChatView logic/browser suites and hook tests |
 | CLN-013 | P0 | TODO | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged. | Sidebar logic/UI/import plus new row characterization |
@@ -231,3 +231,15 @@ For every tracker item:
   semantics. Combined focused verification passed across **15 files / 259 tests**, plus the desktop
   build and isolated Electron smoke; repo scan **1,819 files / 0 unused diagnostics** and
   `git diff --check` passed.
+- 2026-07-19 — CLN-010 started; the public store facade, persistence keys, and reducer behavior are
+  compatibility constraints.
+- 2026-07-19 — CLN-010 complete: `store.ts` shrank from **4,671 → 341 LOC** and now retains only
+  the stable public facade, Zustand wiring, and local UI actions. State, persistence, normalization,
+  projection, and orchestration event reduction have five explicit acyclic owners; the split's
+  production family is **4,783 LOC** including module-boundary overhead. Exact project mapping and
+  upsert knowledge moved from **2 implementations → 1** each. The 4,168-line store test moved into
+  facade/persistence (**516 LOC**), projection, and event-reducer suites with one shared fixture
+  module; one exact duplicate case was deleted and replaced by a normalized-record identity gate.
+  All 94 unique original behavior names remain covered. Combined focused verification passed across
+  **11 files / 158 tests**; the public export/action surface is unchanged, the import graph is
+  acyclic, repo unused diagnostics remain **0 across 1,827 files**, and `git diff --check` passed.
