@@ -64,41 +64,34 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
-  it("fills missing Pi Anthropic flagship models from the static catalog after discovery", () => {
+  it("does not offer Pi Anthropic models when discovery only returns local models", () => {
     expect(
       mergeDynamicModelOptions({
         provider: "pi",
-        staticOptions: [
-          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
-          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
-        ],
+        staticOptions: [],
         dynamicModels: [
           {
-            slug: "anthropic/claude-opus-4-7",
-            name: "Claude Opus 4.7",
-            upstreamProviderId: "anthropic",
-            upstreamProviderName: "Anthropic (Claude Pro/Max)",
+            slug: "local/glm-5.2",
+            name: "GLM 5.2",
+            upstreamProviderId: "local",
+            upstreamProviderName: "Local",
           },
         ],
       }).map((option) => option.slug),
-    ).toEqual([
-      "anthropic/claude-opus-4-7",
-      "anthropic/claude-fable-5",
-      "anthropic/claude-opus-4-8",
-    ]);
+    ).toEqual(["local/glm-5.2"]);
   });
 
-  it("does not advertise Pi static Anthropic fallbacks before discovery returns models", () => {
+  it("offers Pi Fable and Opus when authenticated discovery returns them", () => {
     expect(
       mergeDynamicModelOptions({
         provider: "pi",
-        staticOptions: [
+        staticOptions: [],
+        dynamicModels: [
           { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
           { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
         ],
-        dynamicModels: [],
-      }),
-    ).toEqual([]);
+      }).map((option) => option.slug),
+    ).toEqual(["anthropic/claude-fable-5", "anthropic/claude-opus-4-8"]);
   });
 
   it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {

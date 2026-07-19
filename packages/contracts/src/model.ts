@@ -765,49 +765,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
-  // Pi discovery owns the live catalog. These Anthropic flagship entries only fill
-  // gaps when runtime discovery already returned other models (see mergeDynamicModelOptions)
-  // so older oauth extensions that omit them still surface Fable / Opus 4.8.
-  pi: [
-    {
-      slug: "anthropic/claude-fable-5",
-      name: "Claude Fable 5",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "off", label: "Off" },
-          { value: "minimal", label: "Minimal" },
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium", isDefault: true },
-          { value: "high", label: "High" },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-        contextWindowTokens: 1_000_000,
-      },
-    },
-    {
-      slug: "anthropic/claude-opus-4-8",
-      name: "Claude Opus 4.8",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "off", label: "Off" },
-          { value: "minimal", label: "Minimal" },
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium", isDefault: true },
-          { value: "high", label: "High" },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-        contextWindowTokens: 1_000_000,
-      },
-    },
-  ],
+  // Pi discovery owns the live catalog, including auth-gated Anthropic models.
+  pi: [],
   cursor: [
     {
       slug: "auto",

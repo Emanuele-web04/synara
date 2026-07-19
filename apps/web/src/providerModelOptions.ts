@@ -175,22 +175,15 @@ export function mergeDynamicModelOptions(input: {
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
-  // Pi keeps a tiny static Anthropic fallback catalog (Fable / Opus 4.8). Only merge
-  // those gaps when discovery already returned models — never advertise them alone
-  // before auth/discovery, and never drop live discovery the way antigravity/etc do.
   const missingStaticBuiltIns =
-    input.provider === "pi"
-      ? normalizedDynamicOptions.length > 0
-        ? staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug))
-        : []
-      : (input.provider === "antigravity" ||
-            input.provider === "kilo" ||
-            input.provider === "opencode" ||
-            input.provider === "cursor" ||
-            input.provider === "droid") &&
-          normalizedDynamicOptions.length > 0
-        ? []
-        : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
+    (input.provider === "antigravity" ||
+      input.provider === "kilo" ||
+      input.provider === "opencode" ||
+      input.provider === "cursor" ||
+      input.provider === "droid") &&
+    normalizedDynamicOptions.length > 0
+      ? []
+      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
   const orderedDynamicOptions =
     input.provider === "claudeAgent"

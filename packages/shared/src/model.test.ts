@@ -423,23 +423,6 @@ describe("provider option descriptor helpers", () => {
     expect(descriptors.some((descriptor) => descriptor.id === "reasoningEffort")).toBe(false);
   });
 
-  it("exposes thinking levels for Pi Anthropic Fable and Opus 4.8 fallbacks", () => {
-    expect(
-      getModelCapabilities("pi", "anthropic/claude-fable-5").reasoningEffortLevels.map(
-        (level) => level.value,
-      ),
-    ).toContain("xhigh");
-    expect(
-      getModelCapabilities("pi", "anthropic/claude-opus-4-8").reasoningEffortLevels.map(
-        (level) => level.value,
-      ),
-    ).toContain("xhigh");
-    expect(MODEL_OPTIONS_BY_PROVIDER.pi.map((option) => option.slug)).toEqual([
-      "anthropic/claude-fable-5",
-      "anthropic/claude-opus-4-8",
-    ]);
-  });
-
   it("honors explicit descriptors and serializes their current values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
