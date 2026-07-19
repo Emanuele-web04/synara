@@ -85,6 +85,54 @@ describe("Pi native Synara gateway tools", () => {
     expect(requests[2]?.body.params.arguments).toEqual({ owner: "thread-a" });
     expect(requests[3]?.body.params.arguments).toEqual({ owner: "thread-b" });
   });
+
+  it("forwards Pi tool cancellation to the in-flight MCP request", async () => {
+    let callSignal: AbortSignal | null = null;
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/list") {
+        return Response.json({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            tools: [
+              {
+                name: "synara_create_threads",
+                description: "Create Synara threads.",
+                inputSchema: { type: "object", properties: {} },
+              },
+            ],
+          },
+        });
+      }
+
+      callSignal = init?.signal ?? null;
+      return await new Promise<Response>((_resolve, reject) => {
+        const rejectAborted = () =>
+          reject(
+            callSignal?.reason ?? new DOMException("The operation was aborted.", "AbortError"),
+          );
+        if (callSignal?.aborted) {
+          rejectAborted();
+          return;
+        }
+        callSignal?.addEventListener("abort", rejectAborted, { once: true });
+      });
+    };
+    const tools = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+      defineTool: (tool) => tool,
+      fetch,
+    });
+    const controller = new AbortController();
+    const execution = tools[0]?.execute("call-a", {}, controller.signal, undefined, {} as never);
+
+    controller.abort();
+
+    await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+    expect(callSignal).toBe(controller.signal);
+    expect(controller.signal.aborted).toBe(true);
+  });
 });
 
 describe("Pi Bash process supervision", () => {

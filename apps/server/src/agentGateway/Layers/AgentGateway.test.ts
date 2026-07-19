@@ -18,7 +18,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -135,6 +135,7 @@ interface GatewayHarness {
   }) => void;
   readonly setProviderStatuses: (statuses: ReadonlyArray<ServerProviderStatus>) => void;
   readonly getOperationStatus: (callerTurnId: string) => string | null;
+  readonly getOperationErrorCode: (callerTurnId: string) => string | null;
   readonly getWaitReadCounts: () => {
     readonly detailReads: number;
     readonly batchTurnReads: number;
@@ -208,6 +209,23 @@ function makeHarnessLayer(
     readonly failRemoveWorktree?: boolean;
     readonly failDeleteBranch?: boolean;
     readonly failOperationComplete?: boolean;
+    readonly pauseAfterReservation?: {
+      readonly entered: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    };
+    readonly pauseAfterOperationComplete?: {
+      readonly entered: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    };
+    readonly pauseAfterWorktreeCreate?: {
+      readonly entered: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    };
+    readonly pauseAfterDispatch?: {
+      readonly commandType: OrchestrationCommand["type"];
+      readonly entered: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    };
     readonly advanceParentTurnAfterDispatch?: {
       readonly commandType: OrchestrationCommand["type"];
       readonly turnId: string;
@@ -345,9 +363,14 @@ function makeHarnessLayer(
                 }),
               );
             }
-            return options.failDispatch?.(command)
+            const result = options.failDispatch?.(command)
               ? Effect.fail(new Error("injected dispatch failure"))
               : Effect.succeed({ sequence: dispatched.length });
+            if (options.pauseAfterDispatch?.commandType !== command.type) return result;
+            return Deferred.succeed(options.pauseAfterDispatch.entered, undefined).pipe(
+              Effect.andThen(Deferred.await(options.pauseAfterDispatch.release)),
+              Effect.andThen(result),
+            );
           }),
         ),
       ),
@@ -405,8 +428,12 @@ function makeHarnessLayer(
         })),
       }),
     createWorktree: (input: { newBranch?: string; path?: string }) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         worktreeCreates.push(input);
+        if (options.pauseAfterWorktreeCreate) {
+          yield* Deferred.succeed(options.pauseAfterWorktreeCreate.entered, undefined);
+          yield* Deferred.await(options.pauseAfterWorktreeCreate.release);
+        }
         return {
           worktree: {
             path: input.path ?? `/tmp/worktrees/${input.newBranch ?? "generated"}`,
@@ -548,7 +575,7 @@ function makeHarnessLayer(
       planJson: string;
       now: string;
     }) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const key = `${input.callerThreadId}:${input.callerTurnId}:${input.operationKind}`;
         const existing = operationsByScope.get(key);
         if (existing) {
@@ -569,6 +596,10 @@ function makeHarnessLayer(
           updatedAt: input.now,
         };
         operationsByScope.set(key, operation);
+        if (options.pauseAfterReservation) {
+          yield* Deferred.succeed(options.pauseAfterReservation.entered, undefined);
+          yield* Deferred.await(options.pauseAfterReservation.release);
+        }
         return { kind: "reserved" as const, operation };
       }),
     markDispatching: ({ operationId, now }: { operationId: string; now: string }) =>
@@ -653,21 +684,29 @@ function makeHarnessLayer(
       operationId: string;
       resultJson: string;
       now: string;
-    }) =>
-      options.failOperationComplete
-        ? Effect.fail(new Error("injected operation completion failure"))
-        : Effect.sync(() => {
-            for (const [key, operation] of operationsByScope) {
-              if (operation.operationId === operationId) {
-                operationsByScope.set(key, {
-                  ...operation,
-                  status: "completed",
-                  resultJson,
-                  updatedAt: now,
-                });
-              }
+    }) => {
+      if (options.failOperationComplete) {
+        return Effect.fail(new Error("injected operation completion failure"));
+      }
+      return Effect.gen(function* () {
+        yield* Effect.sync(() => {
+          for (const [key, operation] of operationsByScope) {
+            if (operation.operationId === operationId) {
+              operationsByScope.set(key, {
+                ...operation,
+                status: "completed",
+                resultJson,
+                updatedAt: now,
+              });
             }
-          }),
+          }
+        });
+        if (options.pauseAfterOperationComplete) {
+          yield* Deferred.succeed(options.pauseAfterOperationComplete.entered, undefined);
+          yield* Deferred.await(options.pauseAfterOperationComplete.release);
+        }
+      });
+    },
     fail: ({
       operationId,
       errorJson,
@@ -857,6 +896,13 @@ function makeHarnessLayer(
       getOperationStatus: (callerTurnId) =>
         [...operationsByScope.values()].find((operation) => operation.callerTurnId === callerTurnId)
           ?.status ?? null,
+      getOperationErrorCode: (callerTurnId) => {
+        const errorJson = [...operationsByScope.values()].find(
+          (operation) => operation.callerTurnId === callerTurnId,
+        )?.errorJson;
+        if (!errorJson) return null;
+        return (JSON.parse(errorJson) as { code?: string }).code ?? null;
+      },
       getWaitReadCounts: () => ({
         detailReads: threadDetailReads,
         batchTurnReads,
@@ -2255,6 +2301,208 @@ describe("AgentGateway", () => {
       assert.equal(harness.worktreeRemoves.length, 1);
       assert.equal(harness.branchDeletes.length, 0);
       assert.equal(harness.getOperationStatus("turn-parent-active"), "compensating");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("claims and terminalizes a reservation before observing request interruption", () => {
+    const reservationCreated = Deferred.makeUnsafe<void>();
+    const releaseReservation = Deferred.makeUnsafe<void>();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pauseAfterReservation: {
+        entered: reservationCreated,
+        release: releaseReservation,
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const requestFiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: "interrupt-after-reservation",
+            threads: [
+              {
+                prompt: "must not strand a reserved operation",
+                target: { provider: "codex", model: "gpt-5.5" },
+              },
+            ],
+          },
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(reservationCreated);
+      const interruptFiber = yield* Fiber.interrupt(requestFiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseReservation, undefined);
+      yield* Fiber.join(interruptFiber);
+
+      const exit = yield* Fiber.await(requestFiber);
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      assert.equal(harness.worktreeCreates.length, 0);
+      assert.equal(harness.dispatched.length, 0);
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+      assert.equal(harness.getOperationErrorCode("turn-parent-active"), "request_interrupted");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("compensates a worktree when the MCP request fiber is interrupted mid-create", () => {
+    const worktreeCreated = Deferred.makeUnsafe<void>();
+    const releaseWorktreeCreate = Deferred.makeUnsafe<void>();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pauseAfterWorktreeCreate: {
+        entered: worktreeCreated,
+        release: releaseWorktreeCreate,
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const requestFiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: "interrupt-after-worktree-create",
+            threads: [
+              {
+                prompt: "must compensate the interrupted worktree",
+                target: { provider: "codex", model: "gpt-5.5" },
+                environment: "worktree",
+                branchName: "agent/interrupted-worktree",
+              },
+            ],
+          },
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(worktreeCreated);
+      const interruptFiber = yield* Fiber.interrupt(requestFiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseWorktreeCreate, undefined);
+      yield* Fiber.join(interruptFiber);
+
+      const exit = yield* Fiber.await(requestFiber);
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      assert.equal(harness.worktreeCreates.length, 1);
+      assert.equal(harness.worktreeRemoves.length, 1);
+      assert.deepEqual(
+        harness.branchDeletes.map(({ branch }) => branch),
+        ["agent/interrupted-worktree"],
+      );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+      assert.equal(harness.getOperationErrorCode("turn-parent-active"), "request_interrupted");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("compensates a created thread when its MCP request fiber is interrupted", () => {
+    const threadCreated = Deferred.makeUnsafe<void>();
+    const releaseThreadCreate = Deferred.makeUnsafe<void>();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pauseAfterDispatch: {
+        commandType: "thread.create",
+        entered: threadCreated,
+        release: releaseThreadCreate,
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const requestFiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: "interrupt-after-thread-create",
+            threads: [
+              {
+                prompt: "must compensate the interrupted child",
+                target: { provider: "codex", model: "gpt-5.5" },
+              },
+            ],
+          },
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(threadCreated);
+      const interruptFiber = yield* Fiber.interrupt(requestFiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseThreadCreate, undefined);
+      yield* Fiber.join(interruptFiber);
+
+      const exit = yield* Fiber.await(requestFiber);
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.create").length,
+        1,
+      );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.turn.start").length,
+        0,
+      );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.delete").length,
+        1,
+      );
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+      assert.equal(harness.getOperationErrorCode("turn-parent-active"), "request_interrupted");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("keeps a completed operation committed when its request is interrupted", () => {
+    const operationCompleted = Deferred.makeUnsafe<void>();
+    const releaseCompletion = Deferred.makeUnsafe<void>();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pauseAfterOperationComplete: {
+        entered: operationCompleted,
+        release: releaseCompletion,
+      },
+    });
+    const request = {
+      token: "token-parent",
+      name: "synara_create_threads",
+      args: {
+        requestId: "interrupt-after-operation-complete",
+        threads: [
+          {
+            prompt: "keep the committed child",
+            target: { provider: "codex", model: "gpt-5.5" },
+          },
+        ],
+      },
+    } as const;
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const requestFiber = yield* harness.callTool(request).pipe(Effect.forkChild);
+      yield* Deferred.await(operationCompleted);
+      const interruptFiber = yield* Fiber.interrupt(requestFiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseCompletion, undefined);
+      yield* Fiber.join(interruptFiber);
+
+      const exit = yield* Fiber.await(requestFiber);
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "completed");
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.create").length,
+        1,
+      );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.turn.start").length,
+        1,
+      );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.delete").length,
+        0,
+      );
+
+      const replay = yield* harness.callTool(request);
+      assert.equal(toolResultJson(replay.result).createdCount, 1);
+      assert.equal(harness.dispatched.length, 2);
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "completed");
     }).pipe(Effect.provide(gatewayLayer));
   });
 

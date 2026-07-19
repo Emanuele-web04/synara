@@ -14,7 +14,7 @@ import {
   type SynaraCreateThreadsResult,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
-import { Effect, Option, Semaphore } from "effect";
+import { Cause, Effect, Option, Semaphore } from "effect";
 
 import type { ServerConfigShape } from "../config.ts";
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
@@ -378,83 +378,6 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       yield* context.assertCallerTurnActive();
 
-      const reservation = yield* operationRepository
-        .reserve({
-          operationId,
-          callerThreadId: context.callerThreadId,
-          callerTurnId,
-          operationKind: "create_threads",
-          requestId: input.requestId,
-          fingerprint,
-          requestedCount: prepared.length,
-          planJson: canonicalJson(
-            prepared.map((entry) => ({
-              index: entry.index,
-              spec: entry.spec,
-              projectId: entry.projectId,
-              workspaceRoot: entry.workspaceRoot,
-              environment: entry.environment,
-              runtimeMode: entry.runtimeMode,
-              baseBranch: entry.baseBranch,
-              newBranch: entry.newBranch,
-              plannedWorktreePath: entry.plannedWorktreePath,
-              ownershipPreflightPassed: entry.ownershipPreflightPassed,
-              ids: entry.ids,
-            })),
-          ),
-          now: gatewayIsoNow(),
-        })
-        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-
-      if (reservation.kind === "idempotency_conflict") {
-        return yield* Effect.fail(
-          new GatewayToolError(
-            "idempotency_conflict",
-            `Request id "${input.requestId}" was already used with a different creation plan.`,
-            { operationId: reservation.operation.operationId },
-          ),
-        );
-      }
-      if (reservation.kind === "creation_plan_locked") {
-        return yield* Effect.fail(
-          new GatewayToolError(
-            "creation_plan_locked",
-            "This caller turn already committed a different thread-creation plan. A new user turn is required for another plan.",
-            {
-              operationId: reservation.operation.operationId,
-              requestId: reservation.operation.requestId,
-              requestedCount: reservation.operation.requestedCount,
-              status: reservation.operation.status,
-            },
-          ),
-        );
-      }
-      if (reservation.kind === "replay" && reservation.operation.status === "completed") {
-        return mcpToolResultJson(JSON.parse(reservation.operation.resultJson ?? "{}"));
-      }
-      if (reservation.kind === "replay" && reservation.operation.status === "failed") {
-        return yield* Effect.fail(
-          new GatewayToolError(
-            "operation_failed",
-            "The original thread-creation operation failed; it will not create replacement threads.",
-            {
-              operationId: reservation.operation.operationId,
-              error: reservation.operation.errorJson
-                ? JSON.parse(reservation.operation.errorJson)
-                : null,
-            },
-          ),
-        );
-      }
-      if (reservation.kind === "replay" && reservation.operation.status !== "reserved") {
-        return yield* awaitCreationReplay(operationId);
-      }
-
-      const claimed = yield* operationRepository
-        .markDispatching({ operationId, now: gatewayIsoNow() })
-        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-      if (!claimed) return yield* awaitCreationReplay(operationId);
-
       const createdThreads: Array<(typeof prepared)[number]> = [];
       const createdWorktrees: Array<{
         readonly cwd: string;
@@ -468,125 +391,413 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         } | null;
       }> = [];
 
-      const result = yield* Effect.forEach(
-        prepared,
-        (entry) =>
-          Effect.gen(function* () {
-            yield* context.assertCallerTurnActive();
-            let branch: string | null = null;
-            let worktreePath: string | null = null;
-            if (entry.environment === "worktree") {
-              const created = yield* git.createWorktree({
-                cwd: entry.workspaceRoot,
-                branch: entry.baseBranch!,
-                newBranch: entry.newBranch!,
-                path: entry.plannedWorktreePath,
-              });
-              branch = created.worktree.branch;
-              worktreePath = created.worktree.path;
-              const trackedWorktree = {
-                cwd: entry.workspaceRoot,
-                path: worktreePath,
-                branch,
-                proof: null as (typeof createdWorktrees)[number]["proof"],
-              };
-              createdWorktrees.push(trackedWorktree);
-              const proof = yield* git.recordWorktreeOwnership({
-                path: worktreePath,
-                branch,
-                token: randomUUID(),
-              });
-              trackedWorktree.proof = proof;
-              const ownershipRecorded = yield* operationRepository.recordWorktreeCreated({
+      const compensateClaimedOperation = (cause: Cause.Cause<unknown>) =>
+        Effect.gen(function* () {
+          const interrupted = Cause.hasInterrupts(cause);
+          const failureMessage = interrupted
+            ? "The MCP request was interrupted after thread creation dispatch began."
+            : errorText(Cause.squash(cause));
+          yield* operationRepository.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("agent gateway could not persist compensating status", {
                 operationId,
-                index: entry.index,
-                workspaceRoot: entry.workspaceRoot,
-                path: worktreePath,
-                branch,
-                token: proof.token,
-                gitDir: proof.gitDir,
-                head: proof.head,
-                now: gatewayIsoNow(),
-              });
-              if (!ownershipRecorded) {
-                return yield* Effect.fail(
-                  new Error(
-                    `Could not persist ownership for created worktree ${worktreePath}; compensating it before dispatch.`,
+                error: errorText(error),
+              }),
+            ),
+          );
+          const compensationErrors: string[] = [];
+          let compensatedThreadCount = 0;
+          let compensatedWorktreeCount = 0;
+          yield* Effect.forEach(
+            [...createdThreads].reverse(),
+            (entry) =>
+              orchestrationEngine
+                .dispatch({
+                  type: "thread.delete",
+                  commandId: entry.ids.compensateCommandId,
+                  threadId: entry.ids.threadId,
+                })
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      compensatedThreadCount += 1;
+                    }),
                   ),
-                );
-              }
-            }
-
-            yield* context.assertCallerTurnActive();
-            yield* orchestrationEngine.dispatch({
-              type: "thread.create",
-              commandId: entry.ids.threadCreateCommandId,
-              threadId: entry.ids.threadId,
-              projectId: entry.projectId,
-              title: entry.title,
-              modelSelection: entry.target,
-              runtimeMode: entry.runtimeMode,
-              interactionMode: "default",
-              envMode: entry.environment,
-              branch,
-              worktreePath,
-              creationSource: "synara_mcp",
-              sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
-              sourceTurnId: TurnId.makeUnsafe(callerTurnId),
-              gatewayOperationId: operationId,
-              gatewayOperationIndex: entry.index,
-              ...(worktreePath !== null
-                ? {
-                    associatedWorktreePath: worktreePath,
-                    associatedWorktreeBranch: branch,
-                    associatedWorktreeRef: branch,
-                  }
-                : {}),
-              createdAt: gatewayIsoNow(),
+                  Effect.catch((error) =>
+                    Effect.sync(() =>
+                      compensationErrors.push(`thread ${entry.ids.threadId}: ${errorText(error)}`),
+                    ),
+                  ),
+                ),
+            { discard: true },
+          );
+          yield* Effect.forEach(
+            [...createdWorktrees].reverse(),
+            (worktree) =>
+              git
+                .withMutation(
+                  worktree.cwd,
+                  worktree.proof === null
+                    ? git
+                        .removeWorktree({
+                          cwd: worktree.cwd,
+                          path: worktree.path,
+                          force: false,
+                        })
+                        .pipe(
+                          Effect.flatMap(() =>
+                            git.deleteBranch({
+                              cwd: worktree.cwd,
+                              branch: worktree.branch,
+                              force: false,
+                            }),
+                          ),
+                        )
+                    : git
+                        .verifyWorktreeOwnership({
+                          path: worktree.path,
+                          proof: worktree.proof,
+                        })
+                        .pipe(
+                          Effect.flatMap((verification) =>
+                            verification.verified
+                              ? Effect.void
+                              : Effect.fail(
+                                  new Error(
+                                    `Refusing live compensation: ${verification.reason ?? "ownership verification failed"}.`,
+                                  ),
+                                ),
+                          ),
+                          Effect.flatMap(() =>
+                            git.removeWorktree({
+                              cwd: worktree.cwd,
+                              path: worktree.path,
+                              force: false,
+                            }),
+                          ),
+                          Effect.flatMap(() =>
+                            git.deleteBranchIfUnchanged({
+                              cwd: worktree.cwd,
+                              branch: worktree.branch,
+                              expectedHead: worktree.proof!.head,
+                            }),
+                          ),
+                        ),
+                )
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      compensatedWorktreeCount += 1;
+                    }),
+                  ),
+                  Effect.catch((error) =>
+                    Effect.sync(() =>
+                      compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
+                    ),
+                  ),
+                ),
+            { discard: true },
+          );
+          const failure = {
+            code: interrupted ? "request_interrupted" : "dispatch_failed",
+            message: failureMessage,
+            createdThreadCount: createdThreads.length,
+            compensatedThreadCount,
+            compensatedWorktreeCount,
+            compensationErrors,
+          };
+          if (compensationErrors.length > 0) {
+            yield* operationRepository
+              .recordCompensationFailure({
+                operationId,
+                errorJson: JSON.stringify(failure),
+                now: gatewayIsoNow(),
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("agent gateway compensation status could not be persisted", {
+                    operationId,
+                    error: errorText(error),
+                  }),
+                ),
+              );
+            yield* Effect.logWarning("agent gateway compensation remains pending", {
+              operationId,
+              errors: compensationErrors,
             });
-            createdThreads.push(entry);
+            return new GatewayToolError(
+              "operation_failed",
+              "Synara could not dispatch the exact creation plan and cleanup is still pending. The durable operation remains compensating and will never create replacements.",
+              { operationId, ...failure, compensationPending: true },
+            );
+          }
 
-            yield* context.assertCallerTurnActive();
-            yield* orchestrationEngine.dispatch({
-              type: "thread.turn.start",
-              commandId: entry.ids.turnStartCommandId,
-              threadId: entry.ids.threadId,
-              message: {
-                messageId: entry.ids.messageId,
-                role: "user",
-                text: entry.spec.prompt,
-                attachments: [],
-              },
-              modelSelection: entry.target,
-              dispatchMode: "queue",
-              dispatchOrigin: "agent",
-              runtimeMode: entry.runtimeMode,
-              interactionMode: "default",
-              createdAt: gatewayIsoNow(),
-            });
-            // The dispatch can outlive the caller turn. Recheck after it returns so
-            // a child started in that final race window is compensated as part of
-            // the same durable operation instead of being left detached.
-            yield* context.assertCallerTurnActive();
+          const statusFailure = yield* operationRepository
+            .fail({
+              operationId,
+              errorJson: JSON.stringify(failure),
+              now: gatewayIsoNow(),
+            })
+            .pipe(
+              Effect.match({
+                onFailure: (error) => error,
+                onSuccess: () => null,
+              }),
+            );
+          if (statusFailure !== null) {
+            const statusError = `operation status: ${errorText(statusFailure)}`;
+            compensationErrors.push(statusError);
+            yield* operationRepository
+              .recordCompensationFailure({
+                operationId,
+                errorJson: JSON.stringify(failure),
+                now: gatewayIsoNow(),
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("agent gateway fallback status could not be persisted", {
+                    operationId,
+                    error: errorText(error),
+                  }),
+                ),
+              );
+            return new GatewayToolError(
+              "operation_failed",
+              "Synara compensated the created resources but could not persist a terminal operation status. The operation remains compensating and will never create replacements.",
+              { operationId, ...failure, compensationPending: true },
+            );
+          }
+          return new GatewayToolError(
+            "operation_failed",
+            "Synara could not dispatch the exact creation plan. Created operation-owned resources were compensated; no replacements were created.",
+            { operationId, ...failure },
+          );
+        });
 
+      let claimedByThisFiber = false;
+      const outcome = yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          // Reservation and claim form one uninterruptible handshake. Once the
+          // durable reservation exists, this fiber either claims it while the
+          // compensation boundary is already installed or returns a replay.
+          const reservation = yield* operationRepository
+            .reserve({
+              operationId,
+              callerThreadId: context.callerThreadId,
+              callerTurnId,
+              operationKind: "create_threads",
+              requestId: input.requestId,
+              fingerprint,
+              requestedCount: prepared.length,
+              planJson: canonicalJson(
+                prepared.map((entry) => ({
+                  index: entry.index,
+                  spec: entry.spec,
+                  projectId: entry.projectId,
+                  workspaceRoot: entry.workspaceRoot,
+                  environment: entry.environment,
+                  runtimeMode: entry.runtimeMode,
+                  baseBranch: entry.baseBranch,
+                  newBranch: entry.newBranch,
+                  plannedWorktreePath: entry.plannedWorktreePath,
+                  ownershipPreflightPassed: entry.ownershipPreflightPassed,
+                  ids: entry.ids,
+                })),
+              ),
+              now: gatewayIsoNow(),
+            })
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+
+          if (reservation.kind === "idempotency_conflict") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "idempotency_conflict",
+                `Request id "${input.requestId}" was already used with a different creation plan.`,
+                { operationId: reservation.operation.operationId },
+              ),
+            );
+          }
+          if (reservation.kind === "creation_plan_locked") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "creation_plan_locked",
+                "This caller turn already committed a different thread-creation plan. A new user turn is required for another plan.",
+                {
+                  operationId: reservation.operation.operationId,
+                  requestId: reservation.operation.requestId,
+                  requestedCount: reservation.operation.requestedCount,
+                  status: reservation.operation.status,
+                },
+              ),
+            );
+          }
+          if (reservation.kind === "replay" && reservation.operation.status === "completed") {
             return {
-              index: entry.index,
-              threadId: entry.ids.threadId,
-              projectId: entry.projectId,
-              title: entry.title,
-              target: entry.target,
-              provider: entry.target.provider,
-              model: entry.target.model,
-              runtimeMode: entry.runtimeMode,
-              environment: entry.environment,
-              branch,
-              worktreePath,
-              status: "task_dispatched" as const,
+              kind: "replay" as const,
+              result: mcpToolResultJson(JSON.parse(reservation.operation.resultJson ?? "{}")),
             };
-          }),
-        { concurrency: 1 },
-      ).pipe(
-        Effect.flatMap((results) => {
+          }
+          if (reservation.kind === "replay" && reservation.operation.status === "failed") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "operation_failed",
+                "The original thread-creation operation failed; it will not create replacement threads.",
+                {
+                  operationId: reservation.operation.operationId,
+                  error: reservation.operation.errorJson
+                    ? JSON.parse(reservation.operation.errorJson)
+                    : null,
+                },
+              ),
+            );
+          }
+          if (reservation.kind === "replay" && reservation.operation.status !== "reserved") {
+            return {
+              kind: "replay" as const,
+              result: yield* restore(awaitCreationReplay(operationId)),
+            };
+          }
+
+          const claimed = yield* operationRepository
+            .markDispatching({ operationId, now: gatewayIsoNow() })
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+          if (!claimed) {
+            return {
+              kind: "replay" as const,
+              result: yield* restore(awaitCreationReplay(operationId)),
+            };
+          }
+          claimedByThisFiber = true;
+
+          const results = yield* restore(
+            Effect.forEach(
+              prepared,
+              (entry) =>
+                Effect.gen(function* () {
+                  yield* context.assertCallerTurnActive();
+                  let branch: string | null = null;
+                  let worktreePath: string | null = null;
+                  if (entry.environment === "worktree") {
+                    const created = yield* Effect.uninterruptible(
+                      Effect.gen(function* () {
+                        const created = yield* git.createWorktree({
+                          cwd: entry.workspaceRoot,
+                          branch: entry.baseBranch!,
+                          newBranch: entry.newBranch!,
+                          path: entry.plannedWorktreePath,
+                        });
+                        const trackedWorktree = {
+                          cwd: entry.workspaceRoot,
+                          path: created.worktree.path,
+                          branch: created.worktree.branch,
+                          proof: null as (typeof createdWorktrees)[number]["proof"],
+                        };
+                        createdWorktrees.push(trackedWorktree);
+                        const proof = yield* git.recordWorktreeOwnership({
+                          path: trackedWorktree.path,
+                          branch: trackedWorktree.branch,
+                          token: randomUUID(),
+                        });
+                        trackedWorktree.proof = proof;
+                        const ownershipRecorded = yield* operationRepository.recordWorktreeCreated({
+                          operationId,
+                          index: entry.index,
+                          workspaceRoot: entry.workspaceRoot,
+                          path: trackedWorktree.path,
+                          branch: trackedWorktree.branch,
+                          token: proof.token,
+                          gitDir: proof.gitDir,
+                          head: proof.head,
+                          now: gatewayIsoNow(),
+                        });
+                        if (!ownershipRecorded) {
+                          return yield* Effect.fail(
+                            new Error(
+                              `Could not persist ownership for created worktree ${trackedWorktree.path}; compensating it before dispatch.`,
+                            ),
+                          );
+                        }
+                        return created;
+                      }),
+                    );
+                    branch = created.worktree.branch;
+                    worktreePath = created.worktree.path;
+                  }
+
+                  yield* context.assertCallerTurnActive();
+                  yield* orchestrationEngine
+                    .dispatch({
+                      type: "thread.create",
+                      commandId: entry.ids.threadCreateCommandId,
+                      threadId: entry.ids.threadId,
+                      projectId: entry.projectId,
+                      title: entry.title,
+                      modelSelection: entry.target,
+                      runtimeMode: entry.runtimeMode,
+                      interactionMode: "default",
+                      envMode: entry.environment,
+                      branch,
+                      worktreePath,
+                      creationSource: "synara_mcp",
+                      sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+                      sourceTurnId: TurnId.makeUnsafe(callerTurnId),
+                      gatewayOperationId: operationId,
+                      gatewayOperationIndex: entry.index,
+                      ...(worktreePath !== null
+                        ? {
+                            associatedWorktreePath: worktreePath,
+                            associatedWorktreeBranch: branch,
+                            associatedWorktreeRef: branch,
+                          }
+                        : {}),
+                      createdAt: gatewayIsoNow(),
+                    })
+                    .pipe(
+                      Effect.tap(() => Effect.sync(() => createdThreads.push(entry))),
+                      Effect.uninterruptible,
+                    );
+
+                  yield* context.assertCallerTurnActive();
+                  yield* orchestrationEngine.dispatch({
+                    type: "thread.turn.start",
+                    commandId: entry.ids.turnStartCommandId,
+                    threadId: entry.ids.threadId,
+                    message: {
+                      messageId: entry.ids.messageId,
+                      role: "user",
+                      text: entry.spec.prompt,
+                      attachments: [],
+                    },
+                    modelSelection: entry.target,
+                    dispatchMode: "queue",
+                    dispatchOrigin: "agent",
+                    runtimeMode: entry.runtimeMode,
+                    interactionMode: "default",
+                    createdAt: gatewayIsoNow(),
+                  });
+                  // The dispatch can outlive the caller turn. Recheck after it returns so
+                  // a child started in that final race window is compensated as part of
+                  // the same durable operation instead of being left detached.
+                  yield* context.assertCallerTurnActive();
+
+                  return {
+                    index: entry.index,
+                    threadId: entry.ids.threadId,
+                    projectId: entry.projectId,
+                    title: entry.title,
+                    target: entry.target,
+                    provider: entry.target.provider,
+                    model: entry.target.model,
+                    runtimeMode: entry.runtimeMode,
+                    environment: entry.environment,
+                    branch,
+                    worktreePath,
+                    status: "task_dispatched" as const,
+                  };
+                }),
+              { concurrency: 1 },
+            ),
+          );
           const result = {
             operationId,
             requestId: input.requestId,
@@ -595,159 +806,32 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             threadIds: results.map((entry) => entry.threadId),
             threads: results,
           } satisfies SynaraCreateThreadsResult;
-          return operationRepository
-            .complete({
-              operationId,
-              resultJson: JSON.stringify(result),
-              now: gatewayIsoNow(),
-            })
-            .pipe(Effect.as(result));
-        }),
-        Effect.catch((cause) =>
-          Effect.gen(function* () {
-            yield* operationRepository
-              .markCompensating({ operationId, now: gatewayIsoNow() })
-              .pipe(Effect.catch(() => Effect.void));
-            const compensationErrors: string[] = [];
-            let compensatedThreadCount = 0;
-            let compensatedWorktreeCount = 0;
-            yield* Effect.forEach(
-              [...createdThreads].reverse(),
-              (entry) =>
-                orchestrationEngine
-                  .dispatch({
-                    type: "thread.delete",
-                    commandId: entry.ids.compensateCommandId,
-                    threadId: entry.ids.threadId,
-                  })
-                  .pipe(
-                    Effect.tap(() =>
-                      Effect.sync(() => {
-                        compensatedThreadCount += 1;
-                      }),
-                    ),
-                    Effect.catch((error) =>
-                      Effect.sync(() =>
-                        compensationErrors.push(
-                          `thread ${entry.ids.threadId}: ${errorText(error)}`,
-                        ),
-                      ),
-                    ),
+          // Once every deterministic dispatch succeeded, durable completion is
+          // the commit point. A late client cancellation must not roll back a
+          // fully-created operation or strand it between dispatching/completed.
+          yield* operationRepository.complete({
+            operationId,
+            resultJson: JSON.stringify(result),
+            now: gatewayIsoNow(),
+          });
+          return { kind: "created" as const, result };
+        }).pipe(
+          Effect.catchCause((cause) =>
+            claimedByThisFiber
+              ? compensateClaimedOperation(cause).pipe(
+                  Effect.flatMap((compensationError) =>
+                    Cause.hasInterrupts(cause) || Cause.hasDies(cause)
+                      ? Effect.failCause(cause)
+                      : Effect.fail(compensationError),
                   ),
-              { discard: true },
-            );
-            yield* Effect.forEach(
-              [...createdWorktrees].reverse(),
-              (worktree) =>
-                git
-                  .withMutation(
-                    worktree.cwd,
-                    worktree.proof === null
-                      ? git
-                          .removeWorktree({
-                            cwd: worktree.cwd,
-                            path: worktree.path,
-                            force: false,
-                          })
-                          .pipe(
-                            Effect.flatMap(() =>
-                              git.deleteBranch({
-                                cwd: worktree.cwd,
-                                branch: worktree.branch,
-                                force: false,
-                              }),
-                            ),
-                          )
-                      : git
-                          .verifyWorktreeOwnership({
-                            path: worktree.path,
-                            proof: worktree.proof,
-                          })
-                          .pipe(
-                            Effect.flatMap((verification) =>
-                              verification.verified
-                                ? Effect.void
-                                : Effect.fail(
-                                    new Error(
-                                      `Refusing live compensation: ${verification.reason ?? "ownership verification failed"}.`,
-                                    ),
-                                  ),
-                            ),
-                            Effect.flatMap(() =>
-                              git.removeWorktree({
-                                cwd: worktree.cwd,
-                                path: worktree.path,
-                                force: false,
-                              }),
-                            ),
-                            Effect.flatMap(() =>
-                              git.deleteBranchIfUnchanged({
-                                cwd: worktree.cwd,
-                                branch: worktree.branch,
-                                expectedHead: worktree.proof!.head,
-                              }),
-                            ),
-                          ),
-                  )
-                  .pipe(
-                    Effect.tap(() =>
-                      Effect.sync(() => {
-                        compensatedWorktreeCount += 1;
-                      }),
-                    ),
-                    Effect.catch((error) =>
-                      Effect.sync(() =>
-                        compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
-                      ),
-                    ),
-                  ),
-              { discard: true },
-            );
-            const failure = {
-              message: errorText(cause),
-              createdThreadCount: createdThreads.length,
-              compensatedThreadCount,
-              compensatedWorktreeCount,
-              compensationErrors,
-            };
-            if (compensationErrors.length > 0) {
-              yield* operationRepository
-                .recordCompensationFailure({
-                  operationId,
-                  errorJson: JSON.stringify(failure),
-                  now: gatewayIsoNow(),
-                })
-                .pipe(Effect.catch(() => Effect.void));
-              yield* Effect.logWarning("agent gateway compensation remains pending", {
-                operationId,
-                errors: compensationErrors,
-              });
-              return yield* Effect.fail(
-                new GatewayToolError(
-                  "operation_failed",
-                  "Synara could not dispatch the exact creation plan and cleanup is still pending. The durable operation remains compensating and will never create replacements.",
-                  { operationId, ...failure, compensationPending: true },
-                ),
-              );
-            }
-            yield* operationRepository
-              .fail({
-                operationId,
-                errorJson: JSON.stringify(failure),
-                now: gatewayIsoNow(),
-              })
-              .pipe(Effect.catch(() => Effect.void));
-            return yield* Effect.fail(
-              new GatewayToolError(
-                "operation_failed",
-                "Synara could not dispatch the exact creation plan. Created operation-owned resources were compensated; no replacements were created.",
-                { operationId, ...failure },
-              ),
-            );
-          }),
+                )
+              : Effect.failCause(cause),
+          ),
         ),
       );
 
+      if (outcome.kind === "replay") return outcome.result;
+      const result = outcome.result;
       yield* appendThreadCreationRecap({
         callerThreadId: context.callerThreadId,
         callerTurnId,
