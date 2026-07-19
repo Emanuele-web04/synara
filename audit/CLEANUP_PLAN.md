@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-010 complete
+> Status: in progress — CLN-011 complete
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -135,7 +135,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-004 | P1 | DONE | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
 | CLN-005 | P1 | DONE | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
 | CLN-010 | P0 | DONE | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
-| CLN-011 | P0 | TODO | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
+| CLN-011 | P0 | DONE | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
 | CLN-012 | P0 | TODO | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners. | ChatView logic/browser suites and hook tests |
 | CLN-013 | P0 | TODO | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged. | Sidebar logic/UI/import plus new row characterization |
 | CLN-014 | P1 | TODO | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics. | timeline unit/browser suites; session logic tests |
@@ -243,3 +243,17 @@ For every tracker item:
   All 94 unique original behavior names remain covered. Combined focused verification passed across
   **11 files / 158 tests**; the public export/action surface is unchanged, the import graph is
   acyclic, repo unused diagnostics remain **0 across 1,827 files**, and `git diff --check` passed.
+- 2026-07-19 — CLN-011 started; the existing facade, storage key/schema compatibility, attachment
+  ownership, and granular selector identity are characterization constraints.
+- 2026-07-19 — CLN-011 complete: `composerDraftStore.ts` shrank from **5,185 → 158 LOC** and now
+  owns only public re-exports, Zustand/persistence wiring, hooks, and promotion batch helpers. Domain,
+  model selection, attachment lifetime/verification, migration/serialization, and actions have
+  exactly five internal owners; the production family is **5,420 LOC** including boundary overhead.
+  The old store↔`composerSend` source cycle was removed by placing image cloning with draft transfer
+  and re-exporting it from the send module. The 3,423-line test moved into core/facade (**553 LOC**),
+  attachment, model, and persistence suites with one shared fixture module (**3,470 LOC** total);
+  two overlapping sticky-update cases now share one two-row contract, and three identity/facade
+  characterizations were added. The **27-name export set** and all **61 state/interface members**
+  match the original. Combined focused verification passed across **10 files / 180 tests**; the
+  dependency graph is acyclic, repo unused diagnostics remain **0 across 1,836 files**, and
+  `git diff --check` passed.
