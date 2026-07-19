@@ -32,7 +32,11 @@ import {
 } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
-import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
+import {
+  getComposerTraitSelection,
+  hasVisibleComposerTraitControls,
+  resolveEffortCommitOptionId,
+} from "./composerTraits";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
@@ -354,15 +358,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         onSelectionComplete?.();
         return;
       }
-      const optionId =
-        primarySelectDescriptor?.id ??
-        (provider === "kilo" || provider === "opencode"
-          ? "variant"
-          : provider === "pi"
-            ? "thinkingLevel"
-            : provider === "claudeAgent"
-              ? "effort"
-              : "reasoningEffort");
+      const optionId = resolveEffortCommitOptionId(provider, primarySelectDescriptor?.id);
       commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
     },
     [
