@@ -134,9 +134,9 @@ export function buildAntigravityCaptureCommand(
 ): string {
   const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   if (platform === "win32") {
-    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
   }
-  return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
+  return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
 }
 
 export function hookScriptSource(): string {

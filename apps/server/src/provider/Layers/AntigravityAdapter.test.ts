@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -154,10 +155,26 @@ describe("Antigravity CLI integration helpers", () => {
     );
     const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
     const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
-    const result = await runAntigravityHelperProcess(shell, args, { timeoutMs: 1_000 });
+    const child = spawn(shell, args, {
+      env: { ...process.env, SYNARA_ANTIGRAVITY_EVENTS: "" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    const exit = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
 
-    expect(result.code).toBe(0);
-    expect(result.stdout.trim()).toBe("{}");
+    await new Promise<void>((resolve, reject) => {
+      child.stdin.once("error", reject);
+      child.stdin.end(JSON.stringify({ payload: "x".repeat(2 * 1024 * 1024) }), resolve);
+    });
+    const code = await exit;
+
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe("{}");
   });
 
   it("runs packaged Electron as Node only for Synara-managed sessions", () => {
@@ -169,7 +186,7 @@ describe("Antigravity CLI integration helpers", () => {
         "darwin",
       ),
     ).toBe(
-      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
+      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -179,7 +196,7 @@ describe("Antigravity CLI integration helpers", () => {
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && "C:\Program Files\Synara\Synara.exe" "C:\Users\test\.gemini\capture.cjs" "pre-tool")`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && "C:\Program Files\Synara\Synara.exe" "C:\Users\test\.gemini\capture.cjs" "pre-tool")`,
     );
   });
 
