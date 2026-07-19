@@ -574,7 +574,7 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
   };
 }
 
-function toProjectedThreadShell(input: {
+function toProjectedThreadShellFromStoredSummary(input: {
   readonly threadRow: ProjectionThreadShellDbRow;
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly session: OrchestrationSession | null;
@@ -596,6 +596,11 @@ function toProjectedThreadShell(input: {
     createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     isPinned: threadRow.isPinned > 0,
     parentThreadId: threadRow.parentThreadId ?? null,
+    creationSource: threadRow.creationSource ?? null,
+    sourceThreadId: threadRow.sourceThreadId ?? null,
+    sourceTurnId: threadRow.sourceTurnId ?? null,
+    gatewayOperationId: threadRow.gatewayOperationId ?? null,
+    gatewayOperationIndex: threadRow.gatewayOperationIndex ?? null,
     subagentAgentId: threadRow.subagentAgentId ?? null,
     subagentNickname: threadRow.subagentNickname ?? null,
     subagentRole: threadRow.subagentRole ?? null,
@@ -643,6 +648,11 @@ function toProjectedThread(input: {
     createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     isPinned: threadRow.isPinned > 0,
     parentThreadId: threadRow.parentThreadId ?? null,
+    creationSource: threadRow.creationSource ?? null,
+    sourceThreadId: threadRow.sourceThreadId ?? null,
+    sourceTurnId: threadRow.sourceTurnId ?? null,
+    gatewayOperationId: threadRow.gatewayOperationId ?? null,
+    gatewayOperationIndex: threadRow.gatewayOperationIndex ?? null,
     subagentAgentId: threadRow.subagentAgentId ?? null,
     subagentNickname: threadRow.subagentNickname ?? null,
     subagentRole: threadRow.subagentRole ?? null,
@@ -750,6 +760,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_markers_json AS "threadMarkers",
           notes,
           parent_thread_id AS "parentThreadId",
+          creation_source AS "creationSource",
+          source_thread_id AS "sourceThreadId",
+          source_turn_id AS "sourceTurnId",
+          gateway_operation_id AS "gatewayOperationId",
+          gateway_operation_index AS "gatewayOperationIndex",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
           subagent_role AS "subagentRole",
@@ -792,6 +807,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           parent_thread_id AS "parentThreadId",
+          creation_source AS "creationSource",
+          source_thread_id AS "sourceThreadId",
+          source_turn_id AS "sourceTurnId",
+          gateway_operation_id AS "gatewayOperationId",
+          gateway_operation_index AS "gatewayOperationIndex",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
           subagent_role AS "subagentRole",
@@ -1170,6 +1190,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_markers_json AS "threadMarkers",
           notes,
           parent_thread_id AS "parentThreadId",
+          creation_source AS "creationSource",
+          source_thread_id AS "sourceThreadId",
+          source_turn_id AS "sourceTurnId",
+          gateway_operation_id AS "gatewayOperationId",
+          gateway_operation_index AS "gatewayOperationIndex",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
           subagent_role AS "subagentRole",
@@ -1217,6 +1242,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_markers_json AS "threadMarkers",
           notes,
           parent_thread_id AS "parentThreadId",
+          creation_source AS "creationSource",
+          source_thread_id AS "sourceThreadId",
+          source_turn_id AS "sourceTurnId",
+          gateway_operation_id AS "gatewayOperationId",
+          gateway_operation_index AS "gatewayOperationIndex",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
           subagent_role AS "subagentRole",
@@ -1971,7 +2001,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             threads: threadRows
               .filter((row) => row.deletedAt === null)
               .map((row) =>
-                toProjectedThreadShell({
+                toProjectedThreadShellFromStoredSummary({
                   threadRow: row,
                   latestTurn: latestTurns.byThread.get(row.threadId) ?? null,
                   session: sessions.byThread.get(row.threadId) ?? null,
@@ -2241,7 +2271,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ]);
 
           return Option.some(
-            toProjectedThreadShell({
+            toProjectedThreadShellFromStoredSummary({
               threadRow: threadRow.value,
               latestTurn: Option.match(latestTurnRow, {
                 onNone: () => null,

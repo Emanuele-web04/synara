@@ -49,6 +49,7 @@ const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
+const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -2212,6 +2213,145 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const readWorktreeIdentity = (worktreePath: string) =>
+      Effect.gen(function* () {
+        const gitDirResult = yield* executeGit(
+          "GitCore.readWorktreeIdentity.gitDir",
+          worktreePath,
+          ["rev-parse", "--absolute-git-dir"],
+        );
+        const branchResult = yield* executeGit(
+          "GitCore.readWorktreeIdentity.branch",
+          worktreePath,
+          ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        );
+        const headResult = yield* executeGit("GitCore.readWorktreeIdentity.head", worktreePath, [
+          "rev-parse",
+          "--verify",
+          "HEAD",
+        ]);
+        const statusResult = yield* executeGit(
+          "GitCore.readWorktreeIdentity.status",
+          worktreePath,
+          ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        );
+        const rawGitDir = gitDirResult.stdout.trim();
+        const gitDir = yield* Effect.tryPromise({
+          try: () => nodeFs.realpath(rawGitDir),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.readWorktreeIdentity.gitDir",
+              worktreePath,
+              ["rev-parse", "--absolute-git-dir"],
+              "could not canonicalize the linked worktree Git directory.",
+              cause,
+            ),
+        });
+        return {
+          gitDir,
+          branch: branchResult.stdout.trim(),
+          head: headResult.stdout.trim(),
+          clean: statusResult.stdout.length === 0,
+        };
+      });
+
+    const recordWorktreeOwnership: GitCoreShape["recordWorktreeOwnership"] = (input) =>
+      Effect.gen(function* () {
+        const identity = yield* readWorktreeIdentity(input.path);
+        if (identity.branch !== input.branch || !identity.clean) {
+          return yield* new GitCommandError({
+            operation: "GitCore.recordWorktreeOwnership",
+            command: "git worktree ownership record",
+            cwd: input.path,
+            detail:
+              identity.branch !== input.branch
+                ? `Expected branch ${input.branch}, found ${identity.branch || "detached HEAD"}.`
+                : "The newly-created worktree was already dirty.",
+          });
+        }
+        const proof = {
+          token: input.token,
+          gitDir: identity.gitDir,
+          branch: identity.branch,
+          head: identity.head,
+        };
+        const markerPath = nodePath.join(identity.gitDir, WORKTREE_OWNERSHIP_MARKER);
+        yield* Effect.tryPromise({
+          try: () =>
+            nodeFs.writeFile(markerPath, JSON.stringify(proof), {
+              encoding: "utf8",
+              flag: "wx",
+              mode: 0o600,
+            }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.recordWorktreeOwnership",
+              input.path,
+              ["worktree", "ownership", "record"],
+              "could not persist the linked worktree ownership marker.",
+              cause,
+            ),
+        });
+        return proof;
+      });
+
+    const verifyWorktreeOwnership: GitCoreShape["verifyWorktreeOwnership"] = (input) =>
+      Effect.gen(function* () {
+        const identity = yield* readWorktreeIdentity(input.path);
+        if (identity.gitDir !== input.proof.gitDir) {
+          return { verified: false, reason: "linked worktree Git directory changed" };
+        }
+        const markerPath = nodePath.join(identity.gitDir, WORKTREE_OWNERSHIP_MARKER);
+        const markerText = yield* Effect.tryPromise({
+          try: () =>
+            nodeFs.readFile(markerPath, "utf8").catch((cause: unknown) => {
+              if (hasNodeErrorCode(cause, "ENOENT")) return null;
+              throw cause;
+            }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.verifyWorktreeOwnership",
+              input.path,
+              ["worktree", "ownership", "verify"],
+              "could not read the linked worktree ownership marker.",
+              cause,
+            ),
+        });
+        if (markerText === null) {
+          return { verified: false, reason: "ownership marker is missing" };
+        }
+        let marker: unknown;
+        try {
+          marker = JSON.parse(markerText);
+        } catch {
+          return { verified: false, reason: "ownership marker is invalid" };
+        }
+        if (
+          typeof marker !== "object" ||
+          marker === null ||
+          !("token" in marker) ||
+          marker.token !== input.proof.token ||
+          !("gitDir" in marker) ||
+          marker.gitDir !== input.proof.gitDir ||
+          !("branch" in marker) ||
+          marker.branch !== input.proof.branch ||
+          !("head" in marker) ||
+          marker.head !== input.proof.head
+        ) {
+          return { verified: false, reason: "ownership marker does not match" };
+        }
+        if (identity.branch !== input.proof.branch) {
+          return { verified: false, reason: "worktree branch changed" };
+        }
+        if (identity.head !== input.proof.head) {
+          return { verified: false, reason: "worktree HEAD changed" };
+        }
+        if (!identity.clean) {
+          return { verified: false, reason: "worktree has uncommitted changes" };
+        }
+        return { verified: true, reason: null };
+      });
+
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
       Effect.gen(function* () {
         const worktreePath =
@@ -2334,6 +2474,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ),
         );
       });
+
+    const deleteBranchIfUnchanged: GitCoreShape["deleteBranchIfUnchanged"] = (input) =>
+      executeGit("GitCore.deleteBranchIfUnchanged", input.cwd, [
+        "update-ref",
+        "-d",
+        `refs/heads/${input.branch}`,
+        input.expectedHead,
+      ]).pipe(Effect.asVoid);
 
     const renameBranch: GitCoreShape["renameBranch"] = (input) =>
       Effect.gen(function* () {
@@ -2735,6 +2883,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readConfigValue,
       listBranches,
       createWorktree,
+      recordWorktreeOwnership,
+      verifyWorktreeOwnership,
       createDetachedWorktree,
       fetchPullRequestBranch,
       ensureRemote,
@@ -2742,6 +2892,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       setBranchUpstream,
       removeWorktree,
       deleteBranch,
+      deleteBranchIfUnchanged,
       renameBranch,
       createBranch,
       publishBranch,

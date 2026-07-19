@@ -120,6 +120,7 @@ import {
   createAllThreadsSelector,
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
+  createSidebarTreeThreadsSelector,
   createThreadSelector,
 } from "../storeSelectors";
 import {
@@ -1687,8 +1688,10 @@ export default function Sidebar() {
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const selectSidebarTreeThreads = useMemo(() => createSidebarTreeThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
@@ -1705,6 +1708,11 @@ export default function Sidebar() {
     () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
     [sidebarDisplayThreads, studioProjectIdSet],
   );
+  const { nonStudioThreads: nonStudioSidebarTreeThreads, studioThreads: studioSidebarTreeThreads } =
+    useMemo(
+      () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
+      [sidebarTreeThreads, studioProjectIdSet],
+    );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {
@@ -1800,14 +1808,17 @@ export default function Sidebar() {
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
+  // Pin state must derive from the child-inclusive tree list: project trees
+  // render child rows with the pin action, and a pin stored for a child would
+  // otherwise never surface in the pinned section (root-only display list).
   const pinnedThreadIds = useMemo(
     () =>
       derivePinnedThreadIdsForSidebar({
-        threads: sidebarDisplayThreads,
+        threads: sidebarTreeThreads,
         persistedPinnedThreadIds,
         optimisticPinnedStateByThreadId,
       }),
-    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarDisplayThreads],
+    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarTreeThreads],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const projectById = useMemo(
@@ -1841,10 +1852,10 @@ export default function Sidebar() {
   const pinnedThreads = useMemo(
     () =>
       getPinnedThreadsForSidebar(
-        isOnStudio ? studioSidebarDisplayThreads : nonStudioSidebarDisplayThreads,
+        isOnStudio ? studioSidebarTreeThreads : nonStudioSidebarTreeThreads,
         pinnedThreadIds,
       ),
-    [isOnStudio, nonStudioSidebarDisplayThreads, pinnedThreadIds, studioSidebarDisplayThreads],
+    [isOnStudio, nonStudioSidebarTreeThreads, pinnedThreadIds, studioSidebarTreeThreads],
   );
   useEffect(() => {
     sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
@@ -4404,9 +4415,11 @@ export default function Sidebar() {
     animatedProjectListsRef.current.add(node);
   }, []);
 
+  // Trees need child (subagent) threads too; the flat display list stays
+  // root-only for pinned rows and other non-tree consumers.
   const sidebarThreadsByProjectId = useMemo(
-    () => groupSidebarThreadsByProjectId(sidebarDisplayThreads),
-    [sidebarDisplayThreads],
+    () => groupSidebarThreadsByProjectId(sidebarTreeThreads),
+    [sidebarTreeThreads],
   );
   const sortedSidebarThreadsByProjectId = useMemo(() => {
     const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
@@ -5037,8 +5050,9 @@ export default function Sidebar() {
     [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
   );
   const visibleSidebarThreads = useMemo(
-    () => sidebarDisplayThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
-    [sidebarDisplayThreads, visibleSidebarThreadIdSet],
+    // Tree source so expanded subagent rows also get PR badges/git targets.
+    () => sidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
+    [sidebarTreeThreads, visibleSidebarThreadIdSet],
   );
   // PR badges only render on visible rows, so keep git/PR query setup off hidden project history.
   const threadGitTargets = useMemo(

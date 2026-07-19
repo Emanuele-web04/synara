@@ -91,6 +91,9 @@ const PENDING_GENERATED_IMAGES_CACHE_CAPACITY = 512;
 const PENDING_GENERATED_IMAGES_TTL = Duration.minutes(60);
 const ACTIVITY_UPDATE_FINGERPRINT_CACHE_CAPACITY = 4_096;
 const ACTIVITY_UPDATE_FINGERPRINT_TTL = Duration.minutes(360);
+const MAX_NATIVE_CHILDREN_PER_PARENT_TURN = 20;
+const NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY = 2_048;
+const NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL = Duration.minutes(360);
 const ASSISTANT_DELIVERY_MODE_BY_TURN_CACHE_CAPACITY = 2_048;
 const ASSISTANT_DELIVERY_MODE_BY_TURN_TTL = Duration.minutes(60);
 // One turn realistically produces a handful of images; the cap only bounds a
@@ -149,6 +152,10 @@ type ProviderDiffPlaceholder = {
   // ReadonlyArray — which also lets it accept the readonly `checkpoint.files` from
   // an OrchestrationThread without a defensive copy.
   readonly files: ReadonlyArray<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>[number]>;
+};
+type NativeChildSlotState = {
+  initialized: boolean;
+  readonly childIds: Set<string>;
 };
 
 /**
@@ -752,7 +759,10 @@ function buildContextWindowActivityPayload(
   if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
     return undefined;
   }
-  return toActivityPayload(usage);
+  // Stamp the emitting provider so token stats can attribute usage to the
+  // provider that actually processed the turn, not the thread's persisted
+  // model selection (which can drift, e.g. across future per-turn providers).
+  return toActivityPayload({ ...usage, provider: event.provider });
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
@@ -1746,6 +1756,41 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(undefined),
   });
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
+  const nativeChildIdsBySourceTurn = yield* Cache.make<string, NativeChildSlotState>({
+    capacity: NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY,
+    timeToLive: NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL,
+    lookup: () => Effect.succeed({ initialized: false, childIds: new Set<string>() }),
+  });
+
+  const claimNativeChildSlot = Effect.fnUntraced(function* (
+    parentThreadId: ThreadId,
+    sourceTurnId: TurnId | null,
+    childThreadId: ThreadId,
+  ) {
+    const budgetKey = `${parentThreadId}:${sourceTurnId ?? "session"}`;
+    const slotState = yield* Cache.get(nativeChildIdsBySourceTurn, budgetKey);
+    if (!slotState.initialized) {
+      const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+      for (const thread of snapshot.threads) {
+        if (
+          thread.parentThreadId === parentThreadId &&
+          (thread.sourceTurnId ?? null) === sourceTurnId
+        ) {
+          slotState.childIds.add(thread.id);
+        }
+      }
+      slotState.initialized = true;
+    }
+    const childIds = slotState.childIds;
+    if (childIds.has(childThreadId)) {
+      return { admitted: true, budgetKey } as const;
+    }
+    if (childIds.size >= MAX_NATIVE_CHILDREN_PER_PARENT_TURN) {
+      return { admitted: false, budgetKey } as const;
+    }
+    childIds.add(childThreadId);
+    return { admitted: true, budgetKey } as const;
+  });
 
   const dispatchActivityUpdate = Effect.fnUntraced(function* (
     event: ProviderRuntimeEvent,
@@ -2624,6 +2669,7 @@ const make = Effect.gen(function* () {
           const childThreadId = ThreadId.makeUnsafe(
             `subagent:${parentThread.id}:${providerThreadId}`,
           );
+          const sourceTurnId = toTurnId(event.turnId) ?? null;
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
           // Mirror the parent load: only this event's heavy-detail handlers read the
@@ -2643,6 +2689,31 @@ const make = Effect.gen(function* () {
               : undefined;
 
           if (Option.isNone(existingThread)) {
+            const slot = yield* claimNativeChildSlot(parentThread.id, sourceTurnId, childThreadId);
+            if (!slot.admitted) {
+              const overflowId = EventId.makeUnsafe(
+                `provider-native-child-overflow:${slot.budgetKey}`,
+              );
+              yield* orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId: CommandId.makeUnsafe(`provider:native-child-overflow:${slot.budgetKey}`),
+                threadId: parentThread.id,
+                activity: {
+                  id: overflowId,
+                  tone: "error",
+                  kind: "subagent.materialization.capped",
+                  summary: `Synara limited this provider turn to ${MAX_NATIVE_CHILDREN_PER_PARENT_TURN} visible native subagents.`,
+                  payload: {
+                    source: "provider_native",
+                    cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
+                  },
+                  turnId: sourceTurnId,
+                  createdAt: now,
+                },
+                createdAt: now,
+              });
+              return undefined;
+            }
             yield* orchestrationEngine.dispatch({
               type: "thread.create",
               commandId: providerCommandId(event, "subagent-thread-create", childThreadId),
@@ -2663,6 +2734,9 @@ const make = Effect.gen(function* () {
               associatedWorktreeBranch: parentThread.associatedWorktreeBranch,
               associatedWorktreeRef: parentThread.associatedWorktreeRef,
               parentThreadId: parentThread.id,
+              creationSource: "provider_native",
+              sourceThreadId: parentThread.id,
+              ...(sourceTurnId !== null ? { sourceTurnId } : {}),
               subagentAgentId: identity?.agentId ?? null,
               subagentNickname: identity?.nickname ?? null,
               subagentRole: identity?.role ?? null,
@@ -2717,6 +2791,11 @@ const make = Effect.gen(function* () {
                   providerThreadId,
                 }),
                 parentThreadId: parentThread.id,
+                creationSource: "provider_native" as const,
+                sourceThreadId: parentThread.id,
+                sourceTurnId,
+                gatewayOperationId: null,
+                gatewayOperationIndex: null,
                 subagentAgentId: identity?.agentId ?? null,
                 subagentNickname: identity?.nickname ?? null,
                 subagentRole: identity?.role ?? null,
@@ -2761,7 +2840,7 @@ const make = Effect.gen(function* () {
       const providerParentThreadId = normalizeNonEmptyString(
         event.providerRefs?.providerParentThreadId,
       );
-      const { thread } =
+      const targetThreadResolution =
         providerThreadId !== undefined &&
         providerParentThreadId !== undefined &&
         providerThreadId !== providerParentThreadId
@@ -2769,7 +2848,11 @@ const make = Effect.gen(function* () {
               providerThreadId,
               extractSubagentIdentity(event, providerThreadId),
             )
-          : { thread: parentThread };
+          : { threadId: parentThread.id, thread: parentThread };
+      if (targetThreadResolution === undefined) {
+        return;
+      }
+      const thread = targetThreadResolution.thread;
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
       const rawEventTurnId = toTurnId(event.turnId);
@@ -3283,7 +3366,7 @@ const make = Effect.gen(function* () {
               commandId: providerCommandId(
                 event,
                 "thread-turn-diff-complete",
-                `${thread.id}:${eventTurnId}`,
+                `${thread.id}:${turnId}`,
               ),
               threadId: thread.id,
               turnId,

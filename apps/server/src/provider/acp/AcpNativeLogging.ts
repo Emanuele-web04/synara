@@ -8,6 +8,71 @@ import type {
   AcpSessionRuntimeOptions,
 } from "./AcpSessionRuntime.ts";
 
+export const ACP_LOG_REDACTED_VALUE = "[REDACTED]";
+
+const SENSITIVE_ENTRY_NAMES = new Set(["authorization", "synara_agent_gateway_token"]);
+
+function redactSecretString(value: string): string {
+  return value
+    .replace(/(\bBearer\s+)[^\s"',}\]]+/gi, `$1${ACP_LOG_REDACTED_VALUE}`)
+    .replace(/(SYNARA_AGENT_GATEWAY_TOKEN\s*=\s*)[^\s"',}\]]+/g, `$1${ACP_LOG_REDACTED_VALUE}`)
+    .replace(/("SYNARA_AGENT_GATEWAY_TOKEN"\s*:\s*")[^"]*/g, `$1${ACP_LOG_REDACTED_VALUE}`)
+    .replace(
+      /("name"\s*:\s*"SYNARA_AGENT_GATEWAY_TOKEN"\s*,\s*"value"\s*:\s*")[^"]*/g,
+      `$1${ACP_LOG_REDACTED_VALUE}`,
+    );
+}
+
+/** Recursively sanitize both decoded ACP payloads and raw JSON protocol frames. */
+export function redactAcpLogSecrets(value: unknown): unknown {
+  const seen = new WeakMap<object, unknown>();
+
+  const visit = (current: unknown): unknown => {
+    if (typeof current === "string") {
+      return redactSecretString(current);
+    }
+    if (current === null || typeof current !== "object") {
+      return current;
+    }
+    const existing = seen.get(current);
+    if (existing !== undefined) {
+      return existing;
+    }
+    if (Array.isArray(current)) {
+      const clone: unknown[] = [];
+      seen.set(current, clone);
+      for (const entry of current) {
+        clone.push(visit(entry));
+      }
+      return clone;
+    }
+
+    const prototype = Object.getPrototypeOf(current);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return current;
+    }
+
+    const source = current as Record<string, unknown>;
+    const clone: Record<string, unknown> = {};
+    seen.set(current, clone);
+    const namedEntry = typeof source.name === "string" ? source.name.toLowerCase() : undefined;
+    for (const [key, entry] of Object.entries(source)) {
+      const normalizedKey = key.toLowerCase();
+      if (
+        SENSITIVE_ENTRY_NAMES.has(normalizedKey) ||
+        (normalizedKey === "value" && namedEntry && SENSITIVE_ENTRY_NAMES.has(namedEntry))
+      ) {
+        clone[key] = ACP_LOG_REDACTED_VALUE;
+      } else {
+        clone[key] = visit(entry);
+      }
+    }
+    return clone;
+  };
+
+  return visit(value);
+}
+
 function writeNativeAcpLog(input: {
   readonly nativeEventLogger: EventNdjsonLogger | undefined;
   readonly provider: ProviderKind;
@@ -27,7 +92,7 @@ function writeNativeAcpLog(input: {
           provider: input.provider,
           createdAt: observedAt,
           threadId: input.threadId,
-          payload: input.payload,
+          payload: redactAcpLogSecrets(input.payload),
         },
       },
       input.threadId,

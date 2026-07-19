@@ -122,6 +122,18 @@ export interface GitDeleteBranchInput {
   force?: boolean | undefined;
 }
 
+export interface GitWorktreeOwnershipProof {
+  readonly token: string;
+  readonly gitDir: string;
+  readonly branch: string;
+  readonly head: string;
+}
+
+export interface GitVerifyWorktreeOwnershipResult {
+  readonly verified: boolean;
+  readonly reason: string | null;
+}
+
 export interface GitFetchPullRequestBranchInput {
   cwd: string;
   prNumber: number;
@@ -260,6 +272,19 @@ export interface GitCoreShape {
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;
 
+  /** Attach a non-versioned marker to a newly-created linked worktree's Git admin entry. */
+  readonly recordWorktreeOwnership: (input: {
+    readonly path: string;
+    readonly branch: string;
+    readonly token: string;
+  }) => Effect.Effect<GitWorktreeOwnershipProof, GitCommandError>;
+
+  /** Verify that a linked worktree is still the clean, unchanged object carrying a marker. */
+  readonly verifyWorktreeOwnership: (input: {
+    readonly path: string;
+    readonly proof: GitWorktreeOwnershipProof;
+  }) => Effect.Effect<GitVerifyWorktreeOwnershipResult, GitCommandError>;
+
   /**
    * Create a detached worktree from a branch or ref.
    */
@@ -302,6 +327,13 @@ export interface GitCoreShape {
    * Delete an existing local branch.
    */
   readonly deleteBranch: (input: GitDeleteBranchInput) => Effect.Effect<void, GitCommandError>;
+
+  /** Atomically delete a local branch only when it still points at the expected object id. */
+  readonly deleteBranchIfUnchanged: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly expectedHead: string;
+  }) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Rename an existing local branch.

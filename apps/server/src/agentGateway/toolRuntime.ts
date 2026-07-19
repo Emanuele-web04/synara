@@ -1,0 +1,69 @@
+import type { ProviderKind } from "@synara/contracts";
+import type { Effect } from "effect";
+
+import type { AgentGatewayTargetError } from "./targetResolver.ts";
+import {
+  mcpToolResultJson,
+  type JsonRpcId,
+  type McpToolCallResult,
+  type McpToolDefinition,
+} from "./protocol.ts";
+
+export const READ_ONLY_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+export const WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+export interface ToolContext {
+  readonly callerThreadId: string;
+  readonly callerSessionKey: string;
+  readonly callerProvider: ProviderKind;
+  readonly callerCapabilities: ReadonlySet<"thread:read" | "thread:write" | "automation:write">;
+  readonly callerTurnId: string | null;
+  readonly assertCallerTurnActive: () => Effect.Effect<void, GatewayToolError>;
+  readonly jsonRpcRequestId: JsonRpcId;
+}
+
+export type ToolHandler = (
+  args: Record<string, unknown>,
+  context: ToolContext,
+) => Effect.Effect<McpToolCallResult>;
+
+export interface ToolEntry {
+  readonly definition: McpToolDefinition;
+  readonly handler: ToolHandler;
+  readonly requiresActiveTurn?: boolean;
+}
+
+export class GatewayToolError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(code: string, message: string, details?: unknown) {
+    super(message);
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export function gatewayToolErrorResult(error: GatewayToolError | AgentGatewayTargetError) {
+  return {
+    ...mcpToolResultJson({
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
+      },
+    }),
+    isError: true as const,
+  };
+}

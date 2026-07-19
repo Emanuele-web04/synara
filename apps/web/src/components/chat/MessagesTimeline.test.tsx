@@ -3,7 +3,7 @@
 // Layer: Web chat component tests
 // Depends on: renderToStaticMarkup and a mocked LegendList.
 
-import { CheckpointRef, MessageId, TurnId } from "@synara/contracts";
+import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -206,6 +206,69 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
     expect(markup).toContain("py-1.5");
     expect(markup).toContain("group-hover:opacity-100");
+  });
+
+  it("labels only the first message when another task created the conversation", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        crossTaskOrigin={{
+          sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+          sourceProvider: "codex",
+        }}
+        timelineEntries={[
+          {
+            id: "entry-first-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("first-user-message"),
+              role: "user",
+              text: "Inspect the repository",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-second-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:13:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("second-user-message"),
+              role: "user",
+              text: "Continue",
+              createdAt: "2026-03-17T19:13:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:14:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        onOpenThread={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-cross-task-origin="true"/g)).toHaveLength(1);
+    expect(markup).toContain("Sent by Codex from another task");
+    expect(markup).toContain('aria-label="Open source task"');
+    expect(markup.indexOf("Sent by Codex from another task")).toBeLessThan(
+      markup.indexOf("Inspect the repository"),
+    );
   });
 
   it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {
@@ -550,6 +613,50 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Sent via Automation");
+    expect(markup).not.toContain("Steering conversation");
+  });
+
+  it("renders a 'Sent by agent' chip above agent-dispatched user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-agent-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-agent-user"),
+              role: "user",
+              text: "status check from the coordinator",
+              dispatchOrigin: "agent",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Sent by agent");
+    expect(markup).not.toContain("Sent via Automation");
     expect(markup).not.toContain("Steering conversation");
   });
 
@@ -2439,6 +2546,234 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Codex Apps: Slack Search");
     expect(markup).toContain('data-tool-icon="mcp"');
+  });
+
+  it("shows the Synara mark for every provider-specific tool row shape", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const baseProps = {
+      hasMessages: true,
+      isWorking: false,
+      activeTurnInProgress: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      nowIso: "2026-03-17T19:12:30.000Z",
+      expandedWorkGroups: {},
+      onToggleWorkGroup: () => {},
+      onOpenTurnDiff: () => {},
+      revertTurnCountByUserMessageId: new Map(),
+      onRevertUserMessage: () => {},
+      isRevertingCheckpoint: false,
+      onImageExpand: () => {},
+      markdownCwd: undefined,
+      resolvedTheme: "dark" as const,
+      timestampFormat: "locale" as const,
+      workspaceRoot: undefined,
+    };
+
+    // Provider-style server/tool identifier while the call is active.
+    const claudeMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-claude",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-claude",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "dynamic_tool_call",
+              toolTitle: "Synara__synara_create_thread",
+              toolName: "Synara__synara_create_thread",
+              detail: "Synara__synara_create_thread",
+              activityKind: "tool.started",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(claudeMarkup).toContain('data-tool-icon="synara"');
+    expect(claudeMarkup).not.toContain('data-tool-icon="mcp"');
+    expect(claudeMarkup).toContain("Synara is creating a thread");
+    expect(claudeMarkup).not.toContain("Synara__synara_create_thread");
+
+    // A provider may misclassify an MCP action containing "create" or "list"
+    // as a file change. Tool identity still wins over that transport category.
+    const codexMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-codex",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-codex",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "file_change",
+              toolTitle: "mcp__Synara__synara_list_threads",
+              detail: "mcp__Synara__synara_list_threads",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(codexMarkup).toContain('data-tool-icon="synara"');
+    expect(codexMarkup).toContain("Synara listed threads");
+    expect(codexMarkup).not.toContain("mcp__Synara__synara_list_threads");
+
+    const failedMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-failed",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-failed",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolName: "mcp__synara__synara_create_threads",
+              toolStatus: "failed",
+              detail: "Claude rejected reasoningEffort",
+              activityKind: "tool.completed",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(failedMarkup).toContain("Synara couldn&#x27;t create threads");
+    expect(failedMarkup).toContain("Claude rejected reasoningEffort");
+  });
+
+  it("keeps Synara tool calls and adds a thread creation recap at the end of the turn", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const assistantMessageId = MessageId.makeUnsafe("message-synara-recap");
+    const workEntries = [
+      {
+        id: "entry-synara-create-tool",
+        kind: "work",
+        createdAt: "2026-03-17T19:12:28.000Z",
+        entry: {
+          id: "work-synara-create-tool",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "MCP tool call",
+          tone: "tool",
+          itemType: "mcp_tool_call",
+          toolName: "mcp__synara__synara_create_threads",
+          toolTitle: "Synara created threads",
+          activityKind: "tool.completed",
+        },
+      },
+      {
+        id: "entry-synara-create-recap",
+        kind: "work",
+        createdAt: "2026-03-17T19:12:29.000Z",
+        entry: {
+          id: "work-synara-create-recap",
+          createdAt: "2026-03-17T19:12:29.000Z",
+          label: "Created 2 Synara threads",
+          tone: "info",
+          activityKind: "synara.threads.created",
+          synaraThreadCreation: {
+            operationId: "gateway:create:two-workers",
+            requestedCount: 2,
+            createdCount: 2,
+            threads: [
+              {
+                threadId: "thread-terra",
+                title: "Explain the repository with Terra",
+                provider: "codex",
+                model: "gpt-5.6-terra",
+                environment: "local",
+                status: "task_dispatched",
+              },
+              {
+                threadId: "thread-claude",
+                title: "Explain the repository with Claude",
+                provider: "claudeAgent",
+                model: "claude-sonnet-5",
+                environment: "worktree",
+                status: "task_dispatched",
+              },
+            ],
+          },
+        },
+      },
+    ] as const;
+    const baseProps = {
+      hasMessages: true,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      nowIso: "2026-03-17T19:12:31.000Z",
+      expandedWorkGroups: {},
+      onToggleWorkGroup: () => {},
+      onOpenTurnDiff: () => {},
+      onOpenThread: () => {},
+      revertTurnCountByUserMessageId: new Map(),
+      onRevertUserMessage: () => {},
+      isRevertingCheckpoint: false,
+      onImageExpand: () => {},
+      markdownCwd: undefined,
+      resolvedTheme: "dark" as const,
+      timestampFormat: "locale" as const,
+      workspaceRoot: undefined,
+    };
+    const liveMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        isWorking
+        activeTurnInProgress
+        timelineEntries={[...workEntries]}
+      />,
+    );
+    expect(liveMarkup).toContain("Synara created threads");
+    expect(liveMarkup).not.toContain('data-synara-thread-creation-card="true"');
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        isWorking={false}
+        activeTurnInProgress={false}
+        timelineEntries={[
+          ...workEntries,
+          {
+            id: "entry-synara-recap-assistant",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:30.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "Both threads are running.",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              completedAt: "2026-03-17T19:12:31.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    // The original MCP tool call is preserved inside the settled turn's
+    // "Worked for..." disclosure; the recap is an additional final artifact.
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain('data-synara-thread-creation-card="true"');
+    expect(markup).toContain("2 threads created");
+    expect(markup).toContain("2/2 requested threads created");
+    expect(markup).toContain("Explain the repository with Terra");
+    expect(markup).toContain("Explain the repository with Claude");
+    expect(markup).toContain("GPT-5.6 Terra");
+    expect(markup).toContain("Claude Sonnet 5");
+    expect(markup.indexOf("Both threads are running.")).toBeLessThan(
+      markup.indexOf('data-synara-thread-creation-card="true"'),
+    );
   });
 
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {

@@ -1285,6 +1285,23 @@ export default function ChatView({
   const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
   const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const crossTaskSourceThreadId =
+    serverThread?.creationSource && serverThread.sourceThreadId
+      ? serverThread.sourceThreadId
+      : null;
+  const crossTaskSourceThread = useStore(
+    useMemo(() => createThreadSelector(crossTaskSourceThreadId), [crossTaskSourceThreadId]),
+  );
+  const crossTaskOrigin = useMemo(
+    () =>
+      crossTaskSourceThreadId
+        ? {
+            sourceThreadId: crossTaskSourceThreadId,
+            sourceProvider: crossTaskSourceThread?.modelSelection.provider ?? null,
+          }
+        : null,
+    [crossTaskSourceThread?.modelSelection.provider, crossTaskSourceThreadId],
+  );
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
@@ -8373,9 +8390,17 @@ export default function ChatView({
       );
       turnStartSucceeded = true;
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer.
-      if (dispatchMode === "steer" && selectedModelSelectionForSend.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+      // queued auto-dispatch through that gap so it can't race the steer. The
+      // live session provider decides the interrupt path server-side, so the
+      // gate keys off it rather than the requested model selection.
+      const liveProviderForSteerGate =
+        activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
+      if (dispatchMode === "steer" && liveProviderForSteerGate !== "codex") {
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.session?.activeTurnId ?? null,
+        });
       }
       if (sourceProposedPlanForSend) {
         planSidebarDismissedForTurnRef.current = null;
@@ -8811,9 +8836,17 @@ export default function ChatView({
         createdAt: messageCreatedAt,
       });
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer.
-      if (dispatchMode === "steer" && modelSelectionForPlanDispatch.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+      // queued auto-dispatch through that gap so it can't race the steer. The
+      // live session provider decides the interrupt path server-side, so the
+      // gate keys off it rather than the requested model selection.
+      const livePlanProviderForSteerGate =
+        activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
+      if (dispatchMode === "steer" && livePlanProviderForSteerGate !== "codex") {
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.session?.activeTurnId ?? null,
+        });
       }
       // Optimistically open the plan sidebar when implementing (not refining).
       // "default" mode here means the agent is executing the plan, which produces
@@ -9037,6 +9070,7 @@ export default function ChatView({
   // Advance/expire the steer gate as the session moves through the
   // interrupt→steered-turn handoff (or fails out of it).
   const sessionErroredForSteerGate = activeThread?.session?.status === "error";
+  const activeTurnIdForSteerGate = activeThread?.session?.activeTurnId ?? null;
   useEffect(() => {
     if (!queuedSteerGate) {
       return;
@@ -9045,6 +9079,7 @@ export default function ChatView({
       gate: queuedSteerGate,
       phase,
       sessionErrored: sessionErroredForSteerGate,
+      activeTurnId: activeTurnIdForSteerGate,
       now: Date.now(),
     });
     if (transition.kind === "clear") {
@@ -9053,7 +9088,8 @@ export default function ChatView({
     }
     if (
       transition.gate.sawInterruptGap !== queuedSteerGate.sawInterruptGap ||
-      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt
+      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt ||
+      transition.gate.armedActiveTurnId !== queuedSteerGate.armedActiveTurnId
     ) {
       setQueuedSteerGate(transition.gate);
       return;
@@ -9063,7 +9099,7 @@ export default function ChatView({
     }
     const timer = window.setTimeout(() => setQueuedSteerGate(null), transition.expiresInMs);
     return () => window.clearTimeout(timer);
-  }, [phase, queuedSteerGate, sessionErroredForSteerGate]);
+  }, [activeTurnIdForSteerGate, phase, queuedSteerGate, sessionErroredForSteerGate]);
 
   useEffect(() => {
     if (
@@ -11661,6 +11697,7 @@ export default function ChatView({
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     enteringUserMessageIds={enteringUserMessageIds}
+                    crossTaskOrigin={crossTaskOrigin}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
