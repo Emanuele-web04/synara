@@ -57,6 +57,12 @@ import {
   normalizeFileCommentSelection,
 } from "./lib/fileComments";
 import {
+  type WorkItemReferenceDraft,
+  createWorkItemReferenceDraft,
+  workItemReferenceDedupKey,
+} from "./lib/workItemReferences";
+import type { WorkItemReference } from "@synara/contracts";
+import {
   type PastedTextDraft,
   countPastedTextLines,
   createPastedTextDraft,
@@ -203,6 +209,7 @@ export interface ComposerPromptHistorySavedDraft {
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
+  workItemReferences: WorkItemReferenceDraft[];
   pastedTexts: PastedTextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -221,6 +228,7 @@ export interface QueuedComposerChatTurn {
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
+  workItemReferences: WorkItemReferenceDraft[];
   pastedTexts: PastedTextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -292,6 +300,19 @@ const PersistedFileCommentDraft = Schema.Struct({
 });
 type PersistedFileCommentDraft = typeof PersistedFileCommentDraft.Type;
 
+const PersistedWorkItemReferenceDraft = Schema.Struct({
+  draftId: Schema.String,
+  source: Schema.Literals(["github-issue", "github-pr", "linear-issue"]),
+  id: Schema.String,
+  url: Schema.String,
+  title: Schema.String,
+  identifier: Schema.String,
+  body: Schema.String,
+  bodyPreview: Schema.String,
+  repository: Schema.NullOr(Schema.String),
+});
+type PersistedWorkItemReferenceDraft = typeof PersistedWorkItemReferenceDraft.Type;
+
 // Pasted text always carries its full content (the chip is the only copy), so a
 // single schema covers both live drafts and queued turns. Line/char metrics are
 // recomputed on hydration, so they are not persisted.
@@ -330,6 +351,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   assistantSelections: Schema.optionalKey(Schema.Array(PersistedAssistantSelectionDraft)),
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
   fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
+  workItemReferences: Schema.optionalKey(Schema.Array(PersistedWorkItemReferenceDraft)),
   pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
   skills: Schema.Array(ProviderSkillReference),
   mentions: Schema.Array(ProviderMentionReference),
@@ -375,6 +397,7 @@ const PersistedComposerPromptHistorySavedDraft = Schema.Union([
     assistantSelections: Schema.optionalKey(Schema.Array(PersistedAssistantSelectionDraft)),
     terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
     fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
+    workItemReferences: Schema.optionalKey(Schema.Array(PersistedWorkItemReferenceDraft)),
     pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
     skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
@@ -400,6 +423,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   ),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
   fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
+  workItemReferences: Schema.optionalKey(Schema.Array(PersistedWorkItemReferenceDraft)),
   pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
@@ -494,6 +518,7 @@ export interface ComposerThreadDraftState {
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
+  workItemReferences: WorkItemReferenceDraft[];
   pastedTexts: PastedTextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -650,6 +675,9 @@ export interface ComposerDraftStoreState {
   addFileComment: (threadId: ThreadId, comment: FileCommentDraft) => boolean;
   removeFileComment: (threadId: ThreadId, commentId: string) => void;
   clearFileComments: (threadId: ThreadId) => void;
+  addWorkItemReference: (threadId: ThreadId, reference: WorkItemReference) => boolean;
+  removeWorkItemReference: (threadId: ThreadId, draftId: string) => void;
+  clearWorkItemReferences: (threadId: ThreadId) => void;
   addPastedTexts: (threadId: ThreadId, pastedTexts: PastedTextDraft[]) => void;
   removePastedText: (threadId: ThreadId, pastedTextId: string) => void;
   clearPastedTexts: (threadId: ThreadId) => void;
@@ -933,6 +961,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   assistantSelections: [],
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   fileComments: [],
+  workItemReferences: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
@@ -955,6 +984,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     assistantSelections: [],
     terminalContexts: [],
     fileComments: [],
+    workItemReferences: [],
     pastedTexts: [],
     skills: [],
     mentions: [],
@@ -1089,6 +1119,91 @@ function normalizeFileComments(comments: ReadonlyArray<FileCommentDraft>): FileC
   return normalizedComments;
 }
 
+function normalizeWorkItemReference(
+  reference: WorkItemReferenceDraft | WorkItemReference,
+): WorkItemReferenceDraft | null {
+  const title = reference.title.trim();
+  const identifier = reference.identifier.trim();
+  const url = reference.url.trim();
+  const id = reference.id.trim();
+  if (!title || !identifier || !url || !id) {
+    return null;
+  }
+  const draftId =
+    "draftId" in reference && typeof reference.draftId === "string" && reference.draftId.length > 0
+      ? reference.draftId
+      : createWorkItemReferenceDraft(reference).draftId;
+  return {
+    draftId,
+    source: reference.source,
+    id,
+    url,
+    title,
+    identifier,
+    body: reference.body ?? "",
+    bodyPreview: reference.bodyPreview ?? "",
+    repository: reference.repository?.trim() || null,
+  };
+}
+
+function normalizeWorkItemReferences(
+  references: ReadonlyArray<WorkItemReferenceDraft | WorkItemReference>,
+): WorkItemReferenceDraft[] {
+  const normalized: WorkItemReferenceDraft[] = [];
+  const existingDraftIds = new Set<string>();
+  const existingDedupKeys = new Set<string>();
+  for (const reference of references) {
+    const entry = normalizeWorkItemReference(reference);
+    if (!entry) continue;
+    const dedupKey = workItemReferenceDedupKey(entry);
+    if (existingDraftIds.has(entry.draftId) || existingDedupKeys.has(dedupKey)) {
+      continue;
+    }
+    normalized.push(entry);
+    existingDraftIds.add(entry.draftId);
+    existingDedupKeys.add(dedupKey);
+  }
+  return normalized;
+}
+
+function normalizePersistedWorkItemReferenceDraft(
+  value: unknown,
+): PersistedWorkItemReferenceDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const draftId = typeof candidate.draftId === "string" ? candidate.draftId : "";
+  const source = candidate.source;
+  if (
+    draftId.length === 0 ||
+    (source !== "github-issue" && source !== "github-pr" && source !== "linear-issue")
+  ) {
+    return null;
+  }
+  const id = typeof candidate.id === "string" ? candidate.id : "";
+  const url = typeof candidate.url === "string" ? candidate.url : "";
+  const title = typeof candidate.title === "string" ? candidate.title : "";
+  const identifier = typeof candidate.identifier === "string" ? candidate.identifier : "";
+  if (!id || !url || !title || !identifier) {
+    return null;
+  }
+  return {
+    draftId,
+    source,
+    id,
+    url,
+    title,
+    identifier,
+    body: typeof candidate.body === "string" ? candidate.body : "",
+    bodyPreview: typeof candidate.bodyPreview === "string" ? candidate.bodyPreview : "",
+    repository:
+      typeof candidate.repository === "string" && candidate.repository.trim().length > 0
+        ? candidate.repository.trim()
+        : null,
+  };
+}
+
 function normalizePastedText(pasted: PastedTextDraft): PastedTextDraft | null {
   const text = normalizePastedTextContent(pasted.text);
   if (pasted.id.length === 0 || text.length === 0) {
@@ -1192,6 +1307,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     assistantSelections: normalizeAssistantSelections(draft.assistantSelections),
     terminalContexts: normalizeTerminalContextsForThread(threadId, draft.terminalContexts),
     fileComments: normalizeFileComments(draft.fileComments),
+    workItemReferences: normalizeWorkItemReferences(draft.workItemReferences),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
@@ -1222,6 +1338,7 @@ function buildTransferredComposerDraft(input: {
       sourceDraft.terminalContexts,
     ),
     fileComments: normalizeFileComments(sourceDraft.fileComments),
+    workItemReferences: normalizeWorkItemReferences(sourceDraft.workItemReferences),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
@@ -1248,6 +1365,7 @@ function clonePromptHistorySavedDraft(
       savedDraft.terminalContexts,
     ),
     fileComments: normalizeFileComments(savedDraft.fileComments),
+    workItemReferences: normalizeWorkItemReferences(savedDraft.workItemReferences),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
@@ -1264,6 +1382,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
     draft.fileComments.length === 0 &&
+    draft.workItemReferences.length === 0 &&
     draft.pastedTexts.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
@@ -2133,6 +2252,12 @@ function normalizePersistedPromptHistorySavedDraft(
         return normalized ? [normalized] : [];
       })
     : [];
+  const workItemReferences = Array.isArray(candidate.workItemReferences)
+    ? candidate.workItemReferences.flatMap((entry) => {
+        const normalized = normalizePersistedWorkItemReferenceDraft(entry);
+        return normalized ? [normalized] : [];
+      })
+    : [];
   const pastedTexts = Array.isArray(candidate.pastedTexts)
     ? candidate.pastedTexts.flatMap((entry) => {
         const normalized = normalizePersistedPastedTextDraft(entry);
@@ -2151,6 +2276,7 @@ function normalizePersistedPromptHistorySavedDraft(
     ...(assistantSelections.length > 0 ? { assistantSelections } : {}),
     ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
     ...(fileComments.length > 0 ? { fileComments } : {}),
+    ...(workItemReferences.length > 0 ? { workItemReferences } : {}),
     ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
     ...(skills.length > 0 ? { skills } : {}),
     ...(mentions.length > 0 ? { mentions } : {}),
@@ -2391,6 +2517,12 @@ function normalizePersistedQueuedTurns(
             return normalized ? [normalized] : [];
           })
         : [];
+  const workItemReferences = Array.isArray(candidate.workItemReferences)
+    ? candidate.workItemReferences.flatMap((entry) => {
+        const normalized = normalizePersistedWorkItemReferenceDraft(entry);
+        return normalized ? [normalized] : [];
+      })
+    : [];
       const pastedTexts = Array.isArray(candidate.pastedTexts)
         ? candidate.pastedTexts.flatMap((pasted) => {
             const normalized = normalizePersistedPastedTextDraft(pasted);
@@ -2424,6 +2556,7 @@ function normalizePersistedQueuedTurns(
         ...(assistantSelections.length > 0 ? { assistantSelections } : {}),
         terminalContexts,
         ...(fileComments.length > 0 ? { fileComments } : {}),
+        ...(workItemReferences.length > 0 ? { workItemReferences } : {}),
         ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
         skills: [...skills],
         mentions: [...mentions],
@@ -2647,6 +2780,12 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const workItemReferences = Array.isArray(draftCandidate.workItemReferences)
+      ? draftCandidate.workItemReferences.flatMap((entry) => {
+          const normalized = normalizePersistedWorkItemReferenceDraft(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const pastedTexts = Array.isArray(draftCandidate.pastedTexts)
       ? draftCandidate.pastedTexts.flatMap((entry) => {
           const normalized = normalizePersistedPastedTextDraft(entry);
@@ -2736,6 +2875,7 @@ function normalizePersistedDraftsByThreadId(
       terminalContexts.length === 0 &&
       assistantSelections.length === 0 &&
       fileComments.length === 0 &&
+      workItemReferences.length === 0 &&
       pastedTexts.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
@@ -2753,6 +2893,7 @@ function normalizePersistedDraftsByThreadId(
       ...(assistantSelections.length > 0 ? { assistantSelections } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(fileComments.length > 0 ? { fileComments } : {}),
+      ...(workItemReferences.length > 0 ? { workItemReferences } : {}),
       ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
@@ -2832,6 +2973,21 @@ export function partializeComposerDraftStoreState(
                 })),
               }
             : {}),
+          ...(queuedTurn.workItemReferences.length > 0
+            ? {
+                workItemReferences: queuedTurn.workItemReferences.map((reference) => ({
+                  draftId: reference.draftId,
+                  source: reference.source,
+                  id: reference.id,
+                  url: reference.url,
+                  title: reference.title,
+                  identifier: reference.identifier,
+                  body: reference.body,
+                  bodyPreview: reference.bodyPreview,
+                  repository: reference.repository,
+                })),
+              }
+            : {}),
           ...(queuedTurn.pastedTexts.length > 0
             ? {
                 pastedTexts: queuedTurn.pastedTexts.map((pasted) => ({
@@ -2887,6 +3043,7 @@ export function partializeComposerDraftStoreState(
       draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
       draft.fileComments.length === 0 &&
+      draft.workItemReferences.length === 0 &&
       draft.pastedTexts.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
@@ -2943,6 +3100,23 @@ export function partializeComposerDraftStoreState(
                     })),
                   }
                 : {}),
+              ...(draft.promptHistorySavedDraft.workItemReferences.length > 0
+                ? {
+                    workItemReferences: draft.promptHistorySavedDraft.workItemReferences.map(
+                      (reference) => ({
+                        draftId: reference.draftId,
+                        source: reference.source,
+                        id: reference.id,
+                        url: reference.url,
+                        title: reference.title,
+                        identifier: reference.identifier,
+                        body: reference.body,
+                        bodyPreview: reference.bodyPreview,
+                        repository: reference.repository,
+                      }),
+                    ),
+                  }
+                : {}),
               ...(draft.promptHistorySavedDraft.pastedTexts.length > 0
                 ? {
                     pastedTexts: draft.promptHistorySavedDraft.pastedTexts.map((pasted) => ({
@@ -2992,6 +3166,21 @@ export function partializeComposerDraftStoreState(
               startLine: comment.startLine,
               endLine: comment.endLine,
               text: comment.text,
+            })),
+          }
+        : {}),
+      ...(draft.workItemReferences.length > 0
+        ? {
+            workItemReferences: draft.workItemReferences.map((reference) => ({
+              draftId: reference.draftId,
+              source: reference.source,
+              id: reference.id,
+              url: reference.url,
+              title: reference.title,
+              identifier: reference.identifier,
+              body: reference.body,
+              bodyPreview: reference.bodyPreview,
+              repository: reference.repository,
             })),
           }
         : {}),
@@ -3412,6 +3601,7 @@ function hydrateQueuedTurnsFromPersisted(
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         fileComments: normalizeFileComments(queuedTurn.fileComments ?? []),
+        workItemReferences: normalizeWorkItemReferences(queuedTurn.workItemReferences ?? []),
         pastedTexts: hydratePastedTextsFromPersisted(queuedTurn.pastedTexts),
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
@@ -3437,6 +3627,7 @@ function hydratePromptHistorySavedDraft(
       assistantSelections: [],
       terminalContexts: [],
       fileComments: [],
+      workItemReferences: [],
       pastedTexts: [],
       skills: [],
       mentions: [],
@@ -3456,6 +3647,7 @@ function hydratePromptHistorySavedDraft(
         text: "",
       })) ?? [],
     fileComments: normalizeFileComments(savedDraft.fileComments ?? []),
+    workItemReferences: normalizeWorkItemReferences(savedDraft.workItemReferences ?? []),
     pastedTexts: hydratePastedTextsFromPersisted(savedDraft.pastedTexts),
     skills: [...(savedDraft.skills ?? [])],
     mentions: [...(savedDraft.mentions ?? [])],
@@ -3485,6 +3677,7 @@ function toHydratedThreadDraft(
         text: "",
       })) ?? [],
     fileComments: normalizeFileComments(persistedDraft.fileComments ?? []),
+    workItemReferences: normalizeWorkItemReferences(persistedDraft.workItemReferences ?? []),
     pastedTexts: hydratePastedTextsFromPersisted(persistedDraft.pastedTexts),
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
@@ -3973,6 +4166,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
                   assistantSelections: [],
                   terminalContexts: [],
                   fileComments: [],
+                  workItemReferences: [],
                   pastedTexts: [],
                   skills: [],
                   mentions: [],
@@ -4018,6 +4212,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               savedDraft.terminalContexts,
             ),
             fileComments: normalizeFileComments(savedDraft.fileComments),
+            workItemReferences: normalizeWorkItemReferences(savedDraft.workItemReferences),
             pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
             skills: [...savedDraft.skills],
             mentions: [...savedDraft.mentions],
@@ -4809,6 +5004,85 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      addWorkItemReference: (threadId, reference) => {
+        if (threadId.length === 0) {
+          return false;
+        }
+        let inserted = false;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const normalized = normalizeWorkItemReference(createWorkItemReferenceDraft(reference));
+          if (!normalized) {
+            return state;
+          }
+          const dedupKey = workItemReferenceDedupKey(normalized);
+          if (
+            existing.workItemReferences.some((entry) => entry.draftId === normalized.draftId) ||
+            existing.workItemReferences.some(
+              (entry) => workItemReferenceDedupKey(entry) === dedupKey,
+            )
+          ) {
+            return state;
+          }
+          inserted = true;
+          return {
+            draftsByThreadId: {
+              ...state.draftsByThreadId,
+              [threadId]: {
+                ...existing,
+                workItemReferences: [...existing.workItemReferences, normalized],
+              },
+            },
+          };
+        });
+        return inserted;
+      },
+      removeWorkItemReference: (threadId, draftId) => {
+        if (threadId.length === 0 || draftId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            workItemReferences: current.workItemReferences.filter(
+              (entry) => entry.draftId !== draftId,
+            ),
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      clearWorkItemReferences: (threadId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current || current.workItemReferences.length === 0) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            workItemReferences: [],
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       addPastedTexts: (threadId, pastedTexts) => {
         if (threadId.length === 0 || pastedTexts.length === 0) {
           return;
@@ -5095,6 +5369,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             assistantSelections: [],
             terminalContexts: [],
             fileComments: [],
+            workItemReferences: [],
             pastedTexts: [],
             skills: [],
             mentions: [],
