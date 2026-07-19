@@ -148,6 +148,15 @@ describe("checkpoint revert decider", () => {
       latestTurn: makeLatestTurn("interrupted"),
     },
     {
+      name: "errored with a stale active turn id",
+      session: makeSession({
+        status: "error",
+        activeTurnId: TurnId.makeUnsafe("turn-failed"),
+        lastError: "runtime exploded",
+      }),
+      latestTurn: makeLatestTurn("error"),
+    },
+    {
       name: "no session",
       session: null,
       latestTurn: null,
