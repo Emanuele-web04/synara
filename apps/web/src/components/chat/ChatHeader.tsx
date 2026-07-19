@@ -13,7 +13,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
@@ -147,6 +147,18 @@ const EDITOR_CHAT_HISTORY_LIMIT = 30;
 
 type EditorRailChatTab = EditorRailChatTabSnapshot;
 
+function updateStoredEditorRailChatTabs(
+  setOpenChatTabs: Dispatch<SetStateAction<ReadonlyArray<EditorRailChatTab>>>,
+  projectId: ProjectId,
+  updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>,
+): void {
+  setOpenChatTabs((current) => {
+    const next = updater(current);
+    storeEditorRailChatTabs(projectId, next);
+    return next;
+  });
+}
+
 // Compact recent-chats picker for the editor rail; selecting a thread keeps the
 // editor view because the caller's navigation preserves the `view` search param.
 function EditorChatHistoryMenu(props: {
@@ -155,16 +167,12 @@ function EditorChatHistoryMenu(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
-  const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
   const displayThreads = useStore(selectDisplayThreads);
-  const historyThreads = useMemo(
-    () =>
-      sortThreadsForSidebar(
-        displayThreads.filter((thread) => thread.projectId === props.projectId),
-        settings.sidebarThreadSortOrder,
-      ).slice(0, EDITOR_CHAT_HISTORY_LIMIT),
-    [displayThreads, props.projectId, settings.sidebarThreadSortOrder],
-  );
+  const historyThreads = sortThreadsForSidebar(
+    displayThreads.filter((thread) => thread.projectId === props.projectId),
+    settings.sidebarThreadSortOrder,
+  ).slice(0, EDITOR_CHAT_HISTORY_LIMIT);
 
   return (
     <Menu modal={false}>
@@ -244,94 +252,100 @@ function EditorRailTabs(props: {
         ];
   });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
-  const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
   const displayThreads = useStore(selectDisplayThreads);
-  const currentChatTab = useMemo<EditorRailChatTab>(
-    () => ({
-      id: props.activeThreadId,
-      title: props.activeThreadTitle,
-      provider: props.activeProvider,
-    }),
-    [props.activeProvider, props.activeThreadId, props.activeThreadTitle],
-  );
-  const setAndStoreOpenChatTabs = useCallback(
-    (updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>) => {
-      setOpenChatTabs((current) => {
-        const next = updater(current);
-        storeEditorRailChatTabs(props.projectId, next);
-        return next;
-      });
-    },
-    [props.projectId],
-  );
+  const currentChatTab: EditorRailChatTab = {
+    id: props.activeThreadId,
+    title: props.activeThreadTitle,
+    provider: props.activeProvider,
+  };
+  const setAndStoreOpenChatTabs = (
+    updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>,
+  ) => {
+    updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, updater);
+  };
+  // Timeout-0 in the three sync effects below keeps every state write
+  // asynchronous (no wasted pre-paint render), which also keeps this component
+  // eligible for React Compiler; tab seeding/mirroring is invisible at a tick.
   useEffect(() => {
-    const storedTabs = readEditorRailChatTabs(props.projectId);
-    setOpenChatTabs(
-      storedTabs.length > 0
-        ? storedTabs
-        : [
-            {
-              id: props.activeThreadId,
-              title: props.activeThreadTitle,
-              provider: props.activeProvider,
-            },
-          ],
-    );
+    const timeoutId = window.setTimeout(() => {
+      const storedTabs = readEditorRailChatTabs(props.projectId);
+      setOpenChatTabs(
+        storedTabs.length > 0
+          ? storedTabs
+          : [
+              {
+                id: props.activeThreadId,
+                title: props.activeThreadTitle,
+                provider: props.activeProvider,
+              },
+            ],
+      );
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, props.projectId]);
   useEffect(() => {
-    if (props.terminalAvailable) {
-      setTerminalTabOpen(true);
+    if (!props.terminalAvailable) {
+      return;
     }
+    const timeoutId = window.setTimeout(() => {
+      setTerminalTabOpen(true);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [props.terminalAvailable]);
   useEffect(() => {
     if (props.activeSurface !== "chat") {
       return;
     }
-    setAndStoreOpenChatTabs((current) => {
-      const existingIndex = current.findIndex((thread) => thread.id === currentChatTab.id);
-      if (existingIndex < 0) {
-        return [...current, currentChatTab];
-      }
-      const existing = current[existingIndex];
-      if (
-        existing?.title === currentChatTab.title &&
-        existing.provider === currentChatTab.provider
-      ) {
-        return current;
-      }
-      return current.map((thread) => (thread.id === currentChatTab.id ? currentChatTab : thread));
-    });
-  }, [currentChatTab, props.activeSurface, setAndStoreOpenChatTabs]);
-  const chatTabs = useMemo(() => {
-    const sortedProjectThreads = sortThreadsForSidebar(
-      displayThreads.filter((thread) => thread.projectId === props.projectId),
-      settings.sidebarThreadSortOrder,
-    );
-    const sidebarThreadById = new Map(
-      sortedProjectThreads.map((thread) => [
-        thread.id,
-        {
-          id: thread.id,
-          title: thread.title,
-          provider: thread.session?.provider ?? thread.modelSelection.provider,
-        },
-      ]),
-    );
-    const activeChatAlreadyOpen = openChatTabs.some((thread) => thread.id === props.activeThreadId);
-    const orderedOpenTabs =
-      props.activeSurface === "chat" && !activeChatAlreadyOpen
-        ? [...openChatTabs, currentChatTab]
-        : openChatTabs;
-    return orderedOpenTabs.map((thread) => sidebarThreadById.get(thread.id) ?? thread);
+    const timeoutId = window.setTimeout(() => {
+      const activeChatTab: EditorRailChatTab = {
+        id: props.activeThreadId,
+        title: props.activeThreadTitle,
+        provider: props.activeProvider,
+      };
+      updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, (current) => {
+        const existingIndex = current.findIndex((thread) => thread.id === activeChatTab.id);
+        if (existingIndex < 0) {
+          return [...current, activeChatTab];
+        }
+        const existing = current[existingIndex];
+        if (
+          existing?.title === activeChatTab.title &&
+          existing.provider === activeChatTab.provider
+        ) {
+          return current;
+        }
+        return current.map((thread) => (thread.id === activeChatTab.id ? activeChatTab : thread));
+      });
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [
-    currentChatTab,
-    displayThreads,
+    props.activeProvider,
     props.activeSurface,
     props.activeThreadId,
-    openChatTabs,
+    props.activeThreadTitle,
     props.projectId,
-    settings.sidebarThreadSortOrder,
   ]);
+  const sortedProjectThreads = sortThreadsForSidebar(
+    displayThreads.filter((thread) => thread.projectId === props.projectId),
+    settings.sidebarThreadSortOrder,
+  );
+  const sidebarThreadById = new Map(
+    sortedProjectThreads.map((thread) => [
+      thread.id,
+      {
+        id: thread.id,
+        title: thread.title,
+        provider: thread.session?.provider ?? thread.modelSelection.provider,
+      },
+    ]),
+  );
+  const activeChatAlreadyOpen = openChatTabs.some((thread) => thread.id === props.activeThreadId);
+  const orderedOpenTabs =
+    props.activeSurface === "chat" && !activeChatAlreadyOpen
+      ? [...openChatTabs, currentChatTab]
+      : openChatTabs;
+  const chatTabs = orderedOpenTabs.map((thread) => sidebarThreadById.get(thread.id) ?? thread);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
   const shouldShowTabs = tabCount > 1;
@@ -475,7 +489,7 @@ export function resolveChatHeaderThreadIconKind(
   return entryPoint === "terminal" ? "terminal" : "provider";
 }
 
-export const ChatHeader = memo(function ChatHeader({
+export function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeThreadEntryPoint,
@@ -860,4 +874,4 @@ export const ChatHeader = memo(function ChatHeader({
       </div>
     </div>
   );
-});
+}

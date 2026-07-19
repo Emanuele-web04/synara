@@ -40,7 +40,7 @@ import {
   syncServerThreadDetailHotPath,
   type AppState,
 } from "./store";
-import { getThreadsFromState } from "./threadDerivation";
+import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -2084,6 +2084,23 @@ describe("store pure functions", () => {
 });
 
 describe("store read model sync", () => {
+  it("preserves cross-task creation provenance from the read model", () => {
+    const sourceThreadId = ThreadId.makeUnsafe("source-thread");
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        creationSource: "synara_mcp",
+        sourceThreadId,
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+    const thread = getThreadFromState(next, ThreadId.makeUnsafe("thread-1"));
+
+    expect(thread?.creationSource).toBe("synara_mcp");
+    expect(thread?.sourceThreadId).toBe(sourceThreadId);
+  });
+
   it("evicts high-cardinality thread detail while preserving its shell and sidebar summary", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const hydrated = syncServerReadModel(
@@ -2473,6 +2490,56 @@ describe("store read model sync", () => {
     expect(nextThread?.latestTurn?.completedAt).toBeNull();
     expect(nextThread?.session?.orchestrationStatus).toBe("running");
     expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("applies incoming dispatch origin corrections while retaining live message text", () => {
+    const threadId = ThreadId.makeUnsafe("thread-origin-hot-path");
+    const messageId = MessageId.makeUnsafe("message-origin-hot-path");
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        messages: [
+          {
+            id: messageId,
+            role: "user",
+            text: "automation draft that is still longer locally",
+            dispatchOrigin: "automation",
+            turnId: null,
+            createdAt: "2026-02-27T00:00:00.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        updatedAt: "2026-02-27T00:00:02.000Z",
+        messages: [
+          {
+            id: messageId,
+            role: "user",
+            text: "human edit",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            source: "native",
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:02.000Z",
+            attachments: [],
+          },
+        ],
+      }),
+    );
+
+    const message = getThreadFromState(next, threadId)?.messages.find(
+      (entry) => entry.id === messageId,
+    );
+    expect(message?.text).toBe("automation draft that is still longer locally");
+    expect(message?.dispatchOrigin).toBe("user");
   });
 
   it("stops preserving a live assistant intro once the read model settles the same turn", () => {

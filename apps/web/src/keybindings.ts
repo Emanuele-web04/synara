@@ -653,14 +653,6 @@ export function isChatNewShortcut(
   return matchesCommandShortcut(event, keybindings, "chat.new", options);
 }
 
-export function isChatNewLatestProjectShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.newLatestProject", options);
-}
-
 export function isChatNewChatShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
@@ -670,32 +662,6 @@ export function isChatNewChatShortcut(
     matchesCommandShortcut(event, keybindings, "chat.newChat", options) ||
     matchesCommandShortcut(event, keybindings, "chat.newLocal", options)
   );
-}
-
-export const isChatNewLocalShortcut = isChatNewChatShortcut;
-
-export function isChatNewClaudeShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.newClaude", options);
-}
-
-export function isChatNewCodexShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.newCodex", options);
-}
-
-export function isChatNewCursorShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.newCursor", options);
 }
 
 export function isOpenFavoriteEditorShortcut(

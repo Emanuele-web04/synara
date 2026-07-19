@@ -207,16 +207,18 @@ export function updateWeeklyScheduleTime(
   return { ...schedule, timeOfDay };
 }
 
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 export function formatDateTime(value: string | null): string {
   if (!value) return "Not scheduled";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return `${new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date)}`;
+  return DATE_TIME_FORMATTER.format(date);
 }
 
 function timezoneSuffix(schedule: AutomationSchedule): string {

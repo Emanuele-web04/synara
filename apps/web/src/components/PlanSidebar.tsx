@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { useState } from "react";
 import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -49,7 +49,7 @@ interface PlanSidebarProps {
   onClose: () => void;
 }
 
-const PlanSidebar = memo(function PlanSidebar({
+const PlanSidebar = function PlanSidebar({
   activeTaskList,
   activeProposedPlan,
   markdownCwd,
@@ -185,7 +185,7 @@ const PlanSidebar = memo(function PlanSidebar({
       </ScrollArea>
     </div>
   );
-});
+};
 
 export default PlanSidebar;
 export type { PlanSidebarProps };

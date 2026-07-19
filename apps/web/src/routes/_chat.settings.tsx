@@ -708,6 +708,7 @@ function SettingsRouteView() {
   const allThreadsMessageless = useStore(useMemo(() => createAllThreadsMessagelessSelector(), []));
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const archivedThreads = useMemo(
     () => threadShells.filter((thread) => thread.archivedAt != null),
     [threadShells],
@@ -787,7 +788,8 @@ function SettingsRouteView() {
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) {
-      setAppSnapState(null);
+      // No sync reset needed: the state starts null and the bridge is static
+      // for the whole session (keeps the effect compiler-eligible).
       return;
     }
     let disposed = false;
@@ -1134,7 +1136,10 @@ function SettingsRouteView() {
   }, [availableEditors, keybindingsConfigPath]);
 
   useEffect(() => {
-    setBrowserNotificationPermission(readBrowserNotificationPermissionState());
+    const timeoutId = window.setTimeout(() => {
+      setBrowserNotificationPermission(readBrowserNotificationPermissionState());
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   const addCustomModel = useCallback(
@@ -1225,46 +1230,50 @@ function SettingsRouteView() {
         return;
       }
       setUpdatingProviders((current) => new Set(current).add(provider));
-      try {
-        const result = await withProviderUpdateTimeout({
-          provider,
-          request: ensureNativeApi().server.updateProvider({ provider }),
-        });
-        const refreshedProvider = result.providers.find((status) => status.provider === provider);
-        const failureMessage = providerUpdateFailureMessage(refreshedProvider);
-        if (failureMessage) {
-          const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
+      // Promise chain instead of try/catch/finally: React Compiler does not
+      // yet support try/finally, and it would skip this whole component.
+      await withProviderUpdateTimeout({
+        provider,
+        request: ensureNativeApi().server.updateProvider({ provider }),
+      })
+        .then((result) => {
+          const refreshedProvider = result.providers.find((status) => status.provider === provider);
+          const failureMessage = providerUpdateFailureMessage(refreshedProvider);
+          if (failureMessage) {
+            const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
+            toastManager.add({
+              type: "error",
+              title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
+              description: manualCommand
+                ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
+                : failureMessage,
+              ...(manualCommand ? { data: { copyText: manualCommand } } : {}),
+            });
+            return;
+          }
+          toastManager.add({
+            type: "success",
+            title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
+            description: "New sessions will use the refreshed provider.",
+          });
+        })
+        .catch((error: unknown) => {
           toastManager.add({
             type: "error",
             title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
-            description: manualCommand
-              ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
-              : failureMessage,
-            ...(manualCommand ? { data: { copyText: manualCommand } } : {}),
+            description: error instanceof Error ? error.message : "The provider update failed.",
           });
-          return;
-        }
-        toastManager.add({
-          type: "success",
-          title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
-          description: "New sessions will use the refreshed provider.",
+        })
+        .finally(async () => {
+          await queryClient
+            .invalidateQueries({ queryKey: serverQueryKeys.config() })
+            .catch(() => undefined);
+          setUpdatingProviders((current) => {
+            const next = new Set(current);
+            next.delete(provider);
+            return next;
+          });
         });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
-          description: error instanceof Error ? error.message : "The provider update failed.",
-        });
-      } finally {
-        await queryClient
-          .invalidateQueries({ queryKey: serverQueryKeys.config() })
-          .catch(() => undefined);
-        setUpdatingProviders((current) => {
-          const next = new Set(current);
-          next.delete(provider);
-          return next;
-        });
-      }
     },
     [queryClient, updatingProviders],
   );
@@ -1460,23 +1469,28 @@ function SettingsRouteView() {
     }
 
     setIsRepairingLocalState(true);
-    try {
-      const snapshot = await api.orchestration.repairState();
-      syncServerReadModel(snapshot);
-      toastManager.add({
-        type: "success",
-        title: "Local state repaired",
-        description: "Project indexes were rebuilt without clearing existing chats.",
+    // Promise chain instead of try/finally: React Compiler does not yet
+    // support try/finally, and it would skip optimizing this whole component.
+    await api.orchestration
+      .repairState()
+      .then((snapshot) => {
+        syncServerReadModel(snapshot);
+        toastManager.add({
+          type: "success",
+          title: "Local state repaired",
+          description: "Project indexes were rebuilt without clearing existing chats.",
+        });
+      })
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Repair failed",
+          description: error instanceof Error ? error.message : "Unable to repair local state.",
+        });
+      })
+      .finally(() => {
+        setIsRepairingLocalState(false);
       });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Repair failed",
-        description: error instanceof Error ? error.message : "Unable to repair local state.",
-      });
-    } finally {
-      setIsRepairingLocalState(false);
-    }
   }, [isRepairingLocalState, syncServerReadModel]);
 
   const logoutCurrentSession = useCallback(async () => {

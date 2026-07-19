@@ -288,10 +288,6 @@ export function isThemeVariant(value: unknown): value is ThemeVariant {
   return value === "light" || value === "dark";
 }
 
-export function getThemeSharePrefix(): string {
-  return THEME_SHARE_PREFIX;
-}
-
 export function getAvailableCodeThemes(variant: ThemeVariant): readonly CodeThemeOption[] {
   return CODE_THEME_OPTIONS.filter((option) => option.variants.includes(variant));
 }

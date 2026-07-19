@@ -120,6 +120,7 @@ import {
   createAllThreadsSelector,
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
+  createSidebarTreeThreadsSelector,
   createThreadSelector,
 } from "../storeSelectors";
 import {
@@ -1224,7 +1225,7 @@ function SortableProjectItem({
   );
 }
 
-function SidebarSegmentedPicker({
+export function SidebarSegmentedPicker({
   views,
   activeView,
   onSelectView,
@@ -1241,7 +1242,17 @@ function SidebarSegmentedPicker({
   // from the clicked segment immediately (the navigation itself runs in a
   // transition, see navigateToBackTarget) and let the route catch up; the timeout
   // snaps back if the navigation never lands (e.g. Workspace with no pages).
-  const [pendingView, setPendingView] = useState<SidebarView | null>(null);
+  // Stamp an optimistic selection with the route it started from. When the route
+  // changes, synchronously replace that state before React commits the new props.
+  // Merely hiding a mismatched key is insufficient: browser Back can return to the
+  // old key after the route-landing effect has cancelled the snap-back timeout.
+  const [pendingView, setPendingView] = useState<{
+    key: SidebarView;
+    value: SidebarView | null;
+  }>(() => ({ key: activeView, value: null }));
+  if (pendingView.key !== activeView) {
+    setPendingView({ key: activeView, value: null });
+  }
   const pendingViewResetTimeoutRef = useRef<number | null>(null);
   const clearPendingViewResetTimeout = useCallback(() => {
     if (pendingViewResetTimeoutRef.current !== null) {
@@ -1249,9 +1260,10 @@ function SidebarSegmentedPicker({
       pendingViewResetTimeoutRef.current = null;
     }
   }, []);
+  // Cancel the pending snap-back timer once the route lands. The synchronous reset
+  // above owns the state transition; this effect only releases the timer.
   useEffect(() => {
     clearPendingViewResetTimeout();
-    setPendingView(null);
   }, [activeView, clearPendingViewResetTimeout]);
   useEffect(() => clearPendingViewResetTimeout, [clearPendingViewResetTimeout]);
 
@@ -1260,18 +1272,19 @@ function SidebarSegmentedPicker({
   if (views.length < 2) {
     return null;
   }
-  const displayedView = pendingView ?? activeView;
+  const effectivePendingView = pendingView.key === activeView ? pendingView.value : null;
+  const displayedView = effectivePendingView ?? activeView;
   const handleSelectView = (view: SidebarView) => {
     const nextPendingView = resolvePendingSidebarViewSelection(activeView, view);
     clearPendingViewResetTimeout();
-    setPendingView(nextPendingView);
+    setPendingView({ key: activeView, value: nextPendingView });
     if (nextPendingView !== null) {
       // Start the detail subscription before the transition render so the
       // destination transcript is already loading while React works.
       onPrewarmView?.(view);
       pendingViewResetTimeoutRef.current = window.setTimeout(() => {
         pendingViewResetTimeoutRef.current = null;
-        setPendingView(null);
+        setPendingView((current) => ({ ...current, value: null }));
       }, SIDEBAR_SEGMENT_PENDING_RESET_MS);
     }
     onSelectView(view);
@@ -1505,7 +1518,9 @@ export default function Sidebar() {
   const routeSearch = useDiffRouteSearch();
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
-  const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const activeSplitView = useSplitViewStore(
+    useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
+  );
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
 
   useEffect(() => {
@@ -1673,8 +1688,10 @@ export default function Sidebar() {
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const selectSidebarTreeThreads = useMemo(() => createSidebarTreeThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
@@ -1691,6 +1708,11 @@ export default function Sidebar() {
     () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
     [sidebarDisplayThreads, studioProjectIdSet],
   );
+  const { nonStudioThreads: nonStudioSidebarTreeThreads, studioThreads: studioSidebarTreeThreads } =
+    useMemo(
+      () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
+      [sidebarTreeThreads, studioProjectIdSet],
+    );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {
@@ -1736,8 +1758,15 @@ export default function Sidebar() {
       return;
     }
     if (routeActiveSidebarThreadId === optimisticActiveThreadId) {
-      setOptimisticActiveThreadId(null);
-      return;
+      // The route caught up; drop the optimistic override on the next tick. Async
+      // setState keeps this out of render, and activeSidebarThreadId already resolves
+      // to the same thread via `optimistic ?? route`, so the deferral is invisible.
+      const settle = window.setTimeout(() => {
+        setOptimisticActiveThreadId((current) =>
+          current === optimisticActiveThreadId ? null : current,
+        );
+      }, 0);
+      return () => window.clearTimeout(settle);
     }
 
     const timeout = window.setTimeout(() => {
@@ -1779,14 +1808,17 @@ export default function Sidebar() {
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
+  // Pin state must derive from the child-inclusive tree list: project trees
+  // render child rows with the pin action, and a pin stored for a child would
+  // otherwise never surface in the pinned section (root-only display list).
   const pinnedThreadIds = useMemo(
     () =>
       derivePinnedThreadIdsForSidebar({
-        threads: sidebarDisplayThreads,
+        threads: sidebarTreeThreads,
         persistedPinnedThreadIds,
         optimisticPinnedStateByThreadId,
       }),
-    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarDisplayThreads],
+    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarTreeThreads],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const projectById = useMemo(
@@ -1820,10 +1852,10 @@ export default function Sidebar() {
   const pinnedThreads = useMemo(
     () =>
       getPinnedThreadsForSidebar(
-        isOnStudio ? studioSidebarDisplayThreads : nonStudioSidebarDisplayThreads,
+        isOnStudio ? studioSidebarTreeThreads : nonStudioSidebarTreeThreads,
         pinnedThreadIds,
       ),
-    [isOnStudio, nonStudioSidebarDisplayThreads, pinnedThreadIds, studioSidebarDisplayThreads],
+    [isOnStudio, nonStudioSidebarTreeThreads, pinnedThreadIds, studioSidebarTreeThreads],
   );
   useEffect(() => {
     sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
@@ -1929,25 +1961,31 @@ export default function Sidebar() {
     const serverPinnedStateByThreadId = new Map(
       sidebarThreads.map((thread) => [thread.id, thread.isPinned === true] as const),
     );
-    setOptimisticPinnedStateByThreadId((current) => {
-      let next: Map<ThreadId, boolean> | null = null;
-      const confirmedThreadIds: ThreadId[] = [];
-      for (const [threadId, desiredPinned] of current) {
-        const serverPinned = serverPinnedStateByThreadId.get(threadId);
-        if (serverPinned !== undefined && serverPinned !== desiredPinned) {
-          continue;
+    // Reconciliation drops optimistic entries the server has confirmed while syncing
+    // the mirror ref. Deferring the setState off render (async is allowed) leaves the
+    // derived pinned lists unchanged, since a confirmed entry is redundant either way.
+    const settle = window.setTimeout(() => {
+      setOptimisticPinnedStateByThreadId((current) => {
+        let next: Map<ThreadId, boolean> | null = null;
+        const confirmedThreadIds: ThreadId[] = [];
+        for (const [threadId, desiredPinned] of current) {
+          const serverPinned = serverPinnedStateByThreadId.get(threadId);
+          if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+            continue;
+          }
+          next ??= new Map(current);
+          next.delete(threadId);
+          confirmedThreadIds.push(threadId);
         }
-        next ??= new Map(current);
-        next.delete(threadId);
-        confirmedThreadIds.push(threadId);
-      }
-      if (next) {
-        for (const threadId of confirmedThreadIds) {
-          optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+        if (next) {
+          for (const threadId of confirmedThreadIds) {
+            optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+          }
         }
-      }
-      return next ?? current;
-    });
+        return next ?? current;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [optimisticPinnedStateByThreadId, sidebarThreads]);
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -2106,25 +2144,31 @@ export default function Sidebar() {
     const serverPinnedStateByProjectId = new Map(
       projects.map((project) => [project.id, project.isPinned === true] as const),
     );
-    setOptimisticPinnedStateByProjectId((current) => {
-      let next: Map<ProjectId, boolean> | null = null;
-      const confirmedProjectIds: ProjectId[] = [];
-      for (const [projectId, desiredPinned] of current) {
-        const serverPinned = serverPinnedStateByProjectId.get(projectId);
-        if (serverPinned !== undefined && serverPinned !== desiredPinned) {
-          continue;
+    // Reconciliation drops optimistic entries the server has confirmed while syncing
+    // the mirror ref. Deferring the setState off render (async is allowed) leaves the
+    // derived pinned lists unchanged, since a confirmed entry is redundant either way.
+    const settle = window.setTimeout(() => {
+      setOptimisticPinnedStateByProjectId((current) => {
+        let next: Map<ProjectId, boolean> | null = null;
+        const confirmedProjectIds: ProjectId[] = [];
+        for (const [projectId, desiredPinned] of current) {
+          const serverPinned = serverPinnedStateByProjectId.get(projectId);
+          if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+            continue;
+          }
+          next ??= new Map(current);
+          next.delete(projectId);
+          confirmedProjectIds.push(projectId);
         }
-        next ??= new Map(current);
-        next.delete(projectId);
-        confirmedProjectIds.push(projectId);
-      }
-      if (next) {
-        for (const projectId of confirmedProjectIds) {
-          optimisticPinnedStateByProjectIdRef.current.delete(projectId);
+        if (next) {
+          for (const projectId of confirmedProjectIds) {
+            optimisticPinnedStateByProjectIdRef.current.delete(projectId);
+          }
         }
-      }
-      return next ?? current;
-    });
+        return next ?? current;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [optimisticPinnedStateByProjectId, projects]);
   const workspaceRows = useMemo(
     () =>
@@ -3313,7 +3357,7 @@ export default function Sidebar() {
       if (pendingThreadIds.has(threadId)) return false;
 
       pendingThreadIds.add(threadId);
-      try {
+      const runArchive = async (): Promise<boolean> => {
         await archiveThreadFromClient(api.orchestration, threadId);
 
         // Navigate away before surfacing Undo so a quick restore cannot be
@@ -3337,9 +3381,10 @@ export default function Sidebar() {
         }
 
         return true;
-      } finally {
+      };
+      return runArchive().finally(() => {
         pendingThreadIds.delete(threadId);
-      }
+      });
     },
     [appSettings.sidebarThreadSortOrder, handleNewChat, navigate, routeThreadId, sidebarThreads],
   );
@@ -3361,43 +3406,46 @@ export default function Sidebar() {
       if (pendingThreadIds.has(input.threadId)) return false;
 
       pendingThreadIds.add(input.threadId);
-      try {
-        const currentThread = getThreadFromState(useStore.getState(), input.threadId);
-        if (!currentThread) {
+      const runRestore = async (): Promise<boolean> => {
+        try {
+          const currentThread = getThreadFromState(useStore.getState(), input.threadId);
+          if (!currentThread) {
+            toastManager.add({
+              type: "error",
+              title: "Could not restore thread",
+              description: "The thread no longer exists.",
+            });
+            return false;
+          }
+          try {
+            await unarchiveArchivedThread(input.threadId);
+          } catch (error) {
+            // The archive event reaches the browser store asynchronously. Undo must
+            // still send the server command, then treat an already-restored thread as success.
+            if (!isThreadAlreadyUnarchivedError(error, input.threadId)) {
+              throw error;
+            }
+          }
+          if (input.returnToThreadOnUndo) {
+            void navigate({
+              to: "/$threadId",
+              params: { threadId: input.threadId },
+              replace: true,
+            });
+          }
+          return true;
+        } catch (error) {
           toastManager.add({
             type: "error",
             title: "Could not restore thread",
-            description: "The thread no longer exists.",
+            description: error instanceof Error ? error.message : "Unable to restore the thread.",
           });
           return false;
         }
-        try {
-          await unarchiveArchivedThread(input.threadId);
-        } catch (error) {
-          // The archive event reaches the browser store asynchronously. Undo must
-          // still send the server command, then treat an already-restored thread as success.
-          if (!isThreadAlreadyUnarchivedError(error, input.threadId)) {
-            throw error;
-          }
-        }
-        if (input.returnToThreadOnUndo) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: input.threadId },
-            replace: true,
-          });
-        }
-        return true;
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not restore thread",
-          description: error instanceof Error ? error.message : "Unable to restore the thread.",
-        });
-        return false;
-      } finally {
+      };
+      return runRestore().finally(() => {
         pendingThreadIds.delete(input.threadId);
-      }
+      });
     },
     [navigate, unarchiveArchivedThread],
   );
@@ -3984,12 +4032,13 @@ export default function Sidebar() {
 
       const deletedIds = new Set<ThreadId>(ids);
       const successfullyDeletedIds: ThreadId[] = [];
-      try {
+      const runDeletes = async (): Promise<void> => {
         for (const id of ids) {
           await deleteThread(id, { deletedThreadIds: deletedIds, reconcileDeletedThread: false });
           successfullyDeletedIds.push(id);
         }
-      } finally {
+      };
+      await runDeletes().finally(() => {
         if (successfullyDeletedIds.length > 0) {
           void reconcileDeletedThreadsFromClient({
             threadIds: successfullyDeletedIds,
@@ -3997,7 +4046,7 @@ export default function Sidebar() {
               useStore.getState().removeDeletedThreadFromClientState,
           });
         }
-      }
+      });
       removeFromSelection(ids);
     },
     [
@@ -4126,25 +4175,28 @@ export default function Sidebar() {
       // Optimistically clear the indicator; the server owns the process lifecycle
       // and will broadcast a `removed` event that keeps every client consistent.
       storeRemoveProjectRun(projectId);
-      try {
-        await api.projects.stopDevServer({ projectId });
-      } catch (error) {
-        // The optimistic removal may have been wrong (e.g. the stop failed), so
-        // resync from the authoritative server registry before surfacing the error.
+      const runStop = async (): Promise<void> => {
         try {
-          const { servers } = await api.projects.listDevServers();
-          useProjectRunStore.getState().replaceAll(servers);
-        } catch {
-          // Ignore resync failures; the dev-server event stream will reconcile.
+          await api.projects.stopDevServer({ projectId });
+        } catch (error) {
+          // The optimistic removal may have been wrong (e.g. the stop failed), so
+          // resync from the authoritative server registry before surfacing the error.
+          try {
+            const { servers } = await api.projects.listDevServers();
+            useProjectRunStore.getState().replaceAll(servers);
+          } catch {
+            // Ignore resync failures; the dev-server event stream will reconcile.
+          }
+          toastManager.add({
+            type: "error",
+            title: "Failed to stop run",
+            description: error instanceof Error ? error.message : "Unable to stop the dev server.",
+          });
         }
-        toastManager.add({
-          type: "error",
-          title: "Failed to stop run",
-          description: error instanceof Error ? error.message : "Unable to stop the dev server.",
-        });
-      } finally {
+      };
+      await runStop().finally(() => {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
-      }
+      });
     },
     [queryClient, storeRemoveProjectRun],
   );
@@ -4363,9 +4415,11 @@ export default function Sidebar() {
     animatedProjectListsRef.current.add(node);
   }, []);
 
+  // Trees need child (subagent) threads too; the flat display list stays
+  // root-only for pinned rows and other non-tree consumers.
   const sidebarThreadsByProjectId = useMemo(
-    () => groupSidebarThreadsByProjectId(sidebarDisplayThreads),
-    [sidebarDisplayThreads],
+    () => groupSidebarThreadsByProjectId(sidebarTreeThreads),
+    [sidebarTreeThreads],
   );
   const sortedSidebarThreadsByProjectId = useMemo(() => {
     const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
@@ -4563,7 +4617,9 @@ export default function Sidebar() {
     }
     return commandByProjectId;
   }, [discoveredScriptTargetsByProjectId, standardProjects]);
-  projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
+  useEffect(() => {
+    projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
+  }, [projectRunCommandByProjectId]);
   // Keep manual server attribution alive without repeating the expensive
   // port/process scan while no Synara-owned run needs near-real-time status.
   const hasActiveProjectRun = useMemo(
@@ -4603,7 +4659,9 @@ export default function Sidebar() {
     }
     return serverByProjectId;
   }, [projectRunLocalServersQuery.data?.servers, projectRunsByProjectId, standardProjects]);
-  projectRunServerByProjectIdRef.current = projectRunServerByProjectId;
+  useEffect(() => {
+    projectRunServerByProjectIdRef.current = projectRunServerByProjectId;
+  }, [projectRunServerByProjectId]);
   const projectRunDialogProject = projectRunDialogProjectId
     ? (projectById.get(projectRunDialogProjectId) ?? null)
     : null;
@@ -4621,7 +4679,12 @@ export default function Sidebar() {
     }
     const defaultCommand =
       projectRunCommandByProjectIdRef.current.get(projectRunDialogProjectId)?.command ?? "";
-    setProjectRunDialogCommandDraft(defaultCommand);
+    // Seed off the initial commit (async setState is allowed). useEffect already runs
+    // post-paint, so the deferral matches the original timing.
+    const settle = window.setTimeout(() => {
+      setProjectRunDialogCommandDraft(defaultCommand);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [projectRunDialogProjectId]);
   const projectRunDialogCommandIsValid = projectRunDialogCommandDraft.trim().length > 0;
   // Remember the launched command as the project's primary run script so the
@@ -4737,13 +4800,16 @@ export default function Sidebar() {
 
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
-    setThreadListExtraPagesByProjectCwd((current) =>
-      pruneProjectThreadListPagingForCollapsedProjects({
-        threadListExtraPagesByProjectCwd: current,
-        projects: standardProjects,
-        normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
-      }),
-    );
+    const settle = window.setTimeout(() => {
+      setThreadListExtraPagesByProjectCwd((current) =>
+        pruneProjectThreadListPagingForCollapsedProjects({
+          threadListExtraPagesByProjectCwd: current,
+          projects: standardProjects,
+          normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+        }),
+      );
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [standardProjects]);
 
   useEffect(() => {
@@ -4794,15 +4860,18 @@ export default function Sidebar() {
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
-    setDismissedThreadStatusKeyByThreadId((current) => {
-      const nextEntries = Object.entries(current).filter(([threadId]) =>
-        retainedThreadIds.has(ThreadId.makeUnsafe(threadId)),
-      );
-      if (nextEntries.length === Object.keys(current).length) {
-        return current;
-      }
-      return Object.fromEntries(nextEntries);
-    });
+    const settle = window.setTimeout(() => {
+      setDismissedThreadStatusKeyByThreadId((current) => {
+        const nextEntries = Object.entries(current).filter(([threadId]) =>
+          retainedThreadIds.has(ThreadId.makeUnsafe(threadId)),
+        );
+        if (nextEntries.length === Object.keys(current).length) {
+          return current;
+        }
+        return Object.fromEntries(nextEntries);
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [sidebarThreads]);
 
   useEffect(() => {
@@ -4830,15 +4899,18 @@ export default function Sidebar() {
       threadId: routeThreadId,
       ...(routeSearch.splitViewId ? { splitViewId: routeSearch.splitViewId } : {}),
     };
-    setLastThreadRoute((current) => {
-      if (
-        current?.threadId === nextLastThreadRoute.threadId &&
-        current?.splitViewId === nextLastThreadRoute.splitViewId
-      ) {
-        return current;
-      }
-      return nextLastThreadRoute;
-    });
+    const settle = window.setTimeout(() => {
+      setLastThreadRoute((current) => {
+        if (
+          current?.threadId === nextLastThreadRoute.threadId &&
+          current?.splitViewId === nextLastThreadRoute.splitViewId
+        ) {
+          return current;
+        }
+        return nextLastThreadRoute;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [isOnSettings, isOnWorkspace, routeSearch.splitViewId, routeThreadId]);
 
   useEffect(() => {
@@ -4865,16 +4937,19 @@ export default function Sidebar() {
       return;
     }
 
-    setExpandedSubagentParentIds((previous) => {
-      const next = new Set(previous);
-      let changed = false;
-      for (const parentThreadId of forcedExpandedParentIds) {
-        if (next.has(parentThreadId)) continue;
-        next.add(parentThreadId);
-        changed = true;
-      }
-      return changed ? next : previous;
-    });
+    const settle = window.setTimeout(() => {
+      setExpandedSubagentParentIds((previous) => {
+        const next = new Set(previous);
+        let changed = false;
+        for (const parentThreadId of forcedExpandedParentIds) {
+          if (next.has(parentThreadId)) continue;
+          next.add(parentThreadId);
+          changed = true;
+        }
+        return changed ? next : previous;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [activeSidebarThreadId, sidebarThreadSummaryById]);
 
   const toggleSubagentParent = useCallback((threadId: ThreadId) => {
@@ -4975,8 +5050,9 @@ export default function Sidebar() {
     [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
   );
   const visibleSidebarThreads = useMemo(
-    () => sidebarDisplayThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
-    [sidebarDisplayThreads, visibleSidebarThreadIdSet],
+    // Tree source so expanded subagent rows also get PR badges/git targets.
+    () => sidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
+    [sidebarTreeThreads, visibleSidebarThreadIdSet],
   );
   // PR badges only render on visible rows, so keep git/PR query setup off hidden project history.
   const threadGitTargets = useMemo(
@@ -5101,10 +5177,14 @@ export default function Sidebar() {
   const [threadJumpLabelByThreadId, setThreadJumpLabelByThreadId] =
     useState<ReadonlyMap<ThreadId, string>>(EMPTY_THREAD_JUMP_LABELS);
   const threadJumpLabelsRef = useRef<ReadonlyMap<ThreadId, string>>(EMPTY_THREAD_JUMP_LABELS);
-  threadJumpLabelsRef.current = threadJumpLabelByThreadId;
+  useEffect(() => {
+    threadJumpLabelsRef.current = threadJumpLabelByThreadId;
+  }, [threadJumpLabelByThreadId]);
   const [showThreadJumpHints, setShowThreadJumpHints] = useState(false);
   const showThreadJumpHintsRef = useRef(false);
-  showThreadJumpHintsRef.current = showThreadJumpHints;
+  useEffect(() => {
+    showThreadJumpHintsRef.current = showThreadJumpHints;
+  }, [showThreadJumpHints]);
   const visibleThreadJumpLabelByThreadId = showThreadJumpHints
     ? threadJumpLabelByThreadId
     : EMPTY_THREAD_JUMP_LABELS;
@@ -6481,87 +6561,65 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
-    () =>
-      projects.map((project) => ({
-        id: project.id,
-        name: project.name,
-        remoteName: project.remoteName,
-        folderName: project.folderName,
-        localName: project.localName,
-        cwd: project.cwd,
-        createdAt: project.createdAt,
-        updatedAt: project.updatedAt,
-      })),
-    [projects],
-  );
-  const searchPaletteActions = useMemo<SidebarSearchAction[]>(
-    () => [
-      {
-        id: "new-chat",
-        label: "New chat",
-        description: "Open the new chat landing screen.",
-        keywords: ["chat", "new", "home"],
-        shortcutLabel: newChatShortcutLabel,
-      },
-      {
-        id: "new-thread",
-        label: "New thread",
-        description: "Start a fresh thread in the current or most recently used project.",
-        keywords: ["thread", "new", "project"],
-        shortcutLabel: newThreadShortcutLabel,
-      },
-      {
-        id: "add-project",
-        label: "Add project",
-        description: "Open a repository or folder in the sidebar.",
-        keywords: ["folder", "repo", "repository", "open"],
-        shortcutLabel: addProjectShortcutLabel,
-      },
-      {
-        id: "import-thread",
-        label: "Import thread from...",
-        description: "Attach a local thread to an existing provider session.",
-        keywords: [
-          "import",
-          "resume",
-          "thread",
-          "session",
-          "codex",
-          "claude",
-          "cursor",
-          "opencode",
-        ],
-        shortcutLabel: importThreadShortcutLabel,
-      },
-      {
-        id: "feedback",
-        label: "Feedback Synara",
-        description: "Send feedback or report an issue to the Synara team.",
-        keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
-      },
-      {
-        id: "settings",
-        label: "Settings",
-        description: "Open app settings.",
-        keywords: ["preferences", "config"],
-      },
-      {
-        id: "usage-settings",
-        label: "Usage settings",
-        description: "Open provider usage and remaining credits.",
-        keywords: ["usage", "limits", "credits", "quota", "providers"],
-        shortcutLabel: usageSettingsShortcutLabel,
-      },
-    ],
-    [
-      addProjectShortcutLabel,
-      importThreadShortcutLabel,
-      newChatShortcutLabel,
-      newThreadShortcutLabel,
-      usageSettingsShortcutLabel,
-    ],
-  );
+  const searchPaletteProjects: SidebarSearchProject[] = projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    remoteName: project.remoteName,
+    folderName: project.folderName,
+    localName: project.localName,
+    cwd: project.cwd,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  }));
+  const searchPaletteActions: SidebarSearchAction[] = [
+    {
+      id: "new-chat",
+      label: "New chat",
+      description: "Open the new chat landing screen.",
+      keywords: ["chat", "new", "home"],
+      shortcutLabel: newChatShortcutLabel,
+    },
+    {
+      id: "new-thread",
+      label: "New thread",
+      description: "Start a fresh thread in the current or most recently used project.",
+      keywords: ["thread", "new", "project"],
+      shortcutLabel: newThreadShortcutLabel,
+    },
+    {
+      id: "add-project",
+      label: "Add project",
+      description: "Open a repository or folder in the sidebar.",
+      keywords: ["folder", "repo", "repository", "open"],
+      shortcutLabel: addProjectShortcutLabel,
+    },
+    {
+      id: "import-thread",
+      label: "Import thread from...",
+      description: "Attach a local thread to an existing provider session.",
+      keywords: ["import", "resume", "thread", "session", "codex", "claude", "cursor", "opencode"],
+      shortcutLabel: importThreadShortcutLabel,
+    },
+    {
+      id: "feedback",
+      label: "Feedback Synara",
+      description: "Send feedback or report an issue to the Synara team.",
+      keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      description: "Open app settings.",
+      keywords: ["preferences", "config"],
+    },
+    {
+      id: "usage-settings",
+      label: "Usage settings",
+      description: "Open provider usage and remaining credits.",
+      keywords: ["usage", "limits", "credits", "quota", "providers"],
+      shortcutLabel: usageSettingsShortcutLabel,
+    },
+  ];
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;

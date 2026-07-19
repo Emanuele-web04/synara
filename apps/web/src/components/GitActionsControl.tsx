@@ -316,6 +316,7 @@ export default function GitActionsControl({
 }: GitActionsControlProps) {
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const gitTextGenerationModelSelection = useMemo(
     (): ModelSelection => ({

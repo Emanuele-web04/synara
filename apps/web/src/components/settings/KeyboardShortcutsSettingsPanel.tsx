@@ -5,7 +5,7 @@
 // Depends on: shared shortcut-sheet builder/filter, server keybindings config, and the Kbd pill.
 
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Input } from "~/components/ui/input";
@@ -26,8 +26,7 @@ import {
   SETTINGS_EMPTY_STATE_CLASS_NAME,
 } from "~/settingsPanelStyles";
 
-// Stable empty reference so the section memo doesn't re-run on every render while the
-// server config query is still loading (`?? []` would allocate a fresh array each time).
+// Stable empty reference while the server config query is still loading.
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
 // The settings reference is intentionally context-free: it lists the chat/sidebar bindings
@@ -45,23 +44,16 @@ export function KeyboardShortcutsSettingsPanel() {
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
 
-  const sections = useMemo(
-    () =>
-      buildShortcutSheetSections({
-        keybindings,
-        // Project scripts are per-project and live only in the chat context; the settings
-        // reference stays project-agnostic, so the contextual Mod+/ sheet still owns them.
-        projectScripts: [],
-        platform,
-        context: SETTINGS_SHORTCUT_CONTEXT,
-      }),
-    [keybindings, platform],
-  );
+  const sections = buildShortcutSheetSections({
+    keybindings,
+    // Project scripts are per-project and live only in the chat context; the settings
+    // reference stays project-agnostic, so the contextual Mod+/ sheet still owns them.
+    projectScripts: [],
+    platform,
+    context: SETTINGS_SHORTCUT_CONTEXT,
+  });
 
-  const filteredSections = useMemo(
-    () => filterShortcutSheetSections(sections, query),
-    [sections, query],
-  );
+  const filteredSections = filterShortcutSheetSections(sections, query);
 
   return (
     <div className="space-y-4">

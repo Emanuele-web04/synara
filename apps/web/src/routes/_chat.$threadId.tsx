@@ -15,15 +15,14 @@ import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
+  useMemo,
   Suspense,
   lazy,
   startTransition,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -207,6 +206,33 @@ function clampSplitRatio(value: number): number {
   return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, value));
 }
 
+function shouldAcceptDockWidth({
+  nextWidth,
+  wrapper,
+}: {
+  nextWidth: number;
+  wrapper: HTMLElement;
+}) {
+  const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
+  return canComposerHandlePanelWidth({
+    nextWidth,
+    // The dock coexists only with the single-pane chat, but dock sidechat
+    // panes mount their own composer forms — scope the probe so it always
+    // measures the main composer instead of "first form in the document".
+    paneScopeId: SINGLE_CHAT_PANE_SCOPE_ID,
+    applyWidth: (width) => {
+      wrapper.style.setProperty("--sidebar-width", `${width}px`);
+    },
+    resetWidth: () => {
+      if (previousSidebarWidth.length > 0) {
+        wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
+      } else {
+        wrapper.style.removeProperty("--sidebar-width");
+      }
+    },
+  });
+}
+
 const DiffLoadingFallback = (props: { mode: DiffPanelMode; hideHeader?: boolean }) => {
   return (
     <DiffPanelShell
@@ -291,72 +317,70 @@ function SplitPaneEmbeddedPanel(props: {
       : SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX;
   const minPanelWidth =
     props.panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
-  const [panelWidth, setPanelWidth] = useState<number>(() => {
-    return getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth;
-  });
+  // Keyed by storageKey so switching panel/pane re-reads the persisted width by
+  // deriving during render instead of resetting from an effect. Resizes stamp the
+  // current key; a stale key re-reads localStorage for the new panel's value.
+  const [panelWidthState, setPanelWidthState] = useState<{ key: string; value: number }>(() => ({
+    key: storageKey,
+    value: getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth,
+  }));
+  const panelWidth =
+    panelWidthState.key === storageKey
+      ? panelWidthState.value
+      : (getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth);
 
-  useEffect(() => {
-    setPanelWidth(getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth);
-  }, [defaultPanelWidth, storageKey]);
+  const shouldAcceptEmbeddedWidth = (nextWidth: number) => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return true;
+    return canComposerHandlePanelWidth({
+      nextWidth,
+      paneScopeId: props.paneScopeId,
+      applyWidth: (width) => {
+        wrapper.style.width = `${width}px`;
+      },
+      resetWidth: () => {
+        wrapper.style.width = `${panelWidth}px`;
+      },
+    });
+  };
 
-  const shouldAcceptEmbeddedWidth = useCallback(
-    (nextWidth: number) => {
-      const wrapper = wrapperRef.current;
-      if (!wrapper) return true;
-      return canComposerHandlePanelWidth({
-        nextWidth,
-        paneScopeId: props.paneScopeId,
-        applyWidth: (width) => {
-          wrapper.style.width = `${width}px`;
-        },
-        resetWidth: () => {
-          wrapper.style.width = `${panelWidth}px`;
-        },
-      });
-    },
-    [panelWidth, props.paneScopeId],
-  );
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const wrapper = wrapperRef.current;
+    const parent = wrapper?.parentElement;
+    if (!wrapper || !parent) return;
 
-  const startResize = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const wrapper = wrapperRef.current;
-      const parent = wrapper?.parentElement;
-      if (!wrapper || !parent) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = wrapper.getBoundingClientRect().width;
+    const maxWidth = Math.max(minPanelWidth, parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH);
+    const resizeOverlay = createPanelResizeOverlay();
 
-      event.preventDefault();
-      event.stopPropagation();
-      const startX = event.clientX;
-      const startWidth = wrapper.getBoundingClientRect().width;
-      const maxWidth = Math.max(minPanelWidth, parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH);
-      const resizeOverlay = createPanelResizeOverlay();
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const delta = startX - moveEvent.clientX;
+      const nextWidth = Math.max(minPanelWidth, Math.min(maxWidth, startWidth + delta));
+      if (!shouldAcceptEmbeddedWidth(nextWidth)) {
+        return;
+      }
+      setPanelWidthState({ key: storageKey, value: nextWidth });
+      setLocalStorageItem(storageKey, nextWidth, Schema.Finite);
+    };
 
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        const delta = startX - moveEvent.clientX;
-        const nextWidth = Math.max(minPanelWidth, Math.min(maxWidth, startWidth + delta));
-        if (!shouldAcceptEmbeddedWidth(nextWidth)) {
-          return;
-        }
-        setPanelWidth(nextWidth);
-        setLocalStorageItem(storageKey, nextWidth, Schema.Finite);
-      };
+    const onPointerUp = () => {
+      removePanelResizeOverlay(resizeOverlay);
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+      resizeOverlay.removeEventListener("pointermove", onPointerMove);
+      resizeOverlay.removeEventListener("pointerup", onPointerUp);
+      resizeOverlay.removeEventListener("pointercancel", onPointerUp);
+    };
 
-      const onPointerUp = () => {
-        removePanelResizeOverlay(resizeOverlay);
-        document.body.style.removeProperty("cursor");
-        document.body.style.removeProperty("user-select");
-        resizeOverlay.removeEventListener("pointermove", onPointerMove);
-        resizeOverlay.removeEventListener("pointerup", onPointerUp);
-        resizeOverlay.removeEventListener("pointercancel", onPointerUp);
-      };
-
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      resizeOverlay.addEventListener("pointermove", onPointerMove);
-      resizeOverlay.addEventListener("pointerup", onPointerUp);
-      resizeOverlay.addEventListener("pointercancel", onPointerUp);
-    },
-    [minPanelWidth, shouldAcceptEmbeddedWidth, storageKey],
-  );
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    resizeOverlay.addEventListener("pointermove", onPointerMove);
+    resizeOverlay.addEventListener("pointerup", onPointerUp);
+    resizeOverlay.addEventListener("pointercancel", onPointerUp);
+  };
 
   if (!props.panelOpen || !props.threadId) {
     return null;
@@ -494,98 +518,95 @@ function SplitDivider(props: {
   onSetRatio: (nodeId: PaneId, ratio: number) => void;
 }) {
   const { onSetRatio, splitNodeId, direction } = props;
-  const handlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const target = event.currentTarget;
-      const parent = target.parentElement as HTMLElement | null;
-      if (!parent) return;
-      event.preventDefault();
-      const rect = parent.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const parent = target.parentElement as HTMLElement | null;
+    if (!parent) return;
+    event.preventDefault();
+    const rect = parent.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
 
-      const computeRatio = (clientX: number, clientY: number) =>
-        clampSplitRatio(
-          direction === "horizontal"
-            ? (clientX - rect.left) / rect.width
-            : (clientY - rect.top) / rect.height,
-        );
+    const computeRatio = (clientX: number, clientY: number) =>
+      clampSplitRatio(
+        direction === "horizontal"
+          ? (clientX - rect.left) / rect.width
+          : (clientY - rect.top) / rect.height,
+      );
 
-      let latestRatio = computeRatio(event.clientX, event.clientY);
-      let frameId = 0;
-      const previousParentPosition = parent.style.position;
-      const previousBodyCursor = document.body.style.cursor;
-      const previousBodyUserSelect = document.body.style.userSelect;
-      if (getComputedStyle(parent).position === "static") {
-        parent.style.position = "relative";
-      }
-      const resizeGuide = document.createElement("div");
-      resizeGuide.setAttribute("data-split-resize-guide", "true");
+    let latestRatio = computeRatio(event.clientX, event.clientY);
+    let frameId = 0;
+    const previousParentPosition = parent.style.position;
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    if (getComputedStyle(parent).position === "static") {
+      parent.style.position = "relative";
+    }
+    const resizeGuide = document.createElement("div");
+    resizeGuide.setAttribute("data-split-resize-guide", "true");
+    Object.assign(resizeGuide.style, {
+      position: "absolute",
+      zIndex: "50",
+      pointerEvents: "none",
+      borderRadius: "999px",
+      background: "var(--info)",
+      opacity: "0.75",
+      boxShadow: "0 0 0 1px color-mix(in srgb, var(--info) 70%, transparent)",
+    });
+    if (direction === "horizontal") {
       Object.assign(resizeGuide.style, {
-        position: "absolute",
-        zIndex: "50",
-        pointerEvents: "none",
-        borderRadius: "999px",
-        background: "var(--info)",
-        opacity: "0.75",
-        boxShadow: "0 0 0 1px color-mix(in srgb, var(--info) 70%, transparent)",
+        top: "0",
+        bottom: "0",
+        left: "0",
+        width: "2px",
       });
-      if (direction === "horizontal") {
-        Object.assign(resizeGuide.style, {
-          top: "0",
-          bottom: "0",
-          left: "0",
-          width: "2px",
-        });
-      } else {
-        Object.assign(resizeGuide.style, {
-          top: "0",
-          left: "0",
-          right: "0",
-          height: "2px",
-        });
+    } else {
+      Object.assign(resizeGuide.style, {
+        top: "0",
+        left: "0",
+        right: "0",
+        height: "2px",
+      });
+    }
+    parent.append(resizeGuide);
+
+    const applyGuide = () => {
+      frameId = 0;
+      const offsetPx =
+        direction === "horizontal" ? rect.width * latestRatio : rect.height * latestRatio;
+      resizeGuide.style.transform =
+        direction === "horizontal"
+          ? `translateX(${Math.round(offsetPx)}px)`
+          : `translateY(${Math.round(offsetPx)}px)`;
+    };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      latestRatio = computeRatio(moveEvent.clientX, moveEvent.clientY);
+      if (frameId === 0) {
+        frameId = window.requestAnimationFrame(applyGuide);
       }
-      parent.append(resizeGuide);
+    };
+    const onPointerUp = () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+        applyGuide();
+      }
+      document.body.style.userSelect = previousBodyUserSelect;
+      document.body.style.cursor = previousBodyCursor;
+      parent.style.position = previousParentPosition;
+      resizeGuide.remove();
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      onSetRatio(splitNodeId, latestRatio);
+    };
 
-      const applyGuide = () => {
-        frameId = 0;
-        const offsetPx =
-          direction === "horizontal" ? rect.width * latestRatio : rect.height * latestRatio;
-        resizeGuide.style.transform =
-          direction === "horizontal"
-            ? `translateX(${Math.round(offsetPx)}px)`
-            : `translateY(${Math.round(offsetPx)}px)`;
-      };
-
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        latestRatio = computeRatio(moveEvent.clientX, moveEvent.clientY);
-        if (frameId === 0) {
-          frameId = window.requestAnimationFrame(applyGuide);
-        }
-      };
-      const onPointerUp = () => {
-        if (frameId !== 0) {
-          window.cancelAnimationFrame(frameId);
-          applyGuide();
-        }
-        document.body.style.userSelect = previousBodyUserSelect;
-        document.body.style.cursor = previousBodyCursor;
-        parent.style.position = previousParentPosition;
-        resizeGuide.remove();
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
-        window.removeEventListener("pointercancel", onPointerUp);
-        onSetRatio(splitNodeId, latestRatio);
-      };
-
-      document.body.style.userSelect = "none";
-      document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
-      applyGuide();
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
-      window.addEventListener("pointercancel", onPointerUp);
-    },
-    [direction, onSetRatio, splitNodeId],
-  );
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
+    applyGuide();
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+  };
 
   return (
     <div
@@ -725,7 +746,9 @@ function DeferredChatView(props: {
     if (!props.deferMount) {
       return;
     }
-    setReadyMountKey(null);
+    // readyMountKey is keyed by mountKey, so a changed mountKey already makes
+    // canMountChatView false (skeleton) without an eager reset here; the double
+    // rAF then stamps the new key once the paint has settled.
     let firstFrame = 0;
     let secondFrame = 0;
     firstFrame = window.requestAnimationFrame(() => {
@@ -810,16 +833,17 @@ function SplitPaneSurface(props: {
   const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
 
   const onDropThread = props.onDropThread;
-  const handleDrop = useCallback(
-    (payload: { threadId: ThreadIdType; direction: SplitDirection; side: SplitDropSide }) => {
-      onDropThread({
-        droppedThreadId: payload.threadId,
-        direction: payload.direction,
-        side: payload.side,
-      });
-    },
-    [onDropThread],
-  );
+  const handleDrop = (payload: {
+    threadId: ThreadIdType;
+    direction: SplitDirection;
+    side: SplitDropSide;
+  }) => {
+    onDropThread({
+      droppedThreadId: payload.threadId,
+      direction: payload.direction,
+      side: payload.side,
+    });
+  };
 
   return (
     <div
@@ -903,10 +927,12 @@ function SplitPaneSurface(props: {
 function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: ThreadIdType }) {
   const navigate = useNavigate();
   const { handleNewChat } = useHandleNewChat();
-  const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  const selectAllThreads = createAllThreadsSelector();
   const threads = useStore(selectAllThreads);
   const projects = useStore((store) => store.projects);
-  const splitView = useSplitViewStore(selectSplitView(props.splitViewId));
+  const splitView = useSplitViewStore(
+    useMemo(() => selectSplitView(props.splitViewId), [props.splitViewId]),
+  );
   const setFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const setRatioForNode = useSplitViewStore((store) => store.setRatioForNode);
   const setPanePanelState = useSplitViewStore((store) => store.setPanePanelState);
@@ -991,60 +1017,51 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     setFocusedPane,
   ]);
 
-  const setPaneFocus = useCallback(
-    (paneId: PaneId) => {
-      if (!activeSplitView) return;
-      const leaf = findLeafPaneById(activeSplitView.root, paneId);
-      const nextThreadId = leaf?.threadId ?? resolveSplitViewFocusedThreadId(activeSplitView);
-      setFocusedPane(activeSplitView.id, paneId);
-      if (!nextThreadId || nextThreadId === props.routeThreadId) {
-        return;
-      }
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: nextThreadId },
-        replace: true,
-        search: (previous) => ({
-          ...stripDiffSearchParams(previous),
-          splitViewId: activeSplitView.id,
-        }),
-      });
-    },
-    [activeSplitView, navigate, props.routeThreadId, setFocusedPane],
-  );
+  const setPaneFocus = (paneId: PaneId) => {
+    if (!activeSplitView) return;
+    const leaf = findLeafPaneById(activeSplitView.root, paneId);
+    const nextThreadId = leaf?.threadId ?? resolveSplitViewFocusedThreadId(activeSplitView);
+    setFocusedPane(activeSplitView.id, paneId);
+    if (!nextThreadId || nextThreadId === props.routeThreadId) {
+      return;
+    }
+    void navigate({
+      to: "/$threadId",
+      params: { threadId: nextThreadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        splitViewId: activeSplitView.id,
+      }),
+    });
+  };
 
-  const updatePanePanelState = useCallback(
-    (
-      paneId: PaneId,
-      patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
-    ) => {
-      if (!activeSplitView) return;
-      const leaf = findLeafPaneById(activeSplitView.root, paneId);
-      if (!leaf) return;
-      const nextPanel = patch.panel ?? leaf.panel.panel;
-      setPanePanelState(activeSplitView.id, paneId, {
-        ...patch,
-        hasOpenedPanel: leaf.panel.hasOpenedPanel || nextPanel !== null,
-        lastOpenPanel:
-          patch.panel === "browser" || patch.panel === "diff"
-            ? patch.panel
-            : leaf.panel.lastOpenPanel,
-      });
-    },
-    [activeSplitView, setPanePanelState],
-  );
+  const updatePanePanelState = (
+    paneId: PaneId,
+    patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
+  ) => {
+    if (!activeSplitView) return;
+    const leaf = findLeafPaneById(activeSplitView.root, paneId);
+    if (!leaf) return;
+    const nextPanel = patch.panel ?? leaf.panel.panel;
+    setPanePanelState(activeSplitView.id, paneId, {
+      ...patch,
+      hasOpenedPanel: leaf.panel.hasOpenedPanel || nextPanel !== null,
+      lastOpenPanel:
+        patch.panel === "browser" || patch.panel === "diff"
+          ? patch.panel
+          : leaf.panel.lastOpenPanel,
+    });
+  };
 
-  const togglePanePanel = useCallback(
-    (paneId: PaneId, panel: ChatRightPanel) => {
-      if (!activeSplitView) return;
-      const leaf = findLeafPaneById(activeSplitView.root, paneId);
-      if (!leaf?.threadId) {
-        return;
-      }
-      updatePanePanelState(paneId, resolveToggledChatPanelPatch(leaf.panel, panel));
-    },
-    [activeSplitView, updatePanePanelState],
-  );
+  const togglePanePanel = (paneId: PaneId, panel: ChatRightPanel) => {
+    if (!activeSplitView) return;
+    const leaf = findLeafPaneById(activeSplitView.root, paneId);
+    if (!leaf?.threadId) {
+      return;
+    }
+    updatePanePanelState(paneId, resolveToggledChatPanelPatch(leaf.panel, panel));
+  };
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -1077,25 +1094,19 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     };
   }, [activeSplitView, updatePanePanelState]);
 
-  const closePanePanel = useCallback(
-    (paneId: PaneId) => {
-      updatePanePanelState(paneId, { panel: null });
-    },
-    [updatePanePanelState],
-  );
+  const closePanePanel = (paneId: PaneId) => {
+    updatePanePanelState(paneId, { panel: null });
+  };
 
-  const openPaneTurnDiff = useCallback(
-    (paneId: PaneId, turnId: TurnId, filePath?: string) => {
-      updatePanePanelState(paneId, {
-        panel: "diff",
-        diffTurnId: turnId,
-        diffFilePath: filePath ?? null,
-      });
-    },
-    [updatePanePanelState],
-  );
+  const openPaneTurnDiff = (paneId: PaneId, turnId: TurnId, filePath?: string) => {
+    updatePanePanelState(paneId, {
+      panel: "diff",
+      diffTurnId: turnId,
+      diffFilePath: filePath ?? null,
+    });
+  };
 
-  const maximizeFocusedPane = useCallback(() => {
+  const maximizeFocusedPane = () => {
     if (!activeSplitView) return;
     const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
     const decision = resolveSplitPaneMaximizeDecision({
@@ -1118,140 +1129,123 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
     removeSplitView(activeSplitView.id);
     void handleNewChat({ fresh: true });
-  }, [activeSplitView, handleNewChat, navigate, removeSplitView]);
+  };
 
-  const closePaneThread = useCallback(
-    (paneId: PaneId) => {
-      if (!activeSplitView) return;
-      const closingLeaf = findLeafPaneById(activeSplitView.root, paneId);
-      const closingThread = closingLeaf?.threadId
-        ? threads.find((thread) => thread.id === closingLeaf.threadId)
-        : null;
+  const closePaneThread = (paneId: PaneId) => {
+    if (!activeSplitView) return;
+    const closingLeaf = findLeafPaneById(activeSplitView.root, paneId);
+    const closingThread = closingLeaf?.threadId
+      ? threads.find((thread) => thread.id === closingLeaf.threadId)
+      : null;
 
-      if (closingThread?.sidechatSourceThreadId) {
-        const decision = resolveSplitPaneCloseDecision({
-          splitViewId: activeSplitView.id,
-          sourceThreadId: activeSplitView.sourceThreadId,
-          closingThreadId: closingLeaf?.threadId ?? null,
-          closingSidechatSourceThreadId: closingThread.sidechatSourceThreadId,
-          nextFocusedThreadId: null,
-          nextLeafCount: 0,
-        });
-        if (decision.kind !== "single-thread") return;
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: decision.threadId },
-          replace: true,
-          search: (previous) => ({
-            ...stripDiffSearchParams(previous),
-            splitViewId: undefined,
-          }),
-        }).then(() => {
-          removeSplitView(decision.splitViewIdToRemove);
-        });
-        return;
-      }
-
-      const closed = removePaneFromSplitView({
-        splitViewId: activeSplitView.id,
-        paneId,
-      });
-      if (!closed) return;
-
-      const nextSplitView = useSplitViewStore.getState().splitViewsById[activeSplitView.id];
-      const nextThreadId = nextSplitView ? resolveSplitViewFocusedThreadId(nextSplitView) : null;
+    if (closingThread?.sidechatSourceThreadId) {
       const decision = resolveSplitPaneCloseDecision({
         splitViewId: activeSplitView.id,
         sourceThreadId: activeSplitView.sourceThreadId,
         closingThreadId: closingLeaf?.threadId ?? null,
-        closingSidechatSourceThreadId: null,
-        nextFocusedThreadId: nextThreadId,
-        nextLeafCount: nextSplitView ? collectLeaves(nextSplitView.root).length : 0,
+        closingSidechatSourceThreadId: closingThread.sidechatSourceThreadId,
+        nextFocusedThreadId: null,
+        nextLeafCount: 0,
       });
-
-      if (decision.kind === "single-thread") {
+      if (decision.kind !== "single-thread") return;
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: decision.threadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
+      }).then(() => {
         removeSplitView(decision.splitViewIdToRemove);
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: decision.threadId },
-          replace: true,
-          search: (previous) => ({
-            ...stripDiffSearchParams(previous),
-            splitViewId: undefined,
-          }),
-        });
-        return;
-      }
-
-      if (decision.kind === "split-thread") {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: decision.threadId },
-          replace: true,
-          search: (previous) => ({
-            ...stripDiffSearchParams(previous),
-            splitViewId: decision.splitViewId,
-          }),
-        });
-        return;
-      }
-
-      void handleNewChat({ fresh: true });
-    },
-    [activeSplitView, handleNewChat, navigate, removePaneFromSplitView, removeSplitView, threads],
-  );
-
-  const handleSetRatio = useCallback(
-    (nodeId: PaneId, ratio: number) => {
-      if (!activeSplitView) return;
-      setRatioForNode(activeSplitView.id, nodeId, ratio);
-    },
-    [activeSplitView, setRatioForNode],
-  );
-
-  const handleDropThreadOnPane = useCallback(
-    (
-      paneId: PaneId,
-      payload: {
-        droppedThreadId: ThreadIdType;
-        direction: SplitDirection;
-        side: SplitDropSide;
-      },
-    ) => {
-      if (!activeSplitView) return;
-      const ok = dropThreadOnPane({
-        splitViewId: activeSplitView.id,
-        targetPaneId: paneId,
-        direction: payload.direction,
-        side: payload.side,
-        threadId: payload.droppedThreadId,
       });
-      if (!ok) return;
-      startTransition(() => {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: payload.droppedThreadId },
-          replace: true,
-          search: () => ({ splitViewId: activeSplitView.id }),
-        });
-      });
-    },
-    [activeSplitView, dropThreadOnPane, navigate],
-  );
+      return;
+    }
 
-  const selectableThreads = useMemo(
-    () =>
-      threads.toSorted(
-        (left, right) =>
-          Date.parse(right.updatedAt ?? right.createdAt) -
-          Date.parse(left.updatedAt ?? left.createdAt),
-      ),
-    [threads],
+    const closed = removePaneFromSplitView({
+      splitViewId: activeSplitView.id,
+      paneId,
+    });
+    if (!closed) return;
+
+    const nextSplitView = useSplitViewStore.getState().splitViewsById[activeSplitView.id];
+    const nextThreadId = nextSplitView ? resolveSplitViewFocusedThreadId(nextSplitView) : null;
+    const decision = resolveSplitPaneCloseDecision({
+      splitViewId: activeSplitView.id,
+      sourceThreadId: activeSplitView.sourceThreadId,
+      closingThreadId: closingLeaf?.threadId ?? null,
+      closingSidechatSourceThreadId: null,
+      nextFocusedThreadId: nextThreadId,
+      nextLeafCount: nextSplitView ? collectLeaves(nextSplitView.root).length : 0,
+    });
+
+    if (decision.kind === "single-thread") {
+      removeSplitView(decision.splitViewIdToRemove);
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: decision.threadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
+      });
+      return;
+    }
+
+    if (decision.kind === "split-thread") {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: decision.threadId },
+        replace: true,
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: decision.splitViewId,
+        }),
+      });
+      return;
+    }
+
+    void handleNewChat({ fresh: true });
+  };
+
+  const handleSetRatio = (nodeId: PaneId, ratio: number) => {
+    if (!activeSplitView) return;
+    setRatioForNode(activeSplitView.id, nodeId, ratio);
+  };
+
+  const handleDropThreadOnPane = (
+    paneId: PaneId,
+    payload: {
+      droppedThreadId: ThreadIdType;
+      direction: SplitDirection;
+      side: SplitDropSide;
+    },
+  ) => {
+    if (!activeSplitView) return;
+    const ok = dropThreadOnPane({
+      splitViewId: activeSplitView.id,
+      targetPaneId: paneId,
+      direction: payload.direction,
+      side: payload.side,
+      threadId: payload.droppedThreadId,
+    });
+    if (!ok) return;
+    startTransition(() => {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: payload.droppedThreadId },
+        replace: true,
+        search: () => ({ splitViewId: activeSplitView.id }),
+      });
+    });
+  };
+
+  const selectableThreads = threads.toSorted(
+    (left, right) =>
+      Date.parse(right.updatedAt ?? right.createdAt) - Date.parse(left.updatedAt ?? left.createdAt),
   );
-  const splitThreadIds = useMemo(
-    () => new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []),
-    [activeSplitView],
-  );
+  const splitThreadIds = new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []);
 
   if (!activeSplitView) {
     return <ChatMountSkeleton />;
@@ -1447,7 +1441,9 @@ function SingleChatSurface(props: {
   const navigate = useNavigate();
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
-  const dockState = useRightDockStore(selectRightDockState(props.threadId));
+  const dockState = useRightDockStore(
+    useMemo(() => selectRightDockState(props.threadId), [props.threadId]),
+  );
   const openPane = useRightDockStore((store) => store.openPane);
   const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
   const closePane = useRightDockStore((store) => store.closePane);
@@ -1497,8 +1493,14 @@ function SingleChatSurface(props: {
     }
     editorViewStateThreadIdRef.current = props.threadId;
     const persisted = readEditorViewState(props.threadId);
-    setEditorExpandedDirectories(new Set(persisted?.expandedDirectories ?? []));
-    setEditorCenterMode(props.search.editorFilePath ? "file" : (persisted?.centerMode ?? "diff"));
+    // Re-seed editor view state from storage asynchronously so the reset is not a
+    // synchronous setState in the effect body; both setters are user-mutable
+    // elsewhere, so deriving here would mean stamping the thread key in every one.
+    const timer = window.setTimeout(() => {
+      setEditorExpandedDirectories(new Set(persisted?.expandedDirectories ?? []));
+      setEditorCenterMode(props.search.editorFilePath ? "file" : (persisted?.centerMode ?? "diff"));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [props.search.editorFilePath, props.threadId]);
   const editorViewActive = props.search.view === "editor";
   useEffect(() => {
@@ -1533,45 +1535,39 @@ function SingleChatSurface(props: {
 
   // Bridge the dock's active browser/diff pane back into the panelState shape the
   // chat shell still consumes (diff badge, toggle pressed state, transcript gating).
-  const chatPanelState = useMemo<SplitViewPanePanelState>(
-    () => ({
-      panel:
-        activePane && (activePane.kind === "browser" || activePane.kind === "diff")
-          ? activePane.kind
-          : null,
-      diffTurnId: activePane?.kind === "diff" ? activePane.diffTurnId : null,
-      diffFilePath: activePane?.kind === "diff" ? activePane.diffFilePath : null,
-      hasOpenedPanel: dockState.panes.length > 0,
-      lastOpenPanel: "browser",
-    }),
-    [activePane, dockState.panes.length],
-  );
+  const chatPanelState: SplitViewPanePanelState = {
+    panel:
+      activePane && (activePane.kind === "browser" || activePane.kind === "diff")
+        ? activePane.kind
+        : null,
+    diffTurnId: activePane?.kind === "diff" ? activePane.diffTurnId : null,
+    diffFilePath: activePane?.kind === "diff" ? activePane.diffFilePath : null,
+    hasOpenedPanel: dockState.panes.length > 0,
+    lastOpenPanel: "browser",
+  };
 
-  const handleToggleDiff = useCallback(() => {
+  const handleToggleDiff = () => {
     requestImmediateDockHydration("diff");
     toggleSingletonPane(props.threadId, { kind: "diff" });
-  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
-  const handleToggleBrowser = useCallback(() => {
+  };
+  const handleToggleBrowser = () => {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
-  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
-  const handleOpenBrowserUrl = useCallback(() => {
+  };
+  const handleOpenBrowserUrl = () => {
     requestImmediateDockHydration("browser");
     openPane(props.threadId, { kind: "browser" });
-  }, [openPane, props.threadId, requestImmediateDockHydration]);
-  const handleOpenTurnDiff = useCallback(
-    (turnId: TurnId, filePath?: string) => {
-      requestImmediateDockHydration("diff");
-      openPane(props.threadId, {
-        kind: "diff",
-        diffTurnId: turnId,
-        diffFilePath: filePath ?? null,
-      });
-    },
-    [openPane, props.threadId, requestImmediateDockHydration],
-  );
+  };
+  const handleOpenTurnDiff = (turnId: TurnId, filePath?: string) => {
+    requestImmediateDockHydration("diff");
+    openPane(props.threadId, {
+      kind: "diff",
+      diffTurnId: turnId,
+      diffFilePath: filePath ?? null,
+    });
+  };
 
-  const handleOpenEditorView = useCallback(() => {
+  const handleOpenEditorView = () => {
     void navigate({
       to: "/$threadId",
       params: { threadId: props.threadId },
@@ -1581,34 +1577,31 @@ function SingleChatSurface(props: {
         ...(props.search.editorFilePath ? { editorFilePath: props.search.editorFilePath } : {}),
       }),
     });
-  }, [navigate, props.search.editorFilePath, props.threadId]);
+  };
 
-  const handleCloseEditorView = useCallback(() => {
+  const handleCloseEditorView = () => {
     void navigate({
       to: "/$threadId",
       params: { threadId: props.threadId },
       search: (previous) => stripEditorViewSearchParams(stripDiffSearchParams(previous)),
     });
-  }, [navigate, props.threadId]);
+  };
 
-  const handleSelectEditorFile = useCallback(
-    (filePath: string) => {
-      setEditorCenterMode("file");
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: props.threadId },
-        replace: true,
-        search: (previous) => ({
-          ...stripDiffSearchParams(previous),
-          view: "editor",
-          editorFilePath: filePath,
-        }),
-      });
-    },
-    [navigate, props.threadId],
-  );
+  const handleSelectEditorFile = (filePath: string) => {
+    setEditorCenterMode("file");
+    void navigate({
+      to: "/$threadId",
+      params: { threadId: props.threadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        view: "editor",
+        editorFilePath: filePath,
+      }),
+    });
+  };
 
-  const handleToggleEditorDirectory = useCallback((directoryPath: string) => {
+  const handleToggleEditorDirectory = (directoryPath: string) => {
     setEditorExpandedDirectories((previous) => {
       const next = new Set(previous);
       if (next.has(directoryPath)) {
@@ -1618,128 +1611,108 @@ function SingleChatSurface(props: {
       }
       return next;
     });
-  }, []);
+  };
 
-  const handleEditorToggleDiff = useCallback(() => {
+  const handleEditorToggleDiff = () => {
     setEditorCenterMode((current) =>
       current === "diff" && props.search.editorFilePath ? "file" : "diff",
     );
-  }, [props.search.editorFilePath]);
+  };
 
-  const handleEditorOpenTurnDiff = useCallback((turnId: TurnId, filePath?: string) => {
+  const handleEditorOpenTurnDiff = (turnId: TurnId, filePath?: string) => {
     setEditorCenterMode("diff");
     setEditorDiffPanelState({
       panel: "diff",
       diffTurnId: turnId,
       diffFilePath: filePath ?? null,
     });
-  }, []);
+  };
 
-  const handleUpdateEditorDiffPanelState = useCallback(
-    (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
-      setEditorDiffPanelState((previous) => ({
-        panel: "diff",
-        diffTurnId: "diffTurnId" in patch ? (patch.diffTurnId ?? null) : previous.diffTurnId,
-        diffFilePath:
-          "diffFilePath" in patch ? (patch.diffFilePath ?? null) : previous.diffFilePath,
-      }));
-    },
-    [],
-  );
-  const handleEditorDiffFilesChange = useCallback(
-    (files: ReadonlyArray<FileDiffMetadata>, isLoading: boolean) => {
-      setEditorDiffFiles(files);
-      setEditorDiffFilesLoading(isLoading);
-    },
-    [],
-  );
-  const handleSelectEditorDiffFile = useCallback((filePath: string) => {
+  const handleUpdateEditorDiffPanelState = (
+    patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
+  ) => {
+    setEditorDiffPanelState((previous) => ({
+      panel: "diff",
+      diffTurnId: "diffTurnId" in patch ? (patch.diffTurnId ?? null) : previous.diffTurnId,
+      diffFilePath: "diffFilePath" in patch ? (patch.diffFilePath ?? null) : previous.diffFilePath,
+    }));
+  };
+  const handleEditorDiffFilesChange = (
+    files: ReadonlyArray<FileDiffMetadata>,
+    isLoading: boolean,
+  ) => {
+    setEditorDiffFiles(files);
+    setEditorDiffFilesLoading(isLoading);
+  };
+  const handleSelectEditorDiffFile = (filePath: string) => {
     setEditorCenterMode("diff");
     setEditorDiffPanelState((previous) => ({
       ...previous,
       panel: "diff",
       diffFilePath: filePath,
     }));
-  }, []);
-  const handleEditorDiffOptionsChange = useCallback((control: ReactNode | null) => {
+  };
+  const handleEditorDiffOptionsChange = (control: ReactNode | null) => {
     setEditorDiffOptionsControl(control);
-  }, []);
-  const handleReferenceInChat = useCallback(
-    (reference: ChatFileReference) => {
-      appendChatFileReference(props.threadId, reference);
-    },
-    [props.threadId],
-  );
-  const handleAskWhyInChat = useCallback(
-    (reference: ChatFileReference) => {
-      appendComposerPromptText(props.threadId, buildWhyLinesPrompt(reference));
-    },
-    [props.threadId],
-  );
-  const handleCommentInChat = useCallback(
-    (comment: FileCommentSelection) => {
-      addChatFileComment(props.threadId, comment);
-    },
-    [props.threadId],
-  );
+  };
+  const handleReferenceInChat = (reference: ChatFileReference) => {
+    appendChatFileReference(props.threadId, reference);
+  };
+  const handleAskWhyInChat = (reference: ChatFileReference) => {
+    appendComposerPromptText(props.threadId, buildWhyLinesPrompt(reference));
+  };
+  const handleCommentInChat = (comment: FileCommentSelection) => {
+    addChatFileComment(props.threadId, comment);
+  };
 
   // Hover warm-up shared by both surfaces' file openers: file contents land in
   // the React Query cache and the matching Shiki highlighter loads, so the
   // preview paints instantly on click.
-  const prefetchOpenerFile = useCallback(
-    (path: string) => {
-      if (!workspaceRoot) {
-        return;
-      }
-      const relativePath = resolveWorkspaceFileOpenTarget(path, workspaceRoot);
-      if (relativePath) {
-        prefetchWorkspaceFile(queryClient, workspaceRoot, relativePath);
-      }
-    },
-    [queryClient, workspaceRoot],
-  );
+  const prefetchOpenerFile = (path: string) => {
+    if (!workspaceRoot) {
+      return;
+    }
+    const relativePath = resolveWorkspaceFileOpenTarget(path, workspaceRoot);
+    if (relativePath) {
+      prefetchWorkspaceFile(queryClient, workspaceRoot, relativePath);
+    }
+  };
   // Chat surface: file references open in the right-dock file pane. References
   // outside the workspace report unhandled so chips fall back to the external
   // editor.
-  const dockFileOpener = useMemo<WorkspaceFileOpener>(
-    () => ({
-      openFile: (path) => {
-        // In-workspace references map to relative paths for the file-read RPC;
-        // binary previews in a session's scratch workspace (outside the chat
-        // workspace) open by absolute path through the local-image route.
-        const targetPath = resolveDockFileOpenTarget(path, workspaceRoot);
-        if (!targetPath) {
-          return false;
-        }
-        requestImmediateDockHydration("file");
-        openPane(props.threadId, { kind: "file", filePath: targetPath });
-        return true;
-      },
-      prefetchFile: prefetchOpenerFile,
-    }),
-    [openPane, prefetchOpenerFile, props.threadId, requestImmediateDockHydration, workspaceRoot],
-  );
+  const dockFileOpener: WorkspaceFileOpener = {
+    openFile: (path) => {
+      // In-workspace references map to relative paths for the file-read RPC;
+      // binary previews in a session's scratch workspace (outside the chat
+      // workspace) open by absolute path through the local-image route.
+      const targetPath = resolveDockFileOpenTarget(path, workspaceRoot);
+      if (!targetPath) {
+        return false;
+      }
+      requestImmediateDockHydration("file");
+      openPane(props.threadId, { kind: "file", filePath: targetPath });
+      return true;
+    },
+    prefetchFile: prefetchOpenerFile,
+  };
   // Editor surface: the center file pane is already the file viewer, so file
   // references select into it instead of opening a dock pane.
-  const editorFileOpener = useMemo<WorkspaceFileOpener>(
-    () => ({
-      openFile: (path) => {
-        if (!workspaceRoot) {
-          return false;
-        }
-        const relativePath = resolveWorkspaceFileOpenTarget(path, workspaceRoot);
-        if (!relativePath) {
-          return false;
-        }
-        handleSelectEditorFile(relativePath);
-        return true;
-      },
-      prefetchFile: prefetchOpenerFile,
-    }),
-    [handleSelectEditorFile, prefetchOpenerFile, workspaceRoot],
-  );
+  const editorFileOpener: WorkspaceFileOpener = {
+    openFile: (path) => {
+      if (!workspaceRoot) {
+        return false;
+      }
+      const relativePath = resolveWorkspaceFileOpenTarget(path, workspaceRoot);
+      if (!relativePath) {
+        return false;
+      }
+      handleSelectEditorFile(relativePath);
+      return true;
+    },
+    prefetchFile: prefetchOpenerFile,
+  };
 
-  const handleSplitSurface = useCallback(() => {
+  const handleSplitSurface = () => {
     if (!props.projectId) return;
     const splitViewId = createSplitView({
       sourceThreadId: props.threadId,
@@ -1753,30 +1726,31 @@ function SingleChatSurface(props: {
         search: () => ({ splitViewId }),
       });
     });
-  }, [createSplitView, navigate, props.projectId, props.threadId]);
+  };
 
-  const handleDropThread = useCallback(
-    (payload: { threadId: ThreadIdType; direction: SplitDirection; side: SplitDropSide }) => {
-      if (!props.projectId) return;
-      if (payload.threadId === props.threadId) return;
-      const splitViewId = createSplitViewFromDrop({
-        sourceThreadId: props.threadId,
-        ownerProjectId: props.projectId,
-        droppedThreadId: payload.threadId,
-        direction: payload.direction,
-        side: payload.side,
+  const handleDropThread = (payload: {
+    threadId: ThreadIdType;
+    direction: SplitDirection;
+    side: SplitDropSide;
+  }) => {
+    if (!props.projectId) return;
+    if (payload.threadId === props.threadId) return;
+    const splitViewId = createSplitViewFromDrop({
+      sourceThreadId: props.threadId,
+      ownerProjectId: props.projectId,
+      droppedThreadId: payload.threadId,
+      direction: payload.direction,
+      side: payload.side,
+    });
+    startTransition(() => {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: payload.threadId },
+        replace: true,
+        search: () => ({ splitViewId }),
       });
-      startTransition(() => {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: payload.threadId },
-          replace: true,
-          search: () => ({ splitViewId }),
-        });
-      });
-    },
-    [createSplitViewFromDrop, navigate, props.projectId, props.threadId],
-  );
+    });
+  };
 
   useEffect(() => {
     const { nextAppliedSearchKey, panelPatch } = resolveRoutePanelBootstrap({
@@ -1851,86 +1825,65 @@ function SingleChatSurface(props: {
     };
   }, [openPane, props.threadId, requestImmediateDockHydration]);
 
-  const excludedThreadIds = useMemo(
-    () => new Set<ThreadIdType>([props.threadId]),
-    [props.threadId],
-  );
+  const excludedThreadIds = new Set<ThreadIdType>([props.threadId]);
 
   // Sidechat tab labels only need thread titles, so subscribe to the coarse
   // sidebar-summary selector (turn-level changes) instead of the full thread
   // selector, which re-emits on every streaming token of any thread and would
   // otherwise re-render the entire chat surface + right dock + active pane.
   const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
-  const editorProjectOptions = useMemo(
-    () =>
-      projects.flatMap((project) =>
-        project.kind === "project" ? [{ id: project.id, name: project.name }] : [],
-      ),
-    [projects],
+  const editorProjectOptions = projects.flatMap((project) =>
+    project.kind === "project" ? [{ id: project.id, name: project.name }] : [],
   );
-  const openEditorProject = useCallback(
-    async (projectId: ProjectId) => {
-      const latestThread = sortThreadsForSidebar(
-        threadSummaries.filter((thread) => thread.projectId === projectId),
-        appSettings.sidebarThreadSortOrder,
-      )[0];
-
-      if (latestThread) {
-        await navigate({
-          to: "/$threadId",
-          params: { threadId: latestThread.id },
-          search: (previous) => ({
-            ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
-            view: "editor",
-          }),
-        });
-        return;
-      }
-
-      await handleNewThread(
-        projectId,
-        {
-          envMode: appSettings.defaultThreadEnvMode,
-        },
-        {
-          search: (previous) => ({
-            ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
-            view: "editor",
-          }),
-        },
-      );
-    },
-    [
-      appSettings.defaultThreadEnvMode,
+  const openEditorProject = async (projectId: ProjectId) => {
+    const latestThread = sortThreadsForSidebar(
+      threadSummaries.filter((thread) => thread.projectId === projectId),
       appSettings.sidebarThreadSortOrder,
-      handleNewThread,
-      navigate,
-      threadSummaries,
-    ],
-  );
-  const handleSelectEditorProject = useCallback(
-    (projectId: ProjectId) => {
-      void openEditorProject(projectId).catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: "Unable to open project",
-          description: error instanceof Error ? error.message : "The project could not be opened.",
-        });
+    )[0];
+
+    if (latestThread) {
+      await navigate({
+        to: "/$threadId",
+        params: { threadId: latestThread.id },
+        search: (previous) => ({
+          ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
+          view: "editor",
+        }),
       });
-    },
-    [openEditorProject],
-  );
-  const paneLabelOverrides = useMemo(() => {
-    const hasSidechatPane = dockState.panes.some((pane) => pane.kind === "sidechat");
-    const hasNamedFilePane = dockState.panes.some(
-      (pane) => pane.kind === "file" && pane.filePath !== null,
-    );
-    const hasNumberedPullRequestPane = dockState.panes.some(
-      (pane) => pane.kind === "pullRequest" && pane.pullRequestNumber !== null,
-    );
-    if (!hasSidechatPane && !hasNamedFilePane && !hasNumberedPullRequestPane) {
-      return undefined;
+      return;
     }
+
+    await handleNewThread(
+      projectId,
+      {
+        envMode: appSettings.defaultThreadEnvMode,
+      },
+      {
+        search: (previous) => ({
+          ...stripEditorViewSearchParams(stripDiffSearchParams(previous)),
+          view: "editor",
+        }),
+      },
+    );
+  };
+  const handleSelectEditorProject = (projectId: ProjectId) => {
+    void openEditorProject(projectId).catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to open project",
+        description: error instanceof Error ? error.message : "The project could not be opened.",
+      });
+    });
+  };
+  const hasSidechatPane = dockState.panes.some((pane) => pane.kind === "sidechat");
+  const hasNamedFilePane = dockState.panes.some(
+    (pane) => pane.kind === "file" && pane.filePath !== null,
+  );
+  const hasNumberedPullRequestPane = dockState.panes.some(
+    (pane) => pane.kind === "pullRequest" && pane.pullRequestNumber !== null,
+  );
+  let paneLabelOverrides: Record<string, string | undefined> | undefined;
+  if (hasSidechatPane || hasNamedFilePane || hasNumberedPullRequestPane) {
     const titleByThreadId = hasSidechatPane
       ? new Map(threadSummaries.map((summary) => [summary.id, summary.title]))
       : null;
@@ -1944,8 +1897,8 @@ function SingleChatSurface(props: {
         overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
       }
     }
-    return overrides;
-  }, [threadSummaries, dockState.panes]);
+    paneLabelOverrides = overrides;
+  }
 
   // The pull request pane is a singleton, so at most one tab needs the live state glyph.
   const pullRequestPane = dockState.panes.find(
@@ -1959,207 +1912,163 @@ function SingleChatSurface(props: {
       ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
       : undefined;
 
-  const shouldAcceptDockWidth = useCallback(
-    ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
-      const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
-      return canComposerHandlePanelWidth({
-        nextWidth,
-        // The dock coexists only with the single-pane chat, but dock sidechat
-        // panes mount their own composer forms — scope the probe so it always
-        // measures the main composer instead of "first form in the document".
-        paneScopeId: SINGLE_CHAT_PANE_SCOPE_ID,
-        applyWidth: (width) => {
-          wrapper.style.setProperty("--sidebar-width", `${width}px`);
-        },
-        resetWidth: () => {
-          if (previousSidebarWidth.length > 0) {
-            wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
-          } else {
-            wrapper.style.removeProperty("--sidebar-width");
-          }
-        },
-      });
-    },
-    [],
-  );
-
-  const handleAddDockPane = useCallback(
-    (kind: RightDockPaneKind) => {
-      requestImmediateDockHydration(kind);
-      if (kind === "sidechat") {
-        // Sidechat spawns a thread; reuse the composer's /side flow (correct model
-        // selection) published via the registry instead of opening an empty pane.
-        const createSidechat = getSidechatCreator(props.threadId);
-        if (!createSidechat) {
-          toastManager.add({
-            type: "warning",
-            title: "Side is unavailable",
-            description: "Open a server-backed main thread before starting Side.",
-          });
-          return;
-        }
-        void createSidechat().catch((error) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not start Side",
-            description:
-              error instanceof Error ? error.message : "An error occurred while creating Side.",
-          });
+  const handleAddDockPane = (kind: RightDockPaneKind) => {
+    requestImmediateDockHydration(kind);
+    if (kind === "sidechat") {
+      // Sidechat spawns a thread; reuse the composer's /side flow (correct model
+      // selection) published via the registry instead of opening an empty pane.
+      const createSidechat = getSidechatCreator(props.threadId);
+      if (!createSidechat) {
+        toastManager.add({
+          type: "warning",
+          title: "Side is unavailable",
+          description: "Open a server-backed main thread before starting Side.",
         });
         return;
       }
-      openPane(props.threadId, { kind });
-    },
-    [openPane, props.threadId, requestImmediateDockHydration],
-  );
+      void createSidechat().catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not start Side",
+          description:
+            error instanceof Error ? error.message : "An error occurred while creating Side.",
+        });
+      });
+      return;
+    }
+    openPane(props.threadId, { kind });
+  };
 
-  const renderDockPane = useCallback(
-    (
-      pane: RightDockPane,
-      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
-    ): ReactNode => {
-      switch (pane.kind) {
-        case "browser":
-          return (
-            <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
-              <BrowserPanel
-                mode="sidebar"
-                threadId={props.threadId}
-                onClosePanel={() => closePane(props.threadId, pane.id)}
-                runtimeMode={context.runtimeMode}
-                onRequestLive={requestActiveDockPaneLive}
-              />
-            </Suspense>
-          );
-        case "pullRequest":
-          return (
-            <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
-              <PullRequestDockPane
-                pane={pane}
-                pollingEnabled={context.isVisible}
-                onClose={() => closePane(props.threadId, pane.id)}
-              />
-            </Suspense>
-          );
-        case "diff":
-          return (
-            <LazyDiffPanel
+  const renderDockPane = (
+    pane: RightDockPane,
+    context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
+  ): ReactNode => {
+    switch (pane.kind) {
+      case "browser":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+            <BrowserPanel
               mode="sidebar"
               threadId={props.threadId}
-              panelState={{
-                panel: "diff",
-                diffTurnId: pane.diffTurnId,
-                diffFilePath: pane.diffFilePath,
-              }}
-              onUpdatePanelState={(patch) =>
-                updatePane(props.threadId, pane.id, {
-                  diffTurnId: patch.diffTurnId ?? null,
-                  diffFilePath: patch.diffFilePath ?? null,
-                })
-              }
               onClosePanel={() => closePane(props.threadId, pane.id)}
-              liveRefreshEnabled={context.isActive && dockState.open}
-              queriesEnabled={context.isActive && dockState.open}
+              runtimeMode={context.runtimeMode}
+              onRequestLive={requestActiveDockPaneLive}
             />
-          );
-        case "terminal":
-          if (context.runtimeMode === "preview") {
-            return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
-          }
-          // Kept mounted across tab switches; visibility toggles the xterm runtime
-          // instead of detaching/reattaching it (avoids the open-lag + fit flicker).
-          // Also sleep it while the dock is collapsed: a closed dock keeps the pane
-          // mounted (offcanvas is CSS-only), so without this the off-screen terminal
-          // would keep WebGL + resize observers alive for nothing.
-          return (
-            <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
-              <DockTerminalPane
-                hostThreadId={props.threadId}
-                projectId={props.projectId}
-                isActive={context.isActive && dockState.open}
-              />
-            </Suspense>
-          );
-        case "git":
-          return (
-            <Suspense fallback={<PanelStateMessage>Loading Git...</PanelStateMessage>}>
-              <GitPanel
-                hostThreadId={props.threadId}
-                projectId={props.projectId}
-                onClose={() => closePane(props.threadId, pane.id)}
-              />
-            </Suspense>
-          );
-        case "explorer":
-          return (
-            <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
-              <DockExplorerPane
-                workspaceRoot={workspaceRoot}
-                onReferenceInChat={handleReferenceInChat}
-                onAskWhyInChat={handleAskWhyInChat}
-                onCommentInChat={handleCommentInChat}
-              />
-            </Suspense>
-          );
-        case "file":
-          return (
-            <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
-              <DockFilePane
-                workspaceRoot={workspaceRoot}
-                filePath={pane.filePath}
-                onReferenceInChat={handleReferenceInChat}
-                onAskWhyInChat={handleAskWhyInChat}
-                onCommentInChat={handleCommentInChat}
-              />
-            </Suspense>
-          );
-        case "sidechat":
-          if (!pane.threadId) {
-            return <RightDockPanePlaceholder kind="sidechat" />;
-          }
-          if (context.runtimeMode === "preview") {
-            return null;
-          }
-          return (
-            <DeferredChatView
-              threadId={pane.threadId}
-              paneScopeId={dockSidechatPaneScopeId(pane.id)}
-              deferMount={false}
-              surfaceMode="split"
-              isFocusedPane={false}
-              panelState={DOCK_EMBEDDED_PANEL_STATE}
-              onToggleDiff={noop}
-              onToggleBrowser={noop}
-              onOpenBrowserUrl={noop}
-              onOpenTurnDiff={noop}
-              onCloseThreadPane={() => closePane(props.threadId, pane.id)}
+          </Suspense>
+        );
+      case "pullRequest":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+            <PullRequestDockPane
+              pane={pane}
+              pollingEnabled={context.isVisible}
+              onClose={() => closePane(props.threadId, pane.id)}
             />
-          );
-        default:
-          return <RightDockPanePlaceholder kind={pane.kind} />;
-      }
-    },
-    [
-      closePane,
-      dockState.open,
-      handleAskWhyInChat,
-      handleCommentInChat,
-      handleReferenceInChat,
-      props.projectId,
-      props.threadId,
-      requestActiveDockPaneLive,
-      updatePane,
-      workspaceRoot,
-    ],
-  );
+          </Suspense>
+        );
+      case "diff":
+        return (
+          <LazyDiffPanel
+            mode="sidebar"
+            threadId={props.threadId}
+            panelState={{
+              panel: "diff",
+              diffTurnId: pane.diffTurnId,
+              diffFilePath: pane.diffFilePath,
+            }}
+            onUpdatePanelState={(patch) =>
+              updatePane(props.threadId, pane.id, {
+                diffTurnId: patch.diffTurnId ?? null,
+                diffFilePath: patch.diffFilePath ?? null,
+              })
+            }
+            onClosePanel={() => closePane(props.threadId, pane.id)}
+            liveRefreshEnabled={context.isActive && dockState.open}
+            queriesEnabled={context.isActive && dockState.open}
+          />
+        );
+      case "terminal":
+        if (context.runtimeMode === "preview") {
+          return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
+        }
+        // Kept mounted across tab switches; visibility toggles the xterm runtime
+        // instead of detaching/reattaching it (avoids the open-lag + fit flicker).
+        // Also sleep it while the dock is collapsed: a closed dock keeps the pane
+        // mounted (offcanvas is CSS-only), so without this the off-screen terminal
+        // would keep WebGL + resize observers alive for nothing.
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+            <DockTerminalPane
+              hostThreadId={props.threadId}
+              projectId={props.projectId}
+              isActive={context.isActive && dockState.open}
+            />
+          </Suspense>
+        );
+      case "git":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading Git...</PanelStateMessage>}>
+            <GitPanel
+              hostThreadId={props.threadId}
+              projectId={props.projectId}
+              onClose={() => closePane(props.threadId, pane.id)}
+            />
+          </Suspense>
+        );
+      case "explorer":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
+            <DockExplorerPane
+              workspaceRoot={workspaceRoot}
+              onReferenceInChat={handleReferenceInChat}
+              onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
+            />
+          </Suspense>
+        );
+      case "file":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
+            <DockFilePane
+              workspaceRoot={workspaceRoot}
+              filePath={pane.filePath}
+              onReferenceInChat={handleReferenceInChat}
+              onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
+            />
+          </Suspense>
+        );
+      case "sidechat":
+        if (!pane.threadId) {
+          return <RightDockPanePlaceholder kind="sidechat" />;
+        }
+        if (context.runtimeMode === "preview") {
+          return null;
+        }
+        return (
+          <DeferredChatView
+            threadId={pane.threadId}
+            paneScopeId={dockSidechatPaneScopeId(pane.id)}
+            deferMount={false}
+            surfaceMode="split"
+            isFocusedPane={false}
+            panelState={DOCK_EMBEDDED_PANEL_STATE}
+            onToggleDiff={noop}
+            onToggleBrowser={noop}
+            onOpenBrowserUrl={noop}
+            onOpenTurnDiff={noop}
+            onCloseThreadPane={() => closePane(props.threadId, pane.id)}
+          />
+        );
+      default:
+        return <RightDockPanePlaceholder kind={pane.kind} />;
+    }
+  };
 
-  const handleSelectDockPane = useCallback(
-    (paneId: string) => {
-      requestImmediateDockHydration(dockState.panes.find((pane) => pane.id === paneId)?.kind);
-      setActivePane(props.threadId, paneId);
-    },
-    [dockState.panes, props.threadId, requestImmediateDockHydration, setActivePane],
-  );
+  const handleSelectDockPane = (paneId: string) => {
+    requestImmediateDockHydration(dockState.panes.find((pane) => pane.id === paneId)?.kind);
+    setActivePane(props.threadId, paneId);
+  };
 
   // The editor file path arrives via the URL, so an attacker-crafted link can
   // carry traversal segments ("../../etc"). Treat unsafe values as no selection
@@ -2194,29 +2103,31 @@ function SingleChatSurface(props: {
       }
     }
 
-    setEditorExpandedDirectories((previous) => {
-      let changed = false;
-      const next = new Set(previous);
-      for (const parentPath of parentPaths) {
-        if (!next.has(parentPath)) {
-          next.add(parentPath);
-          changed = true;
+    // Auto-expand the ancestors a tick later so this is not a synchronous setState
+    // in the effect body; the functional update still merges with any user toggles.
+    const expandTimer = window.setTimeout(() => {
+      setEditorExpandedDirectories((previous) => {
+        let changed = false;
+        const next = new Set(previous);
+        for (const parentPath of parentPaths) {
+          if (!next.has(parentPath)) {
+            next.add(parentPath);
+            changed = true;
+          }
         }
-      }
-      return changed ? next : previous;
-    });
+        return changed ? next : previous;
+      });
+    }, 0);
+    return () => window.clearTimeout(expandTimer);
   }, [workspaceRoot, queryClient, selectedEditorFilePath]);
 
-  const editorChatPanelState = useMemo<SplitViewPanePanelState>(
-    () => ({
-      panel: editorCenterMode === "diff" ? "diff" : null,
-      diffTurnId: editorDiffPanelState.diffTurnId,
-      diffFilePath: editorDiffPanelState.diffFilePath,
-      hasOpenedPanel: true,
-      lastOpenPanel: "browser",
-    }),
-    [editorCenterMode, editorDiffPanelState.diffFilePath, editorDiffPanelState.diffTurnId],
-  );
+  const editorChatPanelState: SplitViewPanePanelState = {
+    panel: editorCenterMode === "diff" ? "diff" : null,
+    diffTurnId: editorDiffPanelState.diffTurnId,
+    diffFilePath: editorDiffPanelState.diffFilePath,
+    hasOpenedPanel: true,
+    lastOpenPanel: "browser",
+  };
 
   if (props.search.view === "editor") {
     return (
@@ -2349,11 +2260,8 @@ function ChatThreadRouteView() {
     select: (params) => ThreadId.makeUnsafe(params.threadId),
   });
   const search = Route.useSearch();
-  const threadProjectIdSelector = useMemo(
-    () => createThreadProjectIdSelector(threadId),
-    [threadId],
-  );
-  const threadExistsSelector = useMemo(() => createThreadExistsSelector(threadId), [threadId]);
+  const threadProjectIdSelector = createThreadProjectIdSelector(threadId);
+  const threadExistsSelector = createThreadExistsSelector(threadId);
   const threadProjectId: ProjectId | null = useStore(threadProjectIdSelector);
   const threadExists = useStore(threadExistsSelector);
   const draftThreadState = useComposerDraftStore(
@@ -2361,7 +2269,9 @@ function ChatThreadRouteView() {
   );
   const draftThreadExists = draftThreadState !== null;
   const routeThreadExists = threadExists || draftThreadExists;
-  const splitView = useSplitViewStore(selectSplitView(search.splitViewId ?? null));
+  const splitView = useSplitViewStore(
+    useMemo(() => selectSplitView(search.splitViewId ?? null), [search.splitViewId]),
+  );
   const splitViewsHydrated = useSplitViewStore((store) => store.hasHydrated);
   const activeProjectId = resolveSingleProjectId({
     threadProjectId,
@@ -2372,6 +2282,11 @@ function ChatThreadRouteView() {
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
   const missingThreadRecoveryRunRef = useRef(0);
+  // Synchronous re-entry guard: the "pending" transition below is deferred (async
+  // setState), so this ref keeps the recovery from starting twice in the interim.
+  // It is cleared synchronously whenever an episode is invalidated (new thread
+  // route, or the thread appearing).
+  const recoveryStartedRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -2380,15 +2295,23 @@ function ChatThreadRouteView() {
   }, []);
 
   useEffect(() => {
+    // Invalidate any in-flight recovery and start a fresh episode for the new
+    // thread route. The run bump + guard reset are synchronous (so a stale async
+    // completion cannot stamp "done"); the state reset is deferred async setState.
     missingThreadRecoveryRunRef.current += 1;
-    setMissingThreadRecoveryState("idle");
+    recoveryStartedRef.current = false;
+    const timer = window.setTimeout(() => setMissingThreadRecoveryState("idle"), 0);
+    return () => window.clearTimeout(timer);
   }, [threadId]);
 
   useEffect(() => {
     if (routeThreadExists && missingThreadRecoveryState !== "idle") {
       missingThreadRecoveryRunRef.current += 1;
-      setMissingThreadRecoveryState("idle");
+      recoveryStartedRef.current = false;
+      const timer = window.setTimeout(() => setMissingThreadRecoveryState("idle"), 0);
+      return () => window.clearTimeout(timer);
     }
+    return undefined;
   }, [missingThreadRecoveryState, routeThreadExists]);
 
   useEffect(() => {
@@ -2402,14 +2325,24 @@ function ChatThreadRouteView() {
           hasKnownServerThreads,
           recoveryState: missingThreadRecoveryState,
           routeThreadExists,
-        })
+        }) &&
+        !recoveryStartedRef.current
       ) {
+        recoveryStartedRef.current = true;
         const recoveryRun = (missingThreadRecoveryRunRef.current += 1);
-        setMissingThreadRecoveryState("pending");
+        // Defer the "pending" mark (async setState); the ref guard above prevents a
+        // second start before it lands, and the run check skips it if the episode
+        // was invalidated in the meantime.
+        const pendingTimer = window.setTimeout(() => {
+          if (missingThreadRecoveryRunRef.current === recoveryRun) {
+            setMissingThreadRecoveryState("pending");
+          }
+        }, 0);
         void Promise.all([
           refreshEmptyRouteRestoreSnapshot(readNativeApi()).catch(() => false),
           waitForEmptyRouteRestoreFallbackDelay(),
         ]).finally(() => {
+          window.clearTimeout(pendingTimer);
           if (mountedRef.current && missingThreadRecoveryRunRef.current === recoveryRun) {
             setMissingThreadRecoveryState("done");
           }

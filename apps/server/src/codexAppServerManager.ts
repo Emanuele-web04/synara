@@ -47,6 +47,12 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import {
+  buildCodexMcpConfigToml,
+  SYNARA_AGENT_GATEWAY_TOKEN_ENV,
+} from "./agentGateway/mcpInjection.ts";
+import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
+import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import {
@@ -124,6 +130,7 @@ type CodexSessionApprovalOverride = {
 };
 
 interface CodexSessionContext {
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   lifecycleGeneration?: string;
   account: CodexAccountSnapshot;
@@ -492,7 +499,7 @@ plan content should be human and agent digestible. The final plan must be plan-o
 Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a \`<proposed_plan>\` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
-</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}\n\n${SYNARA_GATEWAY_HARNESS_POLICY}`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
@@ -505,7 +512,7 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}\n\n${SYNARA_GATEWAY_HARNESS_POLICY}`;
 
 // Maps Synara's simple runtime toggle to Codex thread-level permission overrides.
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
@@ -761,18 +768,48 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly synaraSkillsDir: string | undefined;
+  private readonly agentGatewayMcp:
+    | {
+        readonly endpointUrl: () => string;
+        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
+      }
+    | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
       readonly synaraSkillsDir?: string;
+      readonly agentGatewayMcp?: {
+        readonly endpointUrl: () => string;
+        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
+      };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
     },
   ) {
     super();
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
     this.synaraSkillsDir = options?.synaraSkillsDir;
+    this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
+  }
+
+  // The Synara MCP server rides on the shared overlay config (no secrets),
+  // while the per-thread bearer token travels through the app-server process
+  // env referenced by `bearer_token_env_var`.
+  private async buildSessionProcessEnv(
+    homePath: string | undefined,
+    gatewayBearerToken: string | undefined,
+  ) {
+    const env = await buildCodexProcessEnv({
+      ...(homePath ? { homePath } : {}),
+      ...(this.agentGatewayMcp
+        ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
+        : {}),
+    });
+    if (gatewayBearerToken) {
+      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
+    }
+    return env;
   }
 
   // Registers `~/.synara/skills` as a codex skill root so portable skills are
@@ -798,6 +835,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
+    let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
       const existing = this.sessions.get(threadId);
@@ -826,15 +864,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: await this.buildSessionProcessEnv(
+          codexHomePath,
+          gatewaySessionLease?.connection.bearerToken,
+        ),
       });
 
       context = {
+        ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         ...(input.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -999,6 +1040,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.emitErrorEvent(context, "session/startFailed", message);
         await this.stopSession(threadId);
       } else {
+        gatewaySessionLease?.release();
         this.emitEvent({
           id: EventId.makeUnsafe(randomUUID()),
           kind: "error",
@@ -1019,6 +1061,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
     context.collabReceiverTurns.clear();
+    context.collabReceiverParents.clear();
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
@@ -1414,6 +1457,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
+    let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
       const existing = this.sessions.get(threadId);
@@ -1454,15 +1498,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: await this.buildSessionProcessEnv(
+          codexHomePath,
+          gatewaySessionLease?.connection.bearerToken,
+        ),
       });
 
       context = {
+        ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         account: {
           type: "unknown",
@@ -1548,6 +1595,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         });
         this.emitErrorEvent(context, "session/threadForkFailed", message);
         await this.stopSession(threadId);
+      } else {
+        gatewaySessionLease?.release();
       }
       throw new Error(message, { cause: error });
     }
@@ -1779,6 +1828,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.stopping = true;
+    context.gatewaySessionLease?.release();
 
     this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
     context.pendingApprovals.clear();
@@ -2262,6 +2312,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       context.detachStdout?.();
+      context.gatewaySessionLease?.release();
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);
@@ -2440,6 +2491,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -2463,6 +2515,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }

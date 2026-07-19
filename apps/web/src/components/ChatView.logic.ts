@@ -14,7 +14,6 @@ import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
 import {
-  type ChatAssistantSelectionAttachment,
   type ChatMessage,
   type SessionPhase,
   type Thread,
@@ -73,10 +72,11 @@ export function hasFileUndoSettled(input: {
     return true;
   }
 
+  const existingFailureActivityIdSet = new Set(input.pending.existingFailureActivityIds);
   return input.thread.activities.some((activity) => {
     if (
       activity.kind !== "checkpoint.revert.failed" ||
-      input.pending.existingFailureActivityIds.includes(activity.id) ||
+      existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
       !("turnCount" in activity.payload)
@@ -943,6 +943,8 @@ export interface QueuedSteerGate {
   sawInterruptGap: boolean;
   /** Epoch ms when the gap started; null while the original turn still runs. */
   gapStartedAt: number | null;
+  /** Active turn id at steer time; a different live id means the steered turn started. */
+  armedActiveTurnId: string | null;
 }
 
 /** Recovery bound: a healthy interrupt→steered-turn handoff takes ~1-2s. */
@@ -956,6 +958,7 @@ export function resolveQueuedSteerGateTransition(input: {
   gate: QueuedSteerGate;
   phase: SessionPhase;
   sessionErrored: boolean;
+  activeTurnId: string | null;
   now: number;
 }): QueuedSteerGateTransition {
   if (input.phase === "disconnected" || input.sessionErrored) {
@@ -967,10 +970,23 @@ export function resolveQueuedSteerGateTransition(input: {
       // The steered turn is live; normal live-turn guards take over from here.
       return { kind: "clear" };
     }
+    // A fast interrupt→steered-turn handoff may never render an idle gap: the
+    // active turn id flipping while still "running" is the same signal.
+    if (
+      input.gate.armedActiveTurnId !== null &&
+      input.activeTurnId !== null &&
+      input.activeTurnId !== input.gate.armedActiveTurnId
+    ) {
+      return { kind: "clear" };
+    }
     // Original turn still running (interrupt not processed yet): keep holding.
     return {
       kind: "hold",
-      gate: { sawInterruptGap: false, gapStartedAt: null },
+      gate: {
+        sawInterruptGap: false,
+        gapStartedAt: null,
+        armedActiveTurnId: input.gate.armedActiveTurnId ?? input.activeTurnId,
+      },
       expiresInMs: null,
     };
   }
@@ -983,7 +999,11 @@ export function resolveQueuedSteerGateTransition(input: {
   }
   return {
     kind: "hold",
-    gate: { sawInterruptGap: true, gapStartedAt },
+    gate: {
+      sawInterruptGap: true,
+      gapStartedAt,
+      armedActiveTurnId: input.gate.armedActiveTurnId,
+    },
     expiresInMs,
   };
 }
@@ -1043,18 +1063,6 @@ export function deriveComposerSendState(options: {
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0,
   };
-}
-
-export function collectUserMessageAssistantSelections(
-  message: ChatMessage,
-): ChatAssistantSelectionAttachment[] {
-  if (message.role !== "user" || !message.attachments) {
-    return [];
-  }
-  return message.attachments.filter(
-    (attachment): attachment is ChatAssistantSelectionAttachment =>
-      attachment.type === "assistant-selection",
-  );
 }
 
 export function buildExpiredTerminalContextToastCopy(

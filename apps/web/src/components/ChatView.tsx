@@ -858,6 +858,8 @@ const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PROVIDER_AGENTS: readonly ProviderAgentDescriptor[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const MAX_DISMISSED_PROVIDER_HEALTH_BANNERS = 50;
+const EMPTY_LAST_INVOKED_SCRIPT_BY_PROJECT: Record<string, string> = {};
+const EMPTY_DISMISSED_PROVIDER_HEALTH_BANNERS: ReadonlyArray<string> = [];
 
 function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
   return `${threadId}:${provider}`;
@@ -1145,7 +1147,9 @@ export default function ChatView({
   const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
   const rawSearch = useDiffRouteSearch();
-  const activeSplitView = useSplitViewStore(selectSplitView(rawSearch.splitViewId ?? null));
+  const activeSplitView = useSplitViewStore(
+    useMemo(() => selectSplitView(rawSearch.splitViewId ?? null), [rawSearch.splitViewId]),
+  );
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
@@ -1281,6 +1285,23 @@ export default function ChatView({
   const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
   const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const crossTaskSourceThreadId =
+    serverThread?.creationSource && serverThread.sourceThreadId
+      ? serverThread.sourceThreadId
+      : null;
+  const crossTaskSourceThread = useStore(
+    useMemo(() => createThreadSelector(crossTaskSourceThreadId), [crossTaskSourceThreadId]),
+  );
+  const crossTaskOrigin = useMemo(
+    () =>
+      crossTaskSourceThreadId
+        ? {
+            sourceThreadId: crossTaskSourceThreadId,
+            sourceProvider: crossTaskSourceThread?.modelSelection.provider ?? null,
+          }
+        : null,
+    [crossTaskSourceThread?.modelSelection.provider, crossTaskSourceThreadId],
+  );
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
@@ -1290,7 +1311,11 @@ export default function ChatView({
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
-  optimisticUserMessagesRef.current = optimisticUserMessages;
+  // Mirror during the commit, before events or async continuations can observe
+  // the new UI with the previous render's preview URLs.
+  useLayoutEffect(() => {
+    optimisticUserMessagesRef.current = optimisticUserMessages;
+  }, [optimisticUserMessages]);
   const composerAssistantSelectionsRef = useRef<ComposerAssistantSelectionAttachment[]>(
     composerAssistantSelections,
   );
@@ -1364,8 +1389,14 @@ export default function ChatView({
   >(() => composerMentions);
   const selectedComposerSkillsRef = useRef<ProviderSkillReference[]>(selectedComposerSkills);
   const selectedComposerMentionsRef = useRef<ProviderMentionReference[]>(selectedComposerMentions);
-  selectedComposerSkillsRef.current = selectedComposerSkills;
-  selectedComposerMentionsRef.current = selectedComposerMentions;
+  // The setters below stamp these refs synchronously; layout effects backstop
+  // external state changes before another browser event can read stale values.
+  useLayoutEffect(() => {
+    selectedComposerSkillsRef.current = selectedComposerSkills;
+  }, [selectedComposerSkills]);
+  useLayoutEffect(() => {
+    selectedComposerMentionsRef.current = selectedComposerMentions;
+  }, [selectedComposerMentions]);
   const updateSelectedComposerSkills = useCallback(
     (
       next:
@@ -1396,12 +1427,12 @@ export default function ChatView({
   );
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
-    {},
+    EMPTY_LAST_INVOKED_SCRIPT_BY_PROJECT,
     LastInvokedScriptByProjectSchema,
   );
   const [dismissedProviderHealthBannerKeys, setDismissedProviderHealthBannerKeys] = useLocalStorage(
     DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
-    [],
+    EMPTY_DISMISSED_PROVIDER_HEALTH_BANNERS,
     DismissedProviderHealthBannersSchema,
   );
   const [dismissedRateLimitBannerKey, setDismissedRateLimitBannerKey] = useState<string | null>(
@@ -1423,9 +1454,14 @@ export default function ChatView({
   );
 
   useEffect(() => {
-    setComposerCommandPicker(null);
-    setIsModelPickerOpen(false);
-    setIsTraitsPickerOpen(false);
+    // Async setState (post-paint) keeps this thread-change reset out of the
+    // render->effect->render cascade; the pickers already closed post-commit.
+    const settle = window.setTimeout(() => {
+      setComposerCommandPicker(null);
+      setIsModelPickerOpen(false);
+      setIsTraitsPickerOpen(false);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [threadId]);
   useEffect(() => {
     const scrollDebouncer = showScrollDebouncer.current;
@@ -1710,12 +1746,18 @@ export default function ChatView({
   const activeThread = serverThread ?? localDraftThread;
   useEffect(() => {
     if (
-      pendingFileUndo &&
-      hasFileUndoSettled({ pending: pendingFileUndo, thread: activeThread ?? null })
+      !pendingFileUndo ||
+      !hasFileUndoSettled({ pending: pendingFileUndo, thread: activeThread ?? null })
     ) {
+      return;
+    }
+    // Async setState (post-paint) keeps this settled-undo cleanup out of the
+    // render->effect->render cascade.
+    const settle = window.setTimeout(() => {
       setPendingFileUndo(null);
       setIsRevertingCheckpoint(false);
-    }
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [activeThread, pendingFileUndo]);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
@@ -1807,9 +1849,13 @@ export default function ChatView({
   // Tracks the live thread + setup/send state so an async automation resolve that
   // finishes after navigation, cancel, or a later send never commits a stale result.
   const activeThreadIdRef = useRef(threadId);
-  activeThreadIdRef.current = threadId;
   const pendingAutomationConversationRef = useRef(pendingAutomationConversation);
-  pendingAutomationConversationRef.current = pendingAutomationConversation;
+  // Commit these before an in-flight automation promise can resume against a
+  // newly-rendered thread. Declared ahead of the navigation reset below.
+  useLayoutEffect(() => {
+    activeThreadIdRef.current = threadId;
+    pendingAutomationConversationRef.current = pendingAutomationConversation;
+  }, [threadId, pendingAutomationConversation]);
   const hasLiveTurnRef = useRef(false);
   // Ephemeral setup bubbles are rendered as ordinary transcript messages, so persistent
   // actions (pin, markers) must skip them — their ids vanish when setup ends and would
@@ -1898,28 +1944,23 @@ export default function ChatView({
     isFocusedPane && latestTurnLive && !diffEnvironmentPending && !resolvedDiffOpen
       ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
       : false;
-  const activeThreadAssociatedWorktree = useMemo(() => {
-    const associatedWorktreeInput = {
-      branch: activeThread?.branch ?? null,
-      worktreePath: activeThread?.worktreePath ?? null,
-      ...(activeThread?.associatedWorktreePath !== undefined
-        ? { associatedWorktreePath: activeThread.associatedWorktreePath }
-        : {}),
-      ...(activeThread?.associatedWorktreeBranch !== undefined
-        ? { associatedWorktreeBranch: activeThread.associatedWorktreeBranch }
-        : {}),
-      ...(activeThread?.associatedWorktreeRef !== undefined
-        ? { associatedWorktreeRef: activeThread.associatedWorktreeRef }
-        : {}),
-    };
-    return deriveAssociatedWorktreeMetadata(associatedWorktreeInput);
-  }, [
-    activeThread?.associatedWorktreeBranch,
-    activeThread?.associatedWorktreePath,
-    activeThread?.associatedWorktreeRef,
-    activeThread?.branch,
-    activeThread?.worktreePath,
-  ]);
+  const activeThreadAssociatedWorktree = useMemo(
+    () =>
+      deriveAssociatedWorktreeMetadata({
+        branch: activeThread?.branch ?? null,
+        worktreePath: activeThread?.worktreePath ?? null,
+        ...(activeThread?.associatedWorktreePath !== undefined
+          ? { associatedWorktreePath: activeThread.associatedWorktreePath }
+          : {}),
+        ...(activeThread?.associatedWorktreeBranch !== undefined
+          ? { associatedWorktreeBranch: activeThread.associatedWorktreeBranch }
+          : {}),
+        ...(activeThread?.associatedWorktreeRef !== undefined
+          ? { associatedWorktreeRef: activeThread.associatedWorktreeRef }
+          : {}),
+      }),
+    [activeThread],
+  );
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -2062,8 +2103,12 @@ export default function ChatView({
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
-  voiceThreadIdRef.current = threadId;
-  voiceProviderRef.current = selectedProvider;
+  // A transcription can resolve immediately after navigation commits, so stamp
+  // the request identity before passive effects and browser events.
+  useLayoutEffect(() => {
+    voiceThreadIdRef.current = threadId;
+    voiceProviderRef.current = selectedProvider;
+  }, [threadId, selectedProvider]);
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
@@ -2533,6 +2578,10 @@ export default function ChatView({
   const isConnecting = isLocalConnecting || phase === "connecting";
   // User messages intentionally have no turn id; assistant messages are the stable
   // bridge for deciding which historical work can fold into visible replies.
+  // Memoized on purpose: ChatView does not compile under React Compiler yet
+  // (hoisting blockers), so an inline Set would change identity every render
+  // and cascade through the memoized work-log/timeline chain into the
+  // virtualized list, which resets in a loop on unstable data.
   const workLogVisibleTurnIds = useMemo(() => {
     const turnIds = new Set<TurnId>();
     for (const message of activeThread?.messages ?? []) {
@@ -2712,12 +2761,23 @@ export default function ChatView({
     ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
     : null;
   useEffect(() => {
-    setOpenAgentActivityId(null);
+    // Async setState (post-paint) keeps this thread-change reset out of the
+    // render->effect->render cascade.
+    const settle = window.setTimeout(() => {
+      setOpenAgentActivityId(null);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [activeThread?.id]);
   useEffect(() => {
-    if (openAgentActivityId && !agentActivityTimelineState.detailById.has(openAgentActivityId)) {
-      setOpenAgentActivityId(null);
+    if (!openAgentActivityId || agentActivityTimelineState.detailById.has(openAgentActivityId)) {
+      return;
     }
+    // Async setState (post-paint) keeps this stale-detail cleanup out of the
+    // render->effect->render cascade.
+    const settle = window.setTimeout(() => {
+      setOpenAgentActivityId(null);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities, activeThread?.pendingInteractions),
@@ -2981,7 +3041,9 @@ export default function ChatView({
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
   const hasLiveTurn = phase === "running";
-  hasLiveTurnRef.current = hasLiveTurn;
+  useLayoutEffect(() => {
+    hasLiveTurnRef.current = hasLiveTurn;
+  }, [hasLiveTurn]);
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
@@ -3091,7 +3153,7 @@ export default function ChatView({
     activePendingUserInput?.requestId,
     activePendingProgress?.activeQuestion?.id,
   ]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
   const clearAttachmentPreviewHandoffs = useCallback(() => {
@@ -3742,9 +3804,12 @@ export default function ChatView({
       null,
     [composerHighlightedItemId, composerMenuItems],
   );
-  composerMenuOpenRef.current = composerMenuOpen;
-  composerMenuItemsRef.current = composerMenuItems;
-  activeComposerMenuItemRef.current = activeComposerMenuItem;
+  // Keydown can fire as soon as the updated menu commits, before passive effects.
+  useLayoutEffect(() => {
+    composerMenuOpenRef.current = composerMenuOpen;
+    composerMenuItemsRef.current = composerMenuItems;
+    activeComposerMenuItemRef.current = activeComposerMenuItem;
+  }, [composerMenuOpen, composerMenuItems, activeComposerMenuItem]);
   const nonPersistedComposerImageIdSet = useMemo(() => {
     const durableBlobIds = new Set(
       durablyPersistedComposerImageIds
@@ -5532,18 +5597,21 @@ export default function ChatView({
   ]);
 
   useEffect(() => {
-    setPullRequestDialogState(null);
-    setRenameDialogOpen(false);
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
-    if (planSidebarOpenOnNextThreadRef.current) {
-      planSidebarOpenOnNextThreadRef.current = false;
-      setPlanSidebarOpen(true);
-    } else {
-      setPlanSidebarOpen(false);
-    }
+    // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
+    // in render->commit order); defer only the setState so this thread-change reset
+    // stays out of the render->effect->render cascade.
+    const openPlanSidebar = planSidebarOpenOnNextThreadRef.current;
+    planSidebarOpenOnNextThreadRef.current = false;
     planSidebarDismissedForTurnRef.current = null;
+    const settle = window.setTimeout(() => {
+      setPullRequestDialogState(null);
+      setRenameDialogOpen(false);
+      setShowScrollToBottom(false);
+      setPlanSidebarOpen(openPlanSidebar);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -5559,7 +5627,12 @@ export default function ChatView({
   }, [composerMenuItems, composerMenuOpen]);
 
   useEffect(() => {
-    setIsRevertingCheckpoint(false);
+    // Async setState (post-paint) keeps this thread-change reset out of the
+    // render->effect->render cascade.
+    const settle = window.setTimeout(() => {
+      setIsRevertingCheckpoint(false);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -5602,7 +5675,12 @@ export default function ChatView({
 
   useEffect(() => {
     autoDispatchingQueuedTurnRef.current = false;
-    setQueuedSteerGate(null);
+    // Async setState (post-paint) keeps this thread-change reset out of the
+    // render->effect->render cascade.
+    const settle = window.setTimeout(() => {
+      setQueuedSteerGate(null);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [threadId]);
 
   useEffect(() => {
@@ -5710,21 +5788,30 @@ export default function ChatView({
     voiceTranscriptionRequestIdRef.current += 1;
     voiceRecordingStartedAtRef.current = null;
     void cancelVoiceRecording();
-    setIsVoiceTranscribing(false);
-    setOptimisticUserMessages((existing) => {
-      if (existing.length === 0) return existing;
-      for (const message of existing) {
-        revokeUserMessagePreviewUrls(message);
-      }
-      return [];
-    });
-    setLocalDispatch(null);
-    setComposerHighlightedItemId(null);
-    setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
-    setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     dragDepthRef.current = 0;
-    setIsDragOverComposer(false);
-    setExpandedImage(null);
+    // Async setState (post-paint) keeps this thread-change reset out of the
+    // render->effect->render cascade. The pre-paint overlay clear (optimistic
+    // messages, expanded image) lives in the layout effect above, so deferring
+    // these residual resets by a tick is imperceptible.
+    const settle = window.setTimeout(() => {
+      setIsVoiceTranscribing(false);
+      setOptimisticUserMessages((existing) => {
+        if (existing.length === 0) return existing;
+        for (const message of existing) {
+          revokeUserMessagePreviewUrls(message);
+        }
+        return [];
+      });
+      setLocalDispatch(null);
+      setComposerHighlightedItemId(null);
+      setComposerCursor(
+        collapseExpandedComposerCursor(promptRef.current, promptRef.current.length),
+      );
+      setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
+      setIsDragOverComposer(false);
+      setExpandedImage(null);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [cancelVoiceRecording, threadId]);
 
   useEffect(() => {
@@ -6524,7 +6611,7 @@ export default function ChatView({
       voiceThreadIdRef.current === requestThreadId &&
       voiceProviderRef.current === requestProvider;
 
-    try {
+    await (async () => {
       const payload = await stopVoiceRecording();
       if (!isCurrentVoiceRequest()) {
         return;
@@ -6546,41 +6633,43 @@ export default function ChatView({
         return;
       }
       appendVoiceTranscriptToComposer(result.text);
-    } catch (error) {
-      if (!isCurrentVoiceRequest()) {
-        return;
-      }
-      const description =
-        error instanceof Error
-          ? sanitizeVoiceErrorMessage(error.message)
-          : "The voice note could not be transcribed.";
-      const authExpired = isVoiceAuthExpiredMessage(description);
-      if (authExpired) {
-        void refreshProviderStatuses();
-      }
-      toastManager.add({
-        type: "error",
-        title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
-        description: authExpired
-          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
-          : description,
-        ...(authExpired
-          ? {
-              actionProps: {
-                children: "Refresh status",
-                onClick: () => {
-                  void refreshProviderStatuses();
+    })()
+      .catch((error: unknown) => {
+        if (!isCurrentVoiceRequest()) {
+          return;
+        }
+        const description =
+          error instanceof Error
+            ? sanitizeVoiceErrorMessage(error.message)
+            : "The voice note could not be transcribed.";
+        const authExpired = isVoiceAuthExpiredMessage(description);
+        if (authExpired) {
+          void refreshProviderStatuses();
+        }
+        toastManager.add({
+          type: "error",
+          title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
+          description: authExpired
+            ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
+            : description,
+          ...(authExpired
+            ? {
+                actionProps: {
+                  children: "Refresh status",
+                  onClick: () => {
+                    void refreshProviderStatuses();
+                  },
                 },
-              },
-            }
-          : {}),
+              }
+            : {}),
+        });
+      })
+      .finally(() => {
+        if (isCurrentVoiceRequest()) {
+          voiceRecordingStartedAtRef.current = null;
+          setIsVoiceTranscribing(false);
+        }
       });
-    } finally {
-      if (isCurrentVoiceRequest()) {
-        voiceRecordingStartedAtRef.current = null;
-        setIsVoiceTranscribing(false);
-      }
-    }
   }, [
     activeProject,
     activeThread,
@@ -6966,7 +7055,7 @@ export default function ChatView({
       );
       automationDraftSubmittingRef.current = true;
       setIsAutomationDraftSubmitting(true);
-      try {
+      return await (async () => {
         const definition = await api.automation.create(automationInput);
         if (activityThreadId) {
           void (async () => {
@@ -7012,18 +7101,20 @@ export default function ChatView({
           description: `${definition.name} - ${formatCadence(definition.schedule)}`,
         });
         return true;
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not create automation",
-          description:
-            error instanceof Error ? error.message : "Synara could not save the automation.",
+      })()
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not create automation",
+            description:
+              error instanceof Error ? error.message : "Synara could not save the automation.",
+          });
+          return false;
+        })
+        .finally(() => {
+          automationDraftSubmittingRef.current = false;
+          setIsAutomationDraftSubmitting(false);
         });
-        return false;
-      } finally {
-        automationDraftSubmittingRef.current = false;
-        setIsAutomationDraftSubmitting(false);
-      }
     },
     [
       activeProject,
@@ -7202,7 +7293,7 @@ export default function ChatView({
       );
       automationDraftSubmittingRef.current = true;
       setIsAutomationDraftSubmitting(true);
-      try {
+      return await (async () => {
         const providerOptions =
           input.providerOptions ??
           providerOptionsForAutomationEdit(
@@ -7220,12 +7311,12 @@ export default function ChatView({
           description: `${updated.name} - ${formatCadence(updated.schedule)}`,
         });
         return true;
-      } catch {
-        return false;
-      } finally {
-        automationDraftSubmittingRef.current = false;
-        setIsAutomationDraftSubmitting(false);
-      }
+      })()
+        .catch(() => false)
+        .finally(() => {
+          automationDraftSubmittingRef.current = false;
+          setIsAutomationDraftSubmitting(false);
+        });
     },
     [automationUpdateMutation, providerOptionsForDispatch, resetAutomationDraftState],
   );
@@ -7712,17 +7803,13 @@ export default function ChatView({
       }
     }
     sendPreflightInFlightRef.current = true;
-    const sendProviderAvailability = await (async () => {
-      try {
-        return await resolveProviderSendAvailabilityWithRefresh({
-          provider: selectedModelSelectionForSend.provider,
-          statuses: providerStatuses,
-          refreshStatuses: () => refreshProviderStatuses({ silent: true }),
-        });
-      } finally {
-        sendPreflightInFlightRef.current = false;
-      }
-    })();
+    const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
+      provider: selectedModelSelectionForSend.provider,
+      statuses: providerStatuses,
+      refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+    }).finally(() => {
+      sendPreflightInFlightRef.current = false;
+    });
     if (!sendProviderAvailability.usable) {
       toastManager.add({
         type: "error",
@@ -8303,9 +8390,17 @@ export default function ChatView({
       );
       turnStartSucceeded = true;
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer.
-      if (dispatchMode === "steer" && selectedModelSelectionForSend.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+      // queued auto-dispatch through that gap so it can't race the steer. The
+      // live session provider decides the interrupt path server-side, so the
+      // gate keys off it rather than the requested model selection.
+      const liveProviderForSteerGate =
+        activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
+      if (dispatchMode === "steer" && liveProviderForSteerGate !== "codex") {
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.session?.activeTurnId ?? null,
+        });
       }
       if (sourceProposedPlanForSend) {
         planSidebarDismissedForTurnRef.current = null;
@@ -8741,9 +8836,17 @@ export default function ChatView({
         createdAt: messageCreatedAt,
       });
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer.
-      if (dispatchMode === "steer" && modelSelectionForPlanDispatch.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+      // queued auto-dispatch through that gap so it can't race the steer. The
+      // live session provider decides the interrupt path server-side, so the
+      // gate keys off it rather than the requested model selection.
+      const livePlanProviderForSteerGate =
+        activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
+      if (dispatchMode === "steer" && livePlanProviderForSteerGate !== "codex") {
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.session?.activeTurnId ?? null,
+        });
       }
       // Optimistically open the plan sidebar when implementing (not refining).
       // "default" mode here means the agent is executing the plan, which produces
@@ -8809,7 +8912,7 @@ export default function ChatView({
         effort: selectedPromptEffort,
         text: editedTextWithOriginalContext,
       });
-      try {
+      return await (async () => {
         await persistThreadSettingsForNextTurn({
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
@@ -8831,15 +8934,17 @@ export default function ChatView({
           createdAt: messageCreatedAt,
         });
         return true;
-      } catch (err) {
-        setThreadError(
-          activeThread.id,
-          err instanceof Error ? err.message : "Failed to edit message.",
-        );
-        return false;
-      } finally {
-        setIsRevertingCheckpoint(false);
-      }
+      })()
+        .catch((err: unknown) => {
+          setThreadError(
+            activeThread.id,
+            err instanceof Error ? err.message : "Failed to edit message.",
+          );
+          return false;
+        })
+        .finally(() => {
+          setIsRevertingCheckpoint(false);
+        });
     },
     [
       activeThread,
@@ -8862,8 +8967,12 @@ export default function ChatView({
 
   const onSendRef = useRef(onSend);
   const onSubmitPlanFollowUpRef = useRef(onSubmitPlanFollowUp);
-  onSendRef.current = onSend;
-  onSubmitPlanFollowUpRef.current = onSubmitPlanFollowUp;
+  // The queued dispatcher can run from the same commit's follow-up work, so do
+  // not leave a passive-effect window where it sees the previous callbacks.
+  useLayoutEffect(() => {
+    onSendRef.current = onSend;
+    onSubmitPlanFollowUpRef.current = onSubmitPlanFollowUp;
+  });
 
   const dispatchQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
@@ -8961,6 +9070,7 @@ export default function ChatView({
   // Advance/expire the steer gate as the session moves through the
   // interrupt→steered-turn handoff (or fails out of it).
   const sessionErroredForSteerGate = activeThread?.session?.status === "error";
+  const activeTurnIdForSteerGate = activeThread?.session?.activeTurnId ?? null;
   useEffect(() => {
     if (!queuedSteerGate) {
       return;
@@ -8969,6 +9079,7 @@ export default function ChatView({
       gate: queuedSteerGate,
       phase,
       sessionErrored: sessionErroredForSteerGate,
+      activeTurnId: activeTurnIdForSteerGate,
       now: Date.now(),
     });
     if (transition.kind === "clear") {
@@ -8977,7 +9088,8 @@ export default function ChatView({
     }
     if (
       transition.gate.sawInterruptGap !== queuedSteerGate.sawInterruptGap ||
-      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt
+      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt ||
+      transition.gate.armedActiveTurnId !== queuedSteerGate.armedActiveTurnId
     ) {
       setQueuedSteerGate(transition.gate);
       return;
@@ -8987,7 +9099,7 @@ export default function ChatView({
     }
     const timer = window.setTimeout(() => setQueuedSteerGate(null), transition.expiresInMs);
     return () => window.clearTimeout(timer);
-  }, [phase, queuedSteerGate, sessionErroredForSteerGate]);
+  }, [activeTurnIdForSteerGate, phase, queuedSteerGate, sessionErroredForSteerGate]);
 
   useEffect(() => {
     if (
@@ -11585,6 +11697,7 @@ export default function ChatView({
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     enteringUserMessageIds={enteringUserMessageIds}
+                    crossTaskOrigin={crossTaskOrigin}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}

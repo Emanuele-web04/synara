@@ -14,6 +14,7 @@ import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversat
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
+  createElement,
   memo,
   useCallback,
   useEffect,
@@ -24,10 +25,12 @@ import {
   useState,
   type CSSProperties,
   type ComponentProps,
+  type Dispatch,
   type KeyboardEvent,
   type RefObject,
   type ReactElement,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import {
   deriveTimelineEntries,
@@ -73,6 +76,8 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
+import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
@@ -107,11 +112,15 @@ import {
 } from "./MessagesTimeline.logic";
 import {
   deriveReadableCommandDisplay,
+  deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   resolveCommandVisualKind,
+  sanitizeSynaraMcpToolPreview,
+  type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { SynaraLogo } from "../SynaraLogo";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import {
   formatAgentActivityEntryPreview,
@@ -227,6 +236,12 @@ export interface MessagesTimelineController {
 // target agent-task rows specifically; both render the shared central robot glyph.
 const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
+// Synara mark sized/toned like the other tool-row glyphs: `text-current` beats
+// the logo's built-in `text-foreground` so the row's muted tone applies.
+const SynaraToolIcon: LucideIcon = ({ className, ...props }) => (
+  <SynaraLogo {...props} className={cn("text-current", className)} />
+);
+
 // Keeps the origin/steer marker visually attached to the whole sent-message stack.
 // Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate,
 // which the timelineHeight estimator also uses — keep presentation-only concerns here.
@@ -235,6 +250,7 @@ const USER_TURN_MARKER_PRESENTATION: Record<
   { readonly Icon: LucideIcon; readonly label: string }
 > = {
   automation: { Icon: ClockIcon, label: "Sent via Automation" },
+  agent: { Icon: BotIcon, label: "Sent by agent" },
   steer: { Icon: SteerIcon, label: "Steering conversation" },
 };
 
@@ -402,6 +418,8 @@ interface MessagesTimelineProps {
   threadMarkers?: readonly ThreadMarker[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
+  /** Provenance for a conversation created from another Synara task. */
+  crossTaskOrigin?: CrossTaskOrigin | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -461,6 +479,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onTogglePinMessage,
   threadMarkers = [],
   enteringUserMessageIds = EMPTY_MESSAGE_ID_SET,
+  crossTaskOrigin = null,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -620,10 +639,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const firstUserMessageId = useMemo(() => {
+    for (const row of rows) {
+      if (row.kind === "message" && row.message.role === "user") {
+        return row.message.id;
+      }
+    }
+    return null;
+  }, [rows]);
   const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
+      crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -631,6 +659,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      firstUserMessageId,
       highlightedMessageId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -638,6 +667,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       threadMarkersByMessageId,
     }),
     [
+      crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -645,6 +675,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      firstUserMessageId,
       highlightedMessageId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -795,6 +826,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     tailScrollTimeoutsRef.current = [];
   }, []);
+  // Manual memoization kept: the main timeline component does not compile
+  // under React Compiler (props-default destructuring bailout), so these
+  // identities must be stabilized by hand.
   const scrollTailExpansionToEnd = useCallback(() => {
     clearTailExpansionScrollTimers();
     const scrollToEnd = () => {
@@ -847,7 +881,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return anchors;
   }, [rows]);
   const userMessageAnchorsRef = useRef(userMessageAnchors);
-  userMessageAnchorsRef.current = userMessageAnchors;
+  useLayoutEffect(() => {
+    userMessageAnchorsRef.current = userMessageAnchors;
+  }, [userMessageAnchors]);
   const emitTrailHighlightsForViewport = useCallback(
     (topRowIndex: number, bottomRowIndex: number) => {
       if (!onTrailHighlightsChange || !Number.isFinite(topRowIndex)) {
@@ -919,23 +955,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setEditingUserMessageId(messageId);
   }, []);
   const submitUserMessageEdit = useCallback(
-    async (messageId: MessageId, text: string) => {
+    (messageId: MessageId, text: string) => {
       if (!onEditUserMessage) {
-        return;
+        return Promise.resolve();
       }
       const nextText = text.trim();
       if (!nextText) {
-        return;
+        return Promise.resolve();
       }
       setSubmittingEditedUserMessageId(messageId);
-      try {
-        const saved = await onEditUserMessage(messageId, nextText);
-        if (saved) {
-          cancelUserMessageEdit();
-        }
-      } finally {
-        setSubmittingEditedUserMessageId(null);
-      }
+      // Promise chain instead of async/try-finally: React Compiler does not yet
+      // support try/finally, and it would skip optimizing this whole component.
+      return Promise.resolve(onEditUserMessage(messageId, nextText))
+        .then((saved) => {
+          if (saved) {
+            cancelUserMessageEdit();
+          }
+        })
+        .finally(() => {
+          setSubmittingEditedUserMessageId(null);
+        });
     },
     [cancelUserMessageEdit, onEditUserMessage],
   );
@@ -963,7 +1002,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "work" &&
         (() => {
           const groupId = row.id;
-          const groupedEntries = row.groupedEntries;
+          // Creation milestones are reserved for the end-of-turn recap card.
+          // The provider's actual Synara MCP tool rows remain visible here.
+          const groupedEntries = row.groupedEntries.filter(
+            (workEntry) => !workEntry.synaraThreadCreation,
+          );
+          if (groupedEntries.length === 0) {
+            return null;
+          }
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
           const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
           const visibleEntries =
@@ -1074,156 +1120,166 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             pastedTextCount: renderedPastedTexts.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
+          const showCrossTaskOrigin =
+            crossTaskOrigin !== null && row.message.id === firstUserMessageId;
           return (
-            <div className="flex w-full justify-end">
-              <div
-                className={cn(
-                  "group flex flex-col items-end gap-px",
-                  isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
-                )}
-              >
-                {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                <UserDispatchModeChip
-                  dispatchMode={row.message.dispatchMode}
-                  dispatchOrigin={row.message.dispatchOrigin}
-                  hasLeadingMedia={hasLeadingMedia}
+            <div className="flex w-full flex-col gap-3">
+              {showCrossTaskOrigin ? (
+                <CrossTaskOriginLabel
+                  origin={crossTaskOrigin}
+                  {...(onOpenThread ? { onOpenSourceThread: onOpenThread } : {})}
                 />
-                {renderedAssistantSelections.length > 0 && (
-                  <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
-                    <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
-                  </div>
-                )}
-                {renderedFileComments.length > 0 && (
-                  <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
-                    <FileCommentsSummaryChip comments={renderedFileComments} />
-                  </div>
-                )}
-                {renderedPastedTexts.length > 0 && (
-                  <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
-                    {renderedPastedTexts.map((pasted) => (
-                      <UserMessagePastedTextCard
-                        key={pasted.index}
-                        text={pasted.text}
-                        metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
-                      />
-                    ))}
-                  </div>
-                )}
-                {userFiles.length > 0 && (
-                  <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
-                    {userFiles.map((file) => (
-                      <FileAttachmentChip key={file.id} file={file} />
-                    ))}
-                  </div>
-                )}
-                {userImages.length > 0 && (
-                  <div
-                    className={cn(
-                      "flex max-w-[240px] flex-wrap justify-end gap-2 self-end",
-                      showUserText && "mb-1",
-                    )}
-                  >
-                    {userImages.map((image) => (
-                      <UserImageAttachmentThumbnail
-                        key={image.id}
-                        image={image}
-                        userImages={userImages}
-                        onImageExpand={onImageExpand}
-                        onTimelineImageLoad={
-                          isTailContentRow ? scrollTailExpansionToEnd : ignoreTimelineImageLoad
-                        }
-                        resolvedTheme={resolvedTheme}
-                      />
-                    ))}
-                  </div>
-                )}
-                {isEditingThisMessage ? (
-                  <UserMessageEditForm
-                    key={row.message.id}
-                    initialValue={displayedUserMessage.copyText}
-                    disabled={isSubmittingThisEdit || isRevertingCheckpoint}
-                    chatTypographyStyle={userMessageTypographyStyle}
-                    onCancel={cancelUserMessageEdit}
-                    onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+              ) : null}
+              <div className="flex w-full justify-end">
+                <div
+                  className={cn(
+                    "group flex flex-col items-end gap-px",
+                    isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
+                  )}
+                >
+                  {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
+                  <UserDispatchModeChip
+                    dispatchMode={row.message.dispatchMode}
+                    dispatchOrigin={row.message.dispatchOrigin}
+                    hasLeadingMedia={hasLeadingMedia}
                   />
-                ) : showUserText ? (
-                  <div
-                    className={cn(
-                      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
-                      USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-                      bubbleIsChipOnly
-                        ? "py-0.5 px-3"
-                        : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
-                    )}
-                  >
-                    <UserMessageCollapsibleText
-                      text={userMessageText}
-                      expanded={userMessageExpanded}
-                      chatFontSizePx={normalizedChatFontSizePx}
-                      onToggle={() => {
-                        setExpandedUserMessagesById((previous) => ({
-                          ...previous,
-                          [row.message.id]: !(previous[row.message.id] ?? false),
-                        }));
-                      }}
-                    >
-                      <UserMessageBody
-                        text={userMessageText}
-                        mentionReferences={row.message.mentions ?? []}
-                        terminalContexts={terminalContexts}
-                        chatTypographyStyle={userMessageTypographyStyle}
-                        resolvedTheme={resolvedTheme}
-                        markdownCwd={markdownCwd}
-                      />
-                    </UserMessageCollapsibleText>
-                  </div>
-                ) : null}
-                {!isEditingThisMessage && (
-                  <div
-                    className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
-                    style={chatMessageFooterStyle}
-                  >
-                    <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                      {formatShortTimestamp(row.message.createdAt, timestampFormat)}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      {displayedUserMessage.copyText && (
-                        <MessageCopyButton
-                          text={displayedUserMessage.copyText}
-                          className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                        />
-                      )}
-                      {showEditUserMessage && (
-                        <MessageActionButton
-                          label="Edit message"
-                          tooltip="Edit and resend"
-                          disabled={isRevertingCheckpoint}
-                          className={cn(
-                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
-                            "disabled:text-muted-foreground/35",
-                          )}
-                          onClick={() => startUserMessageEdit(row.message.id)}
-                        >
-                          <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                        </MessageActionButton>
-                      )}
-                      {canRevertAgentWork ? (
-                        <MessageActionButton
-                          label="Revert to this message"
-                          tooltip="Revert to this message"
-                          disabled={isRevertingCheckpoint || isWorking}
-                          className={cn(
-                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
-                            "disabled:text-muted-foreground/35",
-                          )}
-                          onClick={() => onRevertUserMessage(row.message.id)}
-                        >
-                          <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                        </MessageActionButton>
-                      ) : null}
+                  {renderedAssistantSelections.length > 0 && (
+                    <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                      <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
                     </div>
-                  </div>
-                )}
+                  )}
+                  {renderedFileComments.length > 0 && (
+                    <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                      <FileCommentsSummaryChip comments={renderedFileComments} />
+                    </div>
+                  )}
+                  {renderedPastedTexts.length > 0 && (
+                    <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
+                      {renderedPastedTexts.map((pasted) => (
+                        <UserMessagePastedTextCard
+                          key={pasted.index}
+                          text={pasted.text}
+                          metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {userFiles.length > 0 && (
+                    <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
+                      {userFiles.map((file) => (
+                        <FileAttachmentChip key={file.id} file={file} />
+                      ))}
+                    </div>
+                  )}
+                  {userImages.length > 0 && (
+                    <div
+                      className={cn(
+                        "flex max-w-[240px] flex-wrap justify-end gap-2 self-end",
+                        showUserText && "mb-1",
+                      )}
+                    >
+                      {userImages.map((image) => (
+                        <UserImageAttachmentThumbnail
+                          key={image.id}
+                          image={image}
+                          userImages={userImages}
+                          onImageExpand={onImageExpand}
+                          onTimelineImageLoad={
+                            isTailContentRow ? scrollTailExpansionToEnd : ignoreTimelineImageLoad
+                          }
+                          resolvedTheme={resolvedTheme}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {isEditingThisMessage ? (
+                    <UserMessageEditForm
+                      key={row.message.id}
+                      initialValue={displayedUserMessage.copyText}
+                      disabled={isSubmittingThisEdit || isRevertingCheckpoint}
+                      chatTypographyStyle={userMessageTypographyStyle}
+                      onCancel={cancelUserMessageEdit}
+                      onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+                    />
+                  ) : showUserText ? (
+                    <div
+                      className={cn(
+                        "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+                        USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+                        bubbleIsChipOnly
+                          ? "py-0.5 px-3"
+                          : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+                      )}
+                    >
+                      <UserMessageCollapsibleText
+                        text={userMessageText}
+                        expanded={userMessageExpanded}
+                        chatFontSizePx={normalizedChatFontSizePx}
+                        onToggle={() => {
+                          setExpandedUserMessagesById((previous) => ({
+                            ...previous,
+                            [row.message.id]: !(previous[row.message.id] ?? false),
+                          }));
+                        }}
+                      >
+                        <UserMessageBody
+                          text={userMessageText}
+                          mentionReferences={row.message.mentions ?? []}
+                          terminalContexts={terminalContexts}
+                          chatTypographyStyle={userMessageTypographyStyle}
+                          resolvedTheme={resolvedTheme}
+                          markdownCwd={markdownCwd}
+                        />
+                      </UserMessageCollapsibleText>
+                    </div>
+                  ) : null}
+                  {!isEditingThisMessage && (
+                    <div
+                      className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
+                      style={chatMessageFooterStyle}
+                    >
+                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                        {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        {displayedUserMessage.copyText && (
+                          <MessageCopyButton
+                            text={displayedUserMessage.copyText}
+                            className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                          />
+                        )}
+                        {showEditUserMessage && (
+                          <MessageActionButton
+                            label="Edit message"
+                            tooltip="Edit and resend"
+                            disabled={isRevertingCheckpoint}
+                            className={cn(
+                              MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                              "disabled:text-muted-foreground/35",
+                            )}
+                            onClick={() => startUserMessageEdit(row.message.id)}
+                          >
+                            <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          </MessageActionButton>
+                        )}
+                        {canRevertAgentWork ? (
+                          <MessageActionButton
+                            label="Revert to this message"
+                            tooltip="Revert to this message"
+                            disabled={isRevertingCheckpoint || isWorking}
+                            className={cn(
+                              MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                              "disabled:text-muted-foreground/35",
+                            )}
+                            onClick={() => onRevertUserMessage(row.message.id)}
+                          >
+                            <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          </MessageActionButton>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -1236,8 +1292,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
-            const toolEntries = workEntries.filter((entry) => entry.tone === "tool");
-            const statusEntries = workEntries.filter((entry) => entry.tone !== "tool");
+            const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
+            const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
+            const statusEntries = displayEntries.filter((entry) => entry.tone !== "tool");
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
             const toolExpanded =
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
@@ -1327,7 +1384,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ]
             .filter((value): value is string => Boolean(value))
             .join(" • ");
-          const collapsedTurnItems = row.collapsedTurnItems;
+          const allTurnWorkEntries = [
+            ...(row.leadingWorkEntries ?? []),
+            ...(row.inlineWorkEntries ?? []),
+            ...(row.collapsedTurnItems ?? []).flatMap((item) =>
+              item.kind === "work" ? [item.entry] : [],
+            ),
+          ];
+          const synaraThreadCreationRecaps = [
+            ...new Map(
+              allTurnWorkEntries.flatMap((entry) =>
+                entry.synaraThreadCreation
+                  ? [[entry.synaraThreadCreation.operationId, entry.synaraThreadCreation] as const]
+                  : [],
+              ),
+            ).values(),
+          ];
+          const collapsedTurnItems = row.collapsedTurnItems?.filter(
+            (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
+          );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
@@ -1571,6 +1646,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ) : null}
                   </div>
                 )}
+                {!row.assistantTurnInProgress && row.showAssistantCopyButton
+                  ? synaraThreadCreationRecaps.map((creation) => (
+                      <div key={creation.operationId} className="mt-2 mb-4">
+                        <SynaraThreadCreationCard
+                          creation={creation}
+                          {...(onOpenThread
+                            ? {
+                                onOpenThread: (createdThreadId) =>
+                                  onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
+                              }
+                            : {})}
+                        />
+                      </div>
+                    ))
+                  : null}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own
@@ -1930,11 +2020,21 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     result: [],
   });
 
-  return useMemo(() => {
-    const nextState = computeStableMessagesTimelineRows(rows, previousStateRef.current);
-    previousStateRef.current = nextState;
-    return nextState.result;
-  }, [rows]);
+  return useMemo(() => reconcileStableTimelineRows(rows, previousStateRef), [rows]);
+}
+
+// The reconciliation reads and rewrites the previous-state cache during the memo,
+// which the compiler rejects. Keeping it in a module helper that takes the ref
+// (module functions aren't compiled) preserves the per-row identity reuse: a
+// whole-array useStableValue would drop every row reference whenever any single row
+// changed, re-rendering the entire streaming transcript instead of just that row.
+function reconcileStableTimelineRows(
+  rows: MessagesTimelineRow[],
+  previousStateRef: RefObject<StableMessagesTimelineRowsState>,
+): MessagesTimelineRow[] {
+  const nextState = computeStableMessagesTimelineRows(rows, previousStateRef.current);
+  previousStateRef.current = nextState;
+  return nextState.result;
 }
 
 // Animates only user rows that ChatView identifies as local optimistic sends;
@@ -1948,42 +2048,13 @@ function useMessageSendEnterAnimations(
   const cleanupTimeoutsRef = useRef<number[]>([]);
 
   useLayoutEffect(() => {
-    const currentRowIds = new Set(rows.map((row) => row.id));
-    const previousRowIds = previousRowIdsRef.current;
-    previousRowIdsRef.current = currentRowIds;
-
-    const freshUserRowIds = rows
-      .filter(
-        (row) =>
-          row.kind === "message" &&
-          row.message.role === "user" &&
-          enteringUserMessageIds.has(row.message.id) &&
-          (previousRowIds === null || !previousRowIds.has(row.id)),
-      )
-      .map((row) => row.id);
-    if (freshUserRowIds.length === 0) {
-      return;
-    }
-
-    setEnteringRowIds((current) => {
-      const next = new Set(current);
-      for (const rowId of freshUserRowIds) {
-        next.add(rowId);
-      }
-      return next;
+    applyMessageSendEnterAnimation({
+      rows,
+      enteringUserMessageIds,
+      previousRowIdsRef,
+      cleanupTimeoutsRef,
+      setEnteringRowIds,
     });
-
-    const cleanupTimeout = window.setTimeout(() => {
-      cleanupTimeoutsRef.current = cleanupTimeoutsRef.current.filter((id) => id !== cleanupTimeout);
-      setEnteringRowIds((current) => {
-        const next = new Set(current);
-        for (const rowId of freshUserRowIds) {
-          next.delete(rowId);
-        }
-        return next.size === current.size ? current : next;
-      });
-    }, MESSAGE_SEND_ENTER_ANIMATION_MS + MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS);
-    cleanupTimeoutsRef.current.push(cleanupTimeout);
   }, [enteringUserMessageIds, rows]);
 
   useEffect(
@@ -1997,6 +2068,58 @@ function useMessageSendEnterAnimations(
   );
 
   return enteringRowIds;
+}
+
+// The fresh-row detection compares against the previous layout pass and stamps the
+// entering class before paint, so the send motion cannot flash. Running it from a
+// module helper (which the compiler doesn't scan) keeps that synchronous setState
+// out of the compiled hook without deferring it to a rAF/timeout that would paint a
+// frame before the class lands.
+function applyMessageSendEnterAnimation(params: {
+  rows: readonly MessagesTimelineRow[];
+  enteringUserMessageIds: ReadonlySet<MessageId>;
+  previousRowIdsRef: RefObject<ReadonlySet<string> | null>;
+  cleanupTimeoutsRef: RefObject<number[]>;
+  setEnteringRowIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
+}): void {
+  const { rows, enteringUserMessageIds, previousRowIdsRef, cleanupTimeoutsRef, setEnteringRowIds } =
+    params;
+  const currentRowIds = new Set(rows.map((row) => row.id));
+  const previousRowIds = previousRowIdsRef.current;
+  previousRowIdsRef.current = currentRowIds;
+
+  const freshUserRowIds = rows
+    .filter(
+      (row) =>
+        row.kind === "message" &&
+        row.message.role === "user" &&
+        enteringUserMessageIds.has(row.message.id) &&
+        (previousRowIds === null || !previousRowIds.has(row.id)),
+    )
+    .map((row) => row.id);
+  if (freshUserRowIds.length === 0) {
+    return;
+  }
+
+  setEnteringRowIds((current) => {
+    const next = new Set(current);
+    for (const rowId of freshUserRowIds) {
+      next.add(rowId);
+    }
+    return next;
+  });
+
+  const cleanupTimeout = window.setTimeout(() => {
+    cleanupTimeoutsRef.current = cleanupTimeoutsRef.current.filter((id) => id !== cleanupTimeout);
+    setEnteringRowIds((current) => {
+      const next = new Set(current);
+      for (const rowId of freshUserRowIds) {
+        next.delete(rowId);
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, MESSAGE_SEND_ENTER_ANIMATION_MS + MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS);
+  cleanupTimeoutsRef.current.push(cleanupTimeout);
 }
 
 interface WorktreeSetupPresentation {
@@ -2026,31 +2149,61 @@ function useWorktreeSetupPresentation(
   }, []);
 
   useLayoutEffect(() => {
-    if (worktreeSetup) {
-      clearCloseTimers();
-      setPresented((current) =>
-        current?.open && current.snapshot === worktreeSetup
-          ? current
-          : { snapshot: worktreeSetup, open: true },
-      );
-      return;
-    }
-    if (!presented?.open || closeFrameRef.current !== null) {
-      return;
-    }
-    closeFrameRef.current = window.requestAnimationFrame(() => {
-      closeFrameRef.current = null;
-      setPresented((current) => (current?.open ? { ...current, open: false } : current));
-      cleanupTimeoutRef.current = window.setTimeout(() => {
-        cleanupTimeoutRef.current = null;
-        setPresented(null);
-      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    reconcileWorktreeSetupPresentation({
+      worktreeSetup,
+      presented,
+      clearCloseTimers,
+      closeFrameRef,
+      cleanupTimeoutRef,
+      setPresented,
     });
   }, [worktreeSetup, presented, clearCloseTimers]);
 
   useLayoutEffect(() => clearCloseTimers, [clearCloseTimers]);
 
   return presented;
+}
+
+// Opens synchronously so the card is mounted before paint, then hands the close off
+// to a rAF-flip + delayed unmount. Isolated in a module helper (not compiled) so the
+// synchronous open setState stays out of the compiled hook while its exact ordering
+// against the close timers is preserved.
+function reconcileWorktreeSetupPresentation(params: {
+  worktreeSetup: WorktreeSetupSnapshot | null;
+  presented: WorktreeSetupPresentation | null;
+  clearCloseTimers: () => void;
+  closeFrameRef: RefObject<number | null>;
+  cleanupTimeoutRef: RefObject<number | null>;
+  setPresented: Dispatch<SetStateAction<WorktreeSetupPresentation | null>>;
+}): void {
+  const {
+    worktreeSetup,
+    presented,
+    clearCloseTimers,
+    closeFrameRef,
+    cleanupTimeoutRef,
+    setPresented,
+  } = params;
+  if (worktreeSetup) {
+    clearCloseTimers();
+    setPresented((current) =>
+      current?.open && current.snapshot === worktreeSetup
+        ? current
+        : { snapshot: worktreeSetup, open: true },
+    );
+    return;
+  }
+  if (!presented?.open || closeFrameRef.current !== null) {
+    return;
+  }
+  closeFrameRef.current = window.requestAnimationFrame(() => {
+    closeFrameRef.current = null;
+    setPresented((current) => (current?.open ? { ...current, open: false } : current));
+    cleanupTimeoutRef.current = window.setTimeout(() => {
+      cleanupTimeoutRef.current = null;
+      setPresented(null);
+    }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+  });
 }
 
 // Keeps newly folded turn details mounted for one shared-disclosure close
@@ -2116,74 +2269,14 @@ function useSettledTurnCollapseTransitions(
   );
 
   useLayoutEffect(() => {
-    const currentAssistantMessageIds = new Set<string>();
-    const currentCollapsed = new Map<
-      string,
-      { signature: string; items: readonly CollapsedTurnItem[] }
-    >();
-
-    for (const row of rows) {
-      if (row.kind !== "message" || row.message.role !== "assistant") {
-        continue;
-      }
-      const messageId = row.message.id;
-      currentAssistantMessageIds.add(messageId);
-      if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
-        currentCollapsed.set(messageId, {
-          signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
-          items: row.collapsedTurnItems,
-        });
-      }
-    }
-
-    const previousAssistantMessageIds = previousAssistantMessageIdsRef.current;
-    const previousCollapsedSignatures = previousCollapsedSignaturesRef.current;
-    const startedTransitions: Array<{
-      messageId: string;
-      items: readonly CollapsedTurnItem[];
-    }> = [];
-
-    for (const [messageId, collapsed] of currentCollapsed) {
-      if (
-        previousAssistantMessageIds.has(messageId) &&
-        !previousCollapsedSignatures.has(messageId)
-      ) {
-        startedTransitions.push({ messageId, items: collapsed.items });
-      }
-    }
-
-    previousAssistantMessageIdsRef.current = currentAssistantMessageIds;
-    previousCollapsedSignaturesRef.current = new Map(
-      Array.from(currentCollapsed, ([messageId, collapsed]) => [messageId, collapsed.signature]),
-    );
-
-    setTransitions((current) => {
-      let next: Record<string, SettledTurnCollapseTransition> | null = null;
-      const ensureNext = () => {
-        next ??= { ...current };
-        return next;
-      };
-
-      for (const messageId of Object.keys(current)) {
-        if (!currentCollapsed.has(messageId)) {
-          clearTransitionTimer(messageId);
-          delete ensureNext()[messageId];
-        }
-      }
-
-      for (const transition of startedTransitions) {
-        ensureNext()[transition.messageId] = {
-          open: true,
-          items: transition.items,
-        };
-      }
-
-      return next ?? current;
+    applySettledTurnCollapseTransitions({
+      rows,
+      previousAssistantMessageIdsRef,
+      previousCollapsedSignaturesRef,
+      clearTransitionTimer,
+      scheduleTransitionClose,
+      setTransitions,
     });
-
-    for (const transition of startedTransitions) {
-      scheduleTransitionClose(transition.messageId);
-    }
   }, [clearTransitionTimer, rows, scheduleTransitionClose]);
 
   useEffect(
@@ -2196,6 +2289,93 @@ function useSettledTurnCollapseTransitions(
   );
 
   return transitions;
+}
+
+// Detects turns that just folded and drives their close animation. Kept in a module
+// helper (not compiled) so the synchronous open setState stays out of the hook while
+// its ordering against scheduleTransitionClose — which needs the open state committed
+// before it schedules the closing rAF — is preserved exactly.
+function applySettledTurnCollapseTransitions(params: {
+  rows: readonly MessagesTimelineRow[];
+  previousAssistantMessageIdsRef: RefObject<ReadonlySet<string>>;
+  previousCollapsedSignaturesRef: RefObject<ReadonlyMap<string, string>>;
+  clearTransitionTimer: (messageId: string) => void;
+  scheduleTransitionClose: (messageId: string) => void;
+  setTransitions: Dispatch<SetStateAction<Record<string, SettledTurnCollapseTransition>>>;
+}): void {
+  const {
+    rows,
+    previousAssistantMessageIdsRef,
+    previousCollapsedSignaturesRef,
+    clearTransitionTimer,
+    scheduleTransitionClose,
+    setTransitions,
+  } = params;
+  const currentAssistantMessageIds = new Set<string>();
+  const currentCollapsed = new Map<
+    string,
+    { signature: string; items: readonly CollapsedTurnItem[] }
+  >();
+
+  for (const row of rows) {
+    if (row.kind !== "message" || row.message.role !== "assistant") {
+      continue;
+    }
+    const messageId = row.message.id;
+    currentAssistantMessageIds.add(messageId);
+    if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
+      currentCollapsed.set(messageId, {
+        signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
+        items: row.collapsedTurnItems,
+      });
+    }
+  }
+
+  const previousAssistantMessageIds = previousAssistantMessageIdsRef.current;
+  const previousCollapsedSignatures = previousCollapsedSignaturesRef.current;
+  const startedTransitions: Array<{
+    messageId: string;
+    items: readonly CollapsedTurnItem[];
+  }> = [];
+
+  for (const [messageId, collapsed] of currentCollapsed) {
+    if (previousAssistantMessageIds.has(messageId) && !previousCollapsedSignatures.has(messageId)) {
+      startedTransitions.push({ messageId, items: collapsed.items });
+    }
+  }
+
+  previousAssistantMessageIdsRef.current = currentAssistantMessageIds;
+  previousCollapsedSignaturesRef.current = new Map(
+    Array.from(currentCollapsed, ([messageId, collapsed]) => [messageId, collapsed.signature]),
+  );
+
+  setTransitions((current) => {
+    let next: Record<string, SettledTurnCollapseTransition> | null = null;
+    const ensureNext = () => {
+      next ??= { ...current };
+      return next;
+    };
+
+    for (const messageId of Object.keys(current)) {
+      if (!currentCollapsed.has(messageId)) {
+        clearTransitionTimer(messageId);
+        delete ensureNext()[messageId];
+      }
+    }
+
+    for (const transition of startedTransitions) {
+      ensureNext()[transition.messageId] = {
+        open: true,
+        items: transition.items,
+      };
+    }
+
+    return next ?? current;
+  });
+
+  for (const transition of startedTransitions) {
+    scheduleTransitionClose(transition.messageId);
+  }
 }
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
@@ -2431,6 +2611,29 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
+// Measures the clamped message against its content before paint so the fade mask
+// never flickers. Kept in a module helper (not compiled) so the synchronous
+// overflow setState — unavoidable for a layout measurement — stays out of the
+// compiled component.
+function measureUserMessageOverflow(
+  collapsed: boolean,
+  contentRef: RefObject<HTMLDivElement | null>,
+  setOverflowing: (overflowing: boolean) => void,
+): (() => void) | undefined {
+  if (!collapsed) {
+    return undefined;
+  }
+  const element = contentRef.current;
+  if (!element) {
+    return undefined;
+  }
+  const measure = () => {
+    setOverflowing(element.scrollHeight - element.clientHeight > 1);
+  };
+  measure();
+  return observeUserMessageOverflow(element, measure);
+}
+
 // Show more/less for long user messages: a visual max-height clamp (with a fade
 // mask) around the fully rendered message instead of the old character slice.
 const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
@@ -2445,20 +2648,10 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
   const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
   const collapsed = !props.expanded;
 
-  useLayoutEffect(() => {
-    if (!collapsed) {
-      return undefined;
-    }
-    const element = contentRef.current;
-    if (!element) {
-      return undefined;
-    }
-    const measure = () => {
-      setOverflowing(element.scrollHeight - element.clientHeight > 1);
-    };
-    measure();
-    return observeUserMessageOverflow(element, measure);
-  }, [collapsed, props.text]);
+  useLayoutEffect(
+    () => measureUserMessageOverflow(collapsed, contentRef, setOverflowing),
+    [collapsed, props.text],
+  );
 
   const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
   const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
@@ -2755,9 +2948,39 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   return workToneIcon(workEntry.tone).icon;
 }
 
+// Dynamic icon selection is data, not a component declaration. Keeping the
+// createElement call in this module helper avoids presenting a render-local
+// component binding to React Compiler.
+function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactElement {
+  return createElement(Icon, { className });
+}
+
 function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   const toolName = workEntry.toolName?.trim().toLowerCase();
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
+}
+
+// Synara's own agent-gateway tools (synara_list_threads, synara_create_thread,
+// ...) get the Synara mark instead of the generic MCP glyph. Providers report
+// the call differently: Claude prefixes the MCP server (mcp__synara__*), ACP
+// agents surface the bare tool name (synara_*), and Codex reports server/tool
+// pairs that the label humanizer renders as "Synara: ...".
+function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
+  if (workEntry.toolStatus) return workEntry.toolStatus;
+  return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
+    ? "running"
+    : "completed";
+}
+
+function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
+  return (
+    deriveSynaraMcpToolTitle({
+      toolName: workEntry.toolName,
+      title: workEntry.toolTitle,
+      fallbackLabel: workEntry.label,
+      status: toolWorkEntryStatus(workEntry),
+    }) !== null
+  );
 }
 
 // Render command, agent-task, file-change, and file-read rows at the tighter
@@ -2794,6 +3017,15 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  const synaraTitle = deriveSynaraMcpToolTitle({
+    toolName: workEntry.toolName,
+    title: workEntry.toolTitle,
+    fallbackLabel: workEntry.label,
+    status: toolWorkEntryStatus(workEntry),
+  });
+  if (synaraTitle) {
+    return synaraTitle;
+  }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
@@ -2972,17 +3204,34 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
-  const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
+  const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
+  const isMcpToolRow =
+    workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
+  const LeftIcon = isGitHubToolRow
+    ? GitHubIcon
+    : isSynaraToolRow
+      ? SynaraToolIcon
+      : isMcpToolRow
+        ? McpIcon
+        : EntryIcon;
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon
       ? "github"
-      : isMcpToolRow
-        ? "mcp"
-        : undefined;
+      : isSynaraToolRow
+        ? "synara"
+        : isMcpToolRow
+          ? "mcp"
+          : undefined;
   const heading = toolWorkEntryHeading(workEntry);
-  const preview = workEntryPreview(workEntry);
+  const rawPreview = workEntryPreview(workEntry);
+  const preview = isSynaraToolRow
+    ? sanitizeSynaraMcpToolPreview({
+        preview: rawPreview,
+        heading,
+        status: toolWorkEntryStatus(workEntry),
+      })
+    : rawPreview;
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
     : isReasoningUpdateWorkEntry(workEntry) && preview
@@ -3141,7 +3390,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 compact ? "size-4" : "size-5",
               )}
             >
-              <EntryIcon className={compact ? "size-2.5" : "size-3"} />
+              {renderWorkEntryIcon(EntryIcon, compact ? "size-2.5" : "size-3")}
             </span>
             <div className="min-w-0 flex-1 overflow-hidden">
               <p
@@ -3243,7 +3492,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                                 style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
                                 title={toolText}
                               >
-                                <ToolEntryIcon className="size-3 shrink-0 text-muted-foreground/32" />
+                                {renderWorkEntryIcon(
+                                  ToolEntryIcon,
+                                  "size-3 shrink-0 text-muted-foreground/32",
+                                )}
                                 <span className="truncate">{toolText}</span>
                               </div>
                             );
@@ -3320,7 +3572,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   {webFetchUrl ? (
                     <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
                   ) : (
-                    <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                    renderWorkEntryIcon(LeftIcon, compact ? "size-3.5" : "size-4")
                   )}
                 </span>
               ) : null}

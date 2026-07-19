@@ -36,6 +36,7 @@ export function useThreadWorkspaceHandoff(input: {
   const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
   const [worktreeHandoffName, setWorktreeHandoffName] = useState("");
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const handoffThread = useCallback(
     async (targetMode: "local" | "worktree", options?: { preferredWorktreeName?: string }) => {
       if (

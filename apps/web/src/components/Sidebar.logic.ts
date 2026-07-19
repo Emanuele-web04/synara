@@ -949,16 +949,30 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
-export function getUnpinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
-  threads: readonly T[],
-  pinnedThreadIds: readonly T["id"][],
-): T[] {
+// Exception: a pinned parent whose children are in the list stays in the tree.
+// The pinned section renders flat rows only, and buildProjectThreadTree
+// promotes children with a missing parent to top-level rows — hiding such a
+// parent would either orphan its children as project roots or (if the
+// descendants were hidden too) make them unreachable anywhere in the sidebar.
+export function getUnpinnedThreadsForSidebar<
+  T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
+>(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
   if (pinnedThreadIds.length === 0) {
     return [...threads];
   }
 
-  const pinnedThreadIdSet = new Set(pinnedThreadIds);
-  return threads.filter((thread) => !pinnedThreadIdSet.has(thread.id));
+  const parentThreadIds = new Set<T["id"]>();
+  for (const thread of threads) {
+    const parentThreadId = thread.parentThreadId ?? null;
+    if (parentThreadId !== null) {
+      parentThreadIds.add(parentThreadId as T["id"]);
+    }
+  }
+
+  const hiddenThreadIds = new Set(
+    pinnedThreadIds.filter((threadId) => !parentThreadIds.has(threadId)),
+  );
+  return threads.filter((thread) => !hiddenThreadIds.has(thread.id));
 }
 
 // Only prune persisted pins after the thread snapshot has hydrated.

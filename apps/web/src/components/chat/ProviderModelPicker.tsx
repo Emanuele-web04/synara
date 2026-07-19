@@ -6,7 +6,7 @@
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
@@ -117,6 +117,7 @@ function providerIconClassName(
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
 const FavoriteModelSlugs = Schema.Array(Schema.String);
+const EMPTY_FAVORITE_MODEL_SLUGS: ReadonlyArray<string> = [];
 
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
 function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
@@ -186,98 +187,64 @@ type ProviderModelMenuItemsProps = {
 // Renders only the popup body of the provider/model picker. Designed to be
 // dropped into any shared picker popup or submenu so the same selection logic can
 // be reused by the standalone picker and the combined composer trait picker.
-export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
+export const ProviderModelMenuItems = function ProviderModelMenuItems(
   props: ProviderModelMenuItemsProps,
 ) {
   const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.kilo,
-    [],
+    EMPTY_FAVORITE_MODEL_SLUGS,
     FavoriteModelSlugs,
   );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
-    [],
+    EMPTY_FAVORITE_MODEL_SLUGS,
     FavoriteModelSlugs,
   );
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.opencode,
-    [],
+    EMPTY_FAVORITE_MODEL_SLUGS,
     FavoriteModelSlugs,
   );
   const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.pi,
-    [],
+    EMPTY_FAVORITE_MODEL_SLUGS,
     FavoriteModelSlugs,
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const hiddenProviders = props.hiddenProviders;
   const providerOrder = props.providerOrder;
-  const hiddenProviderSet = useMemo(
-    () => new Set<ProviderKind>(hiddenProviders ?? []),
-    [hiddenProviders],
+  const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders ?? []);
+  const protectedProviderSet = new Set<ProviderKind>([props.provider]);
+  if (props.lockedProvider !== null) {
+    protectedProviderSet.add(props.lockedProvider);
+  }
+  const visibleAvailableProviderOptions = filterProviderOptionsByVisibility(
+    AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
+      compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
+    ),
+    hiddenProviderSet,
+    protectedProviderSet,
   );
-  const protectedProviderSet = useMemo(() => {
-    const set = new Set<ProviderKind>([props.provider]);
-    if (props.lockedProvider !== null) {
-      set.add(props.lockedProvider);
-    }
-    return set;
-  }, [props.provider, props.lockedProvider]);
-  const visibleAvailableProviderOptions = useMemo(
-    () =>
-      filterProviderOptionsByVisibility(
-        [...AVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
-          compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
-        ),
-        hiddenProviderSet,
-        protectedProviderSet,
-      ),
-    [hiddenProviderSet, protectedProviderSet, providerOrder],
+  const visibleUnavailableProviderOptions = filterProviderOptionsByVisibility(
+    UNAVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
+      compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
+    ),
+    hiddenProviderSet,
+    protectedProviderSet,
   );
-  const visibleUnavailableProviderOptions = useMemo(
-    () =>
-      filterProviderOptionsByVisibility(
-        [...UNAVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
-          compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
-        ),
-        hiddenProviderSet,
-        protectedProviderSet,
-      ),
-    [hiddenProviderSet, protectedProviderSet, providerOrder],
-  );
-  const kiloFavoriteModelSlugSet = useMemo(
-    () => new Set(kiloFavoriteModelSlugs),
-    [kiloFavoriteModelSlugs],
-  );
-  const openCodeFavoriteModelSlugSet = useMemo(
-    () => new Set(openCodeFavoriteModelSlugs),
-    [openCodeFavoriteModelSlugs],
-  );
-  const cursorFavoriteModelSlugSet = useMemo(
-    () => new Set(cursorFavoriteModelSlugs),
-    [cursorFavoriteModelSlugs],
-  );
-  const piFavoriteModelSlugSet = useMemo(
-    () => new Set(piFavoriteModelSlugs),
-    [piFavoriteModelSlugs],
-  );
-  const favoriteModelSlugSets = useMemo(
-    () => ({
-      cursor: cursorFavoriteModelSlugSet,
-      kilo: kiloFavoriteModelSlugSet,
-      opencode: openCodeFavoriteModelSlugSet,
-      pi: piFavoriteModelSlugSet,
-    }),
-    [
-      cursorFavoriteModelSlugSet,
-      kiloFavoriteModelSlugSet,
-      openCodeFavoriteModelSlugSet,
-      piFavoriteModelSlugSet,
-    ],
-  );
+  const kiloFavoriteModelSlugSet = new Set(kiloFavoriteModelSlugs);
+  const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
+  const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
+  const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
+  const favoriteModelSlugSets = {
+    cursor: cursorFavoriteModelSlugSet,
+    kilo: kiloFavoriteModelSlugSet,
+    opencode: openCodeFavoriteModelSlugSet,
+    pi: piFavoriteModelSlugSet,
+  };
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -290,25 +257,17 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
     props.onProviderModelChange(provider, resolvedModel);
     onAfterSelection?.();
   };
-  const toggleFavoriteModel = useCallback(
-    (provider: FavoriteModelProvider, slug: string) => {
-      const setFavoriteModelSlugs =
-        provider === "cursor"
-          ? setCursorFavoriteModelSlugs
-          : provider === "kilo"
-            ? setKiloFavoriteModelSlugs
-            : provider === "pi"
-              ? setPiFavoriteModelSlugs
-              : setOpenCodeFavoriteModelSlugs;
-      setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
-    },
-    [
-      setCursorFavoriteModelSlugs,
-      setKiloFavoriteModelSlugs,
-      setOpenCodeFavoriteModelSlugs,
-      setPiFavoriteModelSlugs,
-    ],
-  );
+  const toggleFavoriteModel = (provider: FavoriteModelProvider, slug: string) => {
+    const setFavoriteModelSlugs =
+      provider === "cursor"
+        ? setCursorFavoriteModelSlugs
+        : provider === "kilo"
+          ? setKiloFavoriteModelSlugs
+          : provider === "pi"
+            ? setPiFavoriteModelSlugs
+            : setOpenCodeFavoriteModelSlugs;
+    setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
+  };
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
     if (props.loadingModelProviders?.[provider]) {
@@ -474,7 +433,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
       })}
     </>
   );
-});
+};
 
 // Resolves the human-readable label for the currently selected model.
 export function resolveProviderModelLabel(input: {
@@ -519,9 +478,7 @@ type ProviderModelPickerProps = {
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
 };
 
-export const ProviderModelPicker = memo(function ProviderModelPicker(
-  props: ProviderModelPickerProps,
-) {
+export const ProviderModelPicker = function ProviderModelPicker(props: ProviderModelPickerProps) {
   const { onOpenChange, onSelectionCommitted, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const selectionCommitTimerRef = useRef<number | null>(null);
@@ -535,16 +492,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
   });
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
-  const setMenuOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (open === undefined) {
-        setUncontrolledMenuOpen(nextOpen);
-      }
-      onOpenChange?.(nextOpen);
-    },
-    [onOpenChange, open],
-  );
-  const scheduleSelectionCommitted = useCallback(() => {
+  const setMenuOpen = (nextOpen: boolean) => {
+    if (open === undefined) {
+      setUncontrolledMenuOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  };
+  const scheduleSelectionCommitted = () => {
     if (selectionCommitTimerRef.current !== null) {
       window.clearTimeout(selectionCommitTimerRef.current);
     }
@@ -553,7 +507,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
       selectionCommitTimerRef.current = null;
       onSelectionCommitted?.();
     }, 0);
-  }, [onSelectionCommitted]);
+  };
   useEffect(
     () => () => {
       if (selectionCommitTimerRef.current !== null) {
@@ -563,10 +517,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
     [],
   );
 
-  const handleAfterSelection = useCallback(() => {
+  const handleAfterSelection = () => {
     setMenuOpen(false);
     scheduleSelectionCommitted();
-  }, [scheduleSelectionCommitted, setMenuOpen]);
+  };
 
   const triggerButton = (
     <PickerTriggerButton
@@ -620,7 +574,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           <span className="sr-only">{selectedModelLabel}</span>
         </MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="start" fixedWidth={props.lockedProvider !== null}>
+      <ComposerPickerMenuPopup align="start" fixedWidth>
         <ProviderModelMenuItems
           provider={props.provider}
           model={props.model}
@@ -639,4 +593,4 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
       </ComposerPickerMenuPopup>
     </Menu>
   );
-});
+};

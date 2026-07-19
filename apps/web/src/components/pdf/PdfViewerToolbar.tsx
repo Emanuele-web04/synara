@@ -5,7 +5,7 @@
 // Layer: Web PDF viewer chrome
 // Exports: PdfViewerToolbar
 
-import { memo, useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   ChevronDownIcon,
@@ -51,7 +51,7 @@ function zoomSelectionValue(mode: PdfZoomMode, scale: number): string {
   return String(Math.round(scale * 100));
 }
 
-export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerToolbarProps) {
+export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolbarProps) {
   const selectionValue = zoomSelectionValue(props.zoomMode, props.scale);
 
   return (
@@ -82,6 +82,7 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
           <ChevronLeftIcon aria-hidden="true" className="size-4" />
         </ChatHeaderIconButton>
         <PdfPageIndicator
+          key={props.currentPage}
           currentPage={props.currentPage}
           numPages={props.numPages}
           onJumpToPage={props.onJumpToPage}
@@ -153,7 +154,7 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
       </div>
     </div>
   );
-});
+};
 
 function PdfPageIndicator({
   currentPage,
@@ -164,15 +165,18 @@ function PdfPageIndicator({
   numPages: number;
   onJumpToPage: (pageNumber: number) => void;
 }) {
+  // The caller keys this editor by currentPage, so every navigation gets a new
+  // draft even when the page sequence returns A -> B -> A.
   const [draft, setDraft] = useState(String(currentPage));
-  useEffect(() => {
-    setDraft(String(currentPage));
-  }, [currentPage]);
 
   const commit = () => {
     const parsed = Number.parseInt(draft, 10);
     if (Number.isFinite(parsed)) {
-      onJumpToPage(Math.min(Math.max(parsed, 1), Math.max(numPages, 1)));
+      const clamped = Math.min(Math.max(parsed, 1), Math.max(numPages, 1));
+      onJumpToPage(clamped);
+      // Canonicalize in place for jumps that clamp to the current page: the
+      // keyed remount only resets the draft when the page actually changes.
+      setDraft(String(clamped));
     } else {
       setDraft(String(currentPage));
     }

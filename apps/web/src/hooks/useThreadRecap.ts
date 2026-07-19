@@ -4,7 +4,7 @@
 // Exports: useThreadRecap for the Environment panel.
 
 import type { ProviderStartOptions, ThreadId } from "@synara/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   deriveThreadRecapSource,
@@ -71,20 +71,20 @@ export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult
     refreshIdleMsOverride: input.refreshIdleMs,
   });
   const threadMessages = thread?.messages;
-  const hasStreamingAssistant = useMemo(() => {
-    if (!shouldPrepareRecapSource || !threadMessages) return false;
-    return threadMessages.some((message) => message.role === "assistant" && message.streaming);
-  }, [shouldPrepareRecapSource, threadMessages]);
+  const hasStreamingAssistant =
+    shouldPrepareRecapSource && threadMessages
+      ? threadMessages.some((message) => message.role === "assistant" && message.streaming)
+      : false;
   const shouldDeriveRecapSource = shouldPrepareRecapSource && !hasStreamingAssistant;
 
-  const source = useMemo(() => {
-    if (!thread || !shouldDeriveRecapSource) return null;
-    return deriveThreadRecapSource({
-      thread,
-      previousCoveredMessageId: cacheEntry?.coveredMessageId ?? null,
-      hasPreviousRecap: Boolean(cacheEntry?.text),
-    });
-  }, [cacheEntry?.coveredMessageId, cacheEntry?.text, shouldDeriveRecapSource, thread]);
+  const source =
+    !thread || !shouldDeriveRecapSource
+      ? null
+      : deriveThreadRecapSource({
+          thread,
+          previousCoveredMessageId: cacheEntry?.coveredMessageId ?? null,
+          hasPreviousRecap: Boolean(cacheEntry?.text),
+        });
   const sourceHasNewMaterial = source?.hasNewMaterial ?? false;
   const sourceSignature = source?.signature ?? null;
   const sourceNewMaterial = source?.newMaterial ?? "";
@@ -96,9 +96,11 @@ export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult
     currentState: sourceCurrentState,
     latestMessageId: sourceLatestMessageId,
   });
-  if (threadId && sourceSignature) {
-    latestSourceSignatureByThreadIdRef.current[threadId] = sourceSignature;
-  }
+  useEffect(() => {
+    if (threadId && sourceSignature) {
+      latestSourceSignatureByThreadIdRef.current[threadId] = sourceSignature;
+    }
+  }, [threadId, sourceSignature]);
 
   useEffect(() => {
     sourcePayloadRef.current = {

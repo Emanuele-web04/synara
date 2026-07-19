@@ -6,13 +6,7 @@
 //          content space so absolute overlays stay anchored while scrolling.
 // Layer: Chat file-preview interaction controller
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 // A line's geometry in the scroll container's content space (independent of the
 // current scroll offset), used to position the absolute "+" button, the blue
@@ -70,92 +64,97 @@ export function useFileLineCommenting(
   options: UseFileLineCommentingOptions,
 ): UseFileLineCommentingResult {
   const { enabled, resetKey } = options;
-  const [hoveredLine, setHoveredLine] = useState<FileLineGeometry | null>(null);
-  const [activeLine, setActiveLine] = useState<FileLineGeometry | null>(null);
+  const [lineState, setLineState] = useState<{
+    enabled: boolean;
+    resetKey: string | null;
+    hoveredLine: FileLineGeometry | null;
+    activeLine: FileLineGeometry | null;
+  }>(() => ({ enabled, resetKey, hoveredLine: null, activeLine: null }));
+  const scopeIsCurrent = lineState.enabled === enabled && lineState.resetKey === resetKey;
+  if (!scopeIsCurrent) {
+    // Reset before committing the new file/mode. Hiding state behind a key would
+    // let A→B→A or Source→Markdown→Source revive the old overlay later.
+    setLineState({ enabled, resetKey, hoveredLine: null, activeLine: null });
+  }
+  const hoveredLine = scopeIsCurrent && enabled ? lineState.hoveredLine : null;
+  const activeLine = scopeIsCurrent && enabled ? lineState.activeLine : null;
+  const setHoveredLine = (line: FileLineGeometry | null) =>
+    setLineState((current) => ({ ...current, hoveredLine: line }));
+  const setActiveLine = (line: FileLineGeometry | null) =>
+    setLineState((current) => ({ ...current, activeLine: line }));
   // The element behind the current hover (deduped so a mousemove that stays on
   // the same line never triggers a re-render) and whether a box is open (read
   // synchronously from the move handler without it depending on render state).
   const hoveredElRef = useRef<Element | null>(null);
   const isActiveRef = useRef(false);
 
-  const clearHover = useCallback(() => {
+  const clearHover = () => {
     hoveredElRef.current = null;
     setHoveredLine(null);
-  }, []);
+  };
 
-  const onContainerMouseMove = useCallback(
-    (event: ReactMouseEvent<HTMLElement>) => {
-      // Suppress the affordance while disabled, while a box is open, and while a
-      // button is held (a drag-selection): the gutter "+" must not flicker as
-      // the user sweeps a text selection.
-      if (!enabled || isActiveRef.current || event.buttons !== 0) {
-        return;
+  const onContainerMouseMove = (event: ReactMouseEvent<HTMLElement>) => {
+    // Suppress the affordance while disabled, while a box is open, and while a
+    // button is held (a drag-selection): the gutter "+" must not flicker as
+    // the user sweeps a text selection.
+    if (!enabled || isActiveRef.current || event.buttons !== 0) {
+      return;
+    }
+    const container = event.currentTarget;
+    const target = event.target instanceof Element ? event.target : null;
+    // The floating "+" is positioned on top of the gutter of the very line it
+    // belongs to. Without this guard, moving the pointer onto it resolves to
+    // "no line" (the button is not inside a `.line`), tears the button down,
+    // re-exposes the line underneath, re-shows the button, and flickers in a
+    // tight mount/unmount loop — a re-render storm felt as lag. The button is
+    // only ever rendered for the already-hovered line, so a hover on it is a
+    // hover on that line: keep the current state untouched.
+    if (target?.closest(".editor-file-viewer__comment-add")) {
+      return;
+    }
+    const lineEl = target ? target.closest<HTMLElement>(".line") : null;
+    if (!lineEl || !container.contains(lineEl)) {
+      if (hoveredElRef.current) {
+        clearHover();
       }
-      const container = event.currentTarget;
-      const target = event.target instanceof Element ? event.target : null;
-      // The floating "+" is positioned on top of the gutter of the very line it
-      // belongs to. Without this guard, moving the pointer onto it resolves to
-      // "no line" (the button is not inside a `.line`), tears the button down,
-      // re-exposes the line underneath, re-shows the button, and flickers in a
-      // tight mount/unmount loop — a re-render storm felt as lag. The button is
-      // only ever rendered for the already-hovered line, so a hover on it is a
-      // hover on that line: keep the current state untouched.
-      if (target?.closest(".editor-file-viewer__comment-add")) {
-        return;
-      }
-      const lineEl = target ? target.closest<HTMLElement>(".line") : null;
-      if (!lineEl || !container.contains(lineEl)) {
-        if (hoveredElRef.current) {
-          clearHover();
-        }
-        return;
-      }
-      if (lineEl === hoveredElRef.current) {
-        return;
-      }
-      hoveredElRef.current = lineEl;
-      setHoveredLine(measureLine(container, lineEl));
-    },
-    [clearHover, enabled],
-  );
+      return;
+    }
+    if (lineEl === hoveredElRef.current) {
+      return;
+    }
+    hoveredElRef.current = lineEl;
+    setHoveredLine(measureLine(container, lineEl));
+  };
 
-  const onContainerMouseLeave = useCallback(() => {
+  const onContainerMouseLeave = () => {
     if (hoveredElRef.current) {
       clearHover();
     }
-  }, [clearHover]);
+  };
 
-  const openComment = useCallback(
-    (line: FileLineGeometry) => {
-      isActiveRef.current = true;
-      setActiveLine(line);
-      clearHover();
-    },
-    [clearHover],
-  );
+  const openComment = (line: FileLineGeometry) => {
+    isActiveRef.current = true;
+    setActiveLine(line);
+    clearHover();
+  };
 
-  const closeComment = useCallback(() => {
+  const closeComment = () => {
     isActiveRef.current = false;
     setActiveLine(null);
-  }, []);
+  };
 
-  // Tearing down on disable (markdown preview) or file switch keeps a stale
-  // overlay from lingering over unrelated content.
+  // Keep the synchronous event-handler mirrors aligned with the state reset above.
   useEffect(() => {
     if (enabled) {
       return;
     }
     isActiveRef.current = false;
     hoveredElRef.current = null;
-    setHoveredLine(null);
-    setActiveLine(null);
   }, [enabled]);
 
   useEffect(() => {
     isActiveRef.current = false;
     hoveredElRef.current = null;
-    setHoveredLine(null);
-    setActiveLine(null);
   }, [resetKey]);
 
   return {

@@ -6,6 +6,7 @@ import { migrationEntries, runMigrations } from "./Migrations.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
+import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -262,10 +263,13 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [67, "ProviderDeliveryReconciliation"],
         [68, "GitHandoffOperations"],
         [69, "ProjectPullRequestPins"],
+        [70, "AgentGatewayOperations"],
+        [71, "ProjectionThreadsGatewayProvenance"],
+        [72, "AgentGatewayOperationRetention"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-16), [
+      assert.deepStrictEqual(tracker.slice(-19), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -282,6 +286,9 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 67, name: "ProviderDeliveryReconciliation" },
         { migration_id: 68, name: "GitHandoffOperations" },
         { migration_id: 69, name: "ProjectPullRequestPins" },
+        { migration_id: 70, name: "AgentGatewayOperations" },
+        { migration_id: 71, name: "ProjectionThreadsGatewayProvenance" },
+        { migration_id: 72, name: "AgentGatewayOperationRetention" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -290,6 +297,97 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
     }),
   );
 });
+
+const agentGatewayRetentionLegacyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+agentGatewayRetentionLegacyLayer(
+  "agent gateway retention migration after legacy migration 71",
+  (it) => {
+    it.effect("adds caller purge tracking without losing legacy operation rows", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 69 });
+        yield* sql`
+        CREATE TABLE agent_gateway_operations (
+          operation_id TEXT PRIMARY KEY,
+          caller_thread_id TEXT NOT NULL,
+          caller_turn_id TEXT NOT NULL,
+          operation_kind TEXT NOT NULL CHECK (operation_kind IN ('create_threads')),
+          request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 256),
+          fingerprint TEXT NOT NULL,
+          requested_count INTEGER NOT NULL CHECK (requested_count BETWEEN 1 AND 20),
+          plan_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('reserved', 'dispatching', 'completed', 'failed', 'compensating')
+          ),
+          result_json TEXT,
+          error_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (caller_thread_id, caller_turn_id, operation_kind)
+        )
+      `;
+        yield* sql`
+        CREATE INDEX idx_agent_gateway_operations_status
+        ON agent_gateway_operations (status, updated_at)
+      `;
+        yield* ProjectionThreadsGatewayProvenanceMigration;
+        yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES
+          (70, 'AgentGatewayOperations'),
+          (71, 'ProjectionThreadsGatewayProvenance')
+      `;
+        yield* sql`
+        INSERT INTO agent_gateway_operations (
+          operation_id, caller_thread_id, caller_turn_id, operation_kind,
+          request_id, fingerprint, requested_count, plan_json, status,
+          result_json, error_json, created_at, updated_at
+        ) VALUES (
+          'legacy-operation', 'legacy-thread', 'legacy-turn', 'create_threads',
+          'legacy-request', 'legacy-fingerprint', 1, '[{"legacy":true}]', 'dispatching',
+          NULL, NULL, '2026-07-18T00:00:00.000Z', '2026-07-18T00:00:00.000Z'
+        )
+      `;
+
+        const executed = yield* runMigrations();
+        assert.deepStrictEqual(executed, [[72, "AgentGatewayOperationRetention"]]);
+
+        const columns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('agent_gateway_operations')
+      `;
+        assert.include(
+          columns.map(({ name }) => name),
+          "caller_purged_at",
+        );
+        const rows = yield* sql<{
+          readonly operationId: string;
+          readonly callerThreadId: string;
+          readonly callerTurnId: string;
+          readonly planJson: string;
+          readonly status: string;
+          readonly callerPurgedAt: string | null;
+        }>`
+        SELECT
+          operation_id AS "operationId", caller_thread_id AS "callerThreadId",
+          caller_turn_id AS "callerTurnId", plan_json AS "planJson", status,
+          caller_purged_at AS "callerPurgedAt"
+        FROM agent_gateway_operations
+      `;
+        assert.deepStrictEqual(rows, [
+          {
+            operationId: "legacy-operation",
+            callerThreadId: "legacy-thread",
+            callerTurnId: "legacy-turn",
+            planJson: '[{"legacy":true}]',
+            status: "dispatching",
+            callerPurgedAt: null,
+          },
+        ]);
+      }),
+    );
+  },
+);
 
 const managedAttachmentsConstraintsLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 

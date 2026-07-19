@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -7,15 +7,18 @@ import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
 import { ProjectionStateRepositoryLive } from "./ProjectionState.ts";
+import { ProjectionTurnRepositoryLive } from "./ProjectionTurns.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
 import { ProjectionStateRepository } from "../Services/ProjectionState.ts";
+import { ProjectionTurnRepository } from "../Services/ProjectionTurns.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionStateRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionTurnRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -160,6 +163,104 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         lastAppliedSequence: 20,
         updatedAt: "2026-07-09T00:00:20.000Z",
       });
+    }),
+  );
+
+  it.effect("batches pinned turn state with current thread existence", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const turns = yield* ProjectionTurnRepository;
+      const now = "2026-07-19T00:00:00.000Z";
+      const makeThread = (threadId: string, deletedAt: string | null) => ({
+        threadId: ThreadId.makeUnsafe(threadId),
+        projectId: ProjectId.makeUnsafe("project-wait-snapshot"),
+        title: threadId,
+        modelSelection: { provider: "codex" as const, model: "gpt-5.5" },
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+        envMode: "local" as const,
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        lastKnownPr: null,
+        latestTurnId: null,
+        handoff: null,
+        pinnedMessages: null,
+        threadMarkers: null,
+        notes: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt,
+      });
+      yield* threads.upsert(makeThread("thread-wait-active", null));
+      yield* threads.upsert(makeThread("thread-wait-deleted", now));
+      yield* turns.upsertByTurnId({
+        threadId: ThreadId.makeUnsafe("thread-wait-active"),
+        turnId: TurnId.makeUnsafe("turn-wait-active"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      yield* turns.upsertByTurnId({
+        threadId: ThreadId.makeUnsafe("thread-wait-deleted"),
+        turnId: TurnId.makeUnsafe("turn-wait-deleted"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+
+      const snapshot = yield* turns.getManyWaitSnapshot({
+        threadIds: [
+          ThreadId.makeUnsafe("thread-wait-active"),
+          ThreadId.makeUnsafe("thread-wait-deleted"),
+          ThreadId.makeUnsafe("thread-wait-missing"),
+        ],
+        turns: [
+          {
+            threadId: ThreadId.makeUnsafe("thread-wait-active"),
+            turnId: TurnId.makeUnsafe("turn-wait-active"),
+          },
+          {
+            threadId: ThreadId.makeUnsafe("thread-wait-deleted"),
+            turnId: TurnId.makeUnsafe("turn-wait-deleted"),
+          },
+        ],
+      });
+      assert.deepStrictEqual(snapshot.existingThreadIds, [
+        ThreadId.makeUnsafe("thread-wait-active"),
+      ]);
+      assert.deepStrictEqual(snapshot.turns, [
+        {
+          threadId: ThreadId.makeUnsafe("thread-wait-active"),
+          turnId: TurnId.makeUnsafe("turn-wait-active"),
+          state: "running",
+        },
+      ]);
     }),
   );
 });

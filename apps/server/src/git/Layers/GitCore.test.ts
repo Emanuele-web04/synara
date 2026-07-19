@@ -7,7 +7,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
 import { describe, expect, vi } from "vitest";
 
 import { GitCoreLive, makeGitCore } from "./GitCore.ts";
@@ -1163,6 +1163,122 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(branchOutput).toBe("wt-check");
 
         yield* (yield* GitCore).removeWorktree({ cwd: tmp, path: wtPath });
+      }),
+    );
+
+    it.effect("verifies a clean unchanged worktree through its Git-admin ownership marker", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-owned");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-owned",
+          path: wtPath,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: "wt-owned",
+          token: "operation-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+
+        yield* writeTextFile(path.join(wtPath, "untracked.txt"), "do not remove\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree has uncommitted changes",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        yield* core.deleteBranchIfUnchanged({
+          cwd: tmp,
+          branch: "wt-owned",
+          expectedHead: proof.head,
+        });
+      }),
+    );
+
+    it.effect("rejects a same-path same-branch replacement without the original marker", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-replaced");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-replaced",
+          path: wtPath,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: "wt-replaced",
+          token: "original-operation-token",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        yield* core.deleteBranchIfUnchanged({
+          cwd: tmp,
+          branch: "wt-replaced",
+          expectedHead: proof.head,
+        });
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-replaced",
+          path: wtPath,
+        });
+
+        const verification = yield* core.verifyWorktreeOwnership({ path: wtPath, proof });
+        expect(verification.verified).toBe(false);
+        expect(verification.reason).toMatch(/Git directory changed|marker is missing/);
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("rejects a moved HEAD and conditionally preserves the changed branch", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-head-moved");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-head-moved",
+          path: wtPath,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: "wt-head-moved",
+          token: "head-moved-token",
+        });
+        yield* writeTextFile(path.join(wtPath, "new-commit.txt"), "preserve me\n");
+        yield* git(wtPath, ["add", "new-commit.txt"]);
+        yield* git(wtPath, ["commit", "-m", "advance owned branch"]);
+
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree HEAD changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: false });
+        const deletion = yield* Effect.exit(
+          core.deleteBranchIfUnchanged({
+            cwd: tmp,
+            branch: "wt-head-moved",
+            expectedHead: proof.head,
+          }),
+        );
+        expect(Exit.isFailure(deletion)).toBe(true);
+        expect(
+          (yield* core.listBranches({ cwd: tmp })).branches.some(
+            (branch) => branch.name === "wt-head-moved",
+          ),
+        ).toBe(true);
+        yield* core.deleteBranch({ cwd: tmp, branch: "wt-head-moved", force: true });
       }),
     );
 

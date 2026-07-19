@@ -636,6 +636,27 @@ describe("pin helpers", () => {
     ).toEqual([threads[0]]);
   });
 
+  it("keeps a pinned parent in project lists so its children stay reachable and nested", () => {
+    const threads = [
+      makeThread("thread-1"),
+      {
+        ...makeThread("child-1"),
+        parentThreadId: "thread-1" as ThreadId,
+      },
+      makeThread("thread-2"),
+    ];
+
+    // Pinning the parent must not orphan child-1 as a top-level project row
+    // (buildProjectThreadTree promotes children with missing parents) nor hide
+    // it entirely; the parent stays in the tree, children render under it.
+    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual(threads);
+    // Childless pinned threads are still hidden from project lists.
+    expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
+      threads[0],
+      threads[1],
+    ]);
+  });
+
   it("lets an optimistic unpin override server and persisted pinned state", () => {
     const threads = [
       {

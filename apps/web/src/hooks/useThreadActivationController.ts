@@ -2,7 +2,6 @@
 // Purpose: Centralize sidebar thread activation side effects around the pure activation policy.
 // Exports: useThreadActivationController
 
-import { useCallback } from "react";
 import type { useNavigate } from "@tanstack/react-router";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import type { LastThreadRoute } from "../chatRouteRestore";
@@ -238,51 +237,30 @@ export function useThreadActivationController(input: ThreadActivationControllerI
     terminalStateByThreadId,
   } = input;
 
-  const activateThread = useCallback(
-    (threadId: ThreadId) => {
-      activateThreadFromSidebarIntent(
-        {
-          activeSplitView,
-          clearSelection,
-          navigate,
-          openChatThreadPage,
-          openSidechatSplit,
-          openTerminalThreadPage,
-          prewarmThreadDetailForIntent,
-          rememberLastThreadRouteNow,
-          routeSplitViewId,
-          routeThreadId,
-          selectedThreadCount,
-          setOptimisticActiveThreadId,
-          setSelectionAnchor,
-          setSplitFocusedPane,
-          sidebarThreadSummaryById,
-          splitViewsById,
-          terminalStateByThreadId,
-        },
-        threadId,
-      );
-    },
-    [
-      activeSplitView,
-      clearSelection,
-      navigate,
-      openChatThreadPage,
-      openSidechatSplit,
-      openTerminalThreadPage,
-      prewarmThreadDetailForIntent,
-      rememberLastThreadRouteNow,
-      routeSplitViewId,
-      routeThreadId,
-      selectedThreadCount,
-      setOptimisticActiveThreadId,
-      setSelectionAnchor,
-      setSplitFocusedPane,
-      sidebarThreadSummaryById,
-      splitViewsById,
-      terminalStateByThreadId,
-    ],
-  );
+  const activateThread = (threadId: ThreadId) => {
+    activateThreadFromSidebarIntent(
+      {
+        activeSplitView,
+        clearSelection,
+        navigate,
+        openChatThreadPage,
+        openSidechatSplit,
+        openTerminalThreadPage,
+        prewarmThreadDetailForIntent,
+        rememberLastThreadRouteNow,
+        routeSplitViewId,
+        routeThreadId,
+        selectedThreadCount,
+        setOptimisticActiveThreadId,
+        setSelectionAnchor,
+        setSplitFocusedPane,
+        sidebarThreadSummaryById,
+        splitViewsById,
+        terminalStateByThreadId,
+      },
+      threadId,
+    );
+  };
 
   return { activateThreadFromSidebarIntent: activateThread };
 }

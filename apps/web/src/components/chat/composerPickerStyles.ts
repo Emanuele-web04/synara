@@ -102,8 +102,6 @@ export const CHAT_ROUTE_INSET_SHELL_CLASS_NAME =
 export const CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME =
   "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden";
 
-/** Shared max width for the chat column (transcript + composer). */
-export const CHAT_COLUMN_MAX_WIDTH_CLASS_NAME = COMPOSER_MAX_WIDTH_CLASS_NAME;
 /** Horizontal padding shared by the transcript and composer columns. */
 export const CHAT_COLUMN_GUTTER_CLASS_NAME =
   "px-[var(--app-density-chat-gutter-x,0.75rem)] sm:px-[var(--app-density-chat-gutter-x-lg,1.25rem)]";
@@ -151,10 +149,6 @@ export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDE
  *  of dropping to shadow-only separation. */
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
-/** Active segment fill in the sidebar Threads/Workspace picker. */
-export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
-  "relative z-[1] text-[var(--color-text-foreground)]";
-
 /** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
 export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
   "relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
@@ -181,9 +175,6 @@ export const COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME = `border border-bor
 
 /** Visual shell for composer picker dropdown panels (menus attached to the composer). */
 export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
-
-/** Frosted backdrop layer inside open picker panels (composer menus + settings selects). */
-export const COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME = `${COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME} pointer-events-none absolute inset-0 rounded-[inherit]`;
 
 /** Scrollable list body inside open picker panels. */
 export const COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME = `relative z-1 w-full min-w-0 overflow-y-auto overscroll-contain ${COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME}`;

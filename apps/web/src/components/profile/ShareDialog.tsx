@@ -4,7 +4,7 @@
 // file. Mirrors the reference share sheet (Copy / X / LinkedIn / Reddit / Save).
 // Layer: web profile feature.
 
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { SiReddit, SiX } from "react-icons/si";
 import { FaLinkedinIn } from "react-icons/fa6";
 import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
@@ -79,7 +79,7 @@ export function ShareDialog({
     return () => observer.disconnect();
   }, [open]);
 
-  const copyCardToClipboard = useCallback(async (): Promise<CopyResult> => {
+  const copyCardToClipboard = async (): Promise<CopyResult> => {
     const node = cardRef.current;
     if (!node) {
       return "render-failed";
@@ -91,53 +91,55 @@ export function ShareDialog({
     }
 
     return (await copyImageToClipboard(blob)) ? "copied" : "clipboard-unavailable";
-  }, []);
+  };
 
-  const handleCopy = useCallback(async () => {
+  // Promise chains instead of async/try-finally in these handlers: React
+  // Compiler does not yet support try/finally and would skip this component.
+  const handleCopy = () => {
     setBusy("copy");
     setStatus(null);
-    try {
-      const copyResult = await copyCardToClipboard();
-      setStatus(copyStatusMessage(copyResult));
-    } finally {
-      setBusy(null);
-    }
-  }, [copyCardToClipboard]);
+    return copyCardToClipboard()
+      .then((copyResult) => {
+        setStatus(copyStatusMessage(copyResult));
+      })
+      .finally(() => {
+        setBusy(null);
+      });
+  };
 
-  const handleShare = useCallback(
-    async (target: ShareTarget) => {
-      setBusy(target);
-      setStatus(null);
-      try {
-        const copyResult = await copyCardToClipboard();
+  const handleShare = (target: ShareTarget) => {
+    setBusy(target);
+    setStatus(null);
+    return copyCardToClipboard()
+      .then((copyResult) => {
         openExternalUrl(shareIntentUrl(target));
         setStatus(shareStatusMessage(copyResult));
-      } finally {
+      })
+      .finally(() => {
         setBusy(null);
-      }
-    },
-    [copyCardToClipboard],
-  );
+      });
+  };
 
-  const handleSave = useCallback(async () => {
+  const handleSave = () => {
     const node = cardRef.current;
     if (!node) {
-      return;
+      return Promise.resolve();
     }
     setBusy("save");
     setStatus(null);
-    try {
-      const blob = await renderNodeToPngBlob(node, CARD_EXPORT_SIZE);
-      if (blob) {
-        downloadBlob(blob, `synara-stats-${stats.timezone.today}.png`);
-        setStatus("Saved PNG to your downloads.");
-      } else {
-        setStatus("Could not render the image.");
-      }
-    } finally {
-      setBusy(null);
-    }
-  }, [stats.timezone.today]);
+    return renderNodeToPngBlob(node, CARD_EXPORT_SIZE)
+      .then((blob) => {
+        if (blob) {
+          downloadBlob(blob, `synara-stats-${stats.timezone.today}.png`);
+          setStatus("Saved PNG to your downloads.");
+        } else {
+          setStatus("Could not render the image.");
+        }
+      })
+      .finally(() => {
+        setBusy(null);
+      });
+  };
 
   const previewScale = previewWidth / SHARE_CARD_WIDTH;
   const actionsDisabled = busy !== null;

@@ -5,7 +5,7 @@
 // Layer: Chat right-dock UI
 // Exports: DockExplorerPane
 
-import { memo, useCallback, useState } from "react";
+import { useState } from "react";
 
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
@@ -20,7 +20,7 @@ import { WorkspaceExplorerSidebar } from "./workspaceExplorer";
 const DOCK_EXPLORER_SIDEBAR_CLASS =
   "flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-border/65 bg-[var(--color-background-surface)]";
 
-export const DockExplorerPane = memo(function DockExplorerPane(props: {
+export const DockExplorerPane = function DockExplorerPane(props: {
   workspaceRoot: string | null;
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
@@ -32,11 +32,11 @@ export const DockExplorerPane = memo(function DockExplorerPane(props: {
   );
   const [searchQuery, setSearchQuery] = useState("");
 
-  const handleSelectFile = useCallback((path: string) => {
+  const handleSelectFile = (path: string) => {
     setSelectedFilePath(path);
-  }, []);
+  };
 
-  const handleToggleDirectory = useCallback((path: string) => {
+  const handleToggleDirectory = (path: string) => {
     setExpandedDirectories((current) => {
       const next = new Set(current);
       if (next.has(path)) {
@@ -46,7 +46,7 @@ export const DockExplorerPane = memo(function DockExplorerPane(props: {
       }
       return next;
     });
-  }, []);
+  };
 
   return (
     <div className="flex h-full min-h-0 w-full">
@@ -77,4 +77,4 @@ export const DockExplorerPane = memo(function DockExplorerPane(props: {
       </div>
     </div>
   );
-});
+};

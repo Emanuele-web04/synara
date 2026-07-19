@@ -117,6 +117,14 @@ export interface AcpSessionRuntimeOptions {
   readonly resolveAuthMethodId?: (
     initializeResult: EffectAcpSchema.InitializeResponse,
   ) => Effect.Effect<string, EffectAcpErrors.AcpError>;
+  /**
+   * MCP servers to attach to the session. Invoked after `initialize` so the
+   * builder can pick a transport based on the agent's advertised
+   * `mcpCapabilities` (e.g. HTTP vs stdio for the Synara agent gateway).
+   */
+  readonly buildMcpServers?: (
+    initializeResult: EffectAcpSchema.InitializeResponse,
+  ) => ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
@@ -199,6 +207,8 @@ export interface AcpSessionRuntimeShape {
     handler: AcpHandler<A, void>,
   ) => Effect.Effect<void>;
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
+  /** Completes when the owned ACP process exits, regardless of its exit status. */
+  readonly awaitExit: Effect.Effect<void>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
   // Monotonic count of parsed session/update events enqueued for the
   // getEvents() consumer. Adapters snapshot it and wait until their own
@@ -263,6 +273,9 @@ interface AcpOwnedChildProcess {
   readonly pid: number;
   readonly exitCode: Effect.Effect<unknown, unknown>;
 }
+
+export const awaitAcpChildExit = (child: AcpOwnedChildProcess): Effect.Effect<void> =>
+  child.exitCode.pipe(Effect.exit, Effect.asVoid);
 
 /**
  * Bridges Effect's child-process exit signal into Synara's process-tree proof. This is deliberately
@@ -1046,6 +1059,8 @@ const makeAcpSessionRuntime = (
         acp.agent.authenticate(authenticatePayload),
       );
 
+      const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
+
       let sessionId: string;
       let sessionSetupResult:
         | EffectAcpSchema.LoadSessionResponse
@@ -1057,7 +1072,7 @@ const makeAcpSessionRuntime = (
         const resumePayload = {
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
         } satisfies EffectAcpSchema.ResumeSessionRequest;
         const supportsResume =
           initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -1079,7 +1094,7 @@ const makeAcpSessionRuntime = (
               const loadPayload = {
                 sessionId: options.resumeSessionId,
                 cwd: options.cwd,
-                mcpServers: [],
+                mcpServers,
               } satisfies EffectAcpSchema.LoadSessionRequest;
               return runLoggedRequest(
                 "session/load",
@@ -1099,7 +1114,7 @@ const makeAcpSessionRuntime = (
         acceptingSessionUpdates = true;
         const createPayload = {
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",
@@ -1181,6 +1196,7 @@ const makeAcpSessionRuntime = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
+      awaitExit: awaitAcpChildExit(child),
       getEvents: () => {
         // Attaching a consumer opens the session/update gate: from here on the
         // queue is drained, so accepting notifications can no longer grow it

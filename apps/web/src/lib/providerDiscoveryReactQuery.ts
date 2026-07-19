@@ -6,7 +6,6 @@ import type {
   ProviderListModelsResult,
   ProviderListPluginsResult,
   ProviderListSkillsResult,
-  ProviderReadPluginResult,
   ProviderSkillsCatalogResult,
 } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
@@ -279,37 +278,6 @@ export function providerPluginsQueryOptions(input: {
     enabled: input.enabled ?? true,
     staleTime: 30_000,
     placeholderData: (previous) => previous ?? EMPTY_PLUGINS_RESULT,
-  });
-}
-
-export function providerReadPluginQueryOptions(input: {
-  provider: ProviderKind;
-  marketplacePath: string;
-  pluginName: string;
-  cwd?: string | null;
-  threadId?: string | null;
-  enabled?: boolean;
-}) {
-  return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.plugin(
-      input.provider,
-      input.marketplacePath,
-      input.pluginName,
-      input.cwd ?? null,
-      input.threadId ?? null,
-    ),
-    queryFn: async (): Promise<ProviderReadPluginResult> => {
-      const api = ensureNativeApi();
-      return api.provider.readPlugin({
-        provider: input.provider,
-        marketplacePath: input.marketplacePath,
-        pluginName: input.pluginName,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-      });
-    },
-    enabled: input.enabled ?? true,
-    staleTime: 60_000,
   });
 }
 

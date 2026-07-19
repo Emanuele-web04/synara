@@ -1,4 +1,4 @@
-import { memo, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   buildCollapsedProposedPlanPreviewMarkdown,
   proposedPlanTitle,
@@ -10,7 +10,7 @@ import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { ProposedPlanActions } from "./ProposedPlanActions";
 
-export const ProposedPlanCard = memo(function ProposedPlanCard({
+export const ProposedPlanCard = function ProposedPlanCard({
   planMarkdown,
   cwd,
   workspaceRoot,
@@ -74,4 +74,4 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
       </div>
     </div>
   );
-});
+};

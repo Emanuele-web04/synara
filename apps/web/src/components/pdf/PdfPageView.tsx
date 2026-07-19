@@ -10,7 +10,7 @@
 // Layer: Web PDF rendering component
 // Exports: PdfPageView
 
-import { memo, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { PDFDocumentProxy } from "~/lib/pdf/pdfEngine";
 import type { PdfLink } from "~/lib/pdf/pdfLinks";
@@ -34,7 +34,7 @@ interface PdfPageViewProps {
   onJumpToPage: (pageNumber: number) => void;
 }
 
-export const PdfPageView = memo(function PdfPageView({
+export const PdfPageView = function PdfPageView({
   document: pdfDocument,
   pageNumber,
   scale,
@@ -122,7 +122,7 @@ export const PdfPageView = memo(function PdfPageView({
       ) : null}
     </div>
   );
-});
+};
 
 function PdfLinkAnchor({
   link,

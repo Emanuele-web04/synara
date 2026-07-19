@@ -33,6 +33,8 @@ import {
 } from "./codexAppServerManager";
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
+import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
+import { acquireAgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
@@ -43,6 +45,56 @@ const approvalRequiredTurnOverrides = {
   approvalPolicy: "untrusted",
   sandboxPolicy: { type: "readOnly" },
 } as const;
+
+describe("Codex Synara harness policy", () => {
+  it("keeps the same host policy exactly once in default and plan instructions", () => {
+    for (const instructions of [
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+    ]) {
+      expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
+      expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
+      expect(instructions).toContain("Synara is the host and harness");
+      expect(instructions).toContain("synara_create_threads exactly once");
+    }
+  });
+
+  it("resolves the gateway endpoint when each session environment is built", async () => {
+    const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-gateway-endpoint-"));
+    const previousSynaraHome = process.env.SYNARA_HOME;
+    process.env.SYNARA_HOME = path.join(homePath, "synara-home");
+    let endpointUrl = "http://127.0.0.1:0/mcp";
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        agentGatewayMcp: {
+          endpointUrl: () => endpointUrl,
+          acquireSessionLease: () => ({
+            connection: { url: endpointUrl, bearerToken: "token" },
+            release: () => undefined,
+          }),
+        },
+      });
+      endpointUrl = "http://127.0.0.1:48123/mcp";
+      const env = await (
+        manager as unknown as {
+          buildSessionProcessEnv: (
+            homePath: string | undefined,
+            token: string | undefined,
+          ) => Promise<NodeJS.ProcessEnv>;
+        }
+      ).buildSessionProcessEnv(homePath, "token");
+      const configPath = path.join(env.CODEX_HOME ?? homePath, "config.toml");
+      expect(readFileSync(configPath, "utf8")).toContain('url = "http://127.0.0.1:48123/mcp"');
+    } finally {
+      if (previousSynaraHome === undefined) {
+        delete process.env.SYNARA_HOME;
+      } else {
+        process.env.SYNARA_HOME = previousSynaraHome;
+      }
+      rmSync(homePath, { recursive: true, force: true });
+    }
+  });
+});
 
 function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" = "full-access") {
   const manager = new CodexAppServerManager();
@@ -390,7 +442,20 @@ describe("Codex app-server teardown", () => {
     );
     const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
     const threadId = asThreadId("thread-codex-exit-proof");
+    const revokeSessionToken = vi.fn();
+    const gatewaySessionLease = acquireAgentGatewaySessionLease(
+      {
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        }),
+        revokeSessionToken,
+      },
+      threadId,
+      "codex",
+    );
     const context = {
+      gatewaySessionLease,
       session: {
         provider: "codex",
         status: "ready",
@@ -420,6 +485,7 @@ describe("Codex app-server teardown", () => {
 
     const stopping = manager.stopSession(threadId);
     await Promise.resolve();
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(teardownProcessTree).toHaveBeenCalledTimes(1);
     expect(manager.hasSession(threadId)).toBe(true);
     expect(exitProven).toBe(false);
@@ -427,7 +493,69 @@ describe("Codex app-server teardown", () => {
     child.exitCode = 0;
     child.emit("exit", 0, null);
     await stopping;
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(exitProven).toBe(true);
+    expect(manager.hasSession(threadId)).toBe(false);
+  });
+
+  it("releases the session lease once when the app-server exits spontaneously", () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5252;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-codex-spontaneous-exit");
+    const revokeSessionToken = vi.fn();
+    const gatewaySessionLease = acquireAgentGatewaySessionLease(
+      {
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        }),
+        revokeSessionToken,
+      },
+      threadId,
+      "codex",
+    );
+    const context = {
+      gatewaySessionLease,
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+
+    child.emit("exit", 1, null);
+    child.emit("exit", 1, null);
+
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(manager.hasSession(threadId)).toBe(false);
   });
 });
@@ -1021,6 +1149,20 @@ describe("startSession", () => {
 });
 
 describe("sendTurn", () => {
+  it("clears stale collaboration receiver routing before a new turn", async () => {
+    const { manager, context } = createSendTurnHarness();
+    context.collabReceiverTurns.set("reused-child", "old-turn");
+    context.collabReceiverParents.set("reused-child", "old-parent");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Start the next turn",
+    });
+
+    expect(context.collabReceiverTurns.size).toBe(0);
+    expect(context.collabReceiverParents.size).toBe(0);
+  });
+
   it("sends text and image user input items to turn/start", async () => {
     const { manager, context, requireSession, sendRequest, updateSession } =
       createSendTurnHarness();

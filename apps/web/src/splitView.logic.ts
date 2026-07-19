@@ -13,17 +13,6 @@ import type {
   SplitViewPanePanelState,
 } from "./splitViewStore";
 
-export function clearSplitViewPanePanelState(
-  panelState: SplitViewPanePanelState,
-): SplitViewPanePanelState {
-  return {
-    ...panelState,
-    panel: null,
-    diffTurnId: null,
-    diffFilePath: null,
-  };
-}
-
 // --- pane lookup ---
 
 export function findPaneById(root: Pane, paneId: PaneId): Pane | null {

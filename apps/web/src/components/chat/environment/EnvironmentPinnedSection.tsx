@@ -5,15 +5,7 @@
 // Layer: Environment panel section
 
 import type { MessageId, PinnedMessage } from "@synara/contracts";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import { Checkbox } from "~/components/ui/checkbox";
 import { IconButton } from "~/components/ui/icon-button";
@@ -63,7 +55,7 @@ export function EnvironmentPinnedSection({
   );
 }
 
-const PinnedMessageRow = memo(function PinnedMessageRow({
+const PinnedMessageRow = function PinnedMessageRow({
   pin,
   text,
   onJump,
@@ -88,12 +80,12 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
   const resolvedLabel = displayLabelFor(pin, text);
   const displayLabel = resolvedLabel.length > 0 ? resolvedLabel : "(message unavailable)";
 
-  const clearScheduledJump = useCallback(() => {
+  const clearScheduledJump = () => {
     if (jumpClickTimeoutRef.current !== null) {
       window.clearTimeout(jumpClickTimeoutRef.current);
       jumpClickTimeoutRef.current = null;
     }
-  }, []);
+  };
 
   useEffect(() => {
     if (editing) {
@@ -102,73 +94,64 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
   }, [editing]);
   useEffect(() => () => clearScheduledJump(), [clearScheduledJump]);
 
-  const beginEditing = useCallback(() => {
+  const beginEditing = () => {
     clearScheduledJump();
     suppressNextBlurCommitRef.current = false;
     setDraft(resolvedLabel);
     setEditing(true);
-  }, [clearScheduledJump, resolvedLabel]);
+  };
 
-  const commitEditing = useCallback(() => {
+  const commitEditing = () => {
     suppressNextBlurCommitRef.current = true;
     setEditing(false);
     const trimmed = draft.trim();
     onRename(pin.messageId, trimmed.length === 0 ? null : trimmed);
-  }, [draft, onRename, pin.messageId]);
+  };
 
-  const cancelEditing = useCallback(() => {
+  const cancelEditing = () => {
     suppressNextBlurCommitRef.current = true;
     setEditing(false);
-  }, []);
-  const handleInputBlur = useCallback(() => {
+  };
+  const handleInputBlur = () => {
     if (suppressNextBlurCommitRef.current) {
       suppressNextBlurCommitRef.current = false;
       return;
     }
     commitEditing();
-  }, [commitEditing]);
+  };
 
-  const handleInputKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitEditing();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        cancelEditing();
-      }
-    },
-    [cancelEditing, commitEditing],
-  );
-  const handleLabelClick = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      if (!available) {
-        beginEditing();
-        return;
-      }
-      if (event.detail > 1) {
-        return;
-      }
-      clearScheduledJump();
-      jumpClickTimeoutRef.current = window.setTimeout(() => {
-        jumpClickTimeoutRef.current = null;
-        onJump(pin.messageId);
-      }, 180);
-    },
-    [available, beginEditing, clearScheduledJump, onJump, pin.messageId],
-  );
-  const handleLabelDoubleClick = useCallback(() => {
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitEditing();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+    }
+  };
+  const handleLabelClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (!available) {
+      beginEditing();
+      return;
+    }
+    if (event.detail > 1) {
+      return;
+    }
+    clearScheduledJump();
+    jumpClickTimeoutRef.current = window.setTimeout(() => {
+      jumpClickTimeoutRef.current = null;
+      onJump(pin.messageId);
+    }, 180);
+  };
+  const handleLabelDoubleClick = () => {
     beginEditing();
-  }, [beginEditing]);
-  const handleLabelKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (event.key === "F2" || (!available && event.key === "Enter")) {
-        event.preventDefault();
-        beginEditing();
-      }
-    },
-    [available, beginEditing],
-  );
+  };
+  const handleLabelKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "F2" || (!available && event.key === "Enter")) {
+      event.preventDefault();
+      beginEditing();
+    }
+  };
 
   return (
     <li className="group/pin flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-[var(--color-background-elevated-secondary)]">
@@ -229,4 +212,4 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
       </IconButton>
     </li>
   );
-});
+};

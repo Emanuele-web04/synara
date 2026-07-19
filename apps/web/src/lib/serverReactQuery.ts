@@ -8,7 +8,6 @@ import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react
 import { ensureNativeApi } from "~/nativeApi";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
-export const LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS = 30_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
 
 export const serverQueryKeys = {
@@ -54,17 +53,6 @@ export function serverAuthSessionQueryOptions() {
       return api.server.getAuthSession();
     },
     staleTime: 15_000,
-  });
-}
-
-export function serverEnvironmentQueryOptions() {
-  return queryOptions({
-    queryKey: serverQueryKeys.environment(),
-    queryFn: async () => {
-      const api = ensureNativeApi();
-      return api.server.getEnvironment();
-    },
-    staleTime: Infinity,
   });
 }
 

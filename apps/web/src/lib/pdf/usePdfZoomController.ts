@@ -6,7 +6,7 @@
 // Layer: Web PDF rendering hook
 // Exports: usePdfZoomController, PdfZoomController
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   clampPdfScale,
@@ -52,37 +52,34 @@ export function usePdfZoomController(input: {
     }
   }, [scale, scrollToPage]);
 
-  const anchorBeforeZoom = useCallback(() => {
+  const anchorBeforeZoom = () => {
     restorePageRef.current = currentPage;
-  }, [currentPage]);
+  };
 
-  const onZoomIn = useCallback(() => {
+  const onZoomIn = () => {
     anchorBeforeZoom();
     setZoomMode({ type: "custom", scale: nextZoomScale(scale) });
-  }, [anchorBeforeZoom, scale]);
+  };
 
-  const onZoomOut = useCallback(() => {
+  const onZoomOut = () => {
     anchorBeforeZoom();
     setZoomMode({ type: "custom", scale: previousZoomScale(scale) });
-  }, [anchorBeforeZoom, scale]);
+  };
 
-  const onSetScale = useCallback(
-    (nextScale: number) => {
-      anchorBeforeZoom();
-      setZoomMode({ type: "custom", scale: clampPdfScale(nextScale) });
-    },
-    [anchorBeforeZoom],
-  );
+  const onSetScale = (nextScale: number) => {
+    anchorBeforeZoom();
+    setZoomMode({ type: "custom", scale: clampPdfScale(nextScale) });
+  };
 
-  const onFitWidth = useCallback(() => {
+  const onFitWidth = () => {
     anchorBeforeZoom();
     setZoomMode({ type: "fit-width" });
-  }, [anchorBeforeZoom]);
+  };
 
-  const onFitPage = useCallback(() => {
+  const onFitPage = () => {
     anchorBeforeZoom();
     setZoomMode({ type: "fit-page" });
-  }, [anchorBeforeZoom]);
+  };
 
   return { zoomMode, scale, onZoomIn, onZoomOut, onSetScale, onFitWidth, onFitPage };
 }

@@ -15,7 +15,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import type { Thread } from "~/types";
@@ -557,18 +557,15 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     onError: (error) => toastManager.add({ type: "error", title: error.message }),
   });
 
-  const runsByAutomationId = useMemo(() => {
-    const map = new Map<string, AutomationRun[]>();
-    for (const run of data.runs) {
-      const runs = map.get(run.automationId) ?? [];
-      runs.push(run);
-      map.set(run.automationId, runs);
-    }
-    for (const runs of map.values()) {
-      runs.sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor));
-    }
-    return map;
-  }, [data.runs]);
+  const runsByAutomationId = new Map<string, AutomationRun[]>();
+  for (const run of data.runs) {
+    const runs = runsByAutomationId.get(run.automationId) ?? [];
+    runs.push(run);
+    runsByAutomationId.set(run.automationId, runs);
+  }
+  for (const runs of runsByAutomationId.values()) {
+    runs.sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor));
+  }
 
   return {
     data,
@@ -695,10 +692,9 @@ export function AutomationModelPicker({
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
-  const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({ [value.provider]: value.model }),
-    [value.model, value.provider],
-  );
+  const modelHintByProvider: Partial<Record<ProviderKind, string | null>> = {
+    [value.provider]: value.model,
+  };
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
     activeProjectCwd: projectCwd,

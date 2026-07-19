@@ -11,7 +11,7 @@
 // Layer: Web chat/editor file-preview component
 // Exports: PdfFilePreview
 
-import { memo, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import { Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
@@ -24,7 +24,7 @@ import { cn } from "~/lib/utils";
 import { PdfPageView } from "./pdf/PdfPageView";
 import { PdfViewerToolbar } from "./pdf/PdfViewerToolbar";
 
-export const PdfFilePreview = memo(function PdfFilePreview(props: {
+export function PdfFilePreview(props: {
   /**
    * Workspace-relative path of the PDF (resolved server-side against cwd), or an
    * allowlisted absolute path (e.g. inside a session's scratch workspace).
@@ -36,16 +36,12 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
   openInTarget: string | null;
   className?: string;
 }) {
-  const previewUrl = useMemo(
-    () =>
-      buildLocalImageUrl({
-        src: props.filePath,
-        cwd: props.cwd ?? undefined,
-        grant: props.previewGrant,
-      }),
-    [props.cwd, props.filePath, props.previewGrant],
-  );
-  const fileName = useMemo(() => basenameOfPath(props.filePath), [props.filePath]);
+  const previewUrl = buildLocalImageUrl({
+    src: props.filePath,
+    cwd: props.cwd ?? undefined,
+    grant: props.previewGrant,
+  });
+  const fileName = basenameOfPath(props.filePath);
   const doc = usePdfDocument(previewUrl);
 
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
@@ -64,10 +60,7 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
     scrollToPage: navigation.scrollToPage,
   });
 
-  const pageNumbers = useMemo(
-    () => Array.from({ length: doc.numPages }, (_, index) => index + 1),
-    [doc.numPages],
-  );
+  const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
 
   const outerClassName = cn(
     "flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]",
@@ -137,4 +130,4 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
       </div>
     </div>
   );
-});
+}
