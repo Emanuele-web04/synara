@@ -46,6 +46,11 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  startAgentGatewaySessionLeaseExitWatcher,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
@@ -169,7 +174,7 @@ interface PendingUserInput {
 
 interface CursorSessionContext {
   harnessPolicyDelivered?: boolean;
-  readonly gatewaySessionToken?: string;
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration?: string;
   session: ProviderSession;
@@ -596,9 +601,7 @@ export function makeCursorAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
-        if (ctx.gatewaySessionToken && agentGatewayCredentials) {
-          agentGatewayCredentials.revokeSessionToken(ctx.gatewaySessionToken);
-        }
+        ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.notificationFiber) {
@@ -646,7 +649,8 @@ export function makeCursorAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
-          const agentGatewayConnection = agentGatewayCredentials?.connectionForThread(
+          const gatewaySessionLease = acquireAgentGatewaySessionLease(
+            agentGatewayCredentials,
             input.threadId,
             PROVIDER,
           );
@@ -654,11 +658,9 @@ export function makeCursorAdapter(
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
           yield* Effect.addFinalizer(() =>
-            sessionScopeTransferred || !agentGatewayConnection || !agentGatewayCredentials
+            sessionScopeTransferred || !gatewaySessionLease
               ? Effect.void
-              : Effect.sync(() =>
-                  agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken),
-                ),
+              : Effect.sync(gatewaySessionLease.release),
           );
           let ctx!: CursorSessionContext;
 
@@ -694,7 +696,7 @@ export function makeCursorAdapter(
               ? {
                   buildMcpServers: (initializeResult) =>
                     buildAcpSynaraMcpServers({
-                      connection: agentGatewayConnection!,
+                      connection: gatewaySessionLease!.connection,
                       initializeResult,
                       stdioProxy: agentGatewayCredentials.stdioProxy,
                     }),
@@ -713,6 +715,7 @@ export function makeCursorAdapter(
                 }),
             ),
           );
+          yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, acp.awaitExit);
           const started = yield* Effect.gen(function* () {
             yield* acp.handleExtRequest("cursor/ask_question", CursorAskQuestionRequest, (params) =>
               Effect.gen(function* () {
@@ -930,9 +933,7 @@ export function makeCursorAdapter(
 
           ctx = {
             threadId: input.threadId,
-            ...(agentGatewayConnection
-              ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
-              : {}),
+            ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             ...(input.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: input.lifecycleGeneration }
               : {}),

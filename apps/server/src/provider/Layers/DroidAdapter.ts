@@ -46,6 +46,11 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  startAgentGatewaySessionLeaseExitWatcher,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
@@ -184,7 +189,7 @@ interface PendingUserInput {
 
 interface DroidSessionContext {
   harnessPolicyDelivered?: boolean;
-  readonly gatewaySessionToken?: string;
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration?: string;
   session: ProviderSession;
@@ -586,9 +591,7 @@ export function makeDroidAdapter(
         Effect.gen(function* () {
           if (!ctx.stopped) {
             ctx.stopped = true;
-            if (ctx.gatewaySessionToken && agentGatewayCredentials) {
-              agentGatewayCredentials.revokeSessionToken(ctx.gatewaySessionToken);
-            }
+            ctx.gatewaySessionLease?.release();
             sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
             sessions.delete(ctx.threadId);
             yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
@@ -781,7 +784,8 @@ export function makeDroidAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
-          const agentGatewayConnection = agentGatewayCredentials?.connectionForThread(
+          const gatewaySessionLease = acquireAgentGatewaySessionLease(
+            agentGatewayCredentials,
             input.threadId,
             PROVIDER,
           );
@@ -789,11 +793,9 @@ export function makeDroidAdapter(
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
           yield* Effect.addFinalizer(() =>
-            sessionScopeTransferred || !agentGatewayConnection || !agentGatewayCredentials
+            sessionScopeTransferred || !gatewaySessionLease
               ? Effect.void
-              : Effect.sync(() =>
-                  agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken),
-                ),
+              : Effect.sync(gatewaySessionLease.release),
           );
           let ctx!: DroidSessionContext;
 
@@ -849,7 +851,7 @@ export function makeDroidAdapter(
               ? {
                   buildMcpServers: (initializeResult: EffectAcpSchema.InitializeResponse) =>
                     buildAcpSynaraMcpServers({
-                      connection: agentGatewayConnection!,
+                      connection: gatewaySessionLease!.connection,
                       initializeResult,
                       stdioProxy: agentGatewayCredentials.stdioProxy,
                     }),
@@ -862,6 +864,7 @@ export function makeDroidAdapter(
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", cause),
             ),
           );
+          yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, acp.awaitExit);
 
           const started = yield* Effect.gen(function* () {
             yield* acp.handleRequestPermission((params) =>
@@ -1053,9 +1056,7 @@ export function makeDroidAdapter(
 
           ctx = {
             threadId: input.threadId,
-            ...(agentGatewayConnection
-              ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
-              : {}),
+            ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             ...(input.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: input.lifecycleGeneration }
               : {}),

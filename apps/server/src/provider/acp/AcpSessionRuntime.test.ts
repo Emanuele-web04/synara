@@ -5,6 +5,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   assistantItemId,
+  awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   makeAcpIncomingFrameGuard,
   sessionConfigOptionsFromSetup,
@@ -70,6 +71,37 @@ describe("teardownAcpChildProcess", () => {
     Deferred.doneUnsafe(processExited, Effect.succeed(0));
     await closing;
     expect(scopeClosed).toBe(true);
+  });
+});
+
+describe("awaitAcpChildExit", () => {
+  it("completes for both successful and failed child exit signals", async () => {
+    const successfulExit = Deferred.makeUnsafe<number>();
+    const failedExit = Deferred.makeUnsafe<number, Error>();
+    let successfulCompleted = false;
+    let failedCompleted = false;
+
+    const successfulWait = Effect.runPromise(
+      awaitAcpChildExit({ pid: 1, exitCode: Deferred.await(successfulExit) }),
+    ).then(() => {
+      successfulCompleted = true;
+    });
+    const failedWait = Effect.runPromise(
+      awaitAcpChildExit({ pid: 2, exitCode: Deferred.await(failedExit) }),
+    ).then(() => {
+      failedCompleted = true;
+    });
+
+    await Promise.resolve();
+    expect(successfulCompleted).toBe(false);
+    expect(failedCompleted).toBe(false);
+
+    Deferred.doneUnsafe(successfulExit, Effect.succeed(0));
+    Deferred.doneUnsafe(failedExit, Effect.fail(new Error("child exit signal failed")));
+    await Promise.all([successfulWait, failedWait]);
+
+    expect(successfulCompleted).toBe(true);
+    expect(failedCompleted).toBe(true);
   });
 });
 

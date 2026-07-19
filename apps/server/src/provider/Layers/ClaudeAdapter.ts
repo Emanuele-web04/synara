@@ -96,6 +96,10 @@ import {
 import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
 import { renderSynaraHarnessPolicy } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -252,7 +256,7 @@ interface ClaudeSubagentRun {
 }
 
 interface ClaudeSessionContext {
-  readonly gatewaySessionToken?: string;
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
@@ -4094,9 +4098,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ): Effect.Effect<void, ProviderAdapterProcessError> =>
       Effect.gen(function* () {
         context.stopped = true;
-        if (context.gatewaySessionToken && agentGatewayCredentials) {
-          agentGatewayCredentials.revokeSessionToken(context.gatewaySessionToken);
-        }
+        context.gatewaySessionLease?.release();
 
         for (const [requestId, pending] of context.pendingApprovals) {
           yield* Deferred.succeed(pending.decision, "cancel");
@@ -4652,7 +4654,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         const processOwner: ClaudeProcessOwner = {};
 
-        const agentGatewayConnection = agentGatewayCredentials?.connectionForThread(
+        const gatewaySessionLease = acquireAgentGatewaySessionLease(
+          agentGatewayCredentials,
           threadId,
           PROVIDER,
         );
@@ -4700,7 +4703,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
           ...(agentGatewayCredentials
             ? {
-                mcpServers: buildClaudeMcpServers(agentGatewayConnection!),
+                mcpServers: buildClaudeMcpServers(gatewaySessionLease!.connection),
               }
             : {}),
         };
@@ -4722,11 +4725,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           Effect.tapError(() =>
             Effect.all([
               teardownClaudeProcess(threadId, processOwner),
-              agentGatewayConnection && agentGatewayCredentials
-                ? Effect.sync(() =>
-                    agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken),
-                  )
-                : Effect.void,
+              gatewaySessionLease ? Effect.sync(gatewaySessionLease.release) : Effect.void,
             ]).pipe(Effect.asVoid),
           ),
         );
@@ -4794,9 +4793,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           };
 
           const context: ClaudeSessionContext = {
-            ...(agentGatewayConnection
-              ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
-              : {}),
+            ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             session,
             ...(input.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -4943,9 +4940,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 }).pipe(Effect.ignore);
               }
               return Effect.gen(function* () {
-                if (agentGatewayConnection && agentGatewayCredentials) {
-                  agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken);
-                }
+                gatewaySessionLease?.release();
                 yield* Queue.shutdown(promptQueue);
                 const closeExit = yield* Effect.exit(Effect.sync(() => queryRuntime.close()));
                 if (Exit.isFailure(closeExit)) {

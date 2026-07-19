@@ -50,6 +50,11 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  startAgentGatewaySessionLeaseExitWatcher,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -222,7 +227,7 @@ interface PendingUserInput {
 
 interface GrokSessionContext {
   harnessPolicyDelivered?: boolean;
-  readonly gatewaySessionToken?: string;
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration?: string;
   session: ProviderSession;
@@ -792,9 +797,7 @@ export function makeGrokAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
-        if (ctx.gatewaySessionToken && agentGatewayCredentials) {
-          agentGatewayCredentials.revokeSessionToken(ctx.gatewaySessionToken);
-        }
+        ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.sessionConfigReady !== undefined) {
@@ -1033,7 +1036,8 @@ export function makeGrokAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
-          const agentGatewayConnection = agentGatewayCredentials?.connectionForThread(
+          const gatewaySessionLease = acquireAgentGatewaySessionLease(
+            agentGatewayCredentials,
             input.threadId,
             PROVIDER,
           );
@@ -1041,11 +1045,9 @@ export function makeGrokAdapter(
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
           yield* Effect.addFinalizer(() =>
-            sessionScopeTransferred || !agentGatewayConnection || !agentGatewayCredentials
+            sessionScopeTransferred || !gatewaySessionLease
               ? Effect.void
-              : Effect.sync(() =>
-                  agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken),
-                ),
+              : Effect.sync(gatewaySessionLease.release),
           );
           let ctx!: GrokSessionContext;
 
@@ -1101,7 +1103,7 @@ export function makeGrokAdapter(
               ? {
                   buildMcpServers: (initializeResult) =>
                     buildAcpSynaraMcpServers({
-                      connection: agentGatewayConnection!,
+                      connection: gatewaySessionLease!.connection,
                       initializeResult,
                       stdioProxy: agentGatewayCredentials.stdioProxy,
                     }),
@@ -1215,6 +1217,7 @@ export function makeGrokAdapter(
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
             ),
           );
+          yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, acp.awaitExit);
 
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
@@ -1237,9 +1240,7 @@ export function makeGrokAdapter(
 
           ctx = {
             threadId: input.threadId,
-            ...(agentGatewayConnection
-              ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
-              : {}),
+            ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             ...(input.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: input.lifecycleGeneration }
               : {}),

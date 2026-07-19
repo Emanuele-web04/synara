@@ -54,6 +54,9 @@ const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
   "cursor",
   "grok",
   "droid",
+  "opencode",
+  "kilo",
+  "pi",
 ]);
 
 export function providerHasSynaraGatewayControl(input: {
@@ -81,9 +84,8 @@ export function takeSynaraHarnessPolicyForSession(
 }
 
 /**
- * Provider-aware delivery guard. Pooled OpenCode/Kilo runtimes and Pi can
- * never accidentally advertise Synara mutations even if a future call site
- * passes a truthy transport flag.
+ * Provider-aware delivery guard. The transport flag must only become true
+ * after a provider has installed thread-scoped gateway tools successfully.
  */
 export function takeSynaraHarnessPolicyForProviderSession(
   state: SynaraHarnessPolicyDeliveryState,

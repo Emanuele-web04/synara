@@ -15,7 +15,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { AGENT_GATEWAY_MCP_PATH } from "./Layers/AgentGatewayCredentials";
 import { AgentGateway } from "./Services/AgentGateway";
 import { AgentGatewayCredentials } from "./Services/AgentGatewayCredentials";
-import { extractBearerToken } from "./tokens.ts";
+import { extractBearerToken } from "./bearerToken.ts";
 
 export const AGENT_GATEWAY_MCP_MAX_BODY_BYTES = 1024 * 1024;
 

@@ -23,6 +23,10 @@ import { Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
+import {
+  AgentGatewayCredentials,
+  type AgentGatewayCredentialsShape,
+} from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
@@ -241,13 +245,16 @@ function makeHarness(config?: {
   };
 }
 
-function makeMultiQueryHarness(config?: { readonly failCreateAt?: number }) {
+function makeMultiQueryHarness(config?: {
+  readonly failCreateAt?: number;
+  readonly gatewayCredentials?: AgentGatewayCredentialsShape;
+}) {
   const queries: Array<FakeClaudeQuery> = [];
   const createInputs: Array<{
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }> = [];
-  const layer = makeClaudeAdapterLive({
+  let layer = makeClaudeAdapterLive({
     createQuery: (input) => {
       if (queries.length === config?.failCreateAt) {
         throw new Error("simulated Claude spawn failure");
@@ -261,8 +268,36 @@ function makeMultiQueryHarness(config?: { readonly failCreateAt?: number }) {
     Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
     Layer.provideMerge(NodeServices.layer),
   );
+  if (config?.gatewayCredentials) {
+    layer = layer.pipe(
+      Layer.provideMerge(Layer.succeed(AgentGatewayCredentials, config.gatewayCredentials)),
+    );
+  }
 
   return { layer, queries, createInputs };
+}
+
+function makeGatewayCredentialsHarness() {
+  let sequence = 0;
+  const revokedTokens: string[] = [];
+  const credentials = {
+    mcpEndpointUrl: "http://127.0.0.1:48123/mcp",
+    setListeningPort: () => undefined,
+    issueSessionToken: () => `gateway-token-${++sequence}`,
+    verifySessionToken: () => null,
+    verifySession: () => null,
+    bindWriteAuthority: () => null,
+    verifyWriteAuthority: () => false,
+    revokeSessionToken: (token: string) => {
+      revokedTokens.push(token);
+    },
+    connectionForThread: () => ({
+      url: "http://127.0.0.1:48123/mcp",
+      bearerToken: `gateway-token-${++sequence}`,
+    }),
+    stdioProxy: { command: "node", args: ["/state/proxy.mjs"] },
+  } satisfies AgentGatewayCredentialsShape;
+  return { credentials, revokedTokens };
 }
 
 function makeDeterministicRandomService(seed = 0x1234_5678): {
@@ -6597,6 +6632,71 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(firstQuery.closeCalls, 1);
       assert.equal(yield* adapter.hasSession(THREAD_ID), false);
       assert.equal((yield* adapter.listSessions()).length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("releases old and failed-replacement gateway leases exactly once", () => {
+    const gateway = makeGatewayCredentialsHarness();
+    const harness = makeMultiQueryHarness({
+      failCreateAt: 1,
+      gatewayCredentials: gateway.credentials,
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const replacement = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-opus-4-8",
+            options: { effort: "max" },
+          },
+        }),
+      );
+
+      assert.ok(Exit.isFailure(replacement));
+      assert.deepEqual(gateway.revokedTokens, ["gateway-token-1", "gateway-token-2"]);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("releases the gateway lease when the Claude stream aborts spontaneously", () => {
+    const gateway = makeGatewayCredentialsHarness();
+    const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.queries[0]?.fail(new Error("All fibers interrupted without error"));
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      assert.deepEqual(gateway.revokedTokens, ["gateway-token-1"]);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

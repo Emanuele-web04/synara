@@ -46,10 +46,9 @@ export function makeServerProviderLayer(
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );
-    // Gives MCP-capable sessions their synara_* gateway credentials. OpenCode/Kilo are
-    // excluded for now: their server processes are pooled across threads, so a
-    // per-thread bearer token cannot be attached to the shared server config.
-    // Antigravity's print-mode CLI and Pi have no MCP client support.
+    // Gives gateway-capable sessions their thread-scoped synara_* credentials.
+    // OpenCode/Kilo isolate managed servers before installing MCP; Pi projects
+    // the same MCP catalog/dispatcher through its native custom-tool API.
     const agentGatewayCredentialsLayer =
       options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
     const codexAdapterLayer = makeCodexAdapterLive(
@@ -61,11 +60,11 @@ export function makeServerProviderLayer(
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,
-    });
+    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const kiloAdapterLayer = makeKiloAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,
-    });
+    }).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const antigravityAdapterLayer = makeAntigravityAdapterLive();
     const grokAdapterLayer = makeGrokAdapterLive(
       {},
@@ -79,7 +78,9 @@ export function makeServerProviderLayer(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
-    const piAdapterLayer = makePiAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined);
+    const piAdapterLayer = makePiAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),

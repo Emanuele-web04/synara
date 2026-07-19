@@ -34,7 +34,7 @@ describe("Synara harness policy", () => {
   });
 
   it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
-    for (const provider of ["cursor", "grok", "droid"] as const) {
+    for (const provider of ["cursor", "grok", "droid", "opencode", "kilo", "pi"] as const) {
       for (const lifecycle of ["fresh", "load", "fork"] as const) {
         const state: { harnessPolicyDelivered?: boolean } = {};
         const first =
@@ -55,12 +55,12 @@ describe("Synara harness policy", () => {
     }
   });
 
-  it("keeps OpenCode, Kilo, and Pi identity-only even if a transport flag is wrong", () => {
+  it("keeps OpenCode, Kilo, and Pi identity-only until scoped setup succeeds", () => {
     for (const provider of ["opencode", "kilo", "pi"] as const) {
       const text =
         takeSynaraHarnessPolicyForProviderSession(
           {},
-          { provider, scopedGatewayConnectionAvailable: true },
+          { provider, scopedGatewayConnectionAvailable: false },
         ) ?? "";
       assert.include(text, SYNARA_HARNESS_POLICY_MARKER, provider);
       assert.include(text, "Synara MCP control is unavailable", provider);

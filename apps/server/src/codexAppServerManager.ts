@@ -52,6 +52,7 @@ import {
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
 } from "./agentGateway/mcpInjection.ts";
 import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
+import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import {
@@ -129,7 +130,7 @@ type CodexSessionApprovalOverride = {
 };
 
 interface CodexSessionContext {
-  readonly gatewaySessionToken?: string;
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   lifecycleGeneration?: string;
   account: CodexAccountSnapshot;
@@ -770,8 +771,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly agentGatewayMcp:
     | {
         readonly endpointUrl: () => string;
-        readonly issueBearerToken: (threadId: ThreadId) => string;
-        readonly revokeBearerToken: (token: string) => void;
+        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
       }
     | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
@@ -781,8 +781,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly synaraSkillsDir?: string;
       readonly agentGatewayMcp?: {
         readonly endpointUrl: () => string;
-        readonly issueBearerToken: (threadId: ThreadId) => string;
-        readonly revokeBearerToken: (token: string) => void;
+        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
       };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
     },
@@ -799,7 +798,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // env referenced by `bearer_token_env_var`.
   private async buildSessionProcessEnv(
     homePath: string | undefined,
-    gatewaySessionToken: string | undefined,
+    gatewayBearerToken: string | undefined,
   ) {
     const env = await buildCodexProcessEnv({
       ...(homePath ? { homePath } : {}),
@@ -807,8 +806,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
         : {}),
     });
-    if (gatewaySessionToken) {
-      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewaySessionToken;
+    if (gatewayBearerToken) {
+      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
     }
     return env;
   }
@@ -836,7 +835,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
-    let gatewaySessionToken: string | undefined;
+    let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
       const existing = this.sessions.get(threadId);
@@ -865,15 +864,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      gatewaySessionToken = this.agentGatewayMcp?.issueBearerToken(threadId);
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await this.buildSessionProcessEnv(codexHomePath, gatewaySessionToken),
+        env: await this.buildSessionProcessEnv(
+          codexHomePath,
+          gatewaySessionLease?.connection.bearerToken,
+        ),
       });
 
       context = {
-        ...(gatewaySessionToken ? { gatewaySessionToken } : {}),
+        ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         ...(input.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -1038,9 +1040,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.emitErrorEvent(context, "session/startFailed", message);
         await this.stopSession(threadId);
       } else {
-        if (gatewaySessionToken && this.agentGatewayMcp) {
-          this.agentGatewayMcp.revokeBearerToken(gatewaySessionToken);
-        }
+        gatewaySessionLease?.release();
         this.emitEvent({
           id: EventId.makeUnsafe(randomUUID()),
           kind: "error",
@@ -1457,7 +1457,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
-    let gatewaySessionToken: string | undefined;
+    let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
       const existing = this.sessions.get(threadId);
@@ -1498,15 +1498,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      gatewaySessionToken = this.agentGatewayMcp?.issueBearerToken(threadId);
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await this.buildSessionProcessEnv(codexHomePath, gatewaySessionToken),
+        env: await this.buildSessionProcessEnv(
+          codexHomePath,
+          gatewaySessionLease?.connection.bearerToken,
+        ),
       });
 
       context = {
-        ...(gatewaySessionToken ? { gatewaySessionToken } : {}),
+        ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         account: {
           type: "unknown",
@@ -1592,8 +1595,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         });
         this.emitErrorEvent(context, "session/threadForkFailed", message);
         await this.stopSession(threadId);
-      } else if (gatewaySessionToken && this.agentGatewayMcp) {
-        this.agentGatewayMcp.revokeBearerToken(gatewaySessionToken);
+      } else {
+        gatewaySessionLease?.release();
       }
       throw new Error(message, { cause: error });
     }
@@ -1825,9 +1828,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.stopping = true;
-    if (context.gatewaySessionToken && this.agentGatewayMcp) {
-      this.agentGatewayMcp.revokeBearerToken(context.gatewaySessionToken);
-    }
+    context.gatewaySessionLease?.release();
 
     this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
     context.pendingApprovals.clear();
@@ -2311,9 +2312,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       context.detachStdout?.();
-      if (context.gatewaySessionToken && this.agentGatewayMcp) {
-        this.agentGatewayMcp.revokeBearerToken(context.gatewaySessionToken);
-      }
+      context.gatewaySessionLease?.release();
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);

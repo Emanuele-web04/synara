@@ -12,6 +12,9 @@ import {
   buildAcpSynaraMcpServers,
   buildClaudeMcpServers,
   buildCodexMcpConfigToml,
+  buildOpenCodeMcpServer,
+  callAgentGatewayMcpTool,
+  listAgentGatewayMcpTools,
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
 } from "./mcpInjection.ts";
 
@@ -173,6 +176,69 @@ describe("agent gateway MCP injection", () => {
         url: connection.url,
         headers: { Authorization: `Bearer ${connection.bearerToken}` },
       },
+    });
+  });
+
+  it("builds an authenticated OpenCode remote MCP config with OAuth disabled", () => {
+    assert.deepEqual(buildOpenCodeMcpServer(connection), {
+      type: "remote",
+      url: connection.url,
+      enabled: true,
+      headers: { Authorization: `Bearer ${connection.bearerToken}` },
+      oauth: false,
+    });
+  });
+
+  it("loads and invokes the canonical gateway catalog for native-tool providers", async () => {
+    const requests: Array<{ readonly authorization: string | null; readonly body: unknown }> = [];
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: unknown = JSON.parse(String(init?.body));
+      requests.push({
+        authorization: new Headers(init?.headers).get("Authorization"),
+        body,
+      });
+      const request = body as { readonly id: string; readonly method: string };
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result:
+          request.method === "tools/list"
+            ? {
+                tools: [
+                  {
+                    name: "synara_list_threads",
+                    description: "List Synara threads.",
+                    inputSchema: { type: "object", properties: {} },
+                  },
+                ],
+              }
+            : { content: [{ type: "text", text: "ok" }] },
+      });
+    };
+
+    assert.deepEqual(await listAgentGatewayMcpTools({ connection, fetch }), [
+      {
+        name: "synara_list_threads",
+        description: "List Synara threads.",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+    assert.deepEqual(
+      await callAgentGatewayMcpTool({
+        connection,
+        name: "synara_list_threads",
+        arguments: { limit: 2 },
+        fetch,
+      }),
+      { content: [{ type: "text", text: "ok" }] },
+    );
+    assert.deepEqual(
+      requests.map((request) => request.authorization),
+      [`Bearer ${connection.bearerToken}`, `Bearer ${connection.bearerToken}`],
+    );
+    assert.deepEqual((requests[1]?.body as { readonly params: unknown }).params, {
+      name: "synara_list_threads",
+      arguments: { limit: 2 },
     });
   });
 

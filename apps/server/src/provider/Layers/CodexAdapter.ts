@@ -44,6 +44,7 @@ import {
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { acquireAgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import {
   codexGeneratedImageArtifact,
@@ -1622,9 +1623,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ? {
                   agentGatewayMcp: {
                     endpointUrl: () => agentGatewayCredentials.mcpEndpointUrl,
-                    issueBearerToken: (threadId) =>
-                      agentGatewayCredentials.issueSessionToken(threadId, PROVIDER),
-                    revokeBearerToken: agentGatewayCredentials.revokeSessionToken,
+                    acquireSessionLease: (threadId) =>
+                      acquireAgentGatewaySessionLease(agentGatewayCredentials, threadId, PROVIDER)!,
                   },
                 }
               : {}),

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ModelSelection } from "@synara/contracts";
+import type { ModelSelection, ProviderKind, ProviderModelDescriptor } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -28,6 +28,29 @@ const discovery = {
           : [],
     }),
 } as unknown as ProviderDiscoveryServiceShape;
+
+function makeEffortDescriptor(slug: string, value: string): ProviderModelDescriptor {
+  return {
+    slug,
+    name: slug,
+    supportedReasoningEfforts: [{ value, label: value }],
+  };
+}
+
+function makeVariantDescriptor(slug: string): ProviderModelDescriptor {
+  return {
+    slug,
+    name: slug,
+    optionDescriptors: [
+      {
+        id: "variant",
+        label: "Variant",
+        type: "select",
+        options: [{ id: "high", label: "High" }],
+      },
+    ],
+  };
+}
 
 describe("agent gateway target resolver", () => {
   it.effect("builds examples from the exact model restrictions and preserves option types", () =>
@@ -229,6 +252,270 @@ describe("agent gateway target resolver", () => {
         models: (yield* optionDiscovery.listModels({ provider: "opencode" })).models,
       });
       assert.deepEqual(guidance.alternativeOptionKeys, ["agent"]);
+    }),
+  );
+
+  it.effect("validates every advertised provider option from the same guidance rules", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<{
+        readonly provider: ProviderKind;
+        readonly descriptor: ProviderModelDescriptor;
+        readonly optionKey: string;
+        readonly acceptedValue: string;
+        readonly rejectedValue: string;
+      }> = [
+        {
+          provider: "codex",
+          descriptor: makeEffortDescriptor("codex-model", "low"),
+          optionKey: "reasoningEffort",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "cursor",
+          descriptor: makeEffortDescriptor("cursor-model", "low"),
+          optionKey: "reasoningEffort",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "grok",
+          descriptor: makeEffortDescriptor("grok-model", "low"),
+          optionKey: "reasoningEffort",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "droid",
+          descriptor: makeEffortDescriptor("droid-model", "low"),
+          optionKey: "reasoningEffort",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "claudeAgent",
+          descriptor: makeEffortDescriptor("claude-model", "low"),
+          optionKey: "effort",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "pi",
+          descriptor: makeEffortDescriptor("pi-model", "low"),
+          optionKey: "thinkingLevel",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "antigravity",
+          descriptor: makeEffortDescriptor("antigravity-model", "low"),
+          optionKey: "reasoningEffort",
+          acceptedValue: "low",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "opencode",
+          descriptor: makeVariantDescriptor("opencode-model"),
+          optionKey: "variant",
+          acceptedValue: "high",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "opencode",
+          descriptor: makeVariantDescriptor("opencode-model"),
+          optionKey: "agent",
+          acceptedValue: "build",
+          rejectedValue: "",
+        },
+        {
+          provider: "kilo",
+          descriptor: makeVariantDescriptor("kilo-model"),
+          optionKey: "variant",
+          acceptedValue: "high",
+          rejectedValue: "invented",
+        },
+        {
+          provider: "kilo",
+          descriptor: makeVariantDescriptor("kilo-model"),
+          optionKey: "agent",
+          acceptedValue: "plan",
+          rejectedValue: "",
+        },
+      ];
+
+      for (const provider of new Set(cases.map((entry) => entry.provider))) {
+        const providerCases = cases.filter((entry) => entry.provider === provider);
+        const descriptor = providerCases[0]!.descriptor;
+        const guidance = agentGatewayTargetOptionGuidance({
+          provider,
+          defaultModel: descriptor.slug,
+          enabled: true,
+          available: true,
+          models: [descriptor],
+        });
+        assert.deepEqual(
+          guidance.providerOptions.map((rule) => rule.key).toSorted(),
+          providerCases.map((entry) => entry.optionKey).toSorted(),
+        );
+
+        const providerDiscovery = {
+          listModels: () => Effect.succeed({ source: "test", models: [descriptor] }),
+        } as unknown as ProviderDiscoveryServiceShape;
+        for (const entry of providerCases) {
+          const accepted = {
+            provider,
+            model: descriptor.slug,
+            options: { [entry.optionKey]: entry.acceptedValue },
+          } as unknown as ModelSelection;
+          assert.deepEqual(
+            yield* resolveAgentGatewayTarget({ target: accepted, discovery: providerDiscovery }),
+            accepted,
+          );
+
+          const rejected = yield* resolveAgentGatewayTarget({
+            target: {
+              provider,
+              model: descriptor.slug,
+              options: { [entry.optionKey]: entry.rejectedValue },
+            } as unknown as ModelSelection,
+            discovery: providerDiscovery,
+          }).pipe(
+            Effect.map(() => ({ code: "unexpected-success" })),
+            Effect.catch((error) => Effect.succeed(error)),
+          );
+          assert.equal(rejected.code, "model_option_unavailable");
+        }
+      }
+    }),
+  );
+
+  it.effect("uses registry rules for model capability and context-window options", () =>
+    Effect.gen(function* () {
+      const descriptor: ProviderModelDescriptor = {
+        slug: "cursor-model",
+        name: "Cursor model",
+        supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+        supportsFastMode: true,
+        supportsThinkingToggle: true,
+        contextWindowOptions: [{ value: "wide", label: "Wide" }],
+      };
+      const capabilityDiscovery = {
+        listModels: () => Effect.succeed({ source: "test", models: [descriptor] }),
+      } as unknown as ProviderDiscoveryServiceShape;
+      const accepted = {
+        provider: "cursor" as const,
+        model: descriptor.slug,
+        options: {
+          reasoningEffort: "low",
+          fastMode: true,
+          thinking: true,
+          contextWindow: "wide",
+        },
+      };
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({ target: accepted, discovery: capabilityDiscovery }),
+        accepted,
+      );
+
+      for (const options of [
+        { fastMode: true },
+        { thinking: true },
+        { contextWindow: "invented" },
+      ] as const) {
+        const unavailableDescriptor = {
+          ...descriptor,
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+        };
+        const unavailableDiscovery = {
+          listModels: () => Effect.succeed({ source: "test", models: [unavailableDescriptor] }),
+        } as unknown as ProviderDiscoveryServiceShape;
+        const result = yield* resolveAgentGatewayTarget({
+          target: { provider: "cursor", model: descriptor.slug, options },
+          discovery: unavailableDiscovery,
+        }).pipe(
+          Effect.map(() => ({ code: "unexpected-success" })),
+          Effect.catch((error) => Effect.succeed(error)),
+        );
+        assert.equal(result.code, "model_option_unavailable");
+      }
+    }),
+  );
+
+  it.effect("enforces a discovered agent allowlist while permitting undiscovered agent names", () =>
+    Effect.gen(function* () {
+      const descriptor: ProviderModelDescriptor = {
+        ...makeVariantDescriptor("opencode-model"),
+        optionDescriptors: [
+          ...(makeVariantDescriptor("opencode-model").optionDescriptors ?? []),
+          {
+            id: "agent",
+            label: "Agent",
+            type: "select",
+            options: [
+              { id: "build", label: "Build" },
+              { id: "plan", label: "Plan" },
+            ],
+          },
+        ],
+      };
+      const restrictedDiscovery = {
+        listModels: () => Effect.succeed({ source: "test", models: [descriptor] }),
+      } as unknown as ProviderDiscoveryServiceShape;
+      const restrictedGuidance = agentGatewayTargetOptionGuidance({
+        provider: "opencode",
+        defaultModel: descriptor.slug,
+        enabled: true,
+        available: true,
+        models: [descriptor],
+      });
+      assert.deepInclude(
+        restrictedGuidance.optionsByModel[descriptor.slug]?.find(
+          (option) => option.key === "agent",
+        ),
+        { allowedValues: ["build", "plan"], allowsCustomValue: false },
+      );
+
+      const accepted = {
+        provider: "opencode" as const,
+        model: descriptor.slug,
+        options: { agent: "build" },
+      };
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({ target: accepted, discovery: restrictedDiscovery }),
+        accepted,
+      );
+
+      const rejected = yield* resolveAgentGatewayTarget({
+        target: { ...accepted, options: { agent: "invented" } },
+        discovery: restrictedDiscovery,
+      }).pipe(
+        Effect.map(() => ({ code: "unexpected-success" })),
+        Effect.catch((error) => Effect.succeed(error)),
+      );
+      assert.equal(rejected.code, "model_option_unavailable");
+
+      const unrestrictedDiscovery = {
+        listModels: () =>
+          Effect.succeed({ source: "test", models: [makeVariantDescriptor("opencode-model")] }),
+      } as unknown as ProviderDiscoveryServiceShape;
+      const unrestrictedGuidance = agentGatewayTargetOptionGuidance({
+        provider: "opencode",
+        defaultModel: "opencode-model",
+        enabled: true,
+        available: true,
+        models: [makeVariantDescriptor("opencode-model")],
+      });
+      assert.deepInclude(
+        unrestrictedGuidance.providerOptions.find((option) => option.key === "agent"),
+        { allowedValues: [], allowsCustomValue: true },
+      );
+      const custom = { ...accepted, options: { agent: "custom-agent" } };
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({ target: custom, discovery: unrestrictedDiscovery }),
+        custom,
+      );
     }),
   );
 

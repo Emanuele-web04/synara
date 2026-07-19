@@ -101,6 +101,12 @@ function openCodeRuntimePoolTestLayer(state: {
   const processUrls = new Map<number, string>();
   return Layer.merge(
     makeOpenCodeRuntimeLive({
+      netService: {
+        canListenOnHost: () => Effect.succeed(true),
+        isPortAvailableOnLoopback: () => Effect.succeed(true),
+        reserveLoopbackPort: () => Effect.succeed(59_000),
+        findAvailablePort: () => Effect.succeed(59_000),
+      },
       teardownProcessTree: async ({ rootPid }) => {
         const url = processUrls.get(rootPid);
         if (url) state.killUrls.push(url);
@@ -283,6 +289,12 @@ describe("OpenCodeRuntime local server pool", () => {
     });
     let teardownCalls = 0;
     const layer = makeOpenCodeRuntimeLive({
+      netService: {
+        canListenOnHost: () => Effect.succeed(true),
+        isPortAvailableOnLoopback: () => Effect.succeed(true),
+        reserveLoopbackPort: () => Effect.succeed(59_000),
+        findAvailablePort: () => Effect.succeed(59_000),
+      },
       teardownProcessTree: async ({ rootPid }) => {
         teardownCalls += 1;
         expect(rootPid).toBe(1);
@@ -355,6 +367,42 @@ describe("OpenCodeRuntime local server pool", () => {
           expect(third.url).toBe("http://127.0.0.1:59001");
           expect(state.spawnUrls).toEqual(["http://127.0.0.1:59000", "http://127.0.0.1:59001"]);
           yield* Scope.close(thirdScope, Exit.void);
+        }),
+      ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+    );
+  });
+
+  it("isolates same-cwd owners and closes private servers immediately on release", async () => {
+    const state = { spawnUrls: [] as Array<string>, killUrls: [] as Array<string> };
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const firstScope = yield* Scope.make();
+          const secondScope = yield* Scope.make();
+          const first = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              cwd: "/repo",
+              poolIsolationKey: "synara-thread-a",
+            })
+            .pipe(Effect.provideService(Scope.Scope, firstScope));
+          const second = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              cwd: "/repo",
+              poolIsolationKey: "synara-thread-b",
+            })
+            .pipe(Effect.provideService(Scope.Scope, secondScope));
+
+          expect(first.url).not.toBe(second.url);
+          expect(state.spawnUrls).toEqual(["http://127.0.0.1:59000", "http://127.0.0.1:59001"]);
+
+          yield* Scope.close(firstScope, Exit.void);
+          expect(state.killUrls).toEqual(["http://127.0.0.1:59000"]);
+          yield* Scope.close(secondScope, Exit.void);
+          expect(state.killUrls).toEqual(["http://127.0.0.1:59000", "http://127.0.0.1:59001"]);
         }),
       ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
     );

@@ -34,6 +34,7 @@ import {
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
+import { acquireAgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
@@ -67,8 +68,10 @@ describe("Codex Synara harness policy", () => {
       const manager = new CodexAppServerManager(undefined, {
         agentGatewayMcp: {
           endpointUrl: () => endpointUrl,
-          issueBearerToken: () => "token",
-          revokeBearerToken: () => undefined,
+          acquireSessionLease: () => ({
+            connection: { url: endpointUrl, bearerToken: "token" },
+            release: () => undefined,
+          }),
         },
       });
       endpointUrl = "http://127.0.0.1:48123/mcp";
@@ -439,7 +442,20 @@ describe("Codex app-server teardown", () => {
     );
     const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
     const threadId = asThreadId("thread-codex-exit-proof");
+    const revokeSessionToken = vi.fn();
+    const gatewaySessionLease = acquireAgentGatewaySessionLease(
+      {
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        }),
+        revokeSessionToken,
+      },
+      threadId,
+      "codex",
+    );
     const context = {
+      gatewaySessionLease,
       session: {
         provider: "codex",
         status: "ready",
@@ -469,6 +485,7 @@ describe("Codex app-server teardown", () => {
 
     const stopping = manager.stopSession(threadId);
     await Promise.resolve();
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(teardownProcessTree).toHaveBeenCalledTimes(1);
     expect(manager.hasSession(threadId)).toBe(true);
     expect(exitProven).toBe(false);
@@ -476,7 +493,69 @@ describe("Codex app-server teardown", () => {
     child.exitCode = 0;
     child.emit("exit", 0, null);
     await stopping;
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(exitProven).toBe(true);
+    expect(manager.hasSession(threadId)).toBe(false);
+  });
+
+  it("releases the session lease once when the app-server exits spontaneously", () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5252;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-codex-spontaneous-exit");
+    const revokeSessionToken = vi.fn();
+    const gatewaySessionLease = acquireAgentGatewaySessionLease(
+      {
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        }),
+        revokeSessionToken,
+      },
+      threadId,
+      "codex",
+    );
+    const context = {
+      gatewaySessionLease,
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+
+    child.emit("exit", 1, null);
+    child.emit("exit", 1, null);
+
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(manager.hasSession(threadId)).toBe(false);
   });
 });

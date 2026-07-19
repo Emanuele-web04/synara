@@ -207,6 +207,8 @@ export interface AcpSessionRuntimeShape {
     handler: AcpHandler<A, void>,
   ) => Effect.Effect<void>;
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
+  /** Completes when the owned ACP process exits, regardless of its exit status. */
+  readonly awaitExit: Effect.Effect<void>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
   // Monotonic count of parsed session/update events enqueued for the
   // getEvents() consumer. Adapters snapshot it and wait until their own
@@ -271,6 +273,9 @@ interface AcpOwnedChildProcess {
   readonly pid: number;
   readonly exitCode: Effect.Effect<unknown, unknown>;
 }
+
+export const awaitAcpChildExit = (child: AcpOwnedChildProcess): Effect.Effect<void> =>
+  child.exitCode.pipe(Effect.exit, Effect.asVoid);
 
 /**
  * Bridges Effect's child-process exit signal into Synara's process-tree proof. This is deliberately
@@ -1191,6 +1196,7 @@ const makeAcpSessionRuntime = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
+      awaitExit: awaitAcpChildExit(child),
       getEvents: () => {
         // Attaching a consumer opens the session/update gate: from here on the
         // queue is drained, so accepting notifications can no longer grow it
