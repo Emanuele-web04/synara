@@ -1,8 +1,8 @@
 # Synara Cleanup Audit and Execution Plan
 
-> Generated: 2026-07-19  
-> Status: in progress — CLN-002 next  
-> Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports  
+> Generated: 2026-07-19
+> Status: in progress — CLN-003 next
+> Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
 ## Objective and boundaries
@@ -128,7 +128,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | ID | Pri | Status | Workstream | Primary validation |
 |---|---|---|---|---|
 | CLN-001 | P0 | DONE | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values. | focused Oxlint unused scan; affected unit tests |
-| CLN-002 | P0 | TODO | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import. | web/server focused tests; repo-wide reference scan |
+| CLN-002 | P0 | DONE | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import. | web/server focused tests; repo-wide reference scan |
 | CLN-003 | P0 | TODO | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
 | CLN-004 | P1 | TODO | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
 | CLN-005 | P1 | TODO | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
@@ -195,3 +195,9 @@ For every tracker item:
   **134 net code lines removed**. Focused verification passed: web keybindings 58/58, web
   activation/terminal/timeline/theme 99/99, server GitCore 86/86, and `git diff --check`.
   Central verification caught and corrected one over-eager mechanical deletion before closure.
+- 2026-07-19 — CLN-002 started after confirming a clean worktree checkpoint at `7c5c3b3f5`.
+- 2026-07-19 — CLN-002 complete: 11 dead source/test files deleted and **947 net code
+  lines removed**. Target reference scan found no remaining imports/callers; the unrelated browser
+  fixture name `attachmentUploadSequence` remains. Unused diagnostics remain at zero. Focused live
+  owner verification passed: profile/timeline 51/51, attachment route 6/6, and managed attachment
+  repository 12/12; `git diff --check` passed.

@@ -7,7 +7,7 @@ import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
-import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 
