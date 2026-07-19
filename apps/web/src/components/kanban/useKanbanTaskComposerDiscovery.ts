@@ -19,7 +19,10 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import type { ComposerCommandItem } from "~/components/chat/ComposerCommandMenu";
 import type { ComposerTrigger } from "~/composer-logic";
-import { useComposerCommandMenuItems } from "~/hooks/useComposerCommandMenuItems";
+import {
+  buildSearchableModelOptions,
+  useComposerCommandMenuItems,
+} from "~/hooks/useComposerCommandMenuItems";
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
@@ -33,24 +36,12 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isMacPlatform } from "~/lib/utils";
-import { compareProvidersByOrder } from "~/providerOrdering";
 import { AVAILABLE_PROVIDER_OPTIONS } from "../chat/ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
   mention: ProviderMentionReference;
-};
-
-type SearchableModelOption = {
-  provider: ProviderKind;
-  providerLabel: string;
-  slug: string;
-  name: string;
-  searchSlug: string;
-  searchName: string;
-  searchProvider: string;
-  searchUpstreamProvider: string;
 };
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
@@ -201,25 +192,13 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerNativeCommands =
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
-  const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders);
-  const searchableModelOptions: SearchableModelOption[] = AVAILABLE_PROVIDER_OPTIONS.toSorted(
-    (left, right) => compareProvidersByOrder(providerOrder, left.value, right.value),
-  )
-    .filter((option) => option.value === selectedProvider || !hiddenProviderSet.has(option.value))
-    .flatMap((option) =>
-      modelOptionsByProvider[option.value].map(
-        ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-          searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
-        }),
-      ),
-    );
+  const searchableModelOptions = buildSearchableModelOptions({
+    providerOptions: AVAILABLE_PROVIDER_OPTIONS,
+    modelOptionsByProvider,
+    providerOrder,
+    hiddenProviders,
+    protectedProviders: [selectedProvider],
+  });
   const dynamicAgents = selectedRuntimeAgents.map((agent) =>
     agent.description
       ? { name: agent.name, displayName: agent.displayName, description: agent.description }

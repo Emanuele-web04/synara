@@ -1,23 +1,23 @@
-// FILE: KanbanTaskExpandedImageOverlay.tsx
-// Purpose: Fullscreen image preview overlay for task composer attachments.
-// Layer: Kanban UI component
-// Exports: KanbanTaskExpandedImageOverlay
+// FILE: ExpandedImageOverlay.tsx
+// Purpose: Shared fullscreen image preview overlay.
+// Layer: Chat and composer UI component
+// Exports: ExpandedImageOverlay
 
 import { Button } from "~/components/ui/button";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/lib/icons";
-import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
+import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
-interface KanbanTaskExpandedImageOverlayProps {
+interface ExpandedImageOverlayProps {
   readonly expandedImage: ExpandedImagePreview | null;
   readonly onClose: () => void;
   readonly onNavigate: (direction: -1 | 1) => void;
 }
 
-export function KanbanTaskExpandedImageOverlay({
+export function ExpandedImageOverlay({
   expandedImage,
   onClose,
   onNavigate,
-}: KanbanTaskExpandedImageOverlayProps) {
+}: ExpandedImageOverlayProps) {
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
   if (!expandedImage || !expandedImageItem) {
     return null;

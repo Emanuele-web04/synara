@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-011 complete
+> Status: in progress — CLN-012 complete
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -136,7 +136,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-005 | P1 | DONE | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
 | CLN-010 | P0 | DONE | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
 | CLN-011 | P0 | DONE | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
-| CLN-012 | P0 | TODO | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners. | ChatView logic/browser suites and hook tests |
+| CLN-012 | P0 | DONE | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners. | ChatView logic/browser suites and hook tests |
 | CLN-013 | P0 | TODO | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged. | Sidebar logic/UI/import plus new row characterization |
 | CLN-014 | P1 | TODO | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics. | timeline unit/browser suites; session logic tests |
 | CLN-015 | P1 | TODO | Split settings route into panel-owned components with local subscriptions. | focused settings render/disclosure tests |
@@ -257,3 +257,19 @@ For every tracker item:
   match the original. Combined focused verification passed across **10 files / 180 tests**; the
   dependency graph is acyclic, repo unused diagnostics remain **0 across 1,836 files**, and
   `git diff --check` passed.
+- 2026-07-19 — CLN-012 started; transcript follow/virtualization ownership, send/queue ordering,
+  provider selection, terminal synchronization, and dialog behavior are characterization constraints.
+- 2026-07-20 — CLN-012 complete: `ChatView.tsx` shrank from **11,930 → 10,902 LOC** while retaining
+  the transcript list, message/work derivation, selection anchoring, and bottom-stick ownership.
+  Provider model/agent discovery moved from **2 owners → 1**, voice recording/transcription from
+  **2 → 1**, searchable model shaping from **3 → 1**, and fullscreen image overlays from **2 → 1**.
+  Focused automation setup (**230 LOC**) and chat-terminal (**359 LOC**) controllers now own their
+  state/effects; direct terminal-store subscriptions in `ChatView` fell from **23 → 0**, provider
+  queries from **21 → 8**, callbacks from **186 → 157**, refs from **68 → 60**, and state hooks from
+  **22 → 18**. The proposed send/queue god hook was deliberately retained after its measured port
+  crossed **~34 independent mutable concerns**; moving it would worsen the architecture. Transcript
+  follow now keys only on real message count/tail changes, with a browser characterization proving
+  buffering, approvals, and tool-only rows do not re-stick while real/live message changes do.
+  Combined verification passed across **25 files / 547 tests** (unit/support 475, shared overlay
+  browser 2, full `ChatView` browser 70); no import cycle was introduced, repo unused diagnostics
+  remain **0 across 1,843 files**, and `git diff --check` passed.
