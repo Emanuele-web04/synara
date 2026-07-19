@@ -121,9 +121,22 @@ function transcriptPathForConversation(conversationId: string): string {
   );
 }
 
-function shellQuote(value: string): string {
-  if (process.platform === "win32") return `"${value.replaceAll('"', '\\"')}"`;
+function shellQuote(value: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return `"${value.replaceAll('"', '\\"')}"`;
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+export function buildAntigravityCaptureCommand(
+  executablePath: string,
+  scriptPath: string,
+  event: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
+  if (platform === "win32") {
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
+  }
+  return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
 }
 
 export function hookScriptSource(): string {
@@ -267,7 +280,7 @@ async function ensureCapturePlugin(binaryPath: string): Promise<void> {
   );
   await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
   const command = (event: string) =>
-    `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${shellQuote(event)}`;
+    buildAntigravityCaptureCommand(process.execPath, scriptPath, event);
   await fs.writeFile(
     path.join(pluginDir, "hooks.json"),
     `${JSON.stringify(buildAntigravityHookConfig(command), null, 2)}\n`,

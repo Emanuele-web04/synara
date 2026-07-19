@@ -5,9 +5,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  buildAntigravityHookConfig,
   antigravityPromptCommandLineIssue,
-  hookScriptSource,
+  buildAntigravityCaptureCommand,
+  buildAntigravityHookConfig,
   makeAntigravityRuntimeEventBase,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
@@ -147,14 +147,40 @@ describe("Antigravity CLI integration helpers", () => {
   });
 
   it("keeps the globally installed hook neutral outside Synara sessions", async () => {
-    const result = await runAntigravityHelperProcess(
-      process.execPath,
-      ["-e", hookScriptSource(), "pre-tool"],
-      { timeoutMs: 1_000 },
+    const command = buildAntigravityCaptureCommand(
+      "__synara_gui_must_not_launch__",
+      "__capture_script_must_not_run__",
+      "pre-tool",
     );
+    const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
+    const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
+    const result = await runAntigravityHelperProcess(shell, args, { timeoutMs: 1_000 });
 
     expect(result.code).toBe(0);
     expect(result.stdout.trim()).toBe("{}");
+  });
+
+  it("runs packaged Electron as Node only for Synara-managed sessions", () => {
+    expect(
+      buildAntigravityCaptureCommand(
+        "/Applications/Synara.app/Contents/MacOS/Synara",
+        "/tmp/synara-capture/capture.cjs",
+        "pre-tool",
+        "darwin",
+      ),
+    ).toBe(
+      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
+    );
+    expect(
+      buildAntigravityCaptureCommand(
+        String.raw`C:\Program Files\Synara\Synara.exe`,
+        String.raw`C:\Users\test\.gemini\capture.cjs`,
+        "pre-tool",
+        "win32",
+      ),
+    ).toBe(
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && "C:\Program Files\Synara\Synara.exe" "C:\Users\test\.gemini\capture.cjs" "pre-tool")`,
+    );
   });
 
   it("guards Windows command-line limits before spawning the CLI", () => {
