@@ -574,7 +574,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           <span className="sr-only">{selectedModelLabel}</span>
         </MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="start" fixedWidth={props.lockedProvider !== null}>
+      <ComposerPickerMenuPopup align="start" fixedWidth>
         <ProviderModelMenuItems
           provider={props.provider}
           model={props.model}
