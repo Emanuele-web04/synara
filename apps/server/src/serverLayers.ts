@@ -40,6 +40,7 @@ import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTur
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
+import { WorkItemServiceLive } from "./workItems/Layers/WorkItemService";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -134,6 +135,10 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
+  const workItemServiceLayer = WorkItemServiceLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
 
   return Layer.mergeAll(
     automationServiceLayer,
@@ -143,6 +148,7 @@ export function makeServerRuntimeServicesLayer() {
     AutomationRepositoryLive,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
+    workItemServiceLayer,
     orchestrationReactorLayer,
     providerCommandReactorLayer,
     threadDeletionReactorLayer,
