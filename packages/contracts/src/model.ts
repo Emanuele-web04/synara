@@ -26,6 +26,14 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "xhigh",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
+
+/**
+ * Anthropic models Synara always surfaces in the Pi picker when Anthropic auth is
+ * already available. Older `pi-anthropic-oauth` builds replace Pi's built-in
+ * Anthropic catalog and can omit these newer flagship ids.
+ */
+export const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
+export type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
@@ -757,7 +765,49 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
-  pi: [],
+  // Pi discovery owns the live catalog. These Anthropic flagship entries only fill
+  // gaps when runtime discovery already returned other models (see mergeDynamicModelOptions)
+  // so older oauth extensions that omit them still surface Fable / Opus 4.8.
+  pi: [
+    {
+      slug: "anthropic/claude-fable-5",
+      name: "Claude Fable 5",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "off", label: "Off" },
+          { value: "minimal", label: "Minimal" },
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium", isDefault: true },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+        contextWindowTokens: 1_000_000,
+      },
+    },
+    {
+      slug: "anthropic/claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "off", label: "Off" },
+          { value: "minimal", label: "Minimal" },
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium", isDefault: true },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+        contextWindowTokens: 1_000_000,
+      },
+    },
+  ],
   cursor: [
     {
       slug: "auto",

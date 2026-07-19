@@ -64,6 +64,43 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it("fills missing Pi Anthropic flagship models from the static catalog after discovery", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [
+          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
+        ],
+        dynamicModels: [
+          {
+            slug: "anthropic/claude-opus-4-7",
+            name: "Claude Opus 4.7",
+            upstreamProviderId: "anthropic",
+            upstreamProviderName: "Anthropic (Claude Pro/Max)",
+          },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual([
+      "anthropic/claude-opus-4-7",
+      "anthropic/claude-fable-5",
+      "anthropic/claude-opus-4-8",
+    ]);
+  });
+
+  it("does not advertise Pi static Anthropic fallbacks before discovery returns models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [
+          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
+        ],
+        dynamicModels: [],
+      }),
+    ).toEqual([]);
+  });
+
   it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
     expect(
       mergeDynamicModelOptions({

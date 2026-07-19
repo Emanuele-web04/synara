@@ -22,6 +22,8 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   EventId,
+  PI_ANTHROPIC_ENSURED_MODEL_IDS,
+  type PiAnthropicEnsuredModelId,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
@@ -81,6 +83,48 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
+
+/**
+ * Metadata used when an OAuth/extension Anthropic catalog replaced Pi's built-ins
+ * and omitted Fable / Opus 4.8. Values mirror `@earendil-works/pi-ai` Anthropic models.
+ */
+const PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES: Record<
+  PiAnthropicEnsuredModelId,
+  {
+    readonly id: PiAnthropicEnsuredModelId;
+    readonly name: string;
+    readonly reasoning: true;
+    readonly thinkingLevelMap: NonNullable<Model<Api>["thinkingLevelMap"]>;
+    readonly compat: NonNullable<Model<Api>["compat"]>;
+    readonly input: Array<"text" | "image">;
+    readonly cost: Model<Api>["cost"];
+    readonly contextWindow: number;
+    readonly maxTokens: number;
+  }
+> = {
+  "claude-fable-5": {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    reasoning: true,
+    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true },
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  "claude-opus-4-8": {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    compat: { forceAdaptiveThinking: true, supportsTemperature: false },
+    input: ["text", "image"],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+};
 
 type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
 type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
@@ -382,10 +426,57 @@ export function getPiSupportedThinkingOptions(
   return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
 }
 
+/**
+ * When Anthropic is already authenticated, ensure Fable 5 and Opus 4.8 appear even
+ * if an older pi-anthropic-oauth extension replaced the built-in Anthropic catalog.
+ */
+export function ensurePiAnthropicCatalogModels(
+  available: ReadonlyArray<Model<Api>>,
+  all: ReadonlyArray<Model<Api>> = available,
+): Model<Api>[] {
+  const hasAnthropic = available.some((model) => model.provider === "anthropic");
+  if (!hasAnthropic) {
+    return [...available];
+  }
+
+  const result = [...available];
+  const peer = result.find((model) => model.provider === "anthropic");
+  if (!peer) {
+    return result;
+  }
+
+  for (const modelId of PI_ANTHROPIC_ENSURED_MODEL_IDS) {
+    if (result.some((model) => model.provider === "anthropic" && model.id === modelId)) {
+      continue;
+    }
+    const fromAll = all.find((model) => model.provider === "anthropic" && model.id === modelId);
+    if (fromAll) {
+      result.push(fromAll);
+      continue;
+    }
+    const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[modelId];
+    result.push({
+      ...peer,
+      ...template,
+      id: template.id,
+      name: template.name,
+      provider: "anthropic",
+      api: peer.api,
+      baseUrl: peer.baseUrl,
+    });
+  }
+
+  return result;
+}
+
 export function getPiDiscoverableModels(
-  registry: Pick<ModelRegistry, "getAvailable">,
+  registry: Pick<ModelRegistry, "getAvailable" | "getAll">,
 ): ReadonlyArray<Model<Api>> {
-  return registry.getAvailable();
+  return ensurePiAnthropicCatalogModels(registry.getAvailable(), registry.getAll());
+}
+
+function isPiAnthropicEnsuredModelId(modelId: string): modelId is PiAnthropicEnsuredModelId {
+  return (PI_ANTHROPIC_ENSURED_MODEL_IDS as ReadonlyArray<string>).includes(modelId);
 }
 
 function parseModelReference(
@@ -419,6 +510,18 @@ function createProviderModelFallback(
   const providerDefault = registry.getAll().find((model) => model.provider === parsed.provider);
   if (!providerDefault) {
     return undefined;
+  }
+  if (parsed.provider === "anthropic" && isPiAnthropicEnsuredModelId(parsed.id)) {
+    const template = PI_ANTHROPIC_ENSURED_MODEL_TEMPLATES[parsed.id];
+    return {
+      ...providerDefault,
+      ...template,
+      id: template.id,
+      name: template.name,
+      provider: "anthropic",
+      api: providerDefault.api,
+      baseUrl: providerDefault.baseUrl,
+    };
   }
   return {
     id: parsed.id,
