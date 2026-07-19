@@ -847,6 +847,53 @@ label:has(> select#reasoning-effort) select {
   border-top: 1px solid var(--border);
 }
 
+/* Headings: restore visual hierarchy that Tailwind preflight flattens.
+   Keep sizes compact so assistant replies remain scannable. */
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 1.1em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.chat-markdown h1 {
+  font-size: 1.75em;
+}
+
+.chat-markdown h2 {
+  font-size: 1.55em;
+}
+
+.chat-markdown h3 {
+  font-size: 1.35em;
+}
+
+.chat-markdown h4 {
+  font-size: 1.2em;
+}
+
+.chat-markdown h5 {
+  font-size: 1.1em;
+}
+
+.chat-markdown h6 {
+  font-size: 1em;
+  color: var(--muted-foreground);
+}
+
+.chat-markdown h1 + h2,
+.chat-markdown h2 + h3,
+.chat-markdown h3 + h4,
+.chat-markdown h4 + h5,
+.chat-markdown h5 + h6 {
+  margin-top: 0.5em;
+}
+
 .chat-markdown a {
   color: var(--color-token-text-link-foreground);
   text-decoration: none;
