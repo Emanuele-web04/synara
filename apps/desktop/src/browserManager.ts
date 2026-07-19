@@ -379,6 +379,59 @@ export class DesktopBrowserManager {
     return options;
   }
 
+  private configureWindowOpenHandling(
+    webContents: WebContents,
+    context: OAuthPopupContext,
+    listenerDisposers: Array<() => void>,
+  ): void {
+    const { threadId, tabId } = context;
+
+    // Auth providers can chain web popups (provider -> consent). Page-controlled custom
+    // schemes are denied here: browser content must never launch an OS handler implicitly.
+    webContents.setWindowOpenHandler((details) => {
+      const { url } = details;
+      const isWebUrl =
+        url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
+      if (!isWebUrl) {
+        return { action: "deny" };
+      }
+
+      const kind = classifyBrowserWindowOpen({
+        url,
+        frameName: details.frameName,
+        features: details.features,
+        disposition: details.disposition,
+      });
+      if (kind === "popup") {
+        // Allow (don't deny) so Electron creates a real child window that keeps
+        // `window.opener`, which the OAuth callback needs to message the page back.
+        return {
+          action: "allow",
+          overrideBrowserWindowOptions: this.buildOAuthPopupWindowOptions(),
+        };
+      }
+
+      this.newTab({
+        threadId,
+        url,
+        activate: true,
+      });
+      const bounds = this.getVisibleBoundsForThread(threadId);
+      if (this.activeThreadId === threadId && bounds) {
+        this.attachActiveTab(threadId, bounds);
+      }
+      return { action: "deny" };
+    });
+
+    const didCreateWindow = (childWindow: BrowserWindow) => {
+      this.registerOAuthPopupWindow(childWindow, { threadId, tabId });
+    };
+    webContents.on("did-create-window", didCreateWindow);
+    listenerDisposers.push(() => {
+      webContents.removeListener("did-create-window", didCreateWindow);
+    });
+  }
+
   private registerOAuthPopupWindow(popup: BrowserWindow, context: OAuthPopupContext): void {
     if (this.popupRuntimes.has(popup)) {
       return;
@@ -417,51 +470,7 @@ export class DesktopBrowserManager {
       webContents.removeListener("before-input-event", closeOnInput);
     });
 
-    // Auth providers can chain web popups (provider -> consent). Page-controlled custom
-    // schemes are denied here: browser content must never launch an OS handler implicitly.
-    webContents.setWindowOpenHandler((details) => {
-      const { url } = details;
-      const isWebUrl =
-        url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
-      if (!isWebUrl) {
-        return { action: "deny" };
-      }
-
-      const kind = classifyBrowserWindowOpen({
-        url,
-        frameName: details.frameName,
-        features: details.features,
-        disposition: details.disposition,
-      });
-      if (kind === "popup") {
-        return {
-          action: "allow",
-          overrideBrowserWindowOptions: this.buildOAuthPopupWindowOptions(),
-        };
-      }
-
-      this.newTab({
-        threadId: runtime.threadId,
-        url,
-        activate: true,
-      });
-      const bounds = this.getVisibleBoundsForThread(runtime.threadId);
-      if (this.activeThreadId === runtime.threadId && bounds) {
-        this.attachActiveTab(runtime.threadId, bounds);
-      }
-      return { action: "deny" };
-    });
-
-    const nestedWindowHandler = (nested: BrowserWindow) => {
-      this.registerOAuthPopupWindow(nested, {
-        threadId: runtime.threadId,
-        tabId: runtime.tabId,
-      });
-    };
-    webContents.on("did-create-window", nestedWindowHandler);
-    runtime.listenerDisposers.push(() => {
-      webContents.removeListener("did-create-window", nestedWindowHandler);
-    });
+    this.configureWindowOpenHandling(webContents, runtime, runtime.listenerDisposers);
 
     popup.once("closed", () => {
       this.removePopupRuntime(runtime);
@@ -947,12 +956,7 @@ export class DesktopBrowserManager {
   selectTab(input: BrowserTabInput): ThreadBrowserState {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
-    if (state.activeTabId !== tab.id) {
-      state.activeTabId = tab.id;
-      syncThreadLastError(state);
-      this.markThreadStateChanged(input.threadId);
-      this.emitState(input.threadId);
-    }
+    this.activateTab(input.threadId, state, tab);
 
     if (this.activeThreadId === input.threadId) {
       this.resumeThread(input.threadId);
@@ -968,12 +972,7 @@ export class DesktopBrowserManager {
   openDevTools(input: BrowserTabInput): void {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
-    if (state.activeTabId !== tab.id) {
-      state.activeTabId = tab.id;
-      syncThreadLastError(state);
-      this.markThreadStateChanged(input.threadId);
-      this.emitState(input.threadId);
-    }
+    this.activateTab(input.threadId, state, tab);
 
     this.resumeThread(input.threadId);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
@@ -992,12 +991,7 @@ export class DesktopBrowserManager {
   }> {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
-    if (state.activeTabId !== tab.id) {
-      state.activeTabId = tab.id;
-      syncThreadLastError(state);
-      this.markThreadStateChanged(input.threadId);
-      this.emitState(input.threadId);
-    }
+    this.activateTab(input.threadId, state, tab);
 
     this.resumeThread(input.threadId);
     const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
@@ -1064,12 +1058,7 @@ export class DesktopBrowserManager {
   async executeCdp(input: BrowserExecuteCdpInput): Promise<unknown> {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
-    if (state.activeTabId !== tab.id) {
-      state.activeTabId = tab.id;
-      syncThreadLastError(state);
-      this.markThreadStateChanged(input.threadId);
-      this.emitState(input.threadId);
-    }
+    this.activateTab(input.threadId, state, tab);
 
     this.resumeThread(input.threadId);
     const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
@@ -1103,12 +1092,7 @@ export class DesktopBrowserManager {
   async attachBrowserUseTab(input: BrowserTabInput): Promise<void> {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
-    if (state.activeTabId !== tab.id) {
-      state.activeTabId = tab.id;
-      syncThreadLastError(state);
-      this.markThreadStateChanged(input.threadId);
-      this.emitState(input.threadId);
-    }
+    this.activateTab(input.threadId, state, tab);
 
     this.resumeThread(input.threadId);
     const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
@@ -1535,48 +1519,7 @@ export class DesktopBrowserManager {
     // <webview> for any navigation after it attaches.
     webContents.setUserAgent(this.resolveSpoofedUserAgent());
 
-    webContents.setWindowOpenHandler((details) => {
-      const { url } = details;
-      const isWebUrl =
-        url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
-      if (!isWebUrl) {
-        return { action: "deny" };
-      }
-
-      const kind = classifyBrowserWindowOpen({
-        url,
-        frameName: details.frameName,
-        features: details.features,
-        disposition: details.disposition,
-      });
-      if (kind === "popup") {
-        // Allow (don't deny) so Electron creates a real child window that keeps
-        // `window.opener`, which the OAuth callback needs to message the page back.
-        return {
-          action: "allow",
-          overrideBrowserWindowOptions: this.buildOAuthPopupWindowOptions(),
-        };
-      }
-
-      this.newTab({
-        threadId,
-        url,
-        activate: true,
-      });
-      const bounds = this.getVisibleBoundsForThread(threadId);
-      if (this.activeThreadId === threadId && bounds) {
-        this.attachActiveTab(threadId, bounds);
-      }
-      return { action: "deny" };
-    });
-
-    const didCreateWindow = (childWindow: BrowserWindow) => {
-      this.registerOAuthPopupWindow(childWindow, { threadId, tabId });
-    };
-    webContents.on("did-create-window", didCreateWindow);
-    runtime.listenerDisposers.push(() => {
-      webContents.removeListener("did-create-window", didCreateWindow);
-    });
+    this.configureWindowOpenHandling(webContents, runtime, runtime.listenerDisposers);
 
     // The native page owns keyboard focus while browsing, so the renderer never sees the
     // copy-link chord. Intercept it here, copy the live URL, and let the shell toast.
@@ -1970,6 +1913,21 @@ export class DesktopBrowserManager {
     state.tabs = [fallback];
     state.activeTabId = fallback.id;
     return fallback;
+  }
+
+  private activateTab(
+    threadId: ThreadId,
+    state: ThreadBrowserState,
+    tab: BrowserTabState,
+  ): void {
+    if (state.activeTabId === tab.id) {
+      return;
+    }
+
+    state.activeTabId = tab.id;
+    syncThreadLastError(state);
+    this.markThreadStateChanged(threadId);
+    this.emitState(threadId);
   }
 
   private getActiveTab(state: ThreadBrowserState): BrowserTabState | null {

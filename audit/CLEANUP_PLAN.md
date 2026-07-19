@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-004 complete
+> Status: in progress — CLN-005 complete
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -91,8 +91,10 @@ Large but currently cohesive and deliberately not scheduled: `providerRuntime.ts
 - Contracts repeat full/shell thread field knowledge and the browser command interface; shared schema
   fields and a shared `BrowserApiCommands` interface should preserve optionality differences.
 - Small domain-owned consolidations: Git unique branch naming, release GitHub-output serialization,
-  provider semver normalization, provider thread locks, sensitive argument redaction, agent alias
-  records, marketing platform SVGs, and profile token-attribution SQL.
+  sensitive argument redaction, agent alias records, marketing platform SVGs, and profile
+  token-attribution SQL. Implementation characterization rejected provider semver normalization and
+  thread-lock sharing: their leading-`v`/malformed-segment and effect-evaluation timing semantics
+  differ.
 
 Rejected as bad abstractions: universal provider adapters, generic record/string helpers, migration
 DDL sharing, two merely similar provider model normalizers, and CSS selector merging where repeated
@@ -131,7 +133,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-002 | P0 | DONE | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import. | web/server focused tests; repo-wide reference scan |
 | CLN-003 | P0 | DONE | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
 | CLN-004 | P1 | DONE | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
-| CLN-005 | P1 | TODO | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
+| CLN-005 | P1 | DONE | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
 | CLN-010 | P0 | TODO | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
 | CLN-011 | P0 | TODO | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
 | CLN-012 | P0 | TODO | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners. | ChatView logic/browser suites and hook tests |
@@ -218,3 +220,14 @@ For every tracker item:
   one typed platform-icon owner. Combined verification passed: web unit **131/131**, browser
   **10/10**, marketing production build, repo scan **1,811 files / 0 unused diagnostics**, and
   `git diff --check`.
+- 2026-07-19 — CLN-005 started from the repeated server/desktop workflows identified in the audit.
+- 2026-07-19 — CLN-005 complete: ACP active-turn/cost/Plan-prompt/cwd bookkeeping moved from
+  **2 implementations → 1** and Grok adopted the existing turn-local item/tool scoping owner;
+  provider CLI version-probe outcomes moved from **9 state machines → 1** classifier; sensitive
+  process-argument regexes **2 → 1** while caller-specific truncation stayed local; Git branch
+  collision loops **2 → 1**; release GitHub-output serializers **2 → 1**; desktop shutdown preflight
+  **2 → 1**, browser window-open policy **2 → 1**, and active-tab transitions **5 → 1**. Semver and
+  provider-lock candidates were retained after characterization exposed different edge-case/timing
+  semantics. Combined focused verification passed across **15 files / 259 tests**, plus the desktop
+  build and isolated Electron smoke; repo scan **1,819 files / 0 unused diagnostics** and
+  `git diff --check` passed.

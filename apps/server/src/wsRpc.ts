@@ -85,6 +85,7 @@ import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
+import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -146,14 +147,8 @@ interface ProcessTableRow {
   readonly args: string;
 }
 
-function redactProcessArgs(args: string): string {
-  const redacted = args
-    .replace(
-      /(--?(?:api[-_]?key|auth|authorization|key|password|secret|token)(?:=|\s+))(\S+)/gi,
-      "$1[redacted]",
-    )
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]");
+function redactAndTruncateProcessArgs(args: string): string {
+  const redacted = redactSensitiveProcessArgs(args);
   return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
     ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
     : redacted;
@@ -172,7 +167,7 @@ function parseProcessTable(output: string): ProcessTableRow[] {
       rssBytes: Number(match[3]) * 1024,
       virtualSizeBytes: Number(match[4]) * 1024,
       command: match[5] ?? "",
-      args: redactProcessArgs(match[6] ?? ""),
+      args: redactAndTruncateProcessArgs(match[6] ?? ""),
     });
   }
   return rows;

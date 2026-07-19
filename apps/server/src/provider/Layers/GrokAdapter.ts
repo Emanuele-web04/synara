@@ -3,8 +3,6 @@
  *
  * @module GrokAdapterLive
  */
-import * as nodePath from "node:path";
-
 import {
   ApprovalRequestId,
   GROK_REASONING_EFFORT_OPTIONS,
@@ -73,10 +71,16 @@ import {
 } from "../acp/AcpAdapterSupport.ts";
 import {
   acceptAcpPlanUpdate,
+  clearAcpActiveTurn,
+  finalizeAcpActiveTurnCost,
   makeAcpThreadLock,
-  readAcpUsdCost,
+  recordAcpSessionCost,
+  resolveAcpSessionCwd,
+  scopeAcpRuntimeItemIdForTurn,
+  scopeAcpToolCallStateForTurn,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
+  withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
@@ -301,28 +305,12 @@ export function isGrokContextCompactionToolCall(toolCall: AcpToolCallState): boo
   return /\b(compact|summariz)/u.test(haystack);
 }
 
-function clearGrokActiveTurn(ctx: GrokSessionContext, turnId: TurnId): boolean {
-  if (ctx.activeTurnId !== turnId) {
-    return false;
-  }
-
-  ctx.activeTurnId = undefined;
-  ctx.activeTurnHadAssistantContent = false;
-  ctx.activeAssistantItemsWithContent.clear();
-  ctx.activeTurnFailedToolDetail = undefined;
-  ctx.activePromptFiber = undefined;
-  ctx.activeInteractionMode = undefined;
-  const { activeTurnId: _activeTurnId, ...session } = ctx.session;
-  ctx.session = session;
-  return true;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function scopeGrokRuntimeItemIdForTurn(turnId: TurnId, itemId: string): string {
-  return `grok:${turnId}:${itemId}`;
+  return scopeAcpRuntimeItemIdForTurn(PROVIDER, turnId, itemId);
 }
 
 // Grok can close a stale assistant segment before any visible text arrives.
@@ -338,14 +326,7 @@ export function scopeGrokToolCallStateForTurn(
   turnId: TurnId,
   toolCall: AcpToolCallState,
 ): AcpToolCallState {
-  return {
-    ...toolCall,
-    toolCallId: scopeGrokRuntimeItemIdForTurn(turnId, toolCall.toolCallId),
-    data: {
-      ...toolCall.data,
-      providerToolCallId: toolCall.toolCallId,
-    },
-  };
+  return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
 }
 
 function parseGrokResume(raw: unknown): { sessionId: string } | undefined {
@@ -542,38 +523,6 @@ function fetchXaiLanguageModels(input: {
   });
 }
 
-function recordGrokSessionCost(
-  ctx: GrokSessionContext,
-  cost: EffectAcpSchema.Cost | null | undefined,
-): void {
-  const sessionCostUsd = readAcpUsdCost(cost);
-  if (sessionCostUsd !== undefined) {
-    ctx.latestSessionCostUsd = sessionCostUsd;
-  }
-}
-
-function finalizeGrokActiveTurnCost(ctx: GrokSessionContext): {
-  readonly cumulativeCostUsd?: number;
-} {
-  return ctx.latestSessionCostUsd !== undefined
-    ? { cumulativeCostUsd: ctx.latestSessionCostUsd }
-    : {};
-}
-
-function withGrokPlanModePrompt(input: {
-  readonly text: string;
-  readonly interactionMode?: ProviderInteractionMode;
-}): string {
-  if (input.interactionMode !== "plan") {
-    return input.text;
-  }
-
-  const text = input.text.trim();
-  return text.length > 0
-    ? `${GROK_PLAN_MODE_PROMPT_PREFIX}\n\nUser request:\n${text}`
-    : GROK_PLAN_MODE_PROMPT_PREFIX;
-}
-
 function normalizeModeSearchText(mode: AcpSessionMode): string {
   return [mode.id, mode.name, mode.description]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -685,13 +634,11 @@ function resolveGrokSessionCwd(
   inputCwd: string | undefined,
   serverConfig: ServerConfigShape,
 ): string | undefined {
-  const requestedCwd = inputCwd?.trim();
-  if (requestedCwd) {
-    return nodePath.resolve(requestedCwd);
-  }
-
-  const fallbackCwd = serverConfig.cwd.trim() || serverConfig.homeDir.trim();
-  return fallbackCwd ? nodePath.resolve(fallbackCwd) : undefined;
+  return resolveAcpSessionCwd({
+    inputCwd,
+    serverCwd: serverConfig.cwd,
+    homeDir: serverConfig.homeDir,
+  });
 }
 
 export function makeGrokAdapter(
@@ -1482,7 +1429,7 @@ export function makeGrokAdapter(
                         return;
                       }
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
-                      recordGrokSessionCost(ctx, event.cost);
+                      recordAcpSessionCost(ctx, event.cost);
                       yield* offerRuntimeEvent(
                         input.lifecycleGeneration,
                         makeAcpTokenUsageEvent({
@@ -1578,15 +1525,15 @@ export function makeGrokAdapter(
 
     // Idle-progress watchdog escape hatch: force-fail a turn whose grok child
     // is alive but has gone completely silent. Mirrors the prompt-fiber
-    // onFailure branch and stays idempotent via clearGrokActiveTurn, so it is a
+    // onFailure branch and stays idempotent via clearAcpActiveTurn, so it is a
     // no-op if the turn settled normally first (whichever fires first wins).
     const failGrokTurnAsTimedOut = (ctx: GrokSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
-        if (!clearGrokActiveTurn(ctx, turnId)) {
+        if (!clearAcpActiveTurn(ctx, turnId)) {
           return;
         }
-        const completedCost = finalizeGrokActiveTurnCost(ctx);
+        const completedCost = finalizeAcpActiveTurnCost(ctx);
         const idleSeconds = Math.round(idleMs / 1000);
         const detail = `Grok stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
         ctx.turns.push({ id: turnId, items: [{ prompt: turnId, timedOut: true, idleMs }] });
@@ -1708,11 +1655,12 @@ export function makeGrokAdapter(
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: input.input?.trim()
-            ? withGrokPlanModePrompt({
+            ? withAcpPlanModePrompt({
                 text: input.input.trim(),
                 ...(input.interactionMode !== undefined
                   ? { interactionMode: input.interactionMode }
                   : {}),
+                promptPrefix: GROK_PLAN_MODE_PROMPT_PREFIX,
               })
             : undefined,
           attachments: input.attachments,
@@ -1808,10 +1756,10 @@ export function makeGrokAdapter(
             onFailure: (error) =>
               Effect.gen(function* () {
                 yield* waitForGrokQueuedTurnEventsDrained(ctx);
-                if (!clearGrokActiveTurn(ctx, turnId)) {
+                if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
-                const completedCost = finalizeGrokActiveTurnCost(ctx);
+                const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
                 const detail = error.message;
                 ctx.session = {
@@ -1842,10 +1790,10 @@ export function makeGrokAdapter(
                 yield* waitForGrokQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
-                if (!clearGrokActiveTurn(ctx, turnId)) {
+                if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
-                const completedCost = finalizeGrokActiveTurnCost(ctx);
+                const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
@@ -1886,10 +1834,10 @@ export function makeGrokAdapter(
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              if (!clearGrokActiveTurn(ctx, turnId)) {
+              if (!clearAcpActiveTurn(ctx, turnId)) {
                 return;
               }
-              const completedCost = finalizeGrokActiveTurnCost(ctx);
+              const completedCost = finalizeAcpActiveTurnCost(ctx);
               ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
               const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
               ctx.session = {
