@@ -221,12 +221,3 @@ export function getSelectionWithin(container: HTMLElement): SelectionWithin | nu
     ...computeSelectionColumns(prefixText, scoped.selectedText),
   };
 }
-
-// Line-range-only view of {@link getSelectionWithin} for callers that don't need
-// columns (kept so existing call sites stay terse).
-export function getSelectionLineRangeWithin(
-  container: HTMLElement,
-): { startLine: number; endLine: number } | null {
-  const selection = getSelectionWithin(container);
-  return selection ? { startLine: selection.startLine, endLine: selection.endLine } : null;
-}

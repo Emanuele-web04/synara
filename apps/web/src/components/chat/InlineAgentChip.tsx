@@ -5,7 +5,6 @@
 // Layer: Shared UI component
 // Exports: InlineAgentChip
 
-import { memo } from "react";
 import { BotIcon } from "~/lib/icons";
 import {
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
@@ -14,10 +13,7 @@ import {
 } from "../composerInlineChip";
 import { InlineChipContent } from "../InlineChip";
 
-export const InlineAgentChip = memo(function InlineAgentChip(props: {
-  alias: string;
-  color: string;
-}) {
+export const InlineAgentChip = function InlineAgentChip(props: { alias: string; color: string }) {
   const colors = resolveAgentChipColor(props.color);
   return (
     <span
@@ -30,4 +26,4 @@ export const InlineAgentChip = memo(function InlineAgentChip(props: {
       />
     </span>
   );
-});
+};

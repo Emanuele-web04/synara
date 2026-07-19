@@ -10,7 +10,7 @@ import {
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
+import React, { useMemo, type ReactNode, useDeferredValue, useEffect, useState } from "react";
 import type { IconType } from "react-icons";
 import {
   SiCanva,
@@ -396,77 +396,64 @@ export function PluginLibrary() {
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
 
-  const providerCapabilities = useMemo<Record<ProviderKind, ProviderCapabilities>>(
-    () => ({
-      codex: {
-        plugins: supportsPluginDiscovery(codexCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(codexCapabilitiesQuery.data),
-      },
-      claudeAgent: {
-        plugins: supportsPluginDiscovery(claudeCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(claudeCapabilitiesQuery.data),
-      },
-      cursor: {
-        plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
-      },
-      antigravity: {
-        plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
-      },
-      grok: {
-        plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
-      },
-      droid: {
-        plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),
-      },
-      kilo: {
-        plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
-      },
-      opencode: {
-        plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
-      },
-      pi: {
-        plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(piCapabilitiesQuery.data),
-      },
-    }),
-    [
-      claudeCapabilitiesQuery.data,
-      codexCapabilitiesQuery.data,
-      cursorCapabilitiesQuery.data,
-      antigravityCapabilitiesQuery.data,
-      grokCapabilitiesQuery.data,
-      droidCapabilitiesQuery.data,
-      kiloCapabilitiesQuery.data,
-      openCodeCapabilitiesQuery.data,
-      piCapabilitiesQuery.data,
-    ],
-  );
+  const providerCapabilities: Record<ProviderKind, ProviderCapabilities> = {
+    codex: {
+      plugins: supportsPluginDiscovery(codexCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(codexCapabilitiesQuery.data),
+    },
+    claudeAgent: {
+      plugins: supportsPluginDiscovery(claudeCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(claudeCapabilitiesQuery.data),
+    },
+    cursor: {
+      plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
+    },
+    antigravity: {
+      plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
+    },
+    grok: {
+      plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
+    },
+    droid: {
+      plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),
+    },
+    kilo: {
+      plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
+    },
+    opencode: {
+      plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
+    },
+    pi: {
+      plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(piCapabilitiesQuery.data),
+    },
+  };
 
-  // Auto-fallback: switch provider when current tab/provider combo is unsupported
-  useEffect(() => {
-    const supportsTab =
-      selectedTab === "plugins"
-        ? providerCapabilities[selectedProvider].plugins
-        : providerCapabilities[selectedProvider].skills;
-    if (supportsTab) return;
-    const fallbackOrder =
-      selectedTab === "plugins"
-        ? DEFAULT_PROVIDER_ORDER
-        : [preferredProvider, ...DEFAULT_PROVIDER_ORDER.filter((p) => p !== preferredProvider)];
-    const fallback =
-      fallbackOrder.find((provider) =>
+  // Auto-fallback: when the current tab/provider combo is unsupported, render
+  // the first capable provider. Derived (not synced into state) so switching
+  // tabs never renders an unsupported frame, and the user's own selection
+  // resurfaces if its provider becomes capable again.
+  const supportsSelectedTab =
+    selectedTab === "plugins"
+      ? providerCapabilities[selectedProvider].plugins
+      : providerCapabilities[selectedProvider].skills;
+  const providerFallbackOrder =
+    selectedTab === "plugins"
+      ? DEFAULT_PROVIDER_ORDER
+      : [preferredProvider, ...DEFAULT_PROVIDER_ORDER.filter((p) => p !== preferredProvider)];
+  const effectiveProvider = supportsSelectedTab
+    ? selectedProvider
+    : (providerFallbackOrder.find((provider) =>
         selectedTab === "plugins"
           ? providerCapabilities[provider].plugins
           : providerCapabilities[provider].skills,
-      ) ?? null;
-    if (fallback) setSelectedProvider(fallback);
-  }, [preferredProvider, providerCapabilities, selectedProvider, selectedTab]);
+      ) ?? selectedProvider);
 
   const discoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: activeThread?.worktreePath ?? null,
@@ -474,13 +461,13 @@ export function PluginLibrary() {
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
 
-  const providerLabel = PROVIDER_DISPLAY_NAMES[selectedProvider];
-  const canListPlugins = providerCapabilities[selectedProvider].plugins;
-  const canListSkills = providerCapabilities[selectedProvider].skills;
+  const providerLabel = PROVIDER_DISPLAY_NAMES[effectiveProvider];
+  const canListPlugins = providerCapabilities[effectiveProvider].plugins;
+  const canListSkills = providerCapabilities[effectiveProvider].skills;
 
   const pluginsQuery = useQuery(
     providerPluginsQueryOptions({
-      provider: selectedProvider,
+      provider: effectiveProvider,
       cwd: discoveryCwd,
       threadId: providerThreadId,
       enabled: selectedTab === "plugins" && canListPlugins,
@@ -489,68 +476,58 @@ export function PluginLibrary() {
 
   const skillsQuery = useQuery(
     providerSkillsQueryOptions({
-      provider: selectedProvider,
+      provider: effectiveProvider,
       cwd: discoveryCwd,
       threadId: providerThreadId,
       enabled: selectedTab === "skills" && canListSkills && discoveryCwd !== null,
     }),
   );
 
-  const discoveredSkills = useMemo(
-    () => skillsQuery.data?.skills ?? [],
-    [skillsQuery.data?.skills],
+  const discoveredSkills = skillsQuery.data?.skills ?? [];
+
+  const featuredPluginIds = new Set(pluginsQuery.data?.featuredPluginIds ?? []);
+  const pluginEntries: PluginEntry[] = (pluginsQuery.data?.marketplaces ?? []).flatMap((m) =>
+    m.plugins.map((plugin) => ({
+      marketplaceName: m.name,
+      marketplacePath: m.path,
+      plugin,
+      isFeatured: featuredPluginIds.has(plugin.id),
+    })),
   );
 
-  const pluginEntries = useMemo<PluginEntry[]>(() => {
-    const featuredIds = new Set(pluginsQuery.data?.featuredPluginIds ?? []);
-    return (pluginsQuery.data?.marketplaces ?? []).flatMap((m) =>
-      m.plugins.map((plugin) => ({
-        marketplaceName: m.name,
-        marketplacePath: m.path,
-        plugin,
-        isFeatured: featuredIds.has(plugin.id),
-      })),
-    );
-  }, [pluginsQuery.data]);
-
-  const installedPluginEntries = useMemo(
-    () => pluginEntries.filter((entry) => isInstalledProviderPlugin(entry.plugin)),
-    [pluginEntries],
+  const installedPluginEntries = pluginEntries.filter((entry) =>
+    isInstalledProviderPlugin(entry.plugin),
   );
 
-  const filteredPluginEntries = useMemo(() => {
-    const q = normalizeProviderDiscoveryText(deferredPluginSearch);
-    if (!q) return installedPluginEntries;
-    return rankProviderDiscoveryItems(installedPluginEntries, q, (entry) =>
-      buildPluginSearchFields(entry.plugin),
-    );
-  }, [deferredPluginSearch, installedPluginEntries]);
+  const pluginSearchQuery = normalizeProviderDiscoveryText(deferredPluginSearch);
+  const filteredPluginEntries = pluginSearchQuery
+    ? rankProviderDiscoveryItems(installedPluginEntries, pluginSearchQuery, (entry) =>
+        buildPluginSearchFields(entry.plugin),
+      )
+    : installedPluginEntries;
 
-  const marketplaceSections = useMemo(() => {
-    const map = new Map<string, { title: string; entries: PluginEntry[] }>();
-    for (const entry of filteredPluginEntries) {
-      const existing = map.get(entry.marketplacePath);
-      if (existing) {
-        existing.entries.push(entry);
-      } else {
-        map.set(entry.marketplacePath, {
-          title: sectionTitle(entry.marketplaceName),
-          entries: [entry],
-        });
-      }
+  const marketplaceSectionsByPath = new Map<string, { title: string; entries: PluginEntry[] }>();
+  for (const entry of filteredPluginEntries) {
+    const existing = marketplaceSectionsByPath.get(entry.marketplacePath);
+    if (existing) {
+      existing.entries.push(entry);
+    } else {
+      marketplaceSectionsByPath.set(entry.marketplacePath, {
+        title: sectionTitle(entry.marketplaceName),
+        entries: [entry],
+      });
     }
-    return Array.from(map.entries()).map(([key, v]) => ({
-      key,
-      title: v.title,
-      entries: v.entries,
-    }));
-  }, [filteredPluginEntries]);
+  }
+  const marketplaceSections = Array.from(marketplaceSectionsByPath.entries()).map(([key, v]) => ({
+    key,
+    title: v.title,
+    entries: v.entries,
+  }));
 
-  const filteredSkills = useMemo(() => {
-    const q = normalizeProviderDiscoveryText(deferredSkillSearch);
-    if (!q) return discoveredSkills;
-    return rankProviderDiscoveryItems(discoveredSkills, q, buildSkillSearchFields);
-  }, [deferredSkillSearch, discoveredSkills]);
+  const skillSearchQuery = normalizeProviderDiscoveryText(deferredSkillSearch);
+  const filteredSkills = skillSearchQuery
+    ? rankProviderDiscoveryItems(discoveredSkills, skillSearchQuery, buildSkillSearchFields)
+    : discoveredSkills;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -588,7 +565,7 @@ export function PluginLibrary() {
                   key={provider}
                   label={label}
                   provider={provider}
-                  active={selectedProvider === provider}
+                  active={effectiveProvider === provider}
                   disabled={!capabilities.plugins && !capabilities.skills}
                   onClick={() => {
                     setSelectedProvider(provider);

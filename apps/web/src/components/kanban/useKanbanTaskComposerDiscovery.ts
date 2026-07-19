@@ -16,7 +16,6 @@ import type {
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useMemo } from "react";
 
 import type { ComposerCommandItem } from "~/components/chat/ComposerCommandMenu";
 import type { ComposerTrigger } from "~/composer-logic";
@@ -189,62 +188,42 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   );
 
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
-  const providerPlugins = useMemo(
-    () =>
-      providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
-        marketplace.plugins.map((plugin) => ({
-          plugin,
-          mention: {
-            name: plugin.name,
-            path: `plugin://${plugin.name}@${marketplace.name}`,
-          } satisfies ProviderMentionReference,
-        })),
-      ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS,
-    [providerPluginsQuery.data],
-  );
+  const providerPlugins =
+    providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
+      marketplace.plugins.map((plugin) => ({
+        plugin,
+        mention: {
+          name: plugin.name,
+          path: `plugin://${plugin.name}@${marketplace.name}`,
+        } satisfies ProviderMentionReference,
+      })),
+    ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS;
   const providerNativeCommands =
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
-  const hiddenProviderSet = useMemo(
-    () => new Set<ProviderKind>(hiddenProviders),
-    [hiddenProviders],
-  );
-  const searchableModelOptions = useMemo<SearchableModelOption[]>(
-    () =>
-      AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-        compareProvidersByOrder(providerOrder, left.value, right.value),
-      )
-        .filter(
-          (option) => option.value === selectedProvider || !hiddenProviderSet.has(option.value),
-        )
-        .flatMap((option) =>
-          modelOptionsByProvider[option.value].map(
-            ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-              provider: option.value,
-              providerLabel: option.label,
-              slug,
-              name,
-              searchSlug: slug.toLowerCase(),
-              searchName: name.toLowerCase(),
-              searchProvider: option.label.toLowerCase(),
-              searchUpstreamProvider: (
-                upstreamProviderName ??
-                upstreamProviderId ??
-                ""
-              ).toLowerCase(),
-            }),
-          ),
-        ),
-    [hiddenProviderSet, modelOptionsByProvider, providerOrder, selectedProvider],
-  );
-  const dynamicAgents = useMemo(
-    () =>
-      selectedRuntimeAgents.map((agent) =>
-        agent.description
-          ? { name: agent.name, displayName: agent.displayName, description: agent.description }
-          : { name: agent.name, displayName: agent.displayName },
+  const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders);
+  const searchableModelOptions: SearchableModelOption[] = AVAILABLE_PROVIDER_OPTIONS.toSorted(
+    (left, right) => compareProvidersByOrder(providerOrder, left.value, right.value),
+  )
+    .filter((option) => option.value === selectedProvider || !hiddenProviderSet.has(option.value))
+    .flatMap((option) =>
+      modelOptionsByProvider[option.value].map(
+        ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+          provider: option.value,
+          providerLabel: option.label,
+          slug,
+          name,
+          searchSlug: slug.toLowerCase(),
+          searchName: name.toLowerCase(),
+          searchProvider: option.label.toLowerCase(),
+          searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+        }),
       ),
-    [selectedRuntimeAgents],
+    );
+  const dynamicAgents = selectedRuntimeAgents.map((agent) =>
+    agent.description
+      ? { name: agent.name, displayName: agent.displayName, description: agent.description }
+      : { name: agent.name, displayName: agent.displayName },
   );
   const rawComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger,
@@ -263,13 +242,9 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     surfaceAppSlashCommands: KANBAN_SUPPORTED_APP_SLASH_COMMANDS,
     dynamicAgents,
   });
-  const composerMenuItems = useMemo(
-    () =>
-      rawComposerMenuItems.filter(
-        (item) =>
-          item.type !== "slash-command" || KANBAN_SUPPORTED_APP_SLASH_COMMANDS.has(item.command),
-      ),
-    [rawComposerMenuItems],
+  const composerMenuItems = rawComposerMenuItems.filter(
+    (item) =>
+      item.type !== "slash-command" || KANBAN_SUPPORTED_APP_SLASH_COMMANDS.has(item.command),
   );
   const isComposerMenuLoading =
     (composerTriggerKind === "mention" &&

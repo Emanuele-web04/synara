@@ -7,7 +7,7 @@
 // Layer: Chat composer UI
 // Exports: ComposerInputBanners
 
-import { memo, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerAutomationSetupBanner } from "./ComposerAutomationSetupBanner";
@@ -25,7 +25,7 @@ interface ComposerInputBannersProps {
   automationSetup: { onCancel: () => void } | null;
 }
 
-export const ComposerInputBanners = memo(function ComposerInputBanners({
+export function ComposerInputBanners({
   roundedTopReset,
   planFollowUp,
   automationSetup,
@@ -48,4 +48,4 @@ export const ComposerInputBanners = memo(function ComposerInputBanners({
       {content}
     </div>
   );
-});
+}

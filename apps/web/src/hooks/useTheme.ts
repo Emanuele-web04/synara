@@ -3,7 +3,7 @@
 // Layer: Web appearance state hook
 // Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { isElectron } from "../env";
 import { isMacPlatform } from "../lib/utils";
 import {
@@ -212,6 +212,40 @@ if (typeof document !== "undefined") {
 
 // ─── Public hook ──────────────────────────────────────────────────────────
 
+function setTheme(nextTheme: ThemeMode) {
+  updateStoredThemeState((state) => ({
+    ...state,
+    mode: nextTheme,
+  }));
+}
+
+function setSystemUiFont(enabled: boolean) {
+  updateStoredThemeState((state) => ({
+    ...state,
+    systemUiFont: enabled,
+  }));
+}
+
+function resetThemeVariant(variant: ThemeVariant) {
+  updateStoredThemeState((state) => resetThemeVariantState(state, variant));
+}
+
+function resetAllThemes() {
+  updateStoredThemeState(() => DEFAULT_THEME_STATE);
+}
+
+function updateThemePack(variant: ThemeVariant, patch: Partial<ChromeTheme>) {
+  updateStoredThemeState((state) => updateChromeTheme(state, variant, patch));
+}
+
+function updateThemeFonts(variant: ThemeVariant, patch: Partial<ThemeFonts>) {
+  updateStoredThemeState((state) => setThemeFonts(state, variant, patch));
+}
+
+function setCodeThemeId(variant: ThemeVariant, codeThemeId: string) {
+  updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
+}
+
 export function useTheme() {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => ({
     state: DEFAULT_THEME_STATE,
@@ -225,71 +259,25 @@ export function useTheme() {
   const defaultActiveTheme = resolveThemePack(DEFAULT_THEME_STATE, resolvedTheme);
   const isDefaultActiveTheme = areThemePacksEqual(activeTheme, defaultActiveTheme);
 
-  const setTheme = useCallback((nextTheme: ThemeMode) => {
-    updateStoredThemeState((state) => ({
-      ...state,
-      mode: nextTheme,
-    }));
-  }, []);
+  const canImportThemeString = (value: string, variant: ThemeVariant = resolvedTheme) =>
+    canParseThemeShareString(value, variant);
 
-  const setSystemUiFont = useCallback((enabled: boolean) => {
-    updateStoredThemeState((state) => ({
-      ...state,
-      systemUiFont: enabled,
-    }));
-  }, []);
+  const importThemeString = (value: string, variant: ThemeVariant = resolvedTheme) => {
+    updateStoredThemeState((state) => updateThemePackFromShareString(state, value, variant));
+  };
 
-  const canImportThemeString = useCallback(
-    (value: string, variant: ThemeVariant = resolvedTheme) =>
-      canParseThemeShareString(value, variant),
-    [resolvedTheme],
-  );
+  const exportThemeString = (variant: ThemeVariant = resolvedTheme) =>
+    createThemeShareString(variant, resolveThemePack(snapshot.state, variant));
 
-  const importThemeString = useCallback(
-    (value: string, variant: ThemeVariant = resolvedTheme) => {
-      updateStoredThemeState((state) => updateThemePackFromShareString(state, value, variant));
-    },
-    [resolvedTheme],
-  );
-
-  const exportThemeString = useCallback(
-    (variant: ThemeVariant = resolvedTheme) =>
-      createThemeShareString(variant, resolveThemePack(snapshot.state, variant)),
-    [resolvedTheme, snapshot.state],
-  );
-
-  const resetActiveTheme = useCallback(() => {
+  const resetActiveTheme = () => {
     updateStoredThemeState((state) => resetThemeVariantState(state, resolvedTheme));
-  }, [resolvedTheme]);
+  };
 
-  const resetThemeVariant = useCallback((variant: ThemeVariant) => {
-    updateStoredThemeState((state) => resetThemeVariantState(state, variant));
-  }, []);
-
-  const resetAllThemes = useCallback(() => {
-    updateStoredThemeState(() => DEFAULT_THEME_STATE);
-  }, []);
-
-  const updateThemePack = useCallback((variant: ThemeVariant, patch: Partial<ChromeTheme>) => {
-    updateStoredThemeState((state) => updateChromeTheme(state, variant, patch));
-  }, []);
-
-  const updateThemeFonts = useCallback((variant: ThemeVariant, patch: Partial<ThemeFonts>) => {
-    updateStoredThemeState((state) => setThemeFonts(state, variant, patch));
-  }, []);
-
-  const setCodeThemeId = useCallback((variant: ThemeVariant, codeThemeId: string) => {
-    updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
-  }, []);
-
-  const isDefaultThemePack = useCallback(
-    (variant: ThemeVariant) =>
-      areThemePacksEqual(
-        resolveThemePack(snapshot.state, variant),
-        resolveThemePack(DEFAULT_THEME_STATE, variant),
-      ),
-    [snapshot.state],
-  );
+  const isDefaultThemePack = (variant: ThemeVariant) =>
+    areThemePacksEqual(
+      resolveThemePack(snapshot.state, variant),
+      resolveThemePack(DEFAULT_THEME_STATE, variant),
+    );
 
   // Keep the DOM synced if something bypassed the immediate module-load apply.
   useEffect(() => {

@@ -4,7 +4,7 @@
 // Exports: Pure controller factory plus a React hook backed by thread-detail retention.
 
 import type { ThreadId } from "@synara/contracts";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { retainThreadDetailSubscription } from "./threadDetailSubscriptionRetention";
 
 export const THREAD_DETAIL_PREWARM_RELEASE_MS = 10_000;
@@ -135,19 +135,16 @@ export function useThreadDetailPrewarm(): Omit<ThreadDetailPrewarmController, "d
     [],
   );
 
-  const prewarmThreadDetail = useCallback((threadId: ThreadId) => {
+  const prewarmThreadDetail = (threadId: ThreadId) => {
     controllerRef.current?.prewarmThreadDetail(threadId);
-  }, []);
+  };
 
-  const prewarmThreadDetails = useCallback((threadIds: readonly ThreadId[]) => {
+  const prewarmThreadDetails = (threadIds: readonly ThreadId[]) => {
     controllerRef.current?.prewarmThreadDetails(threadIds);
-  }, []);
+  };
 
-  return useMemo(
-    () => ({
-      prewarmThreadDetail,
-      prewarmThreadDetails,
-    }),
-    [prewarmThreadDetail, prewarmThreadDetails],
-  );
+  return {
+    prewarmThreadDetail,
+    prewarmThreadDetails,
+  };
 }

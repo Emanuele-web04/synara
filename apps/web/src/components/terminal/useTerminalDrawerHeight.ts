@@ -3,13 +3,7 @@
 // Layer: Terminal interaction hook
 // Depends on: thread terminal sizing defaults and React pointer lifecycle hooks.
 
-import {
-  type PointerEvent as ReactPointerEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 
 import { DEFAULT_THREAD_TERMINAL_HEIGHT } from "../../types";
 
@@ -32,7 +26,29 @@ export function useTerminalDrawerHeight(options: {
   onHeightChange: (height: number) => void;
   resetKey: string;
 }) {
-  const [drawerHeight, setDrawerHeight] = useState(() => clampTerminalDrawerHeight(options.height));
+  // Drag height keyed to the (height, resetKey) it started from: an external
+  // height/reset change derives straight back to the prop value in the same
+  // render, with no state-resetting effect.
+  const [dragHeight, setDragHeight] = useState<{
+    baseHeight: number;
+    baseResetKey: string;
+    height: number;
+  } | null>(null);
+  const drawerHeight =
+    dragHeight !== null &&
+    dragHeight.baseHeight === options.height &&
+    dragHeight.baseResetKey === options.resetKey
+      ? dragHeight.height
+      : clampTerminalDrawerHeight(options.height);
+  // Reads the current base from a ref so the setter captures nothing reactive
+  // and stays safe inside the empty-deps drag callbacks below.
+  const dragBaseRef = useRef({ height: options.height, resetKey: options.resetKey });
+  const setDrawerHeight = (height: number) =>
+    setDragHeight({
+      baseHeight: dragBaseRef.current.height,
+      baseResetKey: dragBaseRef.current.resetKey,
+      height,
+    });
   const drawerHeightRef = useRef(drawerHeight);
   const lastSyncedHeightRef = useRef(clampTerminalDrawerHeight(options.height));
   const onHeightChangeRef = useRef(options.onHeightChange);
@@ -51,21 +67,23 @@ export function useTerminalDrawerHeight(options: {
     drawerHeightRef.current = drawerHeight;
   }, [drawerHeight]);
 
-  const syncHeight = useCallback((nextHeight: number) => {
+  const syncHeight = (nextHeight: number) => {
     const clampedHeight = clampTerminalDrawerHeight(nextHeight);
     if (lastSyncedHeightRef.current === clampedHeight) return;
     lastSyncedHeightRef.current = clampedHeight;
     onHeightChangeRef.current(clampedHeight);
-  }, []);
+  };
 
+  // Ref-only mirror of an external height/reset change (ref writes in effects
+  // are compiler-safe); the rendered height itself is derived above.
   useEffect(() => {
     const clampedHeight = clampTerminalDrawerHeight(options.height);
-    setDrawerHeight(clampedHeight);
+    dragBaseRef.current = { height: options.height, resetKey: options.resetKey };
     drawerHeightRef.current = clampedHeight;
     lastSyncedHeightRef.current = clampedHeight;
   }, [options.height, options.resetKey]);
 
-  const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -75,9 +93,9 @@ export function useTerminalDrawerHeight(options: {
       startY: event.clientY,
       startHeight: drawerHeightRef.current,
     };
-  }, []);
+  };
 
-  const handleResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const resizeState = resizeStateRef.current;
     if (!resizeState || resizeState.pointerId !== event.pointerId) return;
     event.preventDefault();
@@ -90,23 +108,20 @@ export function useTerminalDrawerHeight(options: {
     didResizeDuringDragRef.current = true;
     drawerHeightRef.current = clampedHeight;
     setDrawerHeight(clampedHeight);
-  }, []);
+  };
 
-  const handleResizePointerEnd = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const resizeState = resizeStateRef.current;
-      if (!resizeState || resizeState.pointerId !== event.pointerId) return;
-      resizeStateRef.current = null;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      if (!didResizeDuringDragRef.current) {
-        return;
-      }
-      syncHeight(drawerHeightRef.current);
-    },
-    [syncHeight],
-  );
+  const handleResizePointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resizeState = resizeStateRef.current;
+    if (!resizeState || resizeState.pointerId !== event.pointerId) return;
+    resizeStateRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (!didResizeDuringDragRef.current) {
+      return;
+    }
+    syncHeight(drawerHeightRef.current);
+  };
 
   useEffect(() => {
     const onWindowResize = () => {

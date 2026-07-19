@@ -88,7 +88,10 @@ interface PendingApprovalRequest {
   requestKind: ProviderRequestKind;
   threadId: ThreadId;
   turnId?: TurnId;
+  parentTurnId?: TurnId;
   itemId?: ProviderItemId;
+  providerThreadId?: string;
+  providerParentThreadId?: string;
 }
 
 interface PendingUserInputRequest {
@@ -96,7 +99,17 @@ interface PendingUserInputRequest {
   jsonRpcId: string | number;
   threadId: ThreadId;
   turnId?: TurnId;
+  parentTurnId?: TurnId;
   itemId?: ProviderItemId;
+  providerThreadId?: string;
+  providerParentThreadId?: string;
+}
+
+interface ResolvedCollaborationRoute {
+  readonly parentTurnId?: TurnId;
+  readonly providerThreadId?: string;
+  readonly providerParentThreadId?: string;
+  readonly isChildConversation: boolean;
 }
 
 interface CodexUserInputAnswer {
@@ -784,11 +797,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // The Synara MCP server rides on the shared overlay config (no secrets),
   // while the per-thread bearer token travels through the app-server process
   // env referenced by `bearer_token_env_var`.
-  private buildSessionProcessEnv(
+  private async buildSessionProcessEnv(
     homePath: string | undefined,
     gatewaySessionToken: string | undefined,
   ) {
-    const env = buildCodexProcessEnv({
+    const env = await buildCodexProcessEnv({
       ...(homePath ? { homePath } : {}),
       ...(this.agentGatewayMcp
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
@@ -847,7 +860,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
-      this.assertSupportedCodexCliVersion({
+      await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
@@ -856,7 +869,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: this.buildSessionProcessEnv(codexHomePath, gatewaySessionToken),
+        env: await this.buildSessionProcessEnv(codexHomePath, gatewaySessionToken),
       });
 
       context = {
@@ -1480,7 +1493,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
-      this.assertSupportedCodexCliVersion({
+      await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
@@ -1489,7 +1502,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: this.buildSessionProcessEnv(codexHomePath, gatewaySessionToken),
+        env: await this.buildSessionProcessEnv(codexHomePath, gatewaySessionToken),
       });
 
       context = {
@@ -1694,7 +1707,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : {}),
       method: "item/requestApproval/decision",
       turnId: pendingRequest.turnId,
+      parentTurnId: pendingRequest.parentTurnId,
       itemId: pendingRequest.itemId,
+      providerThreadId: pendingRequest.providerThreadId,
+      providerParentThreadId: pendingRequest.providerParentThreadId,
       requestId: pendingRequest.requestId,
       requestKind: pendingRequest.requestKind,
       payload: {
@@ -1767,7 +1783,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : {}),
       method: "item/tool/requestUserInput/answered",
       turnId: pendingRequest.turnId,
+      parentTurnId: pendingRequest.parentTurnId,
       itemId: pendingRequest.itemId,
+      providerThreadId: pendingRequest.providerThreadId,
+      providerParentThreadId: pendingRequest.providerParentThreadId,
       requestId: pendingRequest.requestId,
       payload: {
         requestId: pendingRequest.requestId,
@@ -2112,14 +2131,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const now = new Date().toISOString();
-    this.assertSupportedCodexCliVersion({
+    await this.assertSupportedCodexCliVersion({
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
     const child = spawnCodexAppServer({
       binaryPath: "codex",
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv(),
+      env: await buildCodexProcessEnv(),
     });
     const context: CodexSessionContext = {
       session: {
@@ -2395,34 +2414,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   ): void {
     const rawRoute = this.readRouteFields(notification.params);
     this.rememberCollabReceiverTurns(context, notification.params, rawRoute.turnId);
-    const childParentTurnId = this.readChildParentTurnId(context, notification.params);
-    const providerThreadId = normalizeProviderThreadId(
-      this.readProviderConversationId(notification.params),
-    );
-    const providerParentThreadId = this.readChildParentProviderThreadId(
-      context,
-      notification.params,
-    );
-    const activeProviderThreadId = normalizeProviderThreadId(
-      readResumeThreadId({
-        threadId: context.session.threadId,
-        runtimeMode: context.session.runtimeMode,
-        resumeCursor: context.session.resumeCursor,
-      }),
-    );
-    // A child can emit turn/started before its collab tool-call payload has
-    // populated the receiver maps. While a parent turn is live, a notification
-    // from another provider thread must not replace the parent's active turn.
-    const isUnmappedChildConversation =
-      context.session.status === "running" &&
-      context.session.activeTurnId !== undefined &&
-      providerThreadId !== undefined &&
-      activeProviderThreadId !== undefined &&
-      providerThreadId !== activeProviderThreadId;
-    const isChildConversation =
-      childParentTurnId !== undefined ||
-      providerParentThreadId !== undefined ||
-      isUnmappedChildConversation;
+    const resolvedCollaborationRoute = this.resolveCollaborationRoute(context, notification.params);
+    const {
+      parentTurnId: childParentTurnId,
+      providerThreadId,
+      providerParentThreadId,
+      isChildConversation,
+    } = resolvedCollaborationRoute;
     if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
@@ -2618,11 +2616,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     request: JsonRpcRequest,
   ): Promise<void> {
     const rawRoute = this.readRouteFields(request.params);
-    const childParentTurnId = this.readChildParentTurnId(context, request.params);
-    const providerThreadId = normalizeProviderThreadId(
-      this.readProviderConversationId(request.params),
-    );
-    const providerParentThreadId = this.readChildParentProviderThreadId(context, request.params);
+    const resolvedCollaborationRoute = this.resolveCollaborationRoute(context, request.params);
+    const {
+      parentTurnId: childParentTurnId,
+      providerThreadId,
+      providerParentThreadId,
+    } = resolvedCollaborationRoute;
     const requestKind = this.requestKindForMethod(request.method);
     let requestId: ApprovalRequestId | undefined;
     if (requestKind) {
@@ -2639,7 +2638,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         requestKind,
         threadId: context.session.threadId,
         ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
+        ...(childParentTurnId ? { parentTurnId: childParentTurnId } : {}),
         ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
+        ...(providerThreadId ? { providerThreadId } : {}),
+        ...(providerParentThreadId ? { providerParentThreadId } : {}),
       };
       if (context.sessionApprovalOverride) {
         await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
@@ -2655,7 +2657,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         jsonRpcId: request.id,
         threadId: context.session.threadId,
         ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
+        ...(childParentTurnId ? { parentTurnId: childParentTurnId } : {}),
         ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
+        ...(providerThreadId ? { providerThreadId } : {}),
+        ...(providerParentThreadId ? { providerParentThreadId } : {}),
       });
     }
 
@@ -2840,12 +2845,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
-  private assertSupportedCodexCliVersion(input: {
+  private async assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
-  }): void {
-    assertSupportedCodexCliVersion(input);
+  }): Promise<void> {
+    await assertSupportedCodexCliVersion(input);
   }
 
   private updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void {
@@ -2986,6 +2991,46 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.readString(this.readObject(params, "thread"), "id") ??
       this.readString(params, "conversationId")
     );
+  }
+
+  private resolveCollaborationRoute(
+    context: CodexSessionContext,
+    params: unknown,
+  ): ResolvedCollaborationRoute {
+    const parentTurnId = this.readChildParentTurnId(context, params);
+    const providerThreadId = normalizeProviderThreadId(this.readProviderConversationId(params));
+    const mappedProviderParentThreadId = this.readChildParentProviderThreadId(context, params);
+    const activeProviderThreadId = normalizeProviderThreadId(
+      readResumeThreadId({
+        threadId: context.session.threadId,
+        runtimeMode: context.session.runtimeMode,
+        resumeCursor: context.session.resumeCursor,
+      }),
+    );
+    // A child can emit events before its collab tool-call payload populates the
+    // receiver maps. During a live parent turn, another provider thread belongs
+    // to that active conversation. Preserve the mapped parent when one exists;
+    // otherwise provide the active provider thread required for child routing.
+    const isUnmappedChildConversation =
+      mappedProviderParentThreadId === undefined &&
+      context.session.status === "running" &&
+      context.session.activeTurnId !== undefined &&
+      providerThreadId !== undefined &&
+      activeProviderThreadId !== undefined &&
+      providerThreadId !== activeProviderThreadId;
+    const providerParentThreadId =
+      mappedProviderParentThreadId ??
+      (isUnmappedChildConversation ? activeProviderThreadId : undefined);
+
+    return {
+      ...(parentTurnId ? { parentTurnId } : {}),
+      ...(providerThreadId ? { providerThreadId } : {}),
+      ...(providerParentThreadId ? { providerParentThreadId } : {}),
+      isChildConversation:
+        parentTurnId !== undefined ||
+        providerParentThreadId !== undefined ||
+        isUnmappedChildConversation,
+    };
   }
 
   private readChildParentTurnId(context: CodexSessionContext, params: unknown): TurnId | undefined {
@@ -3568,12 +3613,12 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   };
 }
 
-function assertSupportedCodexCliVersion(input: {
+async function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
-}): void {
-  const env = buildCodexProcessEnv({
+}): Promise<void> {
+  const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
   const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {

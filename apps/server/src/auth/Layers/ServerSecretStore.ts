@@ -2,6 +2,7 @@ import * as Crypto from "node:crypto";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
 
+import { writeFileStringAtomically } from "../../atomicWrite";
 import { ServerConfig } from "../../config";
 import {
   SecretStoreError,
@@ -50,30 +51,20 @@ export const makeServerSecretStore = Effect.gen(function* () {
       ),
     );
 
-  const set: ServerSecretStoreShape["set"] = (name, value) => {
-    const secretPath = resolveSecretPath(name);
-    const tempPath = `${secretPath}.${process.pid}.${Date.now()}.${Crypto.randomUUID()}.tmp`;
-    return Effect.gen(function* () {
-      yield* fileSystem.writeFile(tempPath, value);
-      yield* fileSystem.chmod(tempPath, 0o600).pipe(Effect.orElseSucceed(() => undefined));
-      yield* fileSystem.rename(tempPath, secretPath);
-      yield* fileSystem.chmod(secretPath, 0o600).pipe(Effect.orElseSucceed(() => undefined));
+  const set: ServerSecretStoreShape["set"] = (name, value) =>
+    writeFileStringAtomically({
+      filePath: resolveSecretPath(name),
+      contents: value,
+      mode: 0o600,
     }).pipe(
-      Effect.catch((cause) =>
-        fileSystem.remove(tempPath).pipe(
-          Effect.ignore,
-          Effect.flatMap(() =>
-            Effect.fail(
-              new SecretStoreError({
-                message: `Failed to persist secret ${name}.`,
-                cause,
-              }),
-            ),
-          ),
-        ),
+      Effect.mapError(
+        (cause) =>
+          new SecretStoreError({
+            message: `Failed to persist secret ${name}.`,
+            cause,
+          }),
       ),
     );
-  };
 
   const getOrCreateRandom: ServerSecretStoreShape["getOrCreateRandom"] = (name, bytes) =>
     get(name).pipe(

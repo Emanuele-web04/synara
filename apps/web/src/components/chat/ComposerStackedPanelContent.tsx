@@ -21,6 +21,7 @@ interface ComposerStackedPanelRowProps extends HTMLAttributes<HTMLDivElement> {
   compact?: boolean;
 }
 
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const ComposerStackedPanelRow = memo(function ComposerStackedPanelRow({
   compact = false,
   className,
@@ -39,19 +40,19 @@ export const ComposerStackedPanelRow = memo(function ComposerStackedPanelRow({
   );
 });
 
-export const ComposerStackedPanelHeaderRow = memo(function ComposerStackedPanelHeaderRow({
+export const ComposerStackedPanelHeaderRow = function ComposerStackedPanelHeaderRow({
   className,
   ...rest
 }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn(COMPOSER_STACKED_PANEL_HEADER_ROW_CLASS_NAME, className)} {...rest} />;
-});
+};
 
-export const ComposerStackedPanelRowMain = memo(function ComposerStackedPanelRowMain({
+export const ComposerStackedPanelRowMain = function ComposerStackedPanelRowMain({
   className,
   ...rest
 }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn(COMPOSER_STACKED_PANEL_ROW_MAIN_CLASS_NAME, className)} {...rest} />;
-});
+};
 
 interface ComposerStackedPanelRowLabelProps {
   children: ReactNode;

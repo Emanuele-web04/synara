@@ -5,7 +5,6 @@
 // Layer: Shared UI component
 // Exports: InlineSkillChip
 
-import { memo } from "react";
 import { CentralIcon } from "~/lib/central-icons";
 import {
   COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
@@ -15,7 +14,7 @@ import {
 } from "../composerInlineChip";
 import { InlineChipContent } from "../InlineChip";
 
-export const InlineSkillChip = memo(function InlineSkillChip(props: { skillName: string }) {
+export const InlineSkillChip = function InlineSkillChip(props: { skillName: string }) {
   return (
     <span className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}>
       <InlineChipContent
@@ -29,4 +28,4 @@ export const InlineSkillChip = memo(function InlineSkillChip(props: { skillName:
       />
     </span>
   );
-});
+};

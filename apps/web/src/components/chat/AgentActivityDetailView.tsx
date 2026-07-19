@@ -5,7 +5,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
-import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -31,11 +31,10 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 
-const MIN_DETAIL_BOTTOM_INSET_PX = 64;
+const DETAIL_BOTTOM_INSET_PX = 64;
 
 interface AgentActivityDetailViewProps {
   detail: AgentActivityDetail;
-  bottomContentInsetPx?: number | undefined;
   chatFontSizePx: number;
   contentInsetRightPx?: number | undefined;
   markdownCwd: string | undefined;
@@ -45,9 +44,8 @@ interface AgentActivityDetailViewProps {
   timestampFormat: TimestampFormat;
 }
 
-export const AgentActivityDetailView = memo(function AgentActivityDetailView({
+export function AgentActivityDetailView({
   detail,
-  bottomContentInsetPx,
   chatFontSizePx,
   contentInsetRightPx,
   markdownCwd,
@@ -56,21 +54,12 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
   onOpenThread,
   timestampFormat,
 }: AgentActivityDetailViewProps) {
-  const chatTypographyStyle = useMemo(
-    () => getChatTranscriptTextStyle(chatFontSizePx),
-    [chatFontSizePx],
-  );
-  const footerTextStyle = useMemo(
-    () => getChatMessageFooterTextStyle(chatFontSizePx),
-    [chatFontSizePx],
-  );
-  const scrollStyle = useMemo<CSSProperties>(
-    () => ({
-      ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
-      paddingBottom: Math.max(bottomContentInsetPx ?? 0, MIN_DETAIL_BOTTOM_INSET_PX),
-    }),
-    [bottomContentInsetPx, contentInsetRightPx],
-  );
+  const chatTypographyStyle = getChatTranscriptTextStyle(chatFontSizePx);
+  const footerTextStyle = getChatMessageFooterTextStyle(chatFontSizePx);
+  const scrollStyle: CSSProperties = {
+    ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
+    paddingBottom: DETAIL_BOTTOM_INSET_PX,
+  };
   const prompt = findPrompt(detail.entries);
   const result = findResult(detail.entries);
   const subagents = collectSubagents(detail.entries);
@@ -178,7 +167,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
       </div>
     </div>
   );
-});
+}
 
 function AgentActivitySection(props: { title: string; children: ReactNode }) {
   return (

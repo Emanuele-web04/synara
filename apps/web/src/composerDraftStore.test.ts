@@ -18,6 +18,7 @@ import {
   findSupersededComposerImageBlobAttachments,
   isComposerImageBlobReferenced,
   markPromotedDraftThreads,
+  partializeComposerDraftStoreState,
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "./composerDraftStore";
@@ -27,7 +28,7 @@ import {
   insertInlineTerminalContextPlaceholder,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
-import { createDebouncedStorage } from "./lib/storage";
+import { createDeferredPersistStorage, flushStorageBeforePageHide } from "./lib/storage";
 
 function makeImage(input: {
   id: string;
@@ -584,7 +585,9 @@ describe("composerDraftStore prompt history saved draft", () => {
         ) => ReturnType<typeof useComposerDraftStore.getState>;
       };
     };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<string, { promptHistorySavedDraft?: Record<string, unknown> }>;
     };
 
@@ -867,7 +870,9 @@ describe("composerDraftStore restored source proposed plan", () => {
         ) => ReturnType<typeof useComposerDraftStore.getState>;
       };
     };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<
         string,
         {
@@ -1114,7 +1119,9 @@ describe("composerDraftStore provider references", () => {
         ) => ReturnType<typeof useComposerDraftStore.getState>;
       };
     };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<
         string,
         {
@@ -1479,12 +1486,9 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       },
     }));
 
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<
         string,
         { attachments?: Array<{ source?: Record<string, unknown> }> }
@@ -1573,12 +1577,9 @@ describe("composerDraftStore terminal contexts", () => {
       .getState()
       .addTerminalContext(threadId, makeTerminalContext({ id: "ctx-persist" }));
 
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<string, { terminalContexts?: Array<Record<string, unknown>> }>;
     };
 
@@ -2685,7 +2686,9 @@ describe("composerDraftStore queued follow-ups", () => {
         ) => ReturnType<typeof useComposerDraftStore.getState>;
       };
     };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<string, { queuedTurns?: Array<Record<string, unknown>> }>;
     };
 
@@ -2731,7 +2734,9 @@ describe("composerDraftStore queued follow-ups", () => {
         ) => ReturnType<typeof useComposerDraftStore.getState>;
       };
     };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+    const persistedState = partializeComposerDraftStoreState(
+      useComposerDraftStore.getState(),
+    ) as unknown as {
       draftsByThreadId?: Record<string, { restoredSourceProposedPlan?: unknown }>;
     };
 
@@ -3255,7 +3260,7 @@ describe("composerDraftStore runtime and interaction settings", () => {
 });
 
 // ---------------------------------------------------------------------------
-// createDebouncedStorage
+// deferred persist storage
 // ---------------------------------------------------------------------------
 
 function createMockStorage() {
@@ -3271,7 +3276,7 @@ function createMockStorage() {
   };
 }
 
-describe("createDebouncedStorage", () => {
+describe("createDeferredPersistStorage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -3280,98 +3285,139 @@ describe("createDebouncedStorage", () => {
     vi.useRealTimers();
   });
 
-  it("delegates getItem immediately", () => {
+  it("defers partialize + JSON.stringify off the set() path until flush", () => {
     const base = createMockStorage();
-    base.getItem.mockReturnValueOnce("value");
-    const storage = createDebouncedStorage(base);
+    const partialize = vi.fn((state: { readonly value: number }) => ({ value: state.value }));
+    const storage = createDeferredPersistStorage<{ readonly value: number }>({
+      getStorage: () => base,
+      partialize,
+    });
 
-    expect(storage.getItem("key")).toBe("value");
-    expect(base.getItem).toHaveBeenCalledWith("key");
-  });
-
-  it("does not write to base storage until the debounce fires", () => {
-    const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
-
-    storage.setItem("key", "v1");
+    // Rapid set()s must not serialize: neither partialize nor the base write runs.
+    storage.setItem("key", { state: { value: 1 }, version: 2 });
+    storage.setItem("key", { state: { value: 2 }, version: 2 });
+    storage.setItem("key", { state: { value: 3 }, version: 2 });
+    expect(partialize).not.toHaveBeenCalled();
     expect(base.setItem).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(299);
-    expect(base.setItem).not.toHaveBeenCalled();
+    storage.flush();
 
-    vi.advanceTimersByTime(1);
-    expect(base.setItem).toHaveBeenCalledWith("key", "v1");
-  });
-
-  it("only writes the last value when setItem is called rapidly", () => {
-    const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
-
-    storage.setItem("key", "v1");
-    storage.setItem("key", "v2");
-    storage.setItem("key", "v3");
-
-    vi.advanceTimersByTime(300);
+    // Serialization happens exactly once, over the latest captured state.
+    expect(partialize).toHaveBeenCalledTimes(1);
+    expect(partialize).toHaveBeenCalledWith({ value: 3 });
     expect(base.setItem).toHaveBeenCalledTimes(1);
-    expect(base.setItem).toHaveBeenCalledWith("key", "v3");
+    expect(base.setItem).toHaveBeenCalledWith(
+      "key",
+      JSON.stringify({ state: { value: 3 }, version: 2 }),
+    );
   });
 
-  it("removeItem cancels a pending setItem write", () => {
+  it("produces the same bytes as createJSONStorage would for the same state", () => {
     const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
+    type FullState = { readonly a: number; readonly secret: string };
+    const storage = createDeferredPersistStorage<FullState, { readonly a: number }>({
+      getStorage: () => base,
+      partialize: (state) => ({ a: state.a }),
+    });
 
-    storage.setItem("key", "v1");
-    storage.removeItem("key");
+    // zustand passes the full state as value.state at runtime (no config partialize).
+    const fullState: FullState = { a: 7, secret: "drop" };
+    storage.setItem("key", { state: fullState, version: 5 });
+    storage.flush();
+
+    // Identical to createJSONStorage(setItem)(name, JSON.stringify({ state: partialize(s), version })).
+    expect(base.setItem).toHaveBeenCalledWith(
+      "key",
+      JSON.stringify({ state: { a: 7 }, version: 5 }),
+    );
+  });
+
+  it("also writes the pending value when the debounce fires on its own", () => {
+    const base = createMockStorage();
+    const partialize = vi.fn((state: { readonly value: number }) => state);
+    const storage = createDeferredPersistStorage<{ readonly value: number }>({
+      getStorage: () => base,
+      partialize,
+    });
+
+    storage.setItem("key", { state: { value: 1 }, version: 1 });
+    expect(base.setItem).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(300);
+    expect(partialize).toHaveBeenCalledTimes(1);
+    expect(base.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("removeItem cancels a pending write and drops the captured state", () => {
+    const base = createMockStorage();
+    const partialize = vi.fn((state: { readonly value: number }) => state);
+    const storage = createDeferredPersistStorage<{ readonly value: number }>({
+      getStorage: () => base,
+      partialize,
+    });
+
+    storage.setItem("key", { state: { value: 1 }, version: 1 });
+    storage.removeItem("key");
+    storage.flush();
+
+    expect(partialize).not.toHaveBeenCalled();
     expect(base.setItem).not.toHaveBeenCalled();
     expect(base.removeItem).toHaveBeenCalledWith("key");
   });
+});
 
-  it("flush writes the pending value immediately", () => {
-    const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
+describe("flushStorageBeforePageHide", () => {
+  function makeFakeEnv() {
+    const windowListeners = new Map<string, () => void>();
+    const documentListeners = new Map<string, () => void>();
+    const visibility = { value: "visible" };
+    return {
+      env: {
+        window: {
+          addEventListener: (type: string, listener: () => void) => {
+            windowListeners.set(type, listener);
+          },
+        },
+        document: {
+          addEventListener: (type: string, listener: () => void) => {
+            documentListeners.set(type, listener);
+          },
+          get visibilityState() {
+            return visibility.value;
+          },
+        },
+      },
+      fireWindow: (type: string) => windowListeners.get(type)?.(),
+      fireDocument: (type: string) => documentListeners.get(type)?.(),
+      setVisibility: (value: string) => {
+        visibility.value = value;
+      },
+    };
+  }
 
-    storage.setItem("key", "v1");
-    expect(base.setItem).not.toHaveBeenCalled();
+  it("flushes on pagehide, beforeunload, and visibilitychange->hidden", () => {
+    const flush = vi.fn();
+    const harness = makeFakeEnv();
+    flushStorageBeforePageHide(flush, harness.env);
 
-    storage.flush();
-    expect(base.setItem).toHaveBeenCalledWith("key", "v1");
+    harness.fireWindow("pagehide");
+    expect(flush).toHaveBeenCalledTimes(1);
 
-    // Timer should be cancelled; no duplicate write.
-    vi.advanceTimersByTime(300);
-    expect(base.setItem).toHaveBeenCalledTimes(1);
+    harness.fireWindow("beforeunload");
+    expect(flush).toHaveBeenCalledTimes(2);
+
+    harness.setVisibility("hidden");
+    harness.fireDocument("visibilitychange");
+    expect(flush).toHaveBeenCalledTimes(3);
   });
 
-  it("flush is a no-op when nothing is pending", () => {
-    const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
+  it("does not flush while the document stays visible", () => {
+    const flush = vi.fn();
+    const harness = makeFakeEnv();
+    flushStorageBeforePageHide(flush, harness.env);
 
-    storage.flush();
-    expect(base.setItem).not.toHaveBeenCalled();
-  });
-
-  it("flush after removeItem is a no-op", () => {
-    const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
-
-    storage.setItem("key", "v1");
-    storage.removeItem("key");
-    storage.flush();
-
-    expect(base.setItem).not.toHaveBeenCalled();
-  });
-
-  it("setItem works normally after removeItem cancels a pending write", () => {
-    const base = createMockStorage();
-    const storage = createDebouncedStorage(base);
-
-    storage.setItem("key", "v1");
-    storage.removeItem("key");
-    storage.setItem("key", "v2");
-
-    vi.advanceTimersByTime(300);
-    expect(base.setItem).toHaveBeenCalledTimes(1);
-    expect(base.setItem).toHaveBeenCalledWith("key", "v2");
+    harness.setVisibility("visible");
+    harness.fireDocument("visibilitychange");
+    expect(flush).not.toHaveBeenCalled();
   });
 });

@@ -11,7 +11,7 @@
 //      same text ChatMarkdown already defers, so the markdown re-parse stays coalesced by
 //      useDeferredValue: this hook governs *cadence*, not parse cost.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMediaQuery } from "./useMediaQuery";
 
 // Drain the current backlog over this window. Kept above the ~100ms network flush so a
@@ -55,14 +55,14 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
   const tickRef = useRef<(now: number) => void>(() => undefined);
   const lastFrameRef = useRef(0);
 
-  const cancelFrame = useCallback(() => {
+  const cancelFrame = () => {
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-  }, []);
+  };
 
-  const scheduleFrame = useCallback(() => {
+  const scheduleFrame = () => {
     if (rafRef.current != null) {
       return;
     }
@@ -70,42 +70,47 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
       rafRef.current = null;
       tickRef.current(now);
     });
-  }, []);
-
-  tickRef.current = (now: number) => {
-    const previous = lastFrameRef.current;
-    const dt = previous ? Math.min((now - previous) / 1000, MAX_FRAME_SECONDS) : 0;
-    lastFrameRef.current = now;
-
-    const target = targetRef.current;
-    const len = target.length;
-    if (shownRef.current > len) shownRef.current = len;
-
-    const backlog = len - shownRef.current;
-    if (backlog <= 0) {
-      // Sleep while caught up; the text-update effect wakes the loop on the next flush.
-      velocityRef.current = 0;
-      lastFrameRef.current = 0;
-      return;
-    }
-
-    const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
-    velocityRef.current += (targetVelocity - velocityRef.current) * VELOCITY_LERP;
-    shownRef.current = Math.min(len, shownRef.current + velocityRef.current * dt);
-
-    const nextCount = Math.floor(shownRef.current);
-    if (nextCount !== emittedRef.current) {
-      emittedRef.current = nextCount;
-      setRevealed(nextCount >= len ? target : target.slice(0, nextCount));
-    }
-
-    if (len - shownRef.current > 0) {
-      scheduleFrame();
-    } else {
-      velocityRef.current = 0;
-      lastFrameRef.current = 0;
-    }
   };
+
+  // Installed in an effect (not during render — that write would make the
+  // whole hook ineligible for React Compiler). The tick reads everything
+  // through refs, so a mount-time install stays permanently fresh.
+  useEffect(() => {
+    tickRef.current = (now: number) => {
+      const previous = lastFrameRef.current;
+      const dt = previous ? Math.min((now - previous) / 1000, MAX_FRAME_SECONDS) : 0;
+      lastFrameRef.current = now;
+
+      const target = targetRef.current;
+      const len = target.length;
+      if (shownRef.current > len) shownRef.current = len;
+
+      const backlog = len - shownRef.current;
+      if (backlog <= 0) {
+        // Sleep while caught up; the text-update effect wakes the loop on the next flush.
+        velocityRef.current = 0;
+        lastFrameRef.current = 0;
+        return;
+      }
+
+      const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
+      velocityRef.current += (targetVelocity - velocityRef.current) * VELOCITY_LERP;
+      shownRef.current = Math.min(len, shownRef.current + velocityRef.current * dt);
+
+      const nextCount = Math.floor(shownRef.current);
+      if (nextCount !== emittedRef.current) {
+        emittedRef.current = nextCount;
+        setRevealed(nextCount >= len ? target : target.slice(0, nextCount));
+      }
+
+      if (len - shownRef.current > 0) {
+        scheduleFrame();
+      } else {
+        velocityRef.current = 0;
+        lastFrameRef.current = 0;
+      }
+    };
+  }, [scheduleFrame]);
 
   useEffect(() => {
     const previousTarget = targetRef.current;

@@ -3,7 +3,14 @@
 // Layer: Chat right-dock UI
 // Depends on: ui/sidebar primitive, right-dock pane metadata, and a caller-provided pane renderer.
 
-import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { cn } from "~/lib/utils";
 import {
@@ -98,21 +105,39 @@ function RightDockTab(props: {
 // Persist which keep-mounted panes (e.g. terminals) have been activated so they
 // stay in the DOM while another tab is selected, pruned to live panes so closed
 // panes drop out and the set never leaks across thread switches. The set is
-// reconciled during render on purpose: when a kept pane stops being active it
-// must remain in the rendered list on that same render, otherwise it would
-// unmount for a frame and lose the very runtime keep-mount is protecting.
+// The rendered set is derived synchronously so a kept pane never unmounts for a
+// frame. A layout effect commits that set for the next render without mutating a
+// ref during render (which is unsafe when React replays or abandons work).
 function useKeepMountedPaneIds(
   panes: readonly RightDockPane[],
   activePane: RightDockPane | null,
 ): ReadonlySet<string> {
-  const ref = useRef<ReadonlySet<string>>(EMPTY_PANE_ID_SET);
-  ref.current = reconcileKeepMountedPaneIds({
-    previous: ref.current,
+  const [committedPaneIds, setCommittedPaneIds] = useState<ReadonlySet<string>>(EMPTY_PANE_ID_SET);
+  const activePaneId = activePane?.id ?? null;
+  const activePaneKind = activePane?.kind ?? null;
+  const renderedPaneIds = reconcileKeepMountedPaneIds({
+    previous: committedPaneIds,
     panes,
-    activePaneId: activePane?.id ?? null,
-    activePaneKind: activePane?.kind ?? null,
+    activePaneId,
+    activePaneKind,
   });
-  return ref.current;
+
+  useLayoutEffect(() => {
+    setCommittedPaneIds((current) => {
+      const next = reconcileKeepMountedPaneIds({
+        previous: current,
+        panes,
+        activePaneId,
+        activePaneKind,
+      });
+      if (next.size === current.size && [...next].every((paneId) => current.has(paneId))) {
+        return current;
+      }
+      return next;
+    });
+  }, [activePaneId, activePaneKind, panes]);
+
+  return renderedPaneIds;
 }
 
 export function RightDock(props: RightDockProps) {
@@ -149,27 +174,25 @@ export function RightDock(props: RightDockProps) {
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
-  const [allowChromeMotion, setAllowChromeMotion] = useState(() => !props.state.open);
-  const [, forceMotionClassRefresh] = useState(0);
-  const previousMotionKeyRef = useRef(props.motionKey);
-  const motionKeyChanged = previousMotionKeyRef.current !== props.motionKey;
-  const shouldSuppressChromeMotion = !allowChromeMotion || motionKeyChanged;
+  // Motion allowance keyed to the current motionKey: a key change (reposition/
+  // remount) derives straight back to "suppressed" in that same render, and the
+  // rAF below re-enables motion once the suppressed frame has painted. Mounting
+  // with the dock open starts suppressed for the same reason.
+  const [motionState, setMotionState] = useState<{
+    key: RightDockProps["motionKey"];
+    allow: boolean;
+  }>(() => ({ key: props.motionKey, allow: !props.state.open }));
+  const shouldSuppressChromeMotion = !(motionState.key === props.motionKey && motionState.allow);
 
   useEffect(() => {
-    const hadMotionKeyChange = previousMotionKeyRef.current !== props.motionKey;
-    previousMotionKeyRef.current = props.motionKey;
-
     if (!shouldSuppressChromeMotion) {
       return;
     }
-
-    if (!allowChromeMotion) {
-      setAllowChromeMotion(true);
-    }
-    if (hadMotionKeyChange && allowChromeMotion) {
-      forceMotionClassRefresh((version) => version + 1);
-    }
-  }, [allowChromeMotion, props.motionKey, shouldSuppressChromeMotion]);
+    const frameId = window.requestAnimationFrame(() => {
+      setMotionState({ key: props.motionKey, allow: true });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [props.motionKey, shouldSuppressChromeMotion]);
 
   // Smooth drawer-style easing for the open/close slide. `ease-linear` (the
   // sidebar default) reads as stepped/janky on the wide dock; this curve front-

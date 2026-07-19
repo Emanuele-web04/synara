@@ -1,6 +1,4 @@
-import { memo } from "react";
-
-export const ComposerPlanFollowUpBanner = memo(function ComposerPlanFollowUpBanner({
+export const ComposerPlanFollowUpBanner = function ComposerPlanFollowUpBanner({
   planTitle,
 }: {
   planTitle: string | null;
@@ -18,4 +16,4 @@ export const ComposerPlanFollowUpBanner = memo(function ComposerPlanFollowUpBann
       </div> */}
     </div>
   );
-});
+};

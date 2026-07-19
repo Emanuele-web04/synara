@@ -7,14 +7,7 @@
 //        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
 //        error card with its own inline frame/overlay rendering.
 
-import {
-  type ImgHTMLAttributes,
-  type MouseEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { type ImgHTMLAttributes, type MouseEvent, useState } from "react";
 
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
 import { DownloadIcon, Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
@@ -46,34 +39,55 @@ export function useLocalImagePreview(input: {
   previewGrant?: string | null | undefined;
 }): LocalImagePreviewState {
   const { src, cwd, previewGrant } = input;
-  const previewUrl = useMemo(
-    () => buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant }),
-    [cwd, previewGrant, src],
-  );
-  const downloadUrl = useMemo(
-    () => buildLocalImageUrl({ src, cwd: cwd ?? undefined, download: true, grant: previewGrant }),
-    [cwd, previewGrant, src],
-  );
-  const fileName = useMemo(() => localImageFileName(src), [src]);
-  const [status, setStatus] = useState<LocalImagePreviewStatus>("loading");
+  const previewUrl = buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant });
+  const downloadUrl = buildLocalImageUrl({
+    src,
+    cwd: cwd ?? undefined,
+    download: true,
+    grant: previewGrant,
+  });
+  const fileName = localImageFileName(src);
+  // A generation distinguishes separate visits to the same URL. This keeps an
+  // A -> B -> A transition from reviving A's old error branch (which contains
+  // no <img> and therefore cannot retry), and rejects stale image events.
+  const [storedLoad, setStoredLoad] = useState<{
+    url: string;
+    generation: number;
+    status: LocalImagePreviewStatus;
+  }>(() => ({ url: previewUrl, generation: 0, status: "loading" }));
+  const load =
+    storedLoad.url === previewUrl
+      ? storedLoad
+      : { url: previewUrl, generation: storedLoad.generation + 1, status: "loading" as const };
+  if (load !== storedLoad) {
+    setStoredLoad(load);
+  }
 
-  useEffect(() => {
-    setStatus("loading");
-  }, [previewUrl]);
+  const settleLoad = (status: Exclude<LocalImagePreviewStatus, "loading">) => {
+    setStoredLoad((current) =>
+      current.url === previewUrl && current.generation === load.generation
+        ? { ...current, status }
+        : current,
+    );
+  };
 
-  const imgProps = useMemo<LocalImagePreviewImgProps>(
-    () => ({
-      src: previewUrl,
-      loading: "lazy",
-      decoding: "async",
-      draggable: false,
-      onLoad: () => setStatus("ready"),
-      onError: () => setStatus("error"),
-    }),
-    [previewUrl],
-  );
+  const imgProps: LocalImagePreviewImgProps = {
+    src: previewUrl,
+    loading: "lazy",
+    decoding: "async",
+    draggable: false,
+    onLoad: () => settleLoad("ready"),
+    onError: () => settleLoad("error"),
+  };
 
-  return { previewUrl, downloadUrl, fileName, downloadName: fileName || "", status, imgProps };
+  return {
+    previewUrl,
+    downloadUrl,
+    fileName,
+    downloadName: fileName || "",
+    status: load.status,
+    imgProps,
+  };
 }
 
 // Handles local-image downloads imperatively so failed API responses surface as
@@ -83,24 +97,21 @@ export function useLocalImageDownloadClick(input: {
   downloadName: string;
   errorTitle?: string | undefined;
 }) {
-  return useCallback(
-    (event: MouseEvent<HTMLElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void downloadUrlAsBlob({
-        url: input.downloadUrl,
-        filename: input.downloadName,
-      }).catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: input.errorTitle ?? "Could not download image",
-          description:
-            error instanceof Error ? error.message : "The file may have moved or be unavailable.",
-        });
+  return (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void downloadUrlAsBlob({
+      url: input.downloadUrl,
+      filename: input.downloadName,
+    }).catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: input.errorTitle ?? "Could not download image",
+        description:
+          error instanceof Error ? error.message : "The file may have moved or be unavailable.",
       });
-    },
-    [input.downloadName, input.downloadUrl, input.errorTitle],
-  );
+    });
+  };
 }
 
 // Span-only markup so the card stays valid inside markdown paragraphs.

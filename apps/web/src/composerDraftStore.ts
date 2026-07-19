@@ -35,7 +35,6 @@ import {
   resolveSelectableModel,
   resolveModelSlugForProvider,
 } from "@synara/shared/model";
-import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
 import {
@@ -74,8 +73,13 @@ import {
 import { classifyProviderReasoningEffortSupport } from "./lib/codexReasoningEffort";
 import { buildModelSelection } from "./providerModelOptions";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
-import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
+import { persist } from "zustand/middleware";
+import {
+  createDeferredPersistStorage,
+  createMemoryStorage,
+  flushStorageBeforePageHide,
+  type StateStorage,
+} from "./lib/storage";
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "synara:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 5;
@@ -100,10 +104,18 @@ const ANTIGRAVITY_REASONING_EFFORT_SET = new Set(["low", "medium", "high", "thin
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
 
-const composerDebouncedStorage = createDebouncedStorage(
-  typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
-  COMPOSER_PERSIST_DEBOUNCE_MS,
-);
+const composerBaseStorage: StateStorage =
+  typeof localStorage !== "undefined" ? localStorage : createMemoryStorage();
+// Defers partialize + JSON.stringify off the keystroke path; the full-store
+// serialization runs once per debounce window inside flush, not on every set().
+const composerPersistStorage = createDeferredPersistStorage<
+  ComposerDraftStoreState,
+  PersistedComposerDraftStoreState
+>({
+  getStorage: () => composerBaseStorage,
+  partialize: partializeComposerDraftStoreState,
+  debounceMs: COMPOSER_PERSIST_DEBOUNCE_MS,
+});
 const composerAttachmentPersistenceQueueByThreadId = new Map<string, Promise<void>>();
 
 function enqueueComposerAttachmentPersistence<Result>(
@@ -134,12 +146,9 @@ function enqueueComposerAttachmentPersistence<Result>(
   return result;
 }
 
-// Flush pending composer draft writes before page unload to prevent data loss.
-if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", () => {
-    composerDebouncedStorage.flush();
-  });
-}
+// Flush pending composer draft writes before the page goes away so at most one
+// debounce window of changes can be lost.
+flushStorageBeforePageHide(() => composerPersistStorage.flush());
 
 const PersistedComposerAppSnapSource = Schema.Struct({
   kind: Schema.Literal("appsnap"),
@@ -2765,7 +2774,7 @@ function migratePersistedComposerDraftStoreState(
   return normalizeCurrentPersistedComposerDraftStoreState(persistedState);
 }
 
-function partializeComposerDraftStoreState(
+export function partializeComposerDraftStoreState(
   state: ComposerDraftStoreState,
 ): PersistedComposerDraftStoreState {
   const persistedDraftsByThreadId: DeepMutable<
@@ -3207,7 +3216,7 @@ function verifyPersistedAttachmentsForSlot(
 ): ComposerAttachmentPersistenceResult {
   let persistedIdsRead: PersistedAttachmentIdsRead = { available: false };
   try {
-    composerDebouncedStorage.flush();
+    composerPersistStorage.flush();
     persistedIdsRead = readPersistedAttachmentIdsFromStorage(threadId, slot);
   } catch {
     persistedIdsRead = { available: false };
@@ -5103,9 +5112,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      storage: createJSONStorage(() => composerDebouncedStorage),
+      // partialize is owned by the deferred storage (not the persist config) so it
+      // runs once at flush time instead of eagerly on every set().
+      storage: composerPersistStorage,
       migrate: migratePersistedComposerDraftStoreState,
-      partialize: partializeComposerDraftStoreState,
       merge: (persistedState, currentState) => {
         const normalizedPersisted =
           normalizeCurrentPersistedComposerDraftStoreState(persistedState);
@@ -5144,27 +5154,16 @@ export function useEffectiveComposerModelState(input: {
 }): EffectiveComposerModelState {
   const draft = useComposerThreadDraft(input.threadId);
 
-  return useMemo(
-    () =>
-      deriveEffectiveComposerModelState({
-        draft,
-        selectedProvider: input.selectedProvider,
-        threadModelSelection: input.threadModelSelection,
-        projectModelSelection: input.projectModelSelection,
-        customModelsByProvider: input.customModelsByProvider,
-        ...(input.availableModelOptionsByProvider !== undefined
-          ? { availableModelOptionsByProvider: input.availableModelOptionsByProvider }
-          : {}),
-      }),
-    [
-      input.availableModelOptionsByProvider,
-      draft,
-      input.customModelsByProvider,
-      input.projectModelSelection,
-      input.selectedProvider,
-      input.threadModelSelection,
-    ],
-  );
+  return deriveEffectiveComposerModelState({
+    draft,
+    selectedProvider: input.selectedProvider,
+    threadModelSelection: input.threadModelSelection,
+    projectModelSelection: input.projectModelSelection,
+    customModelsByProvider: input.customModelsByProvider,
+    ...(input.availableModelOptionsByProvider !== undefined
+      ? { availableModelOptionsByProvider: input.availableModelOptionsByProvider }
+      : {}),
+  });
 }
 
 // Mark drafts as promoted first; route/composer cleanup happens after the server thread starts.

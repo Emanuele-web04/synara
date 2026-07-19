@@ -6,15 +6,13 @@
 // Exports: PullRequestTimelineTab
 
 import type { PullRequestDetail } from "@synara/contracts";
-import { useMemo } from "react";
-
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { buildPullRequestTimelineEvents } from "./pullRequestDetail.logic";
 import { PR_BODY_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
 export function PullRequestTimelineTab({ detail }: { detail: PullRequestDetail }) {
-  const events = useMemo(() => buildPullRequestTimelineEvents(detail), [detail]);
+  const events = buildPullRequestTimelineEvents(detail);
   return (
     <div className="h-full overflow-y-auto px-5 py-5">
       <div className="relative ml-2 border-l border-border/70 pl-5">

@@ -1247,14 +1247,6 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         details:
           "This release fixes editor-mode production feedback, shares project menu picker behavior, splits kanban composer menu discovery from editor logic, and consolidates local image preview state across chat and editor views.",
       },
-      {
-        id: "soccer-physics-playground",
-        title: "A World Cup soccer ball playground landed",
-        description:
-          "There is now a playful soccer-ball physics view for experimenting with motion and interaction inside Synara.",
-        details:
-          "The new World Cup soccer ball physics playground adds a self-contained visual interaction surface, with follow-up formatting and server typecheck cleanup landed on main before the release.",
-      },
     ],
   },
   {

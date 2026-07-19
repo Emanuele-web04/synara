@@ -8,7 +8,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { SplashScreen } from "./SplashScreen";
 import {
@@ -52,9 +52,8 @@ export function RestoreOrCreateChatRoute({
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const splitViewsHydrated = useSplitViewStore((state) => state.hasHydrated);
   const splitViewsById = useSplitViewStore((state) => state.splitViewsById);
-  const splitViewIds = useMemo(
-    () => Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-    [splitViewsById],
+  const splitViewIds = Object.keys(splitViewsById).filter(
+    (splitViewId) => splitViewsById[splitViewId],
   );
   const [attempt, setAttempt] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -73,10 +72,16 @@ export function RestoreOrCreateChatRoute({
   }, []);
 
   useEffect(() => {
-    if (threadIds.length > 0 && emptyRestoreRecoveryState !== "idle") {
+    if (!(threadIds.length > 0 && emptyRestoreRecoveryState !== "idle")) {
+      return;
+    }
+    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the
+    // recovery machine only gates async restore flows.
+    const timeoutId = window.setTimeout(() => {
       emptyRestoreRecoveryRunRef.current += 1;
       setEmptyRestoreRecoveryState("idle");
-    }
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [emptyRestoreRecoveryState, threadIds.length]);
 
   useEffect(() => {
@@ -85,9 +90,15 @@ export function RestoreOrCreateChatRoute({
     }
 
     let cancelled = false;
-    setErrorMessage(null);
 
     void (async () => {
+      // Yield one microtask so every state write below happens asynchronously
+      // (no wasted pre-paint render; keeps the component compiler-eligible).
+      await Promise.resolve();
+      if (cancelled) {
+        return;
+      }
+      setErrorMessage(null);
       const lastThreadRoute = readSidebarUiState().lastThreadRoute;
       if (
         shouldStartRememberedRouteRecovery({
@@ -140,12 +151,11 @@ export function RestoreOrCreateChatRoute({
         return;
       }
       createFreshChatInFlightRef.current = true;
-      let result: StartContainerChatResult;
-      try {
-        result = await createFreshChat();
-      } finally {
+      // .finally instead of try/finally: React Compiler does not yet support
+      // try/finally and would skip optimizing this whole component.
+      const result: StartContainerChatResult = await createFreshChat().finally(() => {
         createFreshChatInFlightRef.current = false;
-      }
+      });
       if (cancelled || result.ok) {
         return;
       }

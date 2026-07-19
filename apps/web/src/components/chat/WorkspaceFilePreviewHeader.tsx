@@ -11,7 +11,7 @@
 // Exports: WorkspaceFilePreviewHeader
 
 import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/shared/path";
-import { Fragment, memo, useCallback, useMemo } from "react";
+import { Fragment } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
@@ -55,7 +55,7 @@ const MARKDOWN_VIEW_SEGMENTS = [
   },
 ] as const;
 
-export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHeader(
+export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
   props: WorkspaceFilePreviewHeaderProps,
 ) {
   const { filePath, workspaceRoot } = props;
@@ -68,33 +68,28 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
   // here (vs. rendering the raw string) lets the directory prefix collapse
   // first under width pressure while the filename stays pinned. Absolute
   // paths drop the project prefix — they live outside the workspace.
-  const { prefixSegments, fileSegment } = useMemo(() => {
-    const projectName =
-      fileIsOutsideWorkspace || !workspaceRoot ? null : basenameOfPath(workspaceRoot);
-    const relativeSegments = filePath
-      .replace(/\\/g, "/")
-      .split("/")
-      .filter((segment) => segment.length > 0);
-    const segments = projectName ? [projectName, ...relativeSegments] : relativeSegments;
-    // Key each crumb by its cumulative path so repeated folder names (e.g. two
-    // `src` dirs at different depths) still get stable, unique React keys.
-    const prefix = segments.slice(0, -1).map((name, index) => ({
-      name,
-      key: segments.slice(0, index + 1).join("/"),
-    }));
-    return {
-      prefixSegments: prefix,
-      fileSegment: segments.at(-1) ?? filePath,
-    };
-  }, [fileIsOutsideWorkspace, filePath, workspaceRoot]);
+  const projectName =
+    fileIsOutsideWorkspace || !workspaceRoot ? null : basenameOfPath(workspaceRoot);
+  const relativeSegments = filePath
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const segments = projectName ? [projectName, ...relativeSegments] : relativeSegments;
+  // Key each crumb by its cumulative path so repeated folder names (e.g. two
+  // `src` dirs at different depths) still get stable, unique React keys.
+  const prefixSegments = segments.slice(0, -1).map((name, index) => ({
+    name,
+    key: segments.slice(0, index + 1).join("/"),
+  }));
+  const fileSegment = segments.at(-1) ?? filePath;
 
   const { onReferenceInChat, onAskWhyInChat } = props;
-  const referenceWholeFile = useCallback(() => {
+  const referenceWholeFile = () => {
     onReferenceInChat?.({ path: filePath });
-  }, [filePath, onReferenceInChat]);
-  const askWhyWholeFile = useCallback(() => {
+  };
+  const askWhyWholeFile = () => {
     onAskWhyInChat?.({ path: filePath });
-  }, [filePath, onAskWhyInChat]);
+  };
 
   const hasChatActions = Boolean(onReferenceInChat || onAskWhyInChat);
 
@@ -199,4 +194,4 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
       </div>
     </div>
   );
-});
+};

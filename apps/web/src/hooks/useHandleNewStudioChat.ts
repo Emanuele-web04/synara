@@ -3,8 +3,6 @@
 // Layer: Web hook
 // Exports: useHandleNewStudioChat
 
-import { useCallback } from "react";
-
 import { ensureStudioProject } from "../lib/studioProjects";
 import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
 import { useWorkspaceStore } from "../workspaceStore";
@@ -16,17 +14,16 @@ export function useHandleNewStudioChat() {
   const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
   const { handleNewThread } = useHandleNewThread();
 
-  const handleNewStudioChat = useCallback(
-    async (options?: { fresh?: boolean }): Promise<StartContainerChatResult> =>
-      startContainerChat({
-        ensureProjectId: () =>
-          ensureStudioProject({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
-        handleNewThread,
-        fresh: options?.fresh,
-        errorLabel: "Unable to prepare a new Studio chat.",
-      }),
-    [chatWorkspaceRoot, handleNewThread, homeDir, studioWorkspaceRoot],
-  );
+  const handleNewStudioChat = async (options?: {
+    fresh?: boolean;
+  }): Promise<StartContainerChatResult> =>
+    startContainerChat({
+      ensureProjectId: () =>
+        ensureStudioProject({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+      handleNewThread,
+      fresh: options?.fresh,
+      errorLabel: "Unable to prepare a new Studio chat.",
+    });
 
   return { handleNewStudioChat };
 }

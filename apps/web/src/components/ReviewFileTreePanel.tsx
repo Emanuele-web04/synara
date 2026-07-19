@@ -10,8 +10,6 @@ import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
   forwardRef,
   memo,
-  useCallback,
-  useMemo,
   useState,
   type ComponentPropsWithoutRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -62,6 +60,7 @@ const ReviewTreeRow = forwardRef<
   );
 });
 
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 const ReviewFileTreeNodes = memo(function ReviewFileTreeNodes(props: {
   nodes: ReadonlyArray<FileDiffTreeNode>;
   depth: number;
@@ -151,7 +150,7 @@ function ReviewFileTreeLoadingRows() {
   );
 }
 
-export const ReviewFileTreePanel = memo(function ReviewFileTreePanel(props: {
+export const ReviewFileTreePanel = function ReviewFileTreePanel(props: {
   files: ReadonlyArray<FileDiffMetadata>;
   selectedFilePath: string | null;
   resolvedTheme: "light" | "dark";
@@ -167,18 +166,12 @@ export const ReviewFileTreePanel = memo(function ReviewFileTreePanel(props: {
   // match stays visible.
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(() => new Set());
 
-  const filteredFiles = useMemo(
-    () => filterRenderableFilesForSearch(props.files, query),
-    [props.files, query],
-  );
-  const tree = useMemo(() => buildFileDiffTree(filteredFiles), [filteredFiles]);
+  const filteredFiles = filterRenderableFilesForSearch(props.files, query);
+  const tree = buildFileDiffTree(filteredFiles);
 
   const isSearching = query.trim().length > 0;
-  const isPathCollapsed = useCallback(
-    (path: string) => !isSearching && collapsedPaths.has(path),
-    [collapsedPaths, isSearching],
-  );
-  const handleToggleDirectory = useCallback((path: string) => {
+  const isPathCollapsed = (path: string) => !isSearching && collapsedPaths.has(path);
+  const handleToggleDirectory = (path: string) => {
     setCollapsedPaths((previous) => {
       const next = new Set(previous);
       if (next.has(path)) {
@@ -188,16 +181,13 @@ export const ReviewFileTreePanel = memo(function ReviewFileTreePanel(props: {
       }
       return next;
     });
-  }, []);
-  const handleSearchKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Escape" && query.length > 0) {
-        event.stopPropagation();
-        setQuery("");
-      }
-    },
-    [query.length],
-  );
+  };
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape" && query.length > 0) {
+      event.stopPropagation();
+      setQuery("");
+    }
+  };
 
   const hasFiles = props.files.length > 0;
   const showLoadingRows = (props.isLoading ?? false) && !hasFiles;
@@ -264,4 +254,4 @@ export const ReviewFileTreePanel = memo(function ReviewFileTreePanel(props: {
       </div>
     </aside>
   );
-});
+};

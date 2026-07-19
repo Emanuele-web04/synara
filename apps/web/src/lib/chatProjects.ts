@@ -158,15 +158,6 @@ function scoreHomeChatProject(project: Project, input: ServerWorkspacePaths): nu
   return score;
 }
 
-export function findHomeChatContainerProject<
-  T extends Pick<Project, "cwd" | "kind" | "name" | "remoteName">,
->(projects: readonly T[], paths: ServerWorkspacePaths): T | null {
-  if (!paths.homeDir) {
-    return null;
-  }
-  return projects.find((project) => isHomeChatContainerProject(project, paths)) ?? null;
-}
-
 function findCanonicalHomeProject(input: ServerWorkspacePaths): {
   canonicalProjectId: ProjectId | null;
   duplicateProjectIds: ProjectId[];
@@ -177,7 +168,7 @@ function findCanonicalHomeProject(input: ServerWorkspacePaths): {
     isLegacyHomeChatContainerProject(project, input),
   );
   const canonicalProject =
-    [...homeProjects].sort(
+    homeProjects.toSorted(
       (left, right) => scoreHomeChatProject(right, input) - scoreHomeChatProject(left, input),
     )[0] ?? null;
   if (!canonicalProject) {

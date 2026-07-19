@@ -10,7 +10,6 @@ import {
   ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
-  FolderIcon,
   FolderOpenIcon,
   KanbanIcon,
   type LucideIcon,
@@ -138,12 +137,21 @@ import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
-import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
+import {
+  resolveCurrentProjectTargetId,
+  resolveLatestProjectTargetId,
+  resolveNewThreadTarget,
+} from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
   pullRequestQueryKeys,
   pullRequestReviewRequestCountQueryOptions,
 } from "../lib/pullRequestReactQuery";
+import {
+  prefetchProviderModelsForNewThread,
+  resolveNewThreadModelPrefetchCwd,
+  resolveNewThreadModelPrefetchProvider,
+} from "../lib/providerModelPrefetch";
 import {
   serverConfigQueryOptions,
   serverQueryKeys,
@@ -162,6 +170,7 @@ import {
   prewarmStudioProject,
 } from "../lib/studioProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
@@ -177,6 +186,8 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
+import { SynaraLogo } from "./SynaraLogo";
+import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -1112,6 +1123,8 @@ function SidebarPrimaryAction({
   icon: Icon,
   label,
   onClick,
+  onMouseEnter,
+  onFocus,
   active = false,
   disabled = false,
   shortcutLabel,
@@ -1121,6 +1134,8 @@ function SidebarPrimaryAction({
   icon: ComponentType<{ className?: string }>;
   label: string;
   onClick?: () => void;
+  onMouseEnter?: () => void;
+  onFocus?: () => void;
   active?: boolean;
   disabled?: boolean;
   shortcutLabel?: string | null;
@@ -1144,6 +1159,8 @@ function SidebarPrimaryAction({
         aria-disabled={disabled || undefined}
         disabled={disabled}
         onClick={onClick}
+        onMouseEnter={onMouseEnter}
+        onFocus={onFocus}
       >
         <SidebarLeadingIcon size="sm" tone="text-inherit">
           <SidebarGlyph icon={Icon} variant="leading" />
@@ -1208,7 +1225,7 @@ function SortableProjectItem({
   );
 }
 
-function SidebarSegmentedPicker({
+export function SidebarSegmentedPicker({
   views,
   activeView,
   onSelectView,
@@ -1225,7 +1242,17 @@ function SidebarSegmentedPicker({
   // from the clicked segment immediately (the navigation itself runs in a
   // transition, see navigateToBackTarget) and let the route catch up; the timeout
   // snaps back if the navigation never lands (e.g. Workspace with no pages).
-  const [pendingView, setPendingView] = useState<SidebarView | null>(null);
+  // Stamp an optimistic selection with the route it started from. When the route
+  // changes, synchronously replace that state before React commits the new props.
+  // Merely hiding a mismatched key is insufficient: browser Back can return to the
+  // old key after the route-landing effect has cancelled the snap-back timeout.
+  const [pendingView, setPendingView] = useState<{
+    key: SidebarView;
+    value: SidebarView | null;
+  }>(() => ({ key: activeView, value: null }));
+  if (pendingView.key !== activeView) {
+    setPendingView({ key: activeView, value: null });
+  }
   const pendingViewResetTimeoutRef = useRef<number | null>(null);
   const clearPendingViewResetTimeout = useCallback(() => {
     if (pendingViewResetTimeoutRef.current !== null) {
@@ -1233,9 +1260,10 @@ function SidebarSegmentedPicker({
       pendingViewResetTimeoutRef.current = null;
     }
   }, []);
+  // Cancel the pending snap-back timer once the route lands. The synchronous reset
+  // above owns the state transition; this effect only releases the timer.
   useEffect(() => {
     clearPendingViewResetTimeout();
-    setPendingView(null);
   }, [activeView, clearPendingViewResetTimeout]);
   useEffect(() => clearPendingViewResetTimeout, [clearPendingViewResetTimeout]);
 
@@ -1244,18 +1272,19 @@ function SidebarSegmentedPicker({
   if (views.length < 2) {
     return null;
   }
-  const displayedView = pendingView ?? activeView;
+  const effectivePendingView = pendingView.key === activeView ? pendingView.value : null;
+  const displayedView = effectivePendingView ?? activeView;
   const handleSelectView = (view: SidebarView) => {
     const nextPendingView = resolvePendingSidebarViewSelection(activeView, view);
     clearPendingViewResetTimeout();
-    setPendingView(nextPendingView);
+    setPendingView({ key: activeView, value: nextPendingView });
     if (nextPendingView !== null) {
       // Start the detail subscription before the transition render so the
       // destination transcript is already loading while React works.
       onPrewarmView?.(view);
       pendingViewResetTimeoutRef.current = window.setTimeout(() => {
         pendingViewResetTimeoutRef.current = null;
-        setPendingView(null);
+        setPendingView((current) => ({ ...current, value: null }));
       }, SIDEBAR_SEGMENT_PENDING_RESET_MS);
     }
     onSelectView(view);
@@ -1489,7 +1518,9 @@ export default function Sidebar() {
   const routeSearch = useDiffRouteSearch();
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
-  const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const activeSplitView = useSplitViewStore(
+    useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
+  );
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
 
   useEffect(() => {
@@ -1565,8 +1596,13 @@ export default function Sidebar() {
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
+  const { data: serverCwd = null } = useQuery({
+    ...serverConfigQueryOptions(),
+    select: (config) => config.cwd ?? null,
+  });
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
+  const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
@@ -1722,8 +1758,15 @@ export default function Sidebar() {
       return;
     }
     if (routeActiveSidebarThreadId === optimisticActiveThreadId) {
-      setOptimisticActiveThreadId(null);
-      return;
+      // The route caught up; drop the optimistic override on the next tick. Async
+      // setState keeps this out of render, and activeSidebarThreadId already resolves
+      // to the same thread via `optimistic ?? route`, so the deferral is invisible.
+      const settle = window.setTimeout(() => {
+        setOptimisticActiveThreadId((current) =>
+          current === optimisticActiveThreadId ? null : current,
+        );
+      }, 0);
+      return () => window.clearTimeout(settle);
     }
 
     const timeout = window.setTimeout(() => {
@@ -1918,25 +1961,31 @@ export default function Sidebar() {
     const serverPinnedStateByThreadId = new Map(
       sidebarThreads.map((thread) => [thread.id, thread.isPinned === true] as const),
     );
-    setOptimisticPinnedStateByThreadId((current) => {
-      let next: Map<ThreadId, boolean> | null = null;
-      const confirmedThreadIds: ThreadId[] = [];
-      for (const [threadId, desiredPinned] of current) {
-        const serverPinned = serverPinnedStateByThreadId.get(threadId);
-        if (serverPinned !== undefined && serverPinned !== desiredPinned) {
-          continue;
+    // Reconciliation drops optimistic entries the server has confirmed while syncing
+    // the mirror ref. Deferring the setState off render (async is allowed) leaves the
+    // derived pinned lists unchanged, since a confirmed entry is redundant either way.
+    const settle = window.setTimeout(() => {
+      setOptimisticPinnedStateByThreadId((current) => {
+        let next: Map<ThreadId, boolean> | null = null;
+        const confirmedThreadIds: ThreadId[] = [];
+        for (const [threadId, desiredPinned] of current) {
+          const serverPinned = serverPinnedStateByThreadId.get(threadId);
+          if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+            continue;
+          }
+          next ??= new Map(current);
+          next.delete(threadId);
+          confirmedThreadIds.push(threadId);
         }
-        next ??= new Map(current);
-        next.delete(threadId);
-        confirmedThreadIds.push(threadId);
-      }
-      if (next) {
-        for (const threadId of confirmedThreadIds) {
-          optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+        if (next) {
+          for (const threadId of confirmedThreadIds) {
+            optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+          }
         }
-      }
-      return next ?? current;
-    });
+        return next ?? current;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [optimisticPinnedStateByThreadId, sidebarThreads]);
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -2095,25 +2144,31 @@ export default function Sidebar() {
     const serverPinnedStateByProjectId = new Map(
       projects.map((project) => [project.id, project.isPinned === true] as const),
     );
-    setOptimisticPinnedStateByProjectId((current) => {
-      let next: Map<ProjectId, boolean> | null = null;
-      const confirmedProjectIds: ProjectId[] = [];
-      for (const [projectId, desiredPinned] of current) {
-        const serverPinned = serverPinnedStateByProjectId.get(projectId);
-        if (serverPinned !== undefined && serverPinned !== desiredPinned) {
-          continue;
+    // Reconciliation drops optimistic entries the server has confirmed while syncing
+    // the mirror ref. Deferring the setState off render (async is allowed) leaves the
+    // derived pinned lists unchanged, since a confirmed entry is redundant either way.
+    const settle = window.setTimeout(() => {
+      setOptimisticPinnedStateByProjectId((current) => {
+        let next: Map<ProjectId, boolean> | null = null;
+        const confirmedProjectIds: ProjectId[] = [];
+        for (const [projectId, desiredPinned] of current) {
+          const serverPinned = serverPinnedStateByProjectId.get(projectId);
+          if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+            continue;
+          }
+          next ??= new Map(current);
+          next.delete(projectId);
+          confirmedProjectIds.push(projectId);
         }
-        next ??= new Map(current);
-        next.delete(projectId);
-        confirmedProjectIds.push(projectId);
-      }
-      if (next) {
-        for (const projectId of confirmedProjectIds) {
-          optimisticPinnedStateByProjectIdRef.current.delete(projectId);
+        if (next) {
+          for (const projectId of confirmedProjectIds) {
+            optimisticPinnedStateByProjectIdRef.current.delete(projectId);
+          }
         }
-      }
-      return next ?? current;
-    });
+        return next ?? current;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [optimisticPinnedStateByProjectId, projects]);
   const workspaceRows = useMemo(
     () =>
@@ -2790,10 +2845,77 @@ export default function Sidebar() {
     () => resolveCurrentProjectTargetId(projects, focusedProjectId),
     [focusedProjectId, projects],
   );
+  const latestUsableProjectId = useMemo(
+    () => resolveLatestProjectTargetId(projects, latestProjectId),
+    [latestProjectId, projects],
+  );
+  const primaryNewThreadTarget = useMemo(
+    () =>
+      resolveNewThreadTarget({
+        currentProjectId: currentProjectShortcutTargetId,
+        latestUsableProjectId,
+      }),
+    [currentProjectShortcutTargetId, latestUsableProjectId],
+  );
+
+  // Warm model discovery before ChatView mounts so new-thread composers skip
+  // the "Loading models" skeleton when React Query already has a fresh cache hit.
+  const prefetchModelsForProjectNewThread = useCallback(
+    (projectId: ProjectId, options?: { includeDroid?: boolean }) => {
+      const project = projects.find((candidate) => candidate.id === projectId);
+      if (!project) {
+        return;
+      }
+
+      const draftStore = useComposerDraftStore.getState();
+      const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");
+      const draftComposer = draftThread
+        ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
+        : null;
+      const provider = resolveNewThreadModelPrefetchProvider({
+        draftActiveProvider: draftComposer?.activeProvider ?? null,
+        stickyActiveProvider: draftStore.stickyActiveProvider,
+        projectDefaultProvider: project.defaultModelSelection?.provider ?? null,
+        defaultProvider: appSettings.defaultProvider,
+      });
+      // Droid discovery spins a disposable ACP session per model — only warm it
+      // from explicit new-thread intent (hover/click), not idle project focus.
+      if (provider === "droid" && options?.includeDroid !== true) {
+        return;
+      }
+      const cwd = resolveNewThreadModelPrefetchCwd({
+        draftWorktreePath: draftThread?.worktreePath ?? null,
+        projectCwd: project.cwd,
+        serverCwd,
+      });
+
+      prefetchProviderModelsForNewThread(queryClient, {
+        provider,
+        settings: appSettings,
+        cwd,
+      });
+    },
+    [appSettings, projects, queryClient, serverCwd],
+  );
+
+  const prefetchModelsForPrimaryNewThread = useCallback(() => {
+    if (!primaryNewThreadTarget) {
+      return;
+    }
+    prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
+  }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
+
+  useEffect(() => {
+    if (!primaryNewThreadTarget) {
+      return;
+    }
+    prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId);
+  }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   const handlePrimaryNewThread = useCallback(() => {
-    if (currentProjectShortcutTargetId) {
-      void handleNewThread(currentProjectShortcutTargetId, {
+    if (primaryNewThreadTarget) {
+      prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
+      void handleNewThread(primaryNewThreadTarget.projectId, {
         envMode: resolveSidebarNewThreadEnvMode({
           defaultEnvMode: appSettings.defaultThreadEnvMode,
         }),
@@ -2801,12 +2923,19 @@ export default function Sidebar() {
       return;
     }
 
+    // The projects snapshot can be temporarily empty during startup. Wait for hydration
+    // before treating a missing target as a genuine no-project state.
+    if (!threadsHydrated) {
+      return;
+    }
     handleStartAddProject();
   }, [
     appSettings.defaultThreadEnvMode,
-    currentProjectShortcutTargetId,
     handleNewThread,
     handleStartAddProject,
+    prefetchModelsForProjectNewThread,
+    primaryNewThreadTarget,
+    threadsHydrated,
   ]);
 
   const handleImportThread = useCallback(
@@ -3228,7 +3357,7 @@ export default function Sidebar() {
       if (pendingThreadIds.has(threadId)) return false;
 
       pendingThreadIds.add(threadId);
-      try {
+      const runArchive = async (): Promise<boolean> => {
         await archiveThreadFromClient(api.orchestration, threadId);
 
         // Navigate away before surfacing Undo so a quick restore cannot be
@@ -3252,9 +3381,10 @@ export default function Sidebar() {
         }
 
         return true;
-      } finally {
+      };
+      return runArchive().finally(() => {
         pendingThreadIds.delete(threadId);
-      }
+      });
     },
     [appSettings.sidebarThreadSortOrder, handleNewChat, navigate, routeThreadId, sidebarThreads],
   );
@@ -3276,43 +3406,46 @@ export default function Sidebar() {
       if (pendingThreadIds.has(input.threadId)) return false;
 
       pendingThreadIds.add(input.threadId);
-      try {
-        const currentThread = getThreadFromState(useStore.getState(), input.threadId);
-        if (!currentThread) {
+      const runRestore = async (): Promise<boolean> => {
+        try {
+          const currentThread = getThreadFromState(useStore.getState(), input.threadId);
+          if (!currentThread) {
+            toastManager.add({
+              type: "error",
+              title: "Could not restore thread",
+              description: "The thread no longer exists.",
+            });
+            return false;
+          }
+          try {
+            await unarchiveArchivedThread(input.threadId);
+          } catch (error) {
+            // The archive event reaches the browser store asynchronously. Undo must
+            // still send the server command, then treat an already-restored thread as success.
+            if (!isThreadAlreadyUnarchivedError(error, input.threadId)) {
+              throw error;
+            }
+          }
+          if (input.returnToThreadOnUndo) {
+            void navigate({
+              to: "/$threadId",
+              params: { threadId: input.threadId },
+              replace: true,
+            });
+          }
+          return true;
+        } catch (error) {
           toastManager.add({
             type: "error",
             title: "Could not restore thread",
-            description: "The thread no longer exists.",
+            description: error instanceof Error ? error.message : "Unable to restore the thread.",
           });
           return false;
         }
-        try {
-          await unarchiveArchivedThread(input.threadId);
-        } catch (error) {
-          // The archive event reaches the browser store asynchronously. Undo must
-          // still send the server command, then treat an already-restored thread as success.
-          if (!isThreadAlreadyUnarchivedError(error, input.threadId)) {
-            throw error;
-          }
-        }
-        if (input.returnToThreadOnUndo) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: input.threadId },
-            replace: true,
-          });
-        }
-        return true;
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not restore thread",
-          description: error instanceof Error ? error.message : "Unable to restore the thread.",
-        });
-        return false;
-      } finally {
+      };
+      return runRestore().finally(() => {
         pendingThreadIds.delete(input.threadId);
-      }
+      });
     },
     [navigate, unarchiveArchivedThread],
   );
@@ -3899,12 +4032,13 @@ export default function Sidebar() {
 
       const deletedIds = new Set<ThreadId>(ids);
       const successfullyDeletedIds: ThreadId[] = [];
-      try {
+      const runDeletes = async (): Promise<void> => {
         for (const id of ids) {
           await deleteThread(id, { deletedThreadIds: deletedIds, reconcileDeletedThread: false });
           successfullyDeletedIds.push(id);
         }
-      } finally {
+      };
+      await runDeletes().finally(() => {
         if (successfullyDeletedIds.length > 0) {
           void reconcileDeletedThreadsFromClient({
             threadIds: successfullyDeletedIds,
@@ -3912,7 +4046,7 @@ export default function Sidebar() {
               useStore.getState().removeDeletedThreadFromClientState,
           });
         }
-      }
+      });
       removeFromSelection(ids);
     },
     [
@@ -4041,25 +4175,28 @@ export default function Sidebar() {
       // Optimistically clear the indicator; the server owns the process lifecycle
       // and will broadcast a `removed` event that keeps every client consistent.
       storeRemoveProjectRun(projectId);
-      try {
-        await api.projects.stopDevServer({ projectId });
-      } catch (error) {
-        // The optimistic removal may have been wrong (e.g. the stop failed), so
-        // resync from the authoritative server registry before surfacing the error.
+      const runStop = async (): Promise<void> => {
         try {
-          const { servers } = await api.projects.listDevServers();
-          useProjectRunStore.getState().replaceAll(servers);
-        } catch {
-          // Ignore resync failures; the dev-server event stream will reconcile.
+          await api.projects.stopDevServer({ projectId });
+        } catch (error) {
+          // The optimistic removal may have been wrong (e.g. the stop failed), so
+          // resync from the authoritative server registry before surfacing the error.
+          try {
+            const { servers } = await api.projects.listDevServers();
+            useProjectRunStore.getState().replaceAll(servers);
+          } catch {
+            // Ignore resync failures; the dev-server event stream will reconcile.
+          }
+          toastManager.add({
+            type: "error",
+            title: "Failed to stop run",
+            description: error instanceof Error ? error.message : "Unable to stop the dev server.",
+          });
         }
-        toastManager.add({
-          type: "error",
-          title: "Failed to stop run",
-          description: error instanceof Error ? error.message : "Unable to stop the dev server.",
-        });
-      } finally {
+      };
+      await runStop().finally(() => {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
-      }
+      });
     },
     [queryClient, storeRemoveProjectRun],
   );
@@ -4480,7 +4617,9 @@ export default function Sidebar() {
     }
     return commandByProjectId;
   }, [discoveredScriptTargetsByProjectId, standardProjects]);
-  projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
+  useEffect(() => {
+    projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
+  }, [projectRunCommandByProjectId]);
   // Keep manual server attribution alive without repeating the expensive
   // port/process scan while no Synara-owned run needs near-real-time status.
   const hasActiveProjectRun = useMemo(
@@ -4520,7 +4659,9 @@ export default function Sidebar() {
     }
     return serverByProjectId;
   }, [projectRunLocalServersQuery.data?.servers, projectRunsByProjectId, standardProjects]);
-  projectRunServerByProjectIdRef.current = projectRunServerByProjectId;
+  useEffect(() => {
+    projectRunServerByProjectIdRef.current = projectRunServerByProjectId;
+  }, [projectRunServerByProjectId]);
   const projectRunDialogProject = projectRunDialogProjectId
     ? (projectById.get(projectRunDialogProjectId) ?? null)
     : null;
@@ -4538,7 +4679,12 @@ export default function Sidebar() {
     }
     const defaultCommand =
       projectRunCommandByProjectIdRef.current.get(projectRunDialogProjectId)?.command ?? "";
-    setProjectRunDialogCommandDraft(defaultCommand);
+    // Seed off the initial commit (async setState is allowed). useEffect already runs
+    // post-paint, so the deferral matches the original timing.
+    const settle = window.setTimeout(() => {
+      setProjectRunDialogCommandDraft(defaultCommand);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [projectRunDialogProjectId]);
   const projectRunDialogCommandIsValid = projectRunDialogCommandDraft.trim().length > 0;
   // Remember the launched command as the project's primary run script so the
@@ -4654,13 +4800,16 @@ export default function Sidebar() {
 
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
-    setThreadListExtraPagesByProjectCwd((current) =>
-      pruneProjectThreadListPagingForCollapsedProjects({
-        threadListExtraPagesByProjectCwd: current,
-        projects: standardProjects,
-        normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
-      }),
-    );
+    const settle = window.setTimeout(() => {
+      setThreadListExtraPagesByProjectCwd((current) =>
+        pruneProjectThreadListPagingForCollapsedProjects({
+          threadListExtraPagesByProjectCwd: current,
+          projects: standardProjects,
+          normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+        }),
+      );
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [standardProjects]);
 
   useEffect(() => {
@@ -4711,15 +4860,18 @@ export default function Sidebar() {
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
-    setDismissedThreadStatusKeyByThreadId((current) => {
-      const nextEntries = Object.entries(current).filter(([threadId]) =>
-        retainedThreadIds.has(ThreadId.makeUnsafe(threadId)),
-      );
-      if (nextEntries.length === Object.keys(current).length) {
-        return current;
-      }
-      return Object.fromEntries(nextEntries);
-    });
+    const settle = window.setTimeout(() => {
+      setDismissedThreadStatusKeyByThreadId((current) => {
+        const nextEntries = Object.entries(current).filter(([threadId]) =>
+          retainedThreadIds.has(ThreadId.makeUnsafe(threadId)),
+        );
+        if (nextEntries.length === Object.keys(current).length) {
+          return current;
+        }
+        return Object.fromEntries(nextEntries);
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [sidebarThreads]);
 
   useEffect(() => {
@@ -4747,15 +4899,18 @@ export default function Sidebar() {
       threadId: routeThreadId,
       ...(routeSearch.splitViewId ? { splitViewId: routeSearch.splitViewId } : {}),
     };
-    setLastThreadRoute((current) => {
-      if (
-        current?.threadId === nextLastThreadRoute.threadId &&
-        current?.splitViewId === nextLastThreadRoute.splitViewId
-      ) {
-        return current;
-      }
-      return nextLastThreadRoute;
-    });
+    const settle = window.setTimeout(() => {
+      setLastThreadRoute((current) => {
+        if (
+          current?.threadId === nextLastThreadRoute.threadId &&
+          current?.splitViewId === nextLastThreadRoute.splitViewId
+        ) {
+          return current;
+        }
+        return nextLastThreadRoute;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [isOnSettings, isOnWorkspace, routeSearch.splitViewId, routeThreadId]);
 
   useEffect(() => {
@@ -4782,16 +4937,19 @@ export default function Sidebar() {
       return;
     }
 
-    setExpandedSubagentParentIds((previous) => {
-      const next = new Set(previous);
-      let changed = false;
-      for (const parentThreadId of forcedExpandedParentIds) {
-        if (next.has(parentThreadId)) continue;
-        next.add(parentThreadId);
-        changed = true;
-      }
-      return changed ? next : previous;
-    });
+    const settle = window.setTimeout(() => {
+      setExpandedSubagentParentIds((previous) => {
+        const next = new Set(previous);
+        let changed = false;
+        for (const parentThreadId of forcedExpandedParentIds) {
+          if (next.has(parentThreadId)) continue;
+          next.add(parentThreadId);
+          changed = true;
+        }
+        return changed ? next : previous;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [activeSidebarThreadId, sidebarThreadSummaryById]);
 
   const toggleSubagentParent = useCallback((threadId: ThreadId) => {
@@ -5019,10 +5177,14 @@ export default function Sidebar() {
   const [threadJumpLabelByThreadId, setThreadJumpLabelByThreadId] =
     useState<ReadonlyMap<ThreadId, string>>(EMPTY_THREAD_JUMP_LABELS);
   const threadJumpLabelsRef = useRef<ReadonlyMap<ThreadId, string>>(EMPTY_THREAD_JUMP_LABELS);
-  threadJumpLabelsRef.current = threadJumpLabelByThreadId;
+  useEffect(() => {
+    threadJumpLabelsRef.current = threadJumpLabelByThreadId;
+  }, [threadJumpLabelByThreadId]);
   const [showThreadJumpHints, setShowThreadJumpHints] = useState(false);
   const showThreadJumpHintsRef = useRef(false);
-  showThreadJumpHintsRef.current = showThreadJumpHints;
+  useEffect(() => {
+    showThreadJumpHintsRef.current = showThreadJumpHints;
+  }, [showThreadJumpHints]);
   const visibleThreadJumpLabelByThreadId = showThreadJumpHints
     ? threadJumpLabelByThreadId
     : EMPTY_THREAD_JUMP_LABELS;
@@ -5945,9 +6107,16 @@ export default function Sidebar() {
                 }
                 tooltipSide="top"
                 data-testid="new-thread-button"
+                onMouseEnter={() => {
+                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                }}
+                onFocus={() => {
+                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                }}
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
+                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
                   void handleNewThread(project.id, {
                     envMode: resolveSidebarNewThreadEnvMode({
                       defaultEnvMode: appSettings.defaultThreadEnvMode,
@@ -6392,87 +6561,65 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
-    () =>
-      projects.map((project) => ({
-        id: project.id,
-        name: project.name,
-        remoteName: project.remoteName,
-        folderName: project.folderName,
-        localName: project.localName,
-        cwd: project.cwd,
-        createdAt: project.createdAt,
-        updatedAt: project.updatedAt,
-      })),
-    [projects],
-  );
-  const searchPaletteActions = useMemo<SidebarSearchAction[]>(
-    () => [
-      {
-        id: "new-chat",
-        label: "New chat",
-        description: "Open the new chat landing screen.",
-        keywords: ["chat", "new", "home"],
-        shortcutLabel: newChatShortcutLabel,
-      },
-      {
-        id: "new-thread",
-        label: "New thread",
-        description: "Start a fresh thread in the current project.",
-        keywords: ["thread", "new", "project"],
-        shortcutLabel: newThreadShortcutLabel,
-      },
-      {
-        id: "add-project",
-        label: "Add project",
-        description: "Open a repository or folder in the sidebar.",
-        keywords: ["folder", "repo", "repository", "open"],
-        shortcutLabel: addProjectShortcutLabel,
-      },
-      {
-        id: "import-thread",
-        label: "Import thread from...",
-        description: "Attach a local thread to an existing provider session.",
-        keywords: [
-          "import",
-          "resume",
-          "thread",
-          "session",
-          "codex",
-          "claude",
-          "cursor",
-          "opencode",
-        ],
-        shortcutLabel: importThreadShortcutLabel,
-      },
-      {
-        id: "feedback",
-        label: "Feedback Synara",
-        description: "Send feedback or report an issue to the Synara team.",
-        keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
-      },
-      {
-        id: "settings",
-        label: "Settings",
-        description: "Open app settings.",
-        keywords: ["preferences", "config"],
-      },
-      {
-        id: "usage-settings",
-        label: "Usage settings",
-        description: "Open provider usage and remaining credits.",
-        keywords: ["usage", "limits", "credits", "quota", "providers"],
-        shortcutLabel: usageSettingsShortcutLabel,
-      },
-    ],
-    [
-      addProjectShortcutLabel,
-      importThreadShortcutLabel,
-      newChatShortcutLabel,
-      newThreadShortcutLabel,
-      usageSettingsShortcutLabel,
-    ],
-  );
+  const searchPaletteProjects: SidebarSearchProject[] = projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    remoteName: project.remoteName,
+    folderName: project.folderName,
+    localName: project.localName,
+    cwd: project.cwd,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  }));
+  const searchPaletteActions: SidebarSearchAction[] = [
+    {
+      id: "new-chat",
+      label: "New chat",
+      description: "Open the new chat landing screen.",
+      keywords: ["chat", "new", "home"],
+      shortcutLabel: newChatShortcutLabel,
+    },
+    {
+      id: "new-thread",
+      label: "New thread",
+      description: "Start a fresh thread in the current or most recently used project.",
+      keywords: ["thread", "new", "project"],
+      shortcutLabel: newThreadShortcutLabel,
+    },
+    {
+      id: "add-project",
+      label: "Add project",
+      description: "Open a repository or folder in the sidebar.",
+      keywords: ["folder", "repo", "repository", "open"],
+      shortcutLabel: addProjectShortcutLabel,
+    },
+    {
+      id: "import-thread",
+      label: "Import thread from...",
+      description: "Attach a local thread to an existing provider session.",
+      keywords: ["import", "resume", "thread", "session", "codex", "claude", "cursor", "opencode"],
+      shortcutLabel: importThreadShortcutLabel,
+    },
+    {
+      id: "feedback",
+      label: "Feedback Synara",
+      description: "Send feedback or report an issue to the Synara team.",
+      keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      description: "Open app settings.",
+      keywords: ["preferences", "config"],
+    },
+    {
+      id: "usage-settings",
+      label: "Usage settings",
+      description: "Open provider usage and remaining credits.",
+      keywords: ["usage", "limits", "credits", "quota", "providers"],
+      shortcutLabel: usageSettingsShortcutLabel,
+    },
+  ];
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -6727,12 +6874,16 @@ export default function Sidebar() {
         <>
           <SidebarHeader
             className={cn(
-              "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
+              "drag-region flex-row items-center gap-2 py-0 ps-4 pe-3 font-system-ui",
               CHAT_SURFACE_HEADER_HEIGHT_CLASS,
               isMacDesktop && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
             )}
           >
             {titlebarControls}
+            <SynaraLogo
+              aria-label="Synara"
+              className="pointer-events-none ml-auto size-3.5 text-[var(--color-text-foreground-secondary)] opacity-80"
+            />
           </SidebarHeader>
         </>
       ) : (
@@ -6836,6 +6987,8 @@ export default function Sidebar() {
                         icon={NewThreadIcon}
                         label="New thread"
                         onClick={handlePrimaryNewThread}
+                        onMouseEnter={prefetchModelsForPrimaryNewThread}
+                        onFocus={prefetchModelsForPrimaryNewThread}
                       />
                       <SidebarPrimaryAction
                         icon={SearchIcon}
@@ -7087,7 +7240,7 @@ export default function Sidebar() {
                               onClick={() => void handlePickFolder()}
                               disabled={isPickingFolder || isAddingProject}
                             >
-                              <SidebarGlyph icon={FolderIcon} variant="chrome" />
+                              <FolderClosed className={sidebarGlyphClass("chrome")} />
                               {isPickingFolder
                                 ? "Opening..."
                                 : isAddingProject
@@ -7105,16 +7258,19 @@ export default function Sidebar() {
                           </button>
                         </div>
                       ) : (
-                        <div
-                          className={`flex items-center rounded-lg border bg-[var(--color-background-control-opaque)] transition-colors ${
-                            addProjectError
-                              ? "border-red-500/70 focus-within:border-red-500"
-                              : "border-[color:var(--color-border)] focus-within:border-[color:var(--color-border-focus)]"
-                          }`}
-                        >
-                          <input
+                        <div className="relative">
+                          <Input
                             ref={addProjectInputRef}
-                            className="min-w-0 flex-1 bg-transparent pl-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+                            nativeInput
+                            size="sm"
+                            variant="soft"
+                            autoFocus
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            aria-invalid={addProjectError ? true : undefined}
+                            aria-label="Project path"
+                            className="[&>[data-slot=input]]:pe-9"
                             placeholder="/path/to/project"
                             value={newCwd}
                             onChange={(event) => {
@@ -7128,11 +7284,10 @@ export default function Sidebar() {
                                 setAddProjectError(null);
                               }
                             }}
-                            autoFocus
                           />
                           <button
                             type="button"
-                            className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
+                            className="-translate-y-1/2 absolute end-1.5 top-1/2 rounded-md px-1.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
                             onClick={handleAddProject}
                             disabled={!canAddProject}
                             aria-label="Add project"

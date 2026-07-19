@@ -6,7 +6,7 @@
 // Layer: Chat workspace-browsing UI primitives
 // Exports: EXPLORER_ROW_PROPS, useExplorerListNavigation
 
-import { type KeyboardEvent as ReactKeyboardEvent, useCallback } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 // Tree rows and search-result rows tag themselves with this so the navigator can
 // collect them in DOM (= visual) order without knowing the tree's shape or which
@@ -57,39 +57,39 @@ function focusExplorerRow(row: HTMLElement): void {
  * rows' native `<button>` activation (open file / toggle folder). From the
  * search box, ArrowDown dips into the list while caret keys stay with the input.
  */
+function handleExplorerListKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  const { key } = event;
+  if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") {
+    return;
+  }
+  const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(EXPLORER_ROW_SELECTOR));
+  if (rows.length === 0) {
+    return;
+  }
+
+  const active = document.activeElement;
+  let target: HTMLElement | undefined;
+  if (isTextEntryElement(active)) {
+    // Only ArrowDown enters the list; ArrowUp/Home/End keep editing the query.
+    if (key !== "ArrowDown") {
+      return;
+    }
+    target = rows[0];
+  } else {
+    const currentIndex = active instanceof HTMLElement ? rows.indexOf(active) : -1;
+    target = rows[nextExplorerRowIndex(key, currentIndex, rows.length)];
+  }
+
+  if (!target) {
+    return;
+  }
+  event.preventDefault();
+  focusExplorerRow(target);
+}
+
 export function useExplorerListNavigation() {
-  return useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
-      return;
-    }
-    const { key } = event;
-    if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") {
-      return;
-    }
-    const rows = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(EXPLORER_ROW_SELECTOR),
-    );
-    if (rows.length === 0) {
-      return;
-    }
-
-    const active = document.activeElement;
-    let target: HTMLElement | undefined;
-    if (isTextEntryElement(active)) {
-      // Only ArrowDown enters the list; ArrowUp/Home/End keep editing the query.
-      if (key !== "ArrowDown") {
-        return;
-      }
-      target = rows[0];
-    } else {
-      const currentIndex = active instanceof HTMLElement ? rows.indexOf(active) : -1;
-      target = rows[nextExplorerRowIndex(key, currentIndex, rows.length)];
-    }
-
-    if (!target) {
-      return;
-    }
-    event.preventDefault();
-    focusExplorerRow(target);
-  }, []);
+  return handleExplorerListKeyDown;
 }

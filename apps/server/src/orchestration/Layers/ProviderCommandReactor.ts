@@ -397,6 +397,7 @@ const make = Effect.gen(function* () {
     });
   });
   const editResendTurnStartKeys = new Set<string>();
+  const quarantinedThreads = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
   // Provider sessions with a drained queued turn whose promotion is in flight.
   // The reservation survives provider startup and binds to the exact turn that
@@ -510,6 +511,8 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.task.stop.failed"
+      | "provider.task.background.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -669,15 +672,38 @@ const make = Effect.gen(function* () {
       }
     });
 
+  const clearThreadRuntimeCaches = (threadId: ThreadId) =>
+    Effect.sync(() => {
+      threadProviderOptions.delete(threadId);
+      threadSessionModelSelections.delete(threadId);
+      const editResendPrefix = `${threadId}:`;
+      for (const key of editResendTurnStartKeys) {
+        if (key.startsWith(editResendPrefix)) {
+          editResendTurnStartKeys.delete(key);
+        }
+      }
+      quarantinedThreads.delete(threadId);
+      // NOTE: `drainingQueuedTurns` is intentionally NOT cleared here. It is a
+      // turn-scoped in-flight guard that each drain self-clears when it settles;
+      // deleting it here would let a concurrent second drain start for the same
+      // thread while the first is still running.
+      suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+      clearPendingContextBootstraps(threadId);
+    });
+
   const clearStaleProviderResumeState = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly cause: ProviderServiceError;
+    readonly preserveActiveRuntime?: boolean;
   }) {
     if (providerService.clearSessionResumeCursor) {
       yield* providerService
-        .clearSessionResumeCursor({ threadId: input.threadId })
+        .clearSessionResumeCursor({
+          threadId: input.threadId,
+          ...(input.preserveActiveRuntime === true ? { preserveActiveRuntime: true } : {}),
+        })
         .pipe(Effect.catch(() => Effect.void));
-    } else {
+    } else if (input.preserveActiveRuntime !== true) {
       yield* providerService
         .stopSession({ threadId: input.threadId })
         .pipe(Effect.catch(() => Effect.void));
@@ -921,8 +947,9 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadSessionModelSelections.get(threadId);
       // Claude restarts resume via `--resume`, which replays the whole conversation
-      // as uncached input tokens. Only spawn-fixed options (effort/settings) may
-      // force that; model and context-window changes switch in-session via setModel.
+      // as uncached input tokens. Only spawn-fixed options (currently `max` effort)
+      // may force that; model and context-window changes switch in-session via
+      // setModel, and effort/fastMode/ultracode/thinking apply via flag settings.
       // When the dispatch cache has no entry (the session was started by a turn
       // without a selection), compare against the projected thread selection the
       // session was actually spawned from so spawn-fixed changes still restart.
@@ -1058,6 +1085,73 @@ const make = Effect.gen(function* () {
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
+      return;
+    }
+    // Subagent threads have no provider session of their own: their messages
+    // steer the running child task through the parent session (mirrors the
+    // interrupt seam), never the session-bootstrap path below. Parent metadata
+    // may be absent on older/local-only rows, so synthetic ids use the same
+    // projection-backed parent inference as interrupt routing.
+    const providerThread = yield* resolveProviderSessionThread(input.threadId);
+    const subagentProviderThreadId = providerThread
+      ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
+      : undefined;
+    if (providerThread && subagentProviderThreadId) {
+      // Parity with the steerTurn path below: inline portable skill
+      // instructions, normalize skill/agent mentions, and forward the
+      // structured context so the adapter can project attachments into the
+      // text-only subagent steering channel.
+      const steerProvider = (providerThread.session?.providerName ??
+        providerThread.modelSelection.provider) as ProviderKind;
+      const steerSkillInlineText =
+        input.skills !== undefined && input.skills.length > 0
+          ? yield* Effect.tryPromise(() =>
+              buildInlineSkillInstructions({
+                provider: steerProvider,
+                skills: input.skills ?? [],
+                maxChars: Math.max(
+                  0,
+                  PROVIDER_SEND_TURN_MAX_INPUT_CHARS - input.messageText.length - 1_000,
+                ),
+              }),
+            ).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to inline portable skill instructions", {
+                  threadId: input.threadId,
+                  error,
+                }).pipe(Effect.as("")),
+              ),
+            )
+          : "";
+      const steerMessageWithSkills = steerSkillInlineText
+        ? `${input.messageText}\n\n${steerSkillInlineText}`
+        : input.messageText;
+      const normalizedSteerInput = toNonEmptyProviderInput(
+        normalizeSkillMentionTextForProvider({
+          provider: steerProvider,
+          messageText: steerMessageWithSkills,
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        }),
+      );
+      const normalizedSteerAttachments = yield* resolveProviderDispatchAttachments({
+        attachments: input.attachments,
+        attachmentsDir: serverConfig.attachmentsDir,
+        repository: managedAttachments,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        provider: steerProvider,
+        operation: "thread.turn.start",
+      });
+      yield* providerService.steerSubagent({
+        threadId: providerThread.id,
+        providerThreadId: subagentProviderThreadId,
+        ...(normalizedSteerInput ? { input: normalizedSteerInput } : {}),
+        ...(normalizedSteerAttachments.length > 0
+          ? { attachments: normalizedSteerAttachments }
+          : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+      });
       return;
     }
     const activeSessionBeforeEnsure = yield* providerService
@@ -1338,6 +1432,62 @@ const make = Effect.gen(function* () {
       if (pendingContextBootstrapAttempt) {
         pendingContextBootstrapAttempts.set(input.threadId, pendingContextBootstrapAttempt);
       }
+      const ensureSessionForStaleRetry = ensureSessionForThread(input.threadId, input.createdAt, {
+        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+      });
+      const replayWithTranscriptBootstrap = (
+        cause: ProviderServiceError,
+        preserveActiveRuntime = false,
+      ) =>
+        Effect.gen(function* () {
+          // Claude cannot continue from a missing native session; clear the
+          // dead cursor and replay once with Synara transcript context.
+          yield* clearStaleProviderResumeState({
+            threadId: input.threadId,
+            cause,
+            ...(preserveActiveRuntime ? { preserveActiveRuntime: true } : {}),
+          });
+          yield* ensureSessionForStaleRetry;
+
+          const retryBootstrapText =
+            priorTranscriptBootstrapAvailableChars > 0
+              ? buildPriorTranscriptBootstrapText(
+                  thread,
+                  input.messageId,
+                  priorTranscriptBootstrapAvailableChars,
+                )
+              : null;
+          const retryProviderInput = retryBootstrapText
+            ? wrapProviderContext({
+                tag: "thread_context",
+                contextText: retryBootstrapText,
+                messageText: boundaryMessageText,
+                wrapLatestUserMessage: true,
+              })
+            : boundaryMessageText;
+          const retryProviderInputWithSkills = skillInlineText
+            ? `${retryProviderInput}\n\n${skillInlineText}`
+            : retryProviderInput;
+          const retryNormalizedInput = toNonEmptyProviderInput(
+            normalizeSkillMentionTextForProvider({
+              provider: selectedProvider as ProviderKind,
+              messageText: retryProviderInputWithSkills,
+              ...(input.skills !== undefined ? { skills: input.skills } : {}),
+            }),
+          );
+
+          yield* Effect.logWarning(
+            "provider command reactor retrying claude turn after stale resume",
+            {
+              threadId: input.threadId,
+              messageId: input.messageId,
+              bootstrappedPriorTranscript: retryBootstrapText !== null,
+            },
+          );
+          return yield* sendQueuedProviderTurn(retryNormalizedInput);
+        });
       const sentTurn = yield* sendQueuedProviderTurn(normalizedInput).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
@@ -1345,58 +1495,47 @@ const make = Effect.gen(function* () {
               return yield* Effect.fail(error);
             }
 
-            // Claude cannot continue from a missing native session; clear the
-            // dead cursor and replay once with Synara transcript context.
-            yield* clearStaleProviderResumeState({
-              threadId: input.threadId,
-              cause: error,
-            });
-            yield* ensureSessionForThread(input.threadId, input.createdAt, {
-              ...(input.modelSelection !== undefined
-                ? { modelSelection: input.modelSelection }
-                : {}),
-              ...(input.providerOptions !== undefined
-                ? { providerOptions: input.providerOptions }
-                : {}),
-              ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
-            });
-
-            const retryBootstrapText =
-              priorTranscriptBootstrapAvailableChars > 0
-                ? buildPriorTranscriptBootstrapText(
-                    thread,
-                    input.messageId,
-                    priorTranscriptBootstrapAvailableChars,
-                  )
-                : null;
-            const retryProviderInput = retryBootstrapText
-              ? wrapProviderContext({
-                  tag: "thread_context",
-                  contextText: retryBootstrapText,
-                  messageText: boundaryMessageText,
-                  wrapLatestUserMessage: true,
-                })
-              : boundaryMessageText;
-            const retryProviderInputWithSkills = skillInlineText
-              ? `${retryProviderInput}\n\n${skillInlineText}`
-              : retryProviderInput;
-            const retryNormalizedInput = toNonEmptyProviderInput(
-              normalizeSkillMentionTextForProvider({
-                provider: selectedProvider as ProviderKind,
-                messageText: retryProviderInputWithSkills,
-                ...(input.skills !== undefined ? { skills: input.skills } : {}),
-              }),
-            );
-
+            // Stale-resume errors can be transient CLI/session-file races, so
+            // retry the native resume id once before paying the transcript
+            // bootstrap. This must preserve the provider binding: startSession
+            // recovers the cursor from it when the fresh runtime is spawned.
+            if (!providerService.stopRuntimeSession) {
+              return yield* replayWithTranscriptBootstrap(error);
+            }
+            // Background tasks share the runtime subprocess with the parent
+            // turn; stopping it for a native-resume retry would silently kill
+            // them. Recover on the live runtime via transcript bootstrap.
+            const liveBackgroundTasks = providerService.hasLiveRuntimeTasks
+              ? yield* providerService.hasLiveRuntimeTasks({ threadId: input.threadId })
+              : false;
+            if (liveBackgroundTasks) {
+              yield* Effect.logWarning(
+                "provider command reactor skipping native resume retry: live background tasks",
+                {
+                  threadId: input.threadId,
+                  messageId: input.messageId,
+                },
+              );
+              return yield* replayWithTranscriptBootstrap(error, true);
+            }
+            yield* providerService
+              .stopRuntimeSession({ threadId: input.threadId })
+              .pipe(Effect.catch(() => Effect.void));
+            yield* ensureSessionForStaleRetry;
             yield* Effect.logWarning(
-              "provider command reactor retrying claude turn after stale resume",
+              "provider command reactor retrying claude turn with native resume",
               {
                 threadId: input.threadId,
                 messageId: input.messageId,
-                bootstrappedPriorTranscript: retryBootstrapText !== null,
               },
             );
-            return yield* sendQueuedProviderTurn(retryNormalizedInput);
+            return yield* sendQueuedProviderTurn(normalizedInput).pipe(
+              Effect.catch((retryError) =>
+                isStaleClaudeResumeError(retryError)
+                  ? replayWithTranscriptBootstrap(retryError)
+                  : Effect.fail(retryError),
+              ),
+            );
           }),
         ),
         Effect.onError(() =>
@@ -2071,12 +2210,27 @@ const make = Effect.gen(function* () {
   });
 
   const recoverQueuedTurnPromotions = Effect.gen(function* () {
-    yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (threadId) =>
-      hasLiveProviderTurn(ThreadId.makeUnsafe(threadId)).pipe(
-        Effect.flatMap((isRunning) =>
-          isRunning ? Effect.void : drainQueuedTurnsForThread(ThreadId.makeUnsafe(threadId)),
-        ),
-      ),
+    yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (rawThreadId) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe(rawThreadId);
+        // Resolve the projected thread first. `resolveThread` filters
+        // `deleted_at IS NULL`, so a soft-deleted (or fully missing) thread
+        // returns undefined; either way there is nothing to drain into, and the
+        // pending promotions must be cancelled rather than promoted (otherwise a
+        // deletion that raced startup would leave orphan turns to dispatch).
+        const thread = yield* resolveThread(threadId);
+        if (!thread || thread.deletedAt !== null) {
+          yield* queuedTurnPromotions.cancelThread({
+            threadId: rawThreadId,
+            updatedAt: new Date().toISOString(),
+          });
+          return;
+        }
+        if (yield* hasLiveProviderTurn(threadId)) {
+          return;
+        }
+        yield* drainQueuedTurnsForThread(threadId);
+      }),
     );
   });
 
@@ -2105,11 +2259,32 @@ const make = Effect.gen(function* () {
     // exact generation-scoped provider turn and rejects a stale mismatch.
     const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
     const turnId = input.turnId ?? thread.session?.activeTurnId ?? undefined;
-    yield* providerService.interruptTurn({
-      threadId: providerThread.id,
-      ...(turnId ? { turnId } : {}),
-      ...(providerThreadId ? { providerThreadId } : {}),
-    });
+    const exit = yield* Effect.exit(
+      providerService.interruptTurn({
+        threadId: providerThread.id,
+        ...(turnId ? { turnId } : {}),
+        ...(providerThreadId ? { providerThreadId } : {}),
+      }),
+    );
+    if (Exit.isSuccess(exit)) {
+      return;
+    }
+    // Terminal rejections (validation and friends) would otherwise vanish
+    // silently and leave the stop button looking dead; surface them on the
+    // thread. Retryable/uncertain failures keep propagating so the durable
+    // delivery machinery can quarantine and retry them.
+    const outcome = classifyProviderAttemptOutcome(exit);
+    if (outcome._tag === "rejected") {
+      return yield* appendProviderFailureActivity({
+        threadId: input.threadId,
+        kind: "provider.turn.interrupt.failed",
+        summary: "Provider turn interrupt failed",
+        detail: outcome.detail,
+        turnId: input.turnId ?? null,
+        createdAt: input.createdAt,
+      });
+    }
+    return yield* Effect.failCause(exit.cause);
   });
 
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
@@ -2120,6 +2295,76 @@ const make = Effect.gen(function* () {
       turnId: event.payload.turnId,
       createdAt: event.payload.createdAt,
     });
+  });
+
+  const processTaskStopRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.task-stop-requested" }>,
+  ) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    const hasSession = providerThread?.session && providerThread.session.status !== "stopped";
+    if (!providerThread || !hasSession) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.task.stop.failed",
+        summary: "Provider task stop failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    yield* providerService
+      .stopTask({
+        threadId: providerThread.id,
+        taskId: event.payload.taskId,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.task.stop.failed",
+            summary: "Provider task stop failed",
+            detail: Cause.pretty(cause),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
+      );
+  });
+
+  const processTaskBackgroundRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.task-background-requested" }>,
+  ) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    const hasSession = providerThread?.session && providerThread.session.status !== "stopped";
+    if (!providerThread || !hasSession) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.task.background.failed",
+        summary: "Provider task background failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    yield* providerService
+      .backgroundTask({
+        threadId: providerThread.id,
+        toolUseId: event.payload.toolUseId,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.task.background.failed",
+            summary: "Provider task background failed",
+            detail: Cause.pretty(cause),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
+      );
   });
 
   const appendInteractionResponseFailure = (
@@ -2623,6 +2868,16 @@ const make = Effect.gen(function* () {
         case "thread.created":
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
+        case "thread.deleted":
+          // Cancel any queued/promoting turns for the deleted thread BEFORE
+          // clearing runtime caches so a concurrent drain cannot resurrect them
+          // (see cancelThread). Best-effort: the event stays unclaimed either way.
+          yield* queuedTurnPromotions.cancelThread({
+            threadId: event.payload.threadId,
+            updatedAt: event.payload.deletedAt,
+          });
+          yield* clearThreadRuntimeCaches(event.payload.threadId);
+          return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
@@ -2674,6 +2929,12 @@ const make = Effect.gen(function* () {
           return;
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);
+          return;
+        case "thread.task-stop-requested":
+          yield* processTaskStopRequested(event);
+          return;
+        case "thread.task-background-requested":
+          yield* processTaskBackgroundRequested(event);
           return;
         case "thread.approval-response-requested":
           yield* processApprovalResponseRequested(event);
@@ -2745,8 +3006,6 @@ const make = Effect.gen(function* () {
 
     const processOwner = `provider-command-reactor:${crypto.randomUUID()}`;
     let cursor = consumerState.value.lastAckedSequence;
-    const quarantinedThreads = new Set<string>();
-
     const refreshCursor = Effect.gen(function* () {
       const state = yield* deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER);
       if (Option.isSome(state)) cursor = state.value.lastAckedSequence;

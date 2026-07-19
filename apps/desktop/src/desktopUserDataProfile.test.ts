@@ -27,12 +27,15 @@ afterEach(() => {
 describe("desktopUserDataProfile", () => {
   it("resolves the canonical Synara profile names", () => {
     const appDataBase = "/Users/tester/Library/Application Support";
-    expect(resolveDesktopUserDataPath({ appDataBase, isDevelopment: true })).toBe(
+    expect(resolveDesktopUserDataPath({ appDataBase, userDataDirectoryName: "synara-dev" })).toBe(
       "/Users/tester/Library/Application Support/synara-dev",
     );
-    expect(resolveDesktopUserDataPath({ appDataBase, isDevelopment: false })).toBe(
+    expect(resolveDesktopUserDataPath({ appDataBase, userDataDirectoryName: "synara" })).toBe(
       "/Users/tester/Library/Application Support/synara",
     );
+    expect(
+      resolveDesktopUserDataPath({ appDataBase, userDataDirectoryName: "synara-canary" }),
+    ).toBe("/Users/tester/Library/Application Support/synara-canary");
   });
 
   it("uses XDG_CONFIG_HOME on Linux when available", () => {

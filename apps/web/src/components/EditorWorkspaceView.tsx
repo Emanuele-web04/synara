@@ -10,9 +10,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -179,7 +177,7 @@ function DiffFileRow(props: {
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
 
   return (
     <button
@@ -248,20 +246,17 @@ function DiffFilesSidebar(props: {
   const { resolvedTheme } = useTheme();
   const { onAskWhyInChat, onReferenceInChat } = props;
   const handleListKeyDown = useExplorerListNavigation();
-  const totals = useMemo(() => summarizeFileDiffStats(props.files), [props.files]);
+  const totals = summarizeFileDiffStats(props.files);
   const hasDiffStats = totals.additions > 0 || totals.deletions > 0;
   const showLoadingRows = props.isLoading && props.files.length === 0;
-  const handleFileContextMenu = useCallback(
-    (filePath: string, position: { x: number; y: number }) => {
-      void showFileReferenceContextMenu({
-        path: filePath,
-        position,
-        onReferenceInChat,
-        onAskWhyInChat,
-      });
-    },
-    [onAskWhyInChat, onReferenceInChat],
-  );
+  const handleFileContextMenu = (filePath: string, position: { x: number; y: number }) => {
+    void showFileReferenceContextMenu({
+      path: filePath,
+      position,
+      onReferenceInChat,
+      onAskWhyInChat,
+    });
+  };
 
   return (
     <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
@@ -388,38 +383,35 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
-  const handleActivityBarSelectItem = useCallback(
-    (item: EditorActivityBarItem) => {
-      const itemActive =
-        sidebarVisible &&
-        (item === "search" ? searchPaneActive : !searchPaneActive && centerMode === item);
-      if (itemActive) {
-        setSidebarVisible(false);
-        storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, false);
-        return;
-      }
-      if (!sidebarVisible) {
-        setSidebarVisible(true);
-        storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, true);
-      }
-      if (item === "search") {
-        setSearchPaneActive(true);
-        return;
-      }
-      setSearchPaneActive(false);
-      onCenterModeChange(item);
-    },
-    [centerMode, onCenterModeChange, searchPaneActive, sidebarVisible],
-  );
-  const toggleChatPaneVisible = useCallback(() => {
+  const handleActivityBarSelectItem = (item: EditorActivityBarItem) => {
+    const itemActive =
+      sidebarVisible &&
+      (item === "search" ? searchPaneActive : !searchPaneActive && centerMode === item);
+    if (itemActive) {
+      setSidebarVisible(false);
+      storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, false);
+      return;
+    }
+    if (!sidebarVisible) {
+      setSidebarVisible(true);
+      storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, true);
+    }
+    if (item === "search") {
+      setSearchPaneActive(true);
+      return;
+    }
+    setSearchPaneActive(false);
+    onCenterModeChange(item);
+  };
+  const toggleChatPaneVisible = () => {
     setChatPaneVisible((previous) => {
       const next = !previous;
       storeEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY, next);
       return next;
     });
-  }, []);
+  };
 
-  const stopChatPaneResize = useCallback(() => {
+  const stopChatPaneResize = () => {
     const resizeState = chatPaneResizeStateRef.current;
     if (!resizeState || typeof window === "undefined") {
       return;
@@ -438,98 +430,92 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     setChatPaneWidth(resizeState.pendingWidth);
     storeEditorChatPaneWidth(resizeState.pendingWidth);
     chatPaneResizeStateRef.current = null;
-  }, []);
+  };
 
   useEffect(() => stopChatPaneResize, [stopChatPaneResize]);
 
-  const handleChatPaneResizePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || typeof window === "undefined") {
+  const handleChatPaneResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || typeof window === "undefined") {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    stopChatPaneResize();
+
+    const resizeState: EditorChatPaneResizeState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: chatPaneWidth,
+      pendingWidth: chatPaneWidth,
+      rafId: null,
+      restoreBodyCursor: document.body.style.cursor,
+      restoreBodyUserSelect: document.body.style.userSelect,
+      onPointerMove: () => undefined,
+      onPointerEnd: () => undefined,
+    };
+
+    resizeState.onPointerMove = (moveEvent) => {
+      if (moveEvent.pointerId !== resizeState.pointerId) {
         return;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
+      resizeState.pendingWidth = clampEditorChatPaneWidth(
+        resizeState.startWidth + resizeState.startX - moveEvent.clientX,
+      );
+
+      if (resizeState.rafId !== null) {
+        return;
+      }
+
+      resizeState.rafId = window.requestAnimationFrame(() => {
+        resizeState.rafId = null;
+        setChatPaneWidth(resizeState.pendingWidth);
+      });
+    };
+
+    resizeState.onPointerEnd = (endEvent) => {
+      if (endEvent.pointerId !== resizeState.pointerId) {
+        return;
+      }
       stopChatPaneResize();
+    };
 
-      const resizeState: EditorChatPaneResizeState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startWidth: chatPaneWidth,
-        pendingWidth: chatPaneWidth,
-        rafId: null,
-        restoreBodyCursor: document.body.style.cursor,
-        restoreBodyUserSelect: document.body.style.userSelect,
-        onPointerMove: () => undefined,
-        onPointerEnd: () => undefined,
-      };
+    chatPaneResizeStateRef.current = resizeState;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", resizeState.onPointerMove);
+    window.addEventListener("pointerup", resizeState.onPointerEnd);
+    window.addEventListener("pointercancel", resizeState.onPointerEnd);
+  };
 
-      resizeState.onPointerMove = (moveEvent) => {
-        if (moveEvent.pointerId !== resizeState.pointerId) {
-          return;
-        }
-
-        resizeState.pendingWidth = clampEditorChatPaneWidth(
-          resizeState.startWidth + resizeState.startX - moveEvent.clientX,
-        );
-
-        if (resizeState.rafId !== null) {
-          return;
-        }
-
-        resizeState.rafId = window.requestAnimationFrame(() => {
-          resizeState.rafId = null;
-          setChatPaneWidth(resizeState.pendingWidth);
-        });
-      };
-
-      resizeState.onPointerEnd = (endEvent) => {
-        if (endEvent.pointerId !== resizeState.pointerId) {
-          return;
-        }
-        stopChatPaneResize();
-      };
-
-      chatPaneResizeStateRef.current = resizeState;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      window.addEventListener("pointermove", resizeState.onPointerMove);
-      window.addEventListener("pointerup", resizeState.onPointerEnd);
-      window.addEventListener("pointercancel", resizeState.onPointerEnd);
-    },
-    [chatPaneWidth, stopChatPaneResize],
-  );
-
-  const handleChatPaneResizeDoubleClick = useCallback(() => {
+  const handleChatPaneResizeDoubleClick = () => {
     setChatPaneWidth(EDITOR_CHAT_PANE_DEFAULT_WIDTH);
     storeEditorChatPaneWidth(EDITOR_CHAT_PANE_DEFAULT_WIDTH);
-  }, []);
+  };
 
-  const handleChatPaneResizeKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      let nextWidth: number | null = null;
+  const handleChatPaneResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    let nextWidth: number | null = null;
 
-      if (event.key === "ArrowLeft") {
-        nextWidth = chatPaneWidth + EDITOR_CHAT_PANE_KEYBOARD_STEP;
-      } else if (event.key === "ArrowRight") {
-        nextWidth = chatPaneWidth - EDITOR_CHAT_PANE_KEYBOARD_STEP;
-      } else if (event.key === "Home") {
-        nextWidth = EDITOR_CHAT_PANE_MIN_WIDTH;
-      } else if (event.key === "End") {
-        nextWidth = EDITOR_CHAT_PANE_MAX_WIDTH;
-      }
+    if (event.key === "ArrowLeft") {
+      nextWidth = chatPaneWidth + EDITOR_CHAT_PANE_KEYBOARD_STEP;
+    } else if (event.key === "ArrowRight") {
+      nextWidth = chatPaneWidth - EDITOR_CHAT_PANE_KEYBOARD_STEP;
+    } else if (event.key === "Home") {
+      nextWidth = EDITOR_CHAT_PANE_MIN_WIDTH;
+    } else if (event.key === "End") {
+      nextWidth = EDITOR_CHAT_PANE_MAX_WIDTH;
+    }
 
-      if (nextWidth === null) {
-        return;
-      }
+    if (nextWidth === null) {
+      return;
+    }
 
-      event.preventDefault();
-      const clampedWidth = clampEditorChatPaneWidth(nextWidth);
-      setChatPaneWidth(clampedWidth);
-      storeEditorChatPaneWidth(clampedWidth);
-    },
-    [chatPaneWidth],
-  );
+    event.preventDefault();
+    const clampedWidth = clampEditorChatPaneWidth(nextWidth);
+    setChatPaneWidth(clampedWidth);
+    storeEditorChatPaneWidth(clampedWidth);
+  };
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-root)] text-foreground">

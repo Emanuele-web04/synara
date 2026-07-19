@@ -4,7 +4,7 @@
 // Depends on: shared dialog UI, shortcut label builder, and current project script metadata.
 
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogDescription,
@@ -32,16 +32,34 @@ export default function ShortcutsDialog(props: {
   platform: string;
   context: ShortcutSheetContext;
 }) {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogPopup className="max-w-xl">
+        {/* Query state lives below DialogPopup, which unmounts its children on
+            close — every open starts with an empty search and fresh focus,
+            with no reset effect. */}
+        <ShortcutsDialogContent
+          keybindings={props.keybindings}
+          projectScripts={props.projectScripts}
+          platform={props.platform}
+          context={props.context}
+        />
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function ShortcutsDialogContent(props: {
+  keybindings: ResolvedKeybindingsConfig;
+  projectScripts: ReadonlyArray<ProjectScript>;
+  platform: string;
+  context: ShortcutSheetContext;
+}) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Reset the query each time the dialog opens so the user always starts fresh,
-  // and autofocus the search input so they can type immediately after Mod+/.
+  // Autofocus the search input so the user can type immediately after Mod+/.
   useEffect(() => {
-    if (!props.open) {
-      setQuery("");
-      return;
-    }
     const frame = window.requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -49,71 +67,60 @@ export default function ShortcutsDialog(props: {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [props.open]);
+  }, []);
 
-  const sections = useMemo(
-    () =>
-      buildShortcutSheetSections({
-        keybindings: props.keybindings,
-        projectScripts: props.projectScripts,
-        platform: props.platform,
-        context: props.context,
-      }),
-    [props.keybindings, props.projectScripts, props.platform, props.context],
-  );
-
-  const filteredSections = useMemo(
-    () => filterShortcutSheetSections(sections, query),
-    [sections, query],
-  );
-
+  const sections = buildShortcutSheetSections({
+    keybindings: props.keybindings,
+    projectScripts: props.projectScripts,
+    platform: props.platform,
+    context: props.context,
+  });
+  const filteredSections = filterShortcutSheetSections(sections, query);
   const hasResults = filteredSections.some((section) => section.entries.length > 0);
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogPopup className="max-w-xl">
-        <DialogHeader className="pb-2">
-          <DialogTitle className="text-base">Keyboard shortcuts</DialogTitle>
-          <DialogDescription className="text-xs">
-            Reflects the bindings active in your current context.
-          </DialogDescription>
-          <div className="pt-2">
-            <Input
-              ref={inputRef}
-              type="search"
-              size="sm"
-              placeholder="Search shortcuts..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && query.length > 0) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setQuery("");
-                }
-              }}
-              className="rounded-md"
-              nativeInput
-              aria-label="Search shortcuts"
-            />
-          </div>
-        </DialogHeader>
+    <>
+      <DialogHeader className="pb-2">
+        <DialogTitle className="text-base">Keyboard shortcuts</DialogTitle>
+        <DialogDescription className="text-xs">
+          Reflects the bindings active in your current context.
+        </DialogDescription>
+        <div className="pt-2">
+          <Input
+            ref={inputRef}
+            type="search"
+            size="sm"
+            placeholder="Search shortcuts..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query.length > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery("");
+              }
+            }}
+            className="rounded-md"
+            nativeInput
+            aria-label="Search shortcuts"
+          />
+        </div>
+      </DialogHeader>
 
-        <DialogPanel className="max-h-[min(70vh,560px)] px-0 py-0">
-          {hasResults ? (
-            <div className="flex flex-col">
-              {filteredSections.map((section, index) => (
-                <ShortcutSection key={section.id} section={section} isFirst={index === 0} />
-              ))}
-            </div>
-          ) : (
-            <div className="px-6 py-10 text-center text-sm text-muted-foreground">
-              No shortcuts match &ldquo;{query}&rdquo;.
-            </div>
-          )}
-        </DialogPanel>
-      </DialogPopup>
-    </Dialog>
+      <DialogPanel className="max-h-[min(70vh,560px)] px-0 py-0">
+        {hasResults ? (
+          <div className="flex flex-col">
+            {filteredSections.map((section, index) => (
+              <ShortcutSection key={section.id} section={section} isFirst={index === 0} />
+            ))}
+          </div>
+        ) : (
+          <div className="px-6 py-10 text-center text-sm text-muted-foreground">
+            No shortcuts match &ldquo;{query}&rdquo;.
+          </div>
+        )}
+      </DialogPanel>
+    </>
   );
 }
 

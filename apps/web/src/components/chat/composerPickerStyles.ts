@@ -102,8 +102,6 @@ export const CHAT_ROUTE_INSET_SHELL_CLASS_NAME =
 export const CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME =
   "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden";
 
-/** Shared max width for the chat column (transcript + composer). */
-export const CHAT_COLUMN_MAX_WIDTH_CLASS_NAME = COMPOSER_MAX_WIDTH_CLASS_NAME;
 /** Horizontal padding shared by the transcript and composer columns. */
 export const CHAT_COLUMN_GUTTER_CLASS_NAME =
   "px-[var(--app-density-chat-gutter-x,0.75rem)] sm:px-[var(--app-density-chat-gutter-x-lg,1.25rem)]";
@@ -125,9 +123,11 @@ export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
- *  transcript text bleed through its top edge. Match the chat surface to stay seamless. */
+ *  transcript text bleed through its top edge. Match the chat surface to stay seamless.
+ *  `relative z-[1]` keeps the full input outline above the inset stacked rail
+ *  (`-mb-px`), so the top border is never covered by live-changes / task / queue chrome. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group chat-composer-shell bg-[var(--color-background-surface)] transition-colors duration-200";
+  "group relative z-[1] chat-composer-shell bg-[var(--color-background-surface)] transition-colors duration-200";
 
 /** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
@@ -148,10 +148,6 @@ export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDE
  *  dark mode using the same `border-border` token as the Environment panel, instead
  *  of dropping to shadow-only separation. */
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
-
-/** Active segment fill in the sidebar Threads/Workspace picker. */
-export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
-  "relative z-[1] text-[var(--color-text-foreground)]";
 
 /** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
 export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
@@ -179,9 +175,6 @@ export const COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME = `border border-bor
 
 /** Visual shell for composer picker dropdown panels (menus attached to the composer). */
 export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
-
-/** Frosted backdrop layer inside open picker panels (composer menus + settings selects). */
-export const COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME = `${COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME} pointer-events-none absolute inset-0 rounded-[inherit]`;
 
 /** Scrollable list body inside open picker panels. */
 export const COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME = `relative z-1 w-full min-w-0 overflow-y-auto overscroll-contain ${COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME}`;

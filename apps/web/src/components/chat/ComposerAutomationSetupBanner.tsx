@@ -6,9 +6,7 @@
 // Layer: Chat composer UI
 // Exports: ComposerAutomationSetupBanner
 
-import { memo } from "react";
-
-export const ComposerAutomationSetupBanner = memo(function ComposerAutomationSetupBanner({
+export const ComposerAutomationSetupBanner = function ComposerAutomationSetupBanner({
   onCancel,
 }: {
   onCancel: () => void;
@@ -28,4 +26,4 @@ export const ComposerAutomationSetupBanner = memo(function ComposerAutomationSet
       </button>
     </div>
   );
-});
+};

@@ -11,10 +11,8 @@
 
 import { type MessageId } from "@synara/contracts";
 import {
-  useCallback,
   useEffect,
   useId,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -100,34 +98,22 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     activeStore.get,
     activeStore.get,
   );
-  const anchorIndex = useMemo(
-    () => items.findIndex((item) => item.id === trailSnapshot.currentId),
-    [items, trailSnapshot.currentId],
-  );
-  const visibleIndexes = useMemo(() => {
-    if (trailSnapshot.visibleIds.length === 0) {
-      return [];
+  const anchorIndex = items.findIndex((item) => item.id === trailSnapshot.currentId);
+  const visibleIdSet = new Set(trailSnapshot.visibleIds);
+  const visibleIndexes: number[] = [];
+  items.forEach((item, index) => {
+    if (visibleIdSet.has(item.id)) {
+      visibleIndexes.push(index);
     }
-    const visibleIds = new Set(trailSnapshot.visibleIds);
-    const indexes: number[] = [];
-    items.forEach((item, index) => {
-      if (visibleIds.has(item.id)) {
-        indexes.push(index);
-      }
-    });
-    return indexes;
-  }, [items, trailSnapshot.visibleIds]);
-  const visibleIndexSet = useMemo(() => new Set(visibleIndexes), [visibleIndexes]);
+  });
+  const visibleIndexSet = new Set(visibleIndexes);
 
   const visible = hasGutter && items.length > 1;
 
   // Tick layout depends only on the message count (fixed spacing, natural content
   // height) — never on the measured viewport — so the capped/scrolling viewport
   // can't feed its height back into the layout (no ResizeObserver loop).
-  const geometry = useMemo(
-    () => computeTrailGeometry({ count: items.length, spacingPx: TICK_SPACING_PX }),
-    [items.length],
-  );
+  const geometry = computeTrailGeometry({ count: items.length, spacingPx: TICK_SPACING_PX });
 
   // --- Hot-path refs (read inside rAF; never trigger renders) ---------------
   const rafIdRef = useRef<number | null>(null);
@@ -136,29 +122,34 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
   const latestPointerClientYRef = useRef<number | null>(null);
   const focusOverrideIndexRef = useRef<number | null>(null);
   const geometryRef = useRef<TrailGeometry | null>(geometry);
-  geometryRef.current = geometry;
   const viewportTopRef = useRef(0);
   const tooltipIndexRef = useRef(-1);
   const reducedMotionRef = useRef(false);
   // Mirror render values into refs so the rAF/handlers stay stable and current.
+  // Mirrored in an effect (not during render) so the component stays eligible
+  // for React Compiler; the rAF loop and handlers only fire post-commit.
   const itemsRef = useRef(items);
-  itemsRef.current = items;
   const anchorIndexRef = useRef(anchorIndex);
-  anchorIndexRef.current = anchorIndex;
   const visibleIndexesRef = useRef(visibleIndexes);
-  visibleIndexesRef.current = visibleIndexes;
   const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
   const visibleRef = useRef(visible);
-  visibleRef.current = visible;
-
-  // Keep the tick-ref array sized to the message count (drop stale trailing refs).
-  if (tickRefs.current.length !== items.length) {
-    tickRefs.current = Array.from<HTMLButtonElement | null>({ length: items.length }).fill(null);
-  }
+  useEffect(() => {
+    geometryRef.current = geometry;
+    itemsRef.current = items;
+    anchorIndexRef.current = anchorIndex;
+    visibleIndexesRef.current = visibleIndexes;
+    onSelectRef.current = onSelect;
+    visibleRef.current = visible;
+    // Keep the tick-ref array sized to the message count. Truncate only —
+    // growth happens via the JSX ref callbacks, which run before this effect,
+    // and a full refill here would wipe the elements they just attached.
+    if (tickRefs.current.length > items.length) {
+      tickRefs.current.length = items.length;
+    }
+  }, [geometry, items, anchorIndex, visibleIndexes, onSelect, visible]);
 
   // --- Imperative writers ----------------------------------------------------
-  const writeStyles = useCallback((styles: readonly TickStyle[]) => {
+  const writeStyles = (styles: readonly TickStyle[]) => {
     const refs = tickRefs.current;
     for (let i = 0; i < styles.length; i += 1) {
       const el = refs[i];
@@ -168,17 +159,17 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
       el.style.width = `${styles[i]!.width}px`;
       el.style.opacity = `${styles[i]!.opacity}`;
     }
-  }, []);
+  };
 
-  const hideTooltip = useCallback(() => {
+  const hideTooltip = () => {
     tooltipIndexRef.current = -1;
     const tip = tooltipRef.current;
     if (tip) {
       tip.style.visibility = "hidden";
     }
-  }, []);
+  };
 
-  const showTooltip = useCallback((index: number, geometry: TrailGeometry) => {
+  const showTooltip = (index: number, geometry: TrailGeometry) => {
     const tip = tooltipRef.current;
     const item = itemsRef.current[index];
     if (!tip || !item) {
@@ -208,9 +199,9 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     const offsetTop = viewport?.offsetTop ?? 0;
     tip.style.top = `${offsetTop + clampTooltipTop(visibleY, tooltipHeight, viewportHeight)}px`;
     tip.style.visibility = "visible";
-  }, []);
+  };
 
-  const applyHighlightFloors = useCallback((styles: TickStyle[]) => {
+  const applyHighlightFloors = (styles: TickStyle[]) => {
     const anchorIndexValue = anchorIndexRef.current;
     for (const index of visibleIndexesRef.current) {
       const style = styles[index];
@@ -222,10 +213,10 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     if (anchorStyle) {
       anchorStyle.opacity = Math.max(anchorStyle.opacity, TICK_ANCHOR_OPACITY);
     }
-  }, []);
+  };
 
   // Pointer/keyboard away: restore the resting rail (anchor tick highlighted).
-  const applyRest = useCallback(() => {
+  const applyRest = () => {
     const styles = computeRestStyles(
       itemsRef.current.length,
       anchorIndexRef.current,
@@ -236,11 +227,11 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     applyHighlightFloors(styles);
     writeStyles(styles);
     hideTooltip();
-  }, [applyHighlightFloors, hideTooltip, writeStyles]);
+  };
 
   // Position the ticks vertically in content space and reset to rest when idle.
   // Width changes never reflow this, so it only runs when the layout changes.
-  const layoutTicks = useCallback(() => {
+  const layoutTicks = () => {
     const geometryValue = geometryRef.current;
     if (!geometryValue) {
       return;
@@ -257,10 +248,10 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     if (latestPointerClientYRef.current === null && focusOverrideIndexRef.current === null) {
       applyRest();
     }
-  }, [applyRest]);
+  };
 
   // --- The magnification frame (single coalesced rAF) ------------------------
-  const renderFrame = useCallback(() => {
+  const renderFrame = () => {
     rafIdRef.current = null;
     const geometry = geometryRef.current;
     if (!geometry || !visibleRef.current) {
@@ -324,20 +315,20 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     }
     writeStyles(styles);
     showTooltip(focusedIndex, geometry);
-  }, [applyHighlightFloors, applyRest, showTooltip, writeStyles]);
+  };
 
-  const scheduleFrame = useCallback(() => {
+  const scheduleFrame = () => {
     if (rafIdRef.current === null) {
       rafIdRef.current = requestAnimationFrame(renderFrame);
     }
-  }, [renderFrame]);
+  };
 
-  const cancelFrame = useCallback(() => {
+  const cancelFrame = () => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
-  }, []);
+  };
 
   // --- Gutter visibility: rail only shows when the pane is wide enough --------
   // Width-only ResizeObserver; the tick layout is count-driven (see `geometry`),
@@ -404,59 +395,50 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
   useEffect(() => cancelFrame, [cancelFrame]);
 
   // --- Pointer handlers (mouse / pen only; touch must not hijack scroll) -----
-  const handlePointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch" || !visibleRef.current) {
-        return;
-      }
-      latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
-      scheduleFrame();
-    },
-    [scheduleFrame],
-  );
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch" || !visibleRef.current) {
+      return;
+    }
+    latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
+    scheduleFrame();
+  };
 
-  const handlePointerEnter = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch" || !visibleRef.current) {
-        return;
-      }
-      const rect = viewportRef.current?.getBoundingClientRect();
-      if (rect) {
-        viewportTopRef.current = rect.top;
-      }
-      latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
-      scheduleFrame();
-    },
-    [scheduleFrame],
-  );
+  const handlePointerEnter = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch" || !visibleRef.current) {
+      return;
+    }
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (rect) {
+      viewportTopRef.current = rect.top;
+    }
+    latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
+    scheduleFrame();
+  };
 
-  const handlePointerLeave = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch") {
-        return;
-      }
-      latestPointerClientYRef.current = null;
-      cancelFrame();
-      // A keyboard-focused tick keeps its magnification; otherwise go to rest.
-      if (focusOverrideIndexRef.current !== null) {
-        scheduleFrame();
-      } else {
-        applyRest();
-      }
-    },
-    [applyRest, cancelFrame, scheduleFrame],
-  );
+  const handlePointerLeave = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    latestPointerClientYRef.current = null;
+    cancelFrame();
+    // A keyboard-focused tick keeps its magnification; otherwise go to rest.
+    if (focusOverrideIndexRef.current !== null) {
+      scheduleFrame();
+    } else {
+      applyRest();
+    }
+  };
 
   // Rail scrolling under a stationary pointer changes which tick is focused, so
   // keep the magnification + tooltip in sync while the pointer/keyboard is engaged.
-  const handleScroll = useCallback(() => {
+  const handleScroll = () => {
     if (latestPointerClientYRef.current !== null || focusOverrideIndexRef.current !== null) {
       scheduleFrame();
     }
-  }, [scheduleFrame]);
+  };
 
   // Big hit-area: clicking anywhere on the rail jumps to the nearest tick.
-  const handleClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+  const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     const geometryValue = geometryRef.current;
     const viewport = viewportRef.current;
     if (!geometryValue || !viewport) {
@@ -468,82 +450,73 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     if (item) {
       onSelectRef.current(item.id);
     }
-  }, []);
+  };
 
   // --- Keyboard: one tab stop (roving), arrows move, Enter jumps -------------
-  const focusTick = useCallback((index: number) => {
+  const focusTick = (index: number) => {
     setRovingIndex(index);
     tickRefs.current[index]?.focus();
-  }, []);
+  };
 
-  const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLElement>) => {
-      const count = itemsRef.current.length;
-      if (count === 0) {
-        return;
-      }
-      const current = clampNumber(rovingIndex, 0, count - 1);
-      switch (event.key) {
-        case "ArrowDown":
-          event.preventDefault();
-          focusTick(Math.min(count - 1, current + 1));
-          break;
-        case "ArrowUp":
-          event.preventDefault();
-          focusTick(Math.max(0, current - 1));
-          break;
-        case "Home":
-          event.preventDefault();
-          focusTick(0);
-          break;
-        case "End":
-          event.preventDefault();
-          focusTick(count - 1);
-          break;
-        case "Enter":
-        case " ": {
-          event.preventDefault();
-          const item = itemsRef.current[current];
-          if (item) {
-            onSelectRef.current(item.id);
-          }
-          break;
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const count = itemsRef.current.length;
+    if (count === 0) {
+      return;
+    }
+    const current = clampNumber(rovingIndex, 0, count - 1);
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusTick(Math.min(count - 1, current + 1));
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusTick(Math.max(0, current - 1));
+        break;
+      case "Home":
+        event.preventDefault();
+        focusTick(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusTick(count - 1);
+        break;
+      case "Enter":
+      case " ": {
+        event.preventDefault();
+        const item = itemsRef.current[current];
+        if (item) {
+          onSelectRef.current(item.id);
         }
-        case "Escape":
-          tickRefs.current[current]?.blur();
-          break;
-        default:
-          break;
+        break;
       }
-    },
-    [focusTick, rovingIndex],
-  );
+      case "Escape":
+        tickRefs.current[current]?.blur();
+        break;
+      default:
+        break;
+    }
+  };
 
-  const handleTickFocus = useCallback(
-    (index: number) => {
-      focusOverrideIndexRef.current = index;
-      const geometry = geometryRef.current;
-      if (geometry) {
-        showTooltip(index, geometry); // synchronous for screen readers
-      }
-      scheduleFrame();
-    },
-    [scheduleFrame, showTooltip],
-  );
+  const handleTickFocus = (index: number) => {
+    focusOverrideIndexRef.current = index;
+    const geometry = geometryRef.current;
+    if (geometry) {
+      showTooltip(index, geometry); // synchronous for screen readers
+    }
+    scheduleFrame();
+  };
 
-  const handleRailBlur = useCallback(
-    (event: ReactFocusEvent<HTMLElement>) => {
-      const root = rootRef.current;
-      if (root && event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) {
-        return; // focus moved between ticks — still inside the rail
-      }
-      focusOverrideIndexRef.current = null;
-      if (latestPointerClientYRef.current === null) {
-        applyRest();
-      }
-    },
-    [applyRest],
-  );
+  const handleRailBlur = (event: ReactFocusEvent<HTMLElement>) => {
+    const root = rootRef.current;
+    if (root && event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) {
+      return; // focus moved between ticks — still inside the rail
+    }
+    focusOverrideIndexRef.current = null;
+    if (latestPointerClientYRef.current === null) {
+      applyRest();
+    }
+  };
 
   const tabStop = clampNumber(rovingIndex, 0, Math.max(0, items.length - 1));
 

@@ -4,19 +4,7 @@
 // Exports: Codex process env builder and browser-plugin overlay helpers.
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
-import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
@@ -35,14 +23,15 @@ const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
 const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
+const codexOverlayPreparationQueues = new Map<string, Promise<void>>();
 // Retired local browser integrations used a stable six-character namespace.
 // Match the structural conflict without retaining any previous product name.
 const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
   /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
 interface CodexOverlayEntryLinker {
-  readonly symlink: typeof symlinkSync;
-  readonly copyFile: typeof copyFileSync;
+  readonly symlink: typeof fs.symlink;
+  readonly copyFile: typeof fs.copyFile;
 }
 
 export function resolveCodexBrowserUsePipePath(
@@ -69,9 +58,9 @@ function isSafePluginSectionHeader(value: unknown): value is string {
   );
 }
 
-export function readSynaraConfigSuppressions(markerPath: string): readonly string[] {
+export async function readSynaraConfigSuppressions(markerPath: string): Promise<readonly string[]> {
   try {
-    const parsed = JSON.parse(readFileSync(markerPath, "utf8")) as unknown;
+    const parsed = JSON.parse(await fs.readFile(markerPath, "utf8")) as unknown;
     if (typeof parsed !== "object" || parsed === null) return [];
     const marker = parsed as { version?: unknown; sectionHeaders?: unknown };
     if (marker.version !== 1 || !Array.isArray(marker.sectionHeaders)) return [];
@@ -146,24 +135,24 @@ export function disableCodexConfigSections(
   return output.join("\n");
 }
 
-function writeSynaraConfigSuppressions(
+async function writeSynaraConfigSuppressions(
   markerPath: string,
   sectionHeaders: readonly string[],
-): void {
+): Promise<void> {
   const normalized = [...new Set(sectionHeaders.filter(isSafePluginSectionHeader))].slice(
     0,
     MAX_CONFIG_SUPPRESSION_SECTIONS,
   );
   const temporaryPath = `${markerPath}.${process.pid}.tmp`;
-  writeFileSync(
+  await fs.writeFile(
     temporaryPath,
     `${JSON.stringify({ version: 1, sectionHeaders: normalized }, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  renameSync(temporaryPath, markerPath);
+  await fs.rename(temporaryPath, markerPath);
 }
 
-export function linkOrCopyCodexOverlayEntry(
+export async function linkOrCopyCodexOverlayEntry(
   input: {
     readonly entryName: string;
     readonly sourcePath: string;
@@ -171,15 +160,15 @@ export function linkOrCopyCodexOverlayEntry(
     readonly type: "dir" | "file";
   },
   linker: CodexOverlayEntryLinker = {
-    symlink: symlinkSync,
-    copyFile: copyFileSync,
+    symlink: fs.symlink,
+    copyFile: fs.copyFile,
   },
-): void {
+): Promise<void> {
   try {
-    linker.symlink(input.sourcePath, input.targetPath, input.type);
+    await linker.symlink(input.sourcePath, input.targetPath, input.type);
   } catch (error: unknown) {
     if (input.type === "file" && CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
-      linker.copyFile(input.sourcePath, input.targetPath);
+      await linker.copyFile(input.sourcePath, input.targetPath);
       return;
     }
     throw error;
@@ -201,21 +190,21 @@ export function prioritizeCodexOverlayEntries(entries: readonly string[]): strin
   return [...sharedStateEntries, ...otherEntries];
 }
 
-function ensureCodexOverlaySymlink(input: {
+async function ensureCodexOverlaySymlink(input: {
   readonly entryName: string;
   readonly sourcePath: string;
   readonly targetPath: string;
   readonly type: "dir" | "file";
-}): void {
-  let targetStat: ReturnType<typeof lstatSync> | undefined;
+}): Promise<void> {
+  let targetStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
   try {
-    targetStat = lstatSync(input.targetPath);
+    targetStat = await fs.lstat(input.targetPath);
   } catch {
     targetStat = undefined;
   }
 
   if (targetStat) {
-    if (targetStat.isSymbolicLink() && readlinkSync(input.targetPath) === input.sourcePath) {
+    if (targetStat.isSymbolicLink() && (await fs.readlink(input.targetPath)) === input.sourcePath) {
       return;
     }
 
@@ -226,13 +215,13 @@ function ensureCodexOverlaySymlink(input: {
     ) {
       // SQLite files must stay generation-matched, and auth must mirror the
       // user's real Codex home so external `codex login` changes are visible.
-      rmSync(input.targetPath, { recursive: true, force: true });
+      await fs.rm(input.targetPath, { recursive: true, force: true });
     } else {
       return;
     }
   }
 
-  linkOrCopyCodexOverlayEntry(input);
+  await linkOrCopyCodexOverlayEntry(input);
 }
 
 export function appendCodexConfigSection(config: string, section: string): string {
@@ -454,30 +443,50 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
   );
 }
 
-function prepareSynaraCodexHomeOverlay(input: {
+async function serializeCodexOverlayPreparation<A>(
+  overlayHomePath: string,
+  prepare: () => Promise<A>,
+): Promise<A> {
+  const previous = codexOverlayPreparationQueues.get(overlayHomePath) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(prepare);
+  const queued = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  codexOverlayPreparationQueues.set(overlayHomePath, queued);
+  try {
+    return await current;
+  } finally {
+    if (codexOverlayPreparationQueues.get(overlayHomePath) === queued) {
+      codexOverlayPreparationQueues.delete(overlayHomePath);
+    }
+  }
+}
+
+async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
   readonly appendConfigToml?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
   const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
 
-  mkdirSync(overlayHomePath, { recursive: true });
+  await fs.mkdir(overlayHomePath, { recursive: true });
 
   try {
     // Auth must get a best-effort link/copy before optional entries whose
     // symlinks may fail on restricted Windows installs.
-    for (const entry of prioritizeCodexOverlayEntries(readdirSync(sourceHomePath))) {
+    for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
       if (entry === "config.toml") {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
       const targetPath = path.join(overlayHomePath, entry);
-      const stat = lstatSync(sourcePath);
-      ensureCodexOverlaySymlink({
+      const stat = await fs.lstat(sourcePath);
+      await ensureCodexOverlaySymlink({
         entryName: entry,
         sourcePath,
         targetPath,
@@ -490,21 +499,32 @@ function prepareSynaraCodexHomeOverlay(input: {
   }
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  const sourceConfig = await fs.readFile(sourceConfigPath, "utf8").catch((cause: unknown) => {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw cause;
+  });
   const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
   const suppressedSections = [
     ...new Set([
       ...findConflictingLocalBrowserPluginSections(sourceConfig),
-      ...readSynaraConfigSuppressions(suppressionMarkerPath),
+      ...(await readSynaraConfigSuppressions(suppressionMarkerPath)),
     ]),
   ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
   const overlayConfigPath = path.join(overlayHomePath, "config.toml");
   let overlayConfig = disableCodexConfigSections(sourceConfig, suppressedSections, true);
   const managedSection =
     input.appendConfigToml ??
-    (existsSync(overlayConfigPath)
-      ? extractManagedCodexConfigSection(readFileSync(overlayConfigPath, "utf8"))
-      : undefined);
+    (await fs
+      .readFile(overlayConfigPath, "utf8")
+      .then(extractManagedCodexConfigSection)
+      .catch((cause: unknown) => {
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+          return undefined;
+        }
+        throw cause;
+      }));
   if (managedSection) {
     overlayConfig = appendManagedCodexConfigSection(overlayConfig, managedSection);
     const tokenEnvVar = /bearer_token_env_var\s*=\s*"([^"]+)"/.exec(managedSection)?.[1];
@@ -512,13 +532,28 @@ function prepareSynaraCodexHomeOverlay(input: {
       overlayConfig = mergeShellEnvPolicyExclude(overlayConfig, tokenEnvVar);
     }
   }
-  writeFileSync(overlayConfigPath, overlayConfig, "utf8");
-  writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
+  await fs.writeFile(overlayConfigPath, overlayConfig, "utf8");
+  await writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
   return overlayHomePath;
 }
 
-export function buildCodexProcessEnv(
+async function prepareSynaraCodexHomeOverlay(input: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly homePath?: string;
+  readonly appendConfigToml?: string;
+}): Promise<string | undefined> {
+  const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
+  if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
+    return undefined;
+  }
+  return serializeCodexOverlayPreparation(overlayHomePath, () =>
+    prepareSynaraCodexHomeOverlayUnlocked(input),
+  );
+}
+
+export async function buildCodexProcessEnv(
   input: {
     readonly env?: NodeJS.ProcessEnv;
     readonly homePath?: string;
@@ -526,9 +561,9 @@ export function buildCodexProcessEnv(
     readonly readEnvironment?: ShellEnvironmentReader;
     readonly appendConfigToml?: string;
   } = {},
-): NodeJS.ProcessEnv {
+): Promise<NodeJS.ProcessEnv> {
   const baseEnv = { ...(input.env ?? process.env) };
-  const overlayHomePath = prepareSynaraCodexHomeOverlay({
+  const overlayHomePath = await prepareSynaraCodexHomeOverlay({
     env: baseEnv,
     ...(input.homePath ? { homePath: input.homePath } : {}),
     ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),

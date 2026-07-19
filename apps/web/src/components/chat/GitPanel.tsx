@@ -11,7 +11,7 @@
 import { type FileDiffMetadata } from "@pierre/diffs/react";
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
@@ -60,10 +60,7 @@ function parsePatchToSortedFiles(
   return renderable?.kind === "files" ? sortFileDiffsByPath(renderable.files) : [];
 }
 
-// Memoized so a stage/unstage in-flight toggle (which flips `actionDisabled`
-// across siblings) and unrelated parent re-renders stay cheap; the per-row stat
-// is only recomputed when the underlying file diff actually changes.
-const GitFileRow = memo(function GitFileRow(props: {
+function GitFileRow(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";
   isSelected: boolean;
@@ -75,7 +72,7 @@ const GitFileRow = memo(function GitFileRow(props: {
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
   return (
     <div
       className={cn(
@@ -117,7 +114,7 @@ const GitFileRow = memo(function GitFileRow(props: {
       </IconButton>
     </div>
   );
-});
+}
 
 function GitFileSection(props: {
   title: string;
@@ -133,11 +130,8 @@ function GitFileSection(props: {
   onSelect: (file: FileDiffMetadata) => void;
   onAction: (paths: string[]) => void;
 }) {
-  const stat = useMemo(() => summarizeFileDiffStats(props.files), [props.files]);
-  const allPaths = useMemo(
-    () => props.files.map((file) => resolveFileDiffPath(file)),
-    [props.files],
-  );
+  const stat = summarizeFileDiffStats(props.files);
+  const allPaths = props.files.map((file) => resolveFileDiffPath(file));
   return (
     <section className="min-w-0">
       <header className="flex items-center gap-2 px-1.5 py-1">
@@ -186,13 +180,7 @@ function GitFileSection(props: {
   );
 }
 
-// Isolated + memoized so the (heavy) diff viewer only re-renders when the
-// selected file or theme changes — not when stage/unstage mutations toggle the
-// pane's pending state.
-const SelectedFileDiff = memo(function SelectedFileDiff(props: {
-  fileDiff: FileDiffMetadata;
-  theme: "light" | "dark";
-}) {
+function SelectedFileDiff(props: { fileDiff: FileDiffMetadata; theme: "light" | "dark" }) {
   return (
     <FileDiffSurface className="h-full min-h-0 overflow-auto px-2 py-2">
       <div className="diff-render-file rounded-md">
@@ -200,7 +188,7 @@ const SelectedFileDiff = memo(function SelectedFileDiff(props: {
       </div>
     </FileDiffSurface>
   );
-});
+}
 
 export function GitPanel(props: {
   hostThreadId: ThreadId;
@@ -226,66 +214,58 @@ export function GitPanel(props: {
   const stagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "staged" }));
   const unstagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "unstaged" }));
 
-  const stagedFiles = useMemo(
-    () => parsePatchToSortedFiles(stagedQuery.data?.patch, `git-pane:staged:${theme}`),
-    [stagedQuery.data?.patch, theme],
-  );
-  const unstagedFiles = useMemo(
-    () => parsePatchToSortedFiles(unstagedQuery.data?.patch, `git-pane:unstaged:${theme}`),
-    [unstagedQuery.data?.patch, theme],
+  const stagedFiles = parsePatchToSortedFiles(stagedQuery.data?.patch, `git-pane:staged:${theme}`);
+  const unstagedFiles = parsePatchToSortedFiles(
+    unstagedQuery.data?.patch,
+    `git-pane:unstaged:${theme}`,
   );
 
   const stageMutation = useMutation(gitStageFilesMutationOptions({ cwd, queryClient }));
   const unstageMutation = useMutation(gitUnstageFilesMutationOptions({ cwd, queryClient }));
   const mutating = stageMutation.isPending || unstageMutation.isPending;
 
-  const stage = useCallback(
-    (paths: string[]) => {
-      if (!cwd || paths.length === 0) return;
-      stageMutation.mutate(paths);
-    },
-    [cwd, stageMutation],
-  );
-  const unstage = useCallback(
-    (paths: string[]) => {
-      if (!cwd || paths.length === 0) return;
-      unstageMutation.mutate(paths);
-    },
-    [cwd, unstageMutation],
-  );
+  const stage = (paths: string[]) => {
+    if (!cwd || paths.length === 0) return;
+    stageMutation.mutate(paths);
+  };
+  const unstage = (paths: string[]) => {
+    if (!cwd || paths.length === 0) return;
+    unstageMutation.mutate(paths);
+  };
 
-  const selectStaged = useCallback((file: FileDiffMetadata) => {
+  const selectStaged = (file: FileDiffMetadata) => {
     setSelected({ section: "staged", path: resolveFileDiffPath(file) });
-  }, []);
-  const selectUnstaged = useCallback((file: FileDiffMetadata) => {
+  };
+  const selectUnstaged = (file: FileDiffMetadata) => {
     setSelected({ section: "unstaged", path: resolveFileDiffPath(file) });
-  }, []);
+  };
 
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (!cwd) return;
     void queryClient.invalidateQueries({ queryKey: gitQueryKeys.workingTreeDiff(cwd, "staged") });
     void queryClient.invalidateQueries({
       queryKey: gitQueryKeys.workingTreeDiff(cwd, "unstaged"),
     });
-  }, [cwd, queryClient]);
+  };
 
   // Resolve the selected file by path, preferring its stored section but falling
   // back to the other list so the diff (and row highlight) follow a file across a
   // stage/unstage move instead of silently clearing.
-  const selectedResolved = useMemo(() => {
-    if (!selected) return null;
+  let selectedResolved: { section: GitPanelSection; file: FileDiffMetadata } | null = null;
+  if (selected) {
     const findInSection = (section: GitPanelSection) =>
       (section === "staged" ? stagedFiles : unstagedFiles).find(
         (file) => resolveFileDiffPath(file) === selected.path,
       ) ?? null;
     const preferred = findInSection(selected.section);
     if (preferred) {
-      return { section: selected.section, file: preferred };
+      selectedResolved = { section: selected.section, file: preferred };
+    } else {
+      const otherSection: GitPanelSection = selected.section === "staged" ? "unstaged" : "staged";
+      const fallback = findInSection(otherSection);
+      selectedResolved = fallback ? { section: otherSection, file: fallback } : null;
     }
-    const otherSection: GitPanelSection = selected.section === "staged" ? "unstaged" : "staged";
-    const fallback = findInSection(otherSection);
-    return fallback ? { section: otherSection, file: fallback } : null;
-  }, [selected, stagedFiles, unstagedFiles]);
+  }
   const selectedFileDiff = selectedResolved?.file ?? null;
   const selectedPath = selected?.path ?? null;
 

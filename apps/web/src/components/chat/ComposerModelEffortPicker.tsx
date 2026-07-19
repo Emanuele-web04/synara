@@ -1,8 +1,8 @@
 // FILE: ComposerModelEffortPicker.tsx
 // Purpose: Combined composer picker for model + effort/reasoning + speed in a single trigger.
 // Layer: Chat composer presentation
-// Depends on: provider/model menu items, traits menu content, shared menu primitives,
-//   composer trait selection helpers, and the composer draft store for fast-mode persistence.
+// Depends on: provider/model menu items, traits menu content (which owns the fast-mode
+//   toggle in its Effort header), shared menu primitives, and composer trait helpers.
 
 import {
   type ModelSlug,
@@ -13,22 +13,13 @@ import {
   type ServerProviderStatus,
   type ThreadId,
 } from "@synara/contracts";
-import { memo, useCallback, useState } from "react";
+import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { useComposerDraftStore } from "../../composerDraftStore";
-import { buildNextProviderOptions, type ProviderModelOption } from "../../providerModelOptions";
+import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
-import {
-  Menu,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuSub,
-  MenuSubTrigger,
-  MenuTrigger,
-} from "../ui/menu";
+import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
@@ -82,26 +73,19 @@ type ComposerModelEffortPickerProps = {
 
 // Renders a single composer trigger that combines model selection, reasoning
 // effort, and the optional speed/fast-mode toggle. The primary menu hosts the
-// reasoning radio group; model and speed are reachable via sub-menus so the
-// composer footer stays compact.
-export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker(
-  props: ComposerModelEffortPickerProps,
-) {
+// reasoning radio group (with fast mode as an icon toggle in its Effort
+// header); the model is reachable via a sub-menu so the footer stays compact.
+export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps) {
   const { onOpenChange, open } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
 
-  const setMenuOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (open === undefined) {
-        setUncontrolledOpen(nextOpen);
-      }
-      onOpenChange?.(nextOpen);
-    },
-    [onOpenChange, open],
-  );
-
-  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const setMenuOpen = (nextOpen: boolean) => {
+    if (open === undefined) {
+      setUncontrolledOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  };
 
   const activeProvider = props.lockedProvider ?? props.provider;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
@@ -131,9 +115,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
   } = traitSelection;
 
   const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
-  const hasTraitsTopSection = hasVisibleComposerTraitControls(traitSelection, {
-    includeFastMode: false,
-  });
+  const hasTraitsTopSection = hasVisibleComposerTraitControls(traitSelection);
 
   const effortLabel = effort
     ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
@@ -147,37 +129,15 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         : null;
   const showsFastBadge = supportsFastModeControl && fastModeEnabled;
 
-  const handleFastModeChange = useCallback(
-    (value: string) => {
-      if (!value) return;
-      const nextFastMode = value === "on";
-      if (nextFastMode === fastModeEnabled) return;
-      setProviderModelOptions(
-        props.threadId,
-        props.provider,
-        buildNextProviderOptions(props.provider, props.modelOptions, {
-          fastMode: nextFastMode,
-        }),
-        {
-          ...(props.model !== undefined ? { model: props.model } : {}),
-          persistSticky: true,
-        },
-      );
-      setMenuOpen(false);
-      props.onSelectionCommitted?.();
-    },
-    [fastModeEnabled, props, setMenuOpen, setProviderModelOptions],
-  );
-
-  const handleAfterModelSelection = useCallback(() => {
+  const handleAfterModelSelection = () => {
     setMenuOpen(false);
     props.onSelectionCommitted?.();
-  }, [props, setMenuOpen]);
+  };
 
-  const handleAfterTraitsSelection = useCallback(() => {
+  const handleAfterTraitsSelection = () => {
     setMenuOpen(false);
     props.onSelectionCommitted?.();
-  }, [props, setMenuOpen]);
+  };
 
   const hiddenTriggerTitle = [
     props.hideModelLabel ? modelLabel : null,
@@ -283,7 +243,6 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             modelOptions={props.modelOptions}
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
-            includeFastMode={false}
             onSelectionComplete={handleAfterTraitsSelection}
           />
         ) : null}
@@ -319,36 +278,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             />
           </ComposerPickerMenuSubPopup>
         </MenuSub>
-
-        {supportsFastModeControl ? (
-          <MenuSub>
-            <MenuSubTrigger>
-              <FastModeIcon
-                aria-hidden="true"
-                className={cn(
-                  "size-3 shrink-0",
-                  fastModeEnabled ? "text-[hsl(var(--chart-4))]" : "text-muted-foreground/85",
-                )}
-              />
-              <span className="truncate">
-                Speed
-                {fastModeEnabled ? (
-                  <span className="ms-1.5 text-muted-foreground/65">Fast</span>
-                ) : null}
-              </span>
-            </MenuSubTrigger>
-            <ComposerPickerMenuSubPopup fixedWidth>
-              <MenuRadioGroup
-                value={fastModeEnabled ? "on" : "off"}
-                onValueChange={handleFastModeChange}
-              >
-                <MenuRadioItem value="off">Default</MenuRadioItem>
-                <MenuRadioItem value="on">Fast</MenuRadioItem>
-              </MenuRadioGroup>
-            </ComposerPickerMenuSubPopup>
-          </MenuSub>
-        ) : null}
       </ComposerPickerMenuPopup>
     </Menu>
   );
-});
+}

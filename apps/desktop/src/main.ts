@@ -50,10 +50,9 @@ import {
 import type { ContextMenuItem } from "@synara/contracts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import {
-  SYNARA_DESKTOP_ENTRY_URL,
-  SYNARA_DESKTOP_SCHEME,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
-  synaraBundleId,
+  resolveSynaraDesktopFlavor,
+  synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
 import { RotatingFileSink } from "@synara/shared/logging";
@@ -188,20 +187,32 @@ syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const BASE_DIR = process.env.SYNARA_HOME?.trim() || Path.join(OS.homedir(), ".synara");
+const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+const desktopFlavor = resolveSynaraDesktopFlavor({
+  isDevelopment,
+  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+});
+const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+const BASE_DIR =
+  process.env.SYNARA_HOME?.trim() ||
+  Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
-const DESKTOP_SCHEME = SYNARA_DESKTOP_SCHEME;
+const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
-const APP_USER_MODEL_ID = synaraBundleId(isDevelopment);
+const APP_DISPLAY_NAME = desktopIdentity.displayName;
+const APP_USER_MODEL_ID = desktopIdentity.bundleId;
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
+// Electron's single-instance lock is scoped through userData on Windows/Linux.
+// Set the flavor-specific profile first so Stable, Dev, and Canary never contend
+// for the same lock even when they use the same Electron executable.
+const userDataPath = resolveUserDataPath();
+app.setPath("userData", userDataPath);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -1258,7 +1269,8 @@ function resolveAutoUpdateDisabledReason(): string | null {
     isPackaged: app.isPackaged,
     platform: process.platform,
     appImage: process.env.APPIMAGE,
-    disabledByEnv: process.env.SYNARA_DISABLE_AUTO_UPDATE === "1",
+    disabledByEnv:
+      desktopIdentity.usesScriptedUpdates || process.env.SYNARA_DISABLE_AUTO_UPDATE === "1",
     hasUpdateFeedConfig: hasConfiguredUpdateFeed(),
   });
 }
@@ -1642,7 +1654,10 @@ function showDesktopNotification(input: {
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  return resolveDesktopUserDataPath({
+    appDataBase,
+    userDataDirectoryName: desktopIdentity.userDataDirectoryName,
+  });
 }
 
 function repairBrowserProfileBeforeElectronReady(userDataPath: string): void {
@@ -3438,7 +3453,7 @@ function createWindow(): BrowserWindow {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
     window.webContents.openDevTools({ mode: "detach" });
   } else {
-    void window.loadURL(SYNARA_DESKTOP_ENTRY_URL);
+    void window.loadURL(desktopIdentity.entryUrl);
   }
 
   window.on("closed", () => {
@@ -3494,11 +3509,9 @@ function configureMediaPermissions(): void {
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
-const userDataPath = resolveUserDataPath();
 if (hasSingleInstanceLock) {
   repairBrowserProfileBeforeElectronReady(userDataPath);
 }
-app.setPath("userData", userDataPath);
 
 configureAppIdentity();
 

@@ -5,6 +5,7 @@
 import {
   buildSubagentIdentityDirectory,
   extractSubagentIdentityHints as extractParsedSubagentIdentityHints,
+  isWorkerTierSubagentRole,
   resolveSubagentIdentityFromDirectory,
 } from "@synara/shared/subagents";
 import { formatModelDisplayName } from "@synara/shared/model";
@@ -90,6 +91,12 @@ function normalizeWhitespace(value: string | null | undefined): string | null {
 function normalizeRole(role: string | null | undefined): string | null {
   const normalized = normalizeWhitespace(role);
   return normalized ? normalized.toLowerCase() : null;
+}
+
+// Worker-tier agent types are internal effort carriers; never surface them as a
+// role even when persisted thread metadata or titles still contain them.
+function suppressWorkerTierRole(role: string | null): string | null {
+  return role !== null && isWorkerTierSubagentRole(role) ? null : role;
 }
 
 function isGenericSubagentTitle(title: string | null): boolean {
@@ -216,15 +223,19 @@ export function resolveSubagentPresentation(input: {
   fallbackId?: string | null | undefined;
 }): SubagentPresentation {
   const explicitNickname = normalizeWhitespace(input.nickname);
-  const explicitRole = normalizeRole(input.role);
+  const explicitRole = suppressWorkerTierRole(normalizeRole(input.role));
   const normalizedTitle = normalizeWhitespace(input.title);
   const parsedTitle = parseBracketedSubagentLabel(normalizedTitle);
+  const parsedTitleRole = suppressWorkerTierRole(parsedTitle.role);
+  // Titles persisted as "Nickname [worker-low]" drop the worker-tier suffix.
+  const titleWithoutWorkerRole =
+    parsedTitle.role !== null && parsedTitleRole === null ? parsedTitle.nickname : normalizedTitle;
   const parsedTitleNickname = isGenericSubagentTitle(parsedTitle.nickname)
     ? null
     : parsedTitle.nickname;
-  const titleLabel = isGenericSubagentTitle(normalizedTitle) ? null : normalizedTitle;
+  const titleLabel = isGenericSubagentTitle(titleWithoutWorkerRole) ? null : titleWithoutWorkerRole;
   const nickname = explicitNickname ?? parsedTitleNickname;
-  const role = explicitRole ?? parsedTitle.role;
+  const role = explicitRole ?? parsedTitleRole;
   const resolvedTitle = parsedTitleNickname ? null : titleLabel;
   const normalizedFallbackId = normalizeWhitespace(input.fallbackId);
   const fallbackLabel = fallbackSubagentLabel(normalizedFallbackId) ?? "Subagent";
@@ -352,6 +363,45 @@ export function humanizeSubagentStatus(
   }
 }
 
+// Short form for agent rows: the "Claude " prefix is redundant next to a
+// model name ("Haiku 4.5" reads as well as "Claude Haiku 4.5" and halves the
+// label), and non-Claude names pass through unchanged.
 export function formatSubagentModelLabel(model: string | null | undefined): string | undefined {
-  return formatModelDisplayName(normalizeWhitespace(model));
+  const displayName = formatModelDisplayName(normalizeWhitespace(model));
+  return displayName?.startsWith("Claude ") ? displayName.slice("Claude ".length) : displayName;
+}
+
+// Status is the only hue in the agent panels: the dot always carries it, the
+// text echoes it only while live (running) or when something went wrong
+// (failed); terminal/neutral states read as plain muted text.
+export function subagentStatusTextToneClassName(
+  statusKind: SubagentStatusKind | null | undefined,
+): string {
+  switch (statusKind) {
+    case "running":
+      return "text-sky-300/85";
+    case "failed":
+      return "text-rose-300/85";
+    default:
+      return "text-muted-foreground/55";
+  }
+}
+
+export function subagentStatusDotClassName(
+  statusKind: SubagentStatusKind | null | undefined,
+): string {
+  switch (statusKind) {
+    case "running":
+      return "bg-sky-300/95";
+    case "completed":
+      return "bg-emerald-300/80";
+    case "failed":
+      return "bg-rose-300/90";
+    case "stopped":
+      return "bg-amber-300/85";
+    case "queued":
+      return "bg-violet-300/80";
+    default:
+      return "bg-muted-foreground/25";
+  }
 }

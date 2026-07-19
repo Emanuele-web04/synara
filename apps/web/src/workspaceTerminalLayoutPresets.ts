@@ -137,11 +137,13 @@ export function ensureTerminalIdsForPreset(
   const normalizedTerminalIds = normalizeTerminalIds(terminalIds);
   const requiredSlotCount = getWorkspaceLayoutPresetSlotCount(presetId);
   const nextTerminalIds = [...normalizedTerminalIds];
+  const seenTerminalIds = new Set(nextTerminalIds);
   while (nextTerminalIds.length < requiredSlotCount) {
     const nextTerminalId = createTerminalId().trim();
-    if (nextTerminalId.length === 0 || nextTerminalIds.includes(nextTerminalId)) {
+    if (nextTerminalId.length === 0 || seenTerminalIds.has(nextTerminalId)) {
       continue;
     }
+    seenTerminalIds.add(nextTerminalId);
     nextTerminalIds.push(nextTerminalId);
   }
   return nextTerminalIds;

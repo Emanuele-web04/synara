@@ -5,7 +5,7 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { memo, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { SearchIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -28,7 +28,7 @@ const DIFF_FILE_JUMP_ICON_SLOT_CLASS_NAME =
 const DIFF_FILE_JUMP_FILE_ICON_CLASS_NAME =
   "size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80";
 
-const DiffFileJumpRow = memo(function DiffFileJumpRow(props: {
+function DiffFileJumpRow(props: {
   fileDiff: FileDiffMetadata;
   resolvedTheme: "light" | "dark";
   isSelected: boolean;
@@ -36,7 +36,7 @@ const DiffFileJumpRow = memo(function DiffFileJumpRow(props: {
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
 
   return (
     <MenuItem
@@ -71,7 +71,7 @@ const DiffFileJumpRow = memo(function DiffFileJumpRow(props: {
       </div>
     </MenuItem>
   );
-});
+}
 
 export function DiffPanelFileJumpMenu(props: {
   renderableFiles: ReadonlyArray<FileDiffMetadata>;
@@ -81,10 +81,7 @@ export function DiffPanelFileJumpMenu(props: {
 }) {
   const [fileSearchQuery, setFileSearchQuery] = useState("");
 
-  const filteredFiles = useMemo(
-    () => filterRenderableFilesForSearch(props.renderableFiles, fileSearchQuery),
-    [fileSearchQuery, props.renderableFiles],
-  );
+  const filteredFiles = filterRenderableFilesForSearch(props.renderableFiles, fileSearchQuery);
 
   return (
     <Menu

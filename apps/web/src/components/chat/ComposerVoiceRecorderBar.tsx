@@ -3,7 +3,7 @@
 // Layer: Chat composer presentation
 // Depends on: live waveform samples and caller-owned record/cancel/send actions.
 
-import { memo, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FiArrowUp } from "react-icons/fi";
 import { IoStopSharp } from "react-icons/io5";
 
@@ -25,9 +25,7 @@ const BAR_GAP_PX = 2;
 const BAR_MIN_HEIGHT_PX = 3;
 const BAR_MAX_HEIGHT_PX = 22;
 
-export const ComposerVoiceRecorderBar = memo(function ComposerVoiceRecorderBar(
-  props: ComposerVoiceRecorderBarProps,
-) {
+export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [visibleBarCount, setVisibleBarCount] = useState(96);
 
@@ -119,4 +117,4 @@ export const ComposerVoiceRecorderBar = memo(function ComposerVoiceRecorderBar(
       </button>
     </div>
   );
-});
+}

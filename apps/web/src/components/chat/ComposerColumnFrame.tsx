@@ -38,7 +38,7 @@ interface ComposerColumnFrameProps {
 }
 
 /** Centers the composer column at the shared chat max width. */
-export const ComposerColumnFrame = memo(function ComposerColumnFrame({
+export const ComposerColumnFrame = function ComposerColumnFrame({
   children,
   className,
 }: ComposerColumnFrameProps) {
@@ -47,7 +47,7 @@ export const ComposerColumnFrame = memo(function ComposerColumnFrame({
       <div className={cn(COMPOSER_COLUMN_FRAME_CLASS_NAME, className)}>{children}</div>
     </ComposerColumnFrameContext.Provider>
   );
-});
+};
 
 interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
@@ -57,6 +57,7 @@ interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement>
 }
 
 /** Full-width rail for panels stacked flush above the composer input. */
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const ComposerStackedHeaderFrame = memo(function ComposerStackedHeaderFrame({
   children,
   className,

@@ -84,6 +84,9 @@ export interface WorkLogEntry {
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
   activityKind?: OrchestrationThreadActivity["kind"];
+  // Provider-native event type carried through the activity payload (e.g.
+  // "background_tasks_changed") so the timeline can pick a specific icon.
+  nativeEventType?: string;
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -120,6 +123,8 @@ export interface WorkLogSubagent {
   nickname?: string | undefined;
   role?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  background?: boolean | undefined;
   prompt?: string | undefined;
   rawStatus?: string | undefined;
   latestUpdate?: string | undefined;
@@ -246,6 +251,7 @@ export interface ActiveTaskListState {
 
 export interface ActiveBackgroundTasksState {
   activeCount: number;
+  taskIds: string[];
 }
 
 export interface LatestProposedPlanState {
@@ -294,7 +300,7 @@ function isActivityOrderStable(activities: ReadonlyArray<OrchestrationThreadActi
 
 // Thread activity arrays are immutable store values and most call sites need the
 // same order; cache it so chat startup does not sort the same array repeatedly.
-function orderedActivities(
+export function orderedActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   const cached = orderedActivitiesCache.get(activities);
@@ -304,7 +310,7 @@ function orderedActivities(
 
   const ordered = isActivityOrderStable(activities)
     ? activities
-    : [...activities].sort(compareActivitiesByOrder);
+    : activities.toSorted(compareActivitiesByOrder);
   orderedActivitiesCache.set(activities, ordered);
   return ordered;
 }
@@ -730,7 +736,8 @@ export function deriveActiveBackgroundTasksState(
       latestTurnId &&
       activity.turnId &&
       activity.turnId !== latestTurnId &&
-      activity.kind !== "task.completed"
+      activity.kind !== "task.completed" &&
+      activity.kind !== "task.updated"
     ) {
       continue;
     }
@@ -738,6 +745,7 @@ export function deriveActiveBackgroundTasksState(
     if (
       activity.kind !== "task.started" &&
       activity.kind !== "task.progress" &&
+      activity.kind !== "task.updated" &&
       activity.kind !== "task.completed"
     ) {
       continue;
@@ -757,6 +765,21 @@ export function deriveActiveBackgroundTasksState(
       continue;
     }
 
+    // Status patches can end a task (killed/completed/failed) without a
+    // task.completed notification following on the same turn.
+    if (activity.kind === "task.updated") {
+      const status = payload && typeof payload.status === "string" ? payload.status : undefined;
+      if (
+        status === "completed" ||
+        status === "failed" ||
+        status === "killed" ||
+        status === "paused"
+      ) {
+        activeTasks.delete(taskId);
+      }
+      continue;
+    }
+
     const previous = activeTasks.get(taskId);
     const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
     activeTasks.set(taskId, {
@@ -764,8 +787,12 @@ export function deriveActiveBackgroundTasksState(
     });
   }
 
-  const activeCount = [...activeTasks.values()].filter((task) => task.taskType !== "plan").length;
-  return activeCount > 0 ? { activeCount } : null;
+  const activeTaskIds = [...activeTasks.entries()]
+    .filter(([, task]) => task.taskType !== "plan")
+    .map(([taskId]) => taskId);
+  return activeTaskIds.length > 0
+    ? { activeCount: activeTaskIds.length, taskIds: activeTaskIds }
+    : null;
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or
@@ -894,14 +921,26 @@ export function buildSourceProposedPlanReference(input: {
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
-  options: { visibleTurnIds?: ReadonlySet<TurnId | string> } = {},
+  options: {
+    visibleTurnIds?: ReadonlySet<TurnId | string>;
+    includeRoutedSubagentActivities?: boolean;
+  } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
-    .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
-    .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
+    .filter(
+      (activity) =>
+        options.includeRoutedSubagentActivities === true ||
+        !shouldOmitRoutedCollabAgentToolActivity(activity),
+    )
+    .filter(
+      (activity) =>
+        activity.kind !== "task.started" &&
+        activity.kind !== "task.updated" &&
+        activity.kind !== "task.completed",
+    )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
@@ -1099,6 +1138,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
   if (collabTaskOutputDetail) {
     entry.detail = collabTaskOutputDetail;
+  }
+  const nativeEventType =
+    payload && typeof payload.nativeEventType === "string" && payload.nativeEventType.length > 0
+      ? payload.nativeEventType
+      : undefined;
+  if (nativeEventType) {
+    entry.nativeEventType = nativeEventType;
   }
   const runtimeWarningMessage =
     activity.kind === "runtime.warning" &&
@@ -1603,7 +1649,8 @@ function areToolLifecycleChangedFilesCompatible(
   if (!previous?.length || !next?.length) {
     return true;
   }
-  return previous.some((path) => next.includes(path));
+  const nextSet = new Set(next);
+  return previous.some((path) => nextSet.has(path));
 }
 
 function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {
@@ -1741,15 +1788,20 @@ function extractCollabSubagents(
   }
 
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
-  const receiverAgents = decodeSubagentReceiverAgents(item, receiverThreadIds).map((agent) => ({
-    threadId: agent.providerThreadId,
-    providerThreadId: agent.providerThreadId,
-    ...(agent.agentId ? { agentId: agent.agentId } : {}),
-    ...(agent.nickname ? { nickname: agent.nickname } : {}),
-    ...(agent.role ? { role: agent.role } : {}),
-    ...(agent.model ? { model: agent.model } : {}),
-    ...(agent.prompt ? { prompt: agent.prompt } : {}),
-  }));
+  const receiverAgents = decodeSubagentReceiverAgents(item, receiverThreadIds).map((agent) => {
+    const receiverAgent: WorkLogSubagent = {
+      threadId: agent.providerThreadId,
+      providerThreadId: agent.providerThreadId,
+    };
+    if (agent.agentId) receiverAgent.agentId = agent.agentId;
+    if (agent.nickname) receiverAgent.nickname = agent.nickname;
+    if (agent.role) receiverAgent.role = agent.role;
+    if (agent.model) receiverAgent.model = agent.model;
+    if (agent.effort) receiverAgent.effort = agent.effort;
+    if (agent.background) receiverAgent.background = agent.background;
+    if (agent.prompt) receiverAgent.prompt = agent.prompt;
+    return receiverAgent;
+  });
 
   const agentStates = decodeSubagentAgentStates(item);
   if (receiverAgents.length > 0 || Object.keys(agentStates).length > 0) {
@@ -1795,6 +1847,8 @@ function extractCollabSubagents(
         ...(fallbackIdentity.nickname ? { nickname: fallbackIdentity.nickname } : {}),
         ...(fallbackIdentity.role ? { role: fallbackIdentity.role } : {}),
         ...(fallbackIdentity.model ? { model: fallbackIdentity.model } : {}),
+        ...(fallbackIdentity.effort ? { effort: fallbackIdentity.effort } : {}),
+        ...(fallbackIdentity.background ? { background: fallbackIdentity.background } : {}),
         ...(fallbackIdentity.prompt ? { prompt: fallbackIdentity.prompt } : {}),
         ...(fallbackIdentity.status ? { rawStatus: fallbackIdentity.status } : {}),
         ...(fallbackIdentity.message ? { latestUpdate: fallbackIdentity.message } : {}),
@@ -1836,6 +1890,8 @@ function extractCollabSubagents(
             item.requestedModel ??
             item.requested_model,
         ) ?? undefined,
+      effort: asTrimmedString(item.effort) ?? undefined,
+      background: item.background === true ? true : undefined,
       prompt: asTrimmedString(item.prompt ?? item.task ?? item.message) ?? undefined,
     },
   ];

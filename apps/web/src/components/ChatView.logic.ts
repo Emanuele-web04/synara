@@ -14,7 +14,6 @@ import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
 import {
-  type ChatAssistantSelectionAttachment,
   type ChatMessage,
   type SessionPhase,
   type Thread,
@@ -34,6 +33,7 @@ import {
 import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
   humanizeSubagentStatus,
+  normalizeSubagentStatusKind,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
 import {
@@ -72,10 +72,11 @@ export function hasFileUndoSettled(input: {
     return true;
   }
 
+  const existingFailureActivityIdSet = new Set(input.pending.existingFailureActivityIds);
   return input.thread.activities.some((activity) => {
     if (
       activity.kind !== "checkpoint.revert.failed" ||
-      input.pending.existingFailureActivityIds.includes(activity.id) ||
+      existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
       !("turnCount" in activity.payload)
@@ -1064,18 +1065,6 @@ export function deriveComposerSendState(options: {
   };
 }
 
-export function collectUserMessageAssistantSelections(
-  message: ChatMessage,
-): ChatAssistantSelectionAttachment[] {
-  if (message.role !== "user" || !message.attachments) {
-    return [];
-  }
-  return message.attachments.filter(
-    (attachment): attachment is ChatAssistantSelectionAttachment =>
-      attachment.type === "assistant-selection",
-  );
-}
-
 export function buildExpiredTerminalContextToastCopy(
   expiredTerminalContextCount: number,
   variant: "omitted" | "empty",
@@ -1246,6 +1235,23 @@ function humanizeSubagentRawStatus(rawStatus: string | undefined): string | unde
   return humanizeSubagentStatus(rawStatus);
 }
 
+// Terminal work-log statuses are authoritative over child-thread session state:
+// a finished subagent's thread merely parks in an "Idle"/"Closed" session status,
+// which must not mask Completed/Failed/Stopped. The per-agent rawStatus wins over
+// the collab item's own status, which only covers the whole tool call.
+function terminalSubagentStatusLabel(
+  rawStatus: string | undefined,
+  entryStatus: string | undefined,
+): string | undefined {
+  for (const candidate of rawStatus !== undefined ? [rawStatus] : [entryStatus]) {
+    const statusKind = normalizeSubagentStatusKind(candidate);
+    if (statusKind === "completed" || statusKind === "failed" || statusKind === "stopped") {
+      return humanizeSubagentStatus(candidate);
+    }
+  }
+  return undefined;
+}
+
 function resolveTimelineSubagentThread(input: {
   subagent: NonNullable<WorkLogEntry["subagents"]>[number];
   parentThreadId: ThreadIdType | null;
@@ -1312,6 +1318,9 @@ export function enrichSubagentWorkEntries(
       });
       const status = deriveSubagentStatus(matchedThread);
       const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
+      const terminalStatusLabel = status.isActive
+        ? undefined
+        : terminalSubagentStatusLabel(subagent.rawStatus, entry.subagentAction?.status);
       const matchedPresentation =
         matchedThread !== undefined
           ? resolveSubagentPresentationForThread({ thread: matchedThread, threads })
@@ -1323,8 +1332,8 @@ export function enrichSubagentWorkEntries(
       if (matchedPresentation) {
         nextSubagent.title = matchedPresentation.fullLabel;
       }
-      if (status.label ?? fallbackStatusLabel) {
-        nextSubagent.statusLabel = status.label ?? fallbackStatusLabel;
+      if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
+        nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
       if (status.isActive || fallbackStatusLabel === "Running") {
         nextSubagent.isActive = true;

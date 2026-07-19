@@ -5,6 +5,7 @@ import {
   AutomationId,
   type AutomationCreateInput,
   type AutomationDefinition,
+  CheckpointRef,
   EventId,
   MessageId,
   ORCHESTRATION_WS_METHODS,
@@ -33,6 +34,7 @@ import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
 } from "../chat-scroll";
+import { useLatestProjectStore } from "../latestProjectStore";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -57,6 +59,9 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+// Pre-transform the compiler-heavy component outside the first case's timeout.
+// The router's auto-split route otherwise requests this module on first mount.
+import "./ChatView";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
@@ -589,6 +594,16 @@ function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationRea
   };
 }
 
+function withActiveHomeChatThread(snapshot: OrchestrationReadModel): OrchestrationReadModel {
+  const snapshotWithHomeProject = withHomeChatProject(snapshot);
+  return {
+    ...snapshotWithHomeProject,
+    threads: snapshotWithHomeProject.threads.map((thread) =>
+      thread.id === THREAD_ID ? { ...thread, projectId: HOME_PROJECT_ID } : thread,
+    ),
+  };
+}
+
 function withStudioProject(snapshot: OrchestrationReadModel): OrchestrationReadModel {
   return {
     ...snapshot,
@@ -750,6 +765,46 @@ function createSnapshotWithActiveInlinePlan(): OrchestrationReadModel {
                 }
               : null,
             updatedAt: isoAt(1_003),
+          }
+        : thread,
+    ),
+  };
+}
+
+function createSnapshotWithTallComposerStack(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithActiveInlinePlan();
+  const activeTurnId = TurnId.makeUnsafe("turn-inline-plan");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            checkpoints: [
+              {
+                turnId: activeTurnId,
+                checkpointTurnCount: 1,
+                checkpointRef: CheckpointRef.makeUnsafe("checkpoint-inline-plan"),
+                status: "ready",
+                files: [
+                  {
+                    path: "apps/web/src/components/ChatView.tsx",
+                    kind: "modified",
+                    additions: 12,
+                    deletions: 4,
+                  },
+                  {
+                    path: "apps/web/src/components/ChatView.browser.tsx",
+                    kind: "modified",
+                    additions: 36,
+                    deletions: 0,
+                  },
+                ],
+                assistantMessageId: null,
+                completedAt: isoAt(1_004),
+              },
+            ],
           }
         : thread,
     ),
@@ -1652,9 +1707,9 @@ async function waitForMountedChatReady(options: {
       if (!expectedThread) return;
       const state = useStore.getState();
       expect(state.threadIds?.includes(expectedThread.id)).toBe(true);
-      const hydratedMessageIds = state.messageIdsByThreadId?.[expectedThread.id] ?? [];
+      const hydratedMessageIdSet = new Set(state.messageIdsByThreadId?.[expectedThread.id] ?? []);
       expect(
-        expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+        expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },
@@ -1769,6 +1824,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
     localStorage.clear();
+    useLatestProjectStore.setState({ latestProjectId: null });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     useComposerDraftStore.setState({
@@ -3567,6 +3623,139 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses the latest ordinary project from Home when the global New thread button is clicked", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-global-new-thread-latest-project" as MessageId,
+          targetText: "global new thread latest project",
+        }),
+      ),
+    });
+
+    try {
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Global New thread should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+      await expect.element(page.getByText("Type path", { exact: true })).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses the latest ordinary project from Home for the command-palette New thread action", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-palette-new-thread-latest-project" as MessageId,
+          targetText: "palette new thread latest project",
+        }),
+      ),
+    });
+
+    try {
+      const searchButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+            button.textContent?.trim().startsWith("Search"),
+          ) ?? null,
+        "Unable to find the global Search button.",
+      );
+      searchButton.click();
+      const paletteNewThreadAction = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="command-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("New thread"),
+          ) ?? null,
+        "Unable to find the command-palette New thread action.",
+      );
+      paletteNewThreadAction.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Command-palette New thread should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens Add project when the global New thread action has no usable project target", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const snapshot = withActiveHomeChatThread(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-user-global-new-thread-no-project" as MessageId,
+        targetText: "global new thread no project",
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        projects: snapshot.projects.filter((project) => project.kind !== "project"),
+      },
+    });
+
+    try {
+      const initialPath = mounted.router.state.location.pathname;
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      await expect.element(page.getByText("Type path", { exact: true })).toBeInTheDocument();
+      expect(mounted.router.state.location.pathname).toBe(initialPath);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not open Add project before project hydration completes", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-global-new-thread-before-hydration" as MessageId,
+          targetText: "global new thread before hydration",
+        }),
+      ),
+    });
+
+    try {
+      useStore.setState({ projects: [], threadsHydrated: false });
+      await waitForLayout();
+      const initialPath = mounted.router.state.location.pathname;
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+      await waitForLayout();
+
+      await expect.element(page.getByText("Type path", { exact: true })).not.toBeInTheDocument();
+      expect(mounted.router.state.location.pathname).toBe(initialPath);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("lets an empty project draft switch to another open project", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -4982,6 +5171,164 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await expect.element(page.getByText("Expand plan")).toBeInTheDocument();
       expect(document.querySelector('[aria-label="Close plan sidebar"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the final transcript row clear of a tall composer panel stack", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithTallComposerStack(),
+    });
+
+    const maxFixedClearancePx = 128;
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("2 files changed");
+          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const readStackLayout = () => {
+        const renderedRows = Array.from(
+          document.querySelectorAll<HTMLElement>("[data-timeline-row-kind]"),
+        );
+        const finalTranscriptRow = renderedRows.reduce<HTMLElement | null>((latest, row) => {
+          if (!latest) return row;
+          return row.getBoundingClientRect().bottom > latest.getBoundingClientRect().bottom
+            ? row
+            : latest;
+        }, null);
+        const taskListCard = document.querySelector<HTMLElement>(
+          '[data-testid="active-task-list-card"]',
+        );
+        const stackedPanels = taskListCard?.parentElement ?? null;
+
+        expect(
+          finalTranscriptRow,
+          "Unable to find the final rendered transcript row.",
+        ).toBeTruthy();
+        expect(taskListCard, "Unable to find the active task-list card.").toBeTruthy();
+        expect(stackedPanels, "Unable to find the stacked composer-panel wrapper.").toBeTruthy();
+
+        const finalRowRect = finalTranscriptRow!.getBoundingClientRect();
+        const taskCardRect = taskListCard!.getBoundingClientRect();
+        const stackRect = stackedPanels!.getBoundingClientRect();
+        return {
+          gapPx: stackRect.top - finalRowRect.bottom,
+          stackHeightPx: stackRect.height,
+          taskCardHeightPx: taskCardRect.height,
+          distanceFromBottomPx: getScrollContainerDistanceFromBottom(scrollContainer),
+        };
+      };
+
+      const waitForBoundedGap = async (phase: string) => {
+        let measured = readStackLayout();
+        await vi.waitFor(
+          () => {
+            measured = readStackLayout();
+            expect(
+              measured.distanceFromBottomPx,
+              `${phase}: transcript must stay at the end`,
+            ).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
+            expect(
+              measured.gapPx,
+              `${phase}: final row must not be obscured`,
+            ).toBeGreaterThanOrEqual(-1);
+            expect(
+              measured.gapPx,
+              `${phase}: gap must stay within fixed clearance`,
+            ).toBeLessThanOrEqual(maxFixedClearancePx);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+        return measured;
+      };
+
+      const expanded = await waitForBoundedGap("expanded");
+      expect(expanded.stackHeightPx).toBeGreaterThan(maxFixedClearancePx);
+
+      const collapseButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        "Unable to find the task-banner collapse button.",
+      );
+      collapseButton.click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
+        ).not.toBeNull();
+      });
+      const collapsed = await waitForBoundedGap("collapsed");
+      expect(collapsed.taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
+      expect(Math.abs(collapsed.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
+
+      const expandButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
+        "Unable to find the task-banner expand button.",
+      );
+      expandButton.click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        ).not.toBeNull();
+      });
+      const reexpanded = await waitForBoundedGap("re-expanded");
+      expect(reexpanded.taskCardHeightPx).toBeGreaterThan(collapsed.taskCardHeightPx + 20);
+      expect(Math.abs(reexpanded.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
+
+      const finalCollapseButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        "Unable to find the task-banner collapse button before the away-from-end check.",
+      );
+      finalCollapseButton.click();
+      const finalExpandButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
+        "Unable to find the task-banner expand button before the away-from-end check.",
+      );
+      await vi.waitFor(() => {
+        expect(readStackLayout().taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
+      });
+
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollTopBeforeExpansion = scrollContainer.scrollTop;
+
+      finalExpandButton.click();
+      await vi.waitFor(
+        () => {
+          const awayFromEnd = readStackLayout();
+          expect(awayFromEnd.taskCardHeightPx).toBeGreaterThan(expanded.taskCardHeightPx - 2);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      await waitForLayout();
+      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
+        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+      );
+      await waitForLayout();
+      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
+        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+      );
+      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeExpansion)).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();
     }

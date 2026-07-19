@@ -987,6 +987,11 @@ function runtimeEventToActivities(
     case "runtime.warning": {
       const raw = asObject((event as { raw?: unknown }).raw);
       const nativeType = asString(asObject(raw?.payload)?.type);
+      // Claude backgrounding notices arrive as warnings whose detail is the
+      // SDK background_tasks_changed message; they present as a plain info
+      // line ("Moved to background: <work>"), not as a runtime warning.
+      const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
+      const isBackgroundMove = detailSubtype === "background_tasks_changed";
       const message = truncateDetail(event.payload.message);
       return [
         {
@@ -994,9 +999,10 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary:
-            (event.provider === "opencode" || event.provider === "kilo") &&
-            (nativeType === "session.next.retried" || nativeType === "session.status")
+          summary: isBackgroundMove
+            ? "Moved to background"
+            : (event.provider === "opencode" || event.provider === "kilo") &&
+                (nativeType === "session.next.retried" || nativeType === "session.status")
               ? event.provider === "opencode"
                 ? "OpenCode retrying"
                 : "Kilo retrying"
@@ -1005,7 +1011,11 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             message,
             detail: message,
-            ...(nativeType ? { nativeEventType: nativeType } : {}),
+            ...(isBackgroundMove
+              ? { nativeEventType: detailSubtype }
+              : nativeType
+                ? { nativeEventType: nativeType }
+                : {}),
             ...activityDataField(event.payload.detail),
           }),
           turnId: toTurnId(event.turnId) ?? null,
@@ -1094,6 +1104,21 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
+            ...(event.payload.subagentType ? { subagentType: event.payload.subagentType } : {}),
+            ...(event.payload.workflowName ? { workflowName: event.payload.workflowName } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowPhases
+              ? { workflowPhases: event.payload.workflowPhases }
+              : {}),
+            ...(event.payload.workflowAgentPhases
+              ? { workflowAgentPhases: event.payload.workflowAgentPhases }
+              : {}),
+            ...(event.payload.workflowAgentPlans
+              ? { workflowAgentPlans: event.payload.workflowAgentPlans }
+              : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
@@ -1115,9 +1140,18 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
+            // Kept verbatim next to detail: workflow progress encodes
+            // "<phase>: <agent label>" here and the panel parses it back out.
+            description: truncateDetail(event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowAgents
+              ? { workflowAgents: event.payload.workflowAgents }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1143,6 +1177,66 @@ function runtimeEventToActivities(
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowAgents
+              ? { workflowAgents: event.payload.workflowAgents }
+              : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "task.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: event.payload.status === "failed" ? "error" : "info",
+          kind: "task.updated",
+          summary:
+            event.payload.status === "paused"
+              ? "Task paused"
+              : event.payload.status === "killed"
+                ? "Task killed"
+                : event.payload.isBackgrounded === true
+                  ? "Task moved to background"
+                  : "Task updated",
+          payload: toActivityPayload({
+            taskId: event.payload.taskId,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowRunId ? { workflowRunId: event.payload.workflowRunId } : {}),
+            ...(event.payload.workflowScriptPath
+              ? { workflowScriptPath: event.payload.workflowScriptPath }
+              : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "turn.steered": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.steered",
+          summary: "User message delivered",
+          payload: toActivityPayload({
+            detail: truncateDetail(event.payload.message),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

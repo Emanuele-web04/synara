@@ -5,7 +5,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useEffect, useRef, useState } from "react";
 import { toastManager } from "../components/ui/toast";
 import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibility";
 import { useAppSettings } from "../appSettings";
@@ -147,16 +147,19 @@ export function TaskCompletionNotifications() {
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
   const routeSearch = useDiffRouteSearch();
-  const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
-  const threads = useStore(useRef(createAllThreadsSelector()).current);
+  const splitView = useSplitViewStore(
+    useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
+  );
+  const [allThreadsSelector] = useState(() => createAllThreadsSelector());
+  const threads = useStore(allThreadsSelector);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
-  const visibleThreadIds = useMemo(() => {
-    return resolveVisibleToastThreadIds({ activeThreadId, splitView });
-  }, [activeThreadId, splitView]);
+  const visibleThreadIds = resolveVisibleToastThreadIds({ activeThreadId, splitView });
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
-  const runtimeStartedAtMsRef = useRef(Date.now());
+  // Lazy state init: evaluated once, keeping the impure Date.now() call out
+  // of re-renders (useRef(Date.now()) re-evaluates its argument every render).
+  const [runtimeStartedAtMs] = useState(() => Date.now());
   const readyRef = useRef(false);
 
   useEffect(() => {
@@ -198,7 +201,7 @@ export function TaskCompletionNotifications() {
       previousThreadsRef.current,
       threads,
     ).filter((candidate) =>
-      isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMsRef.current),
+      isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs),
     );
     const terminalCompletions = collectCompletedTerminalCandidates(
       previousTerminalStateRef.current,
@@ -208,7 +211,7 @@ export function TaskCompletionNotifications() {
       previousThreadsRef.current,
       threads,
     ).filter((candidate) =>
-      isNotificationRuntimeFreshTimestamp(candidate.createdAt, runtimeStartedAtMsRef.current),
+      isNotificationRuntimeFreshTimestamp(candidate.createdAt, runtimeStartedAtMs),
     );
     const terminalAttentionCandidates = collectTerminalAttentionCandidates(
       previousTerminalStateRef.current,

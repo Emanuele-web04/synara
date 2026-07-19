@@ -1,12 +1,9 @@
 // FILE: ComposerActiveTaskListCard.tsx
 // Purpose: Active task-list card stacked flush above the composer. Wraps
-// ActiveTaskListCard in the shared stacked-header frame. The composer measures the
-// whole stacked-panel block (see ChatView's measureComposerStackedChrome) so this
-// card no longer needs to expose its own ref.
+// ActiveTaskListCard in the shared stacked-header frame. The card participates in
+// normal composer flow and does not need to expose a measurement ref.
 // Layer: Chat composer UI
 // Exports: ComposerActiveTaskListCard
-
-import { memo } from "react";
 
 import type { ActiveTaskListState } from "../../session-logic";
 import { ActiveTaskListCard } from "./ActiveTaskListCard";
@@ -21,7 +18,7 @@ interface ComposerActiveTaskListCardProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCard({
+export function ComposerActiveTaskListCard({
   activeTaskList,
   backgroundTaskCount,
   compact,
@@ -44,4 +41,4 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
       />
     </ComposerStackedPanel>
   );
-});
+}

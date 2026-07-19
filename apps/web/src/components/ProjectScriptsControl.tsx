@@ -179,6 +179,7 @@ export default function ProjectScriptsControl({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const primaryScript = useMemo(() => {
     if (preferredScriptId) {
       const preferred = scripts.find((script) => script.id === preferredScriptId);

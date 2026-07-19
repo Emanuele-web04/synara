@@ -5,8 +5,6 @@
 // Exports: KanbanOverview
 
 import type { ProjectId } from "@synara/contracts";
-import { memo } from "react";
-
 import { Button } from "~/components/ui/button";
 import { ChevronRightIcon, PlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -20,7 +18,7 @@ import {
 
 const OVERVIEW_RENDER_CAP = 20;
 
-const OverviewProjectColumn = memo(function OverviewProjectColumn({
+const OverviewProjectColumn = function OverviewProjectColumn({
   projectBoard,
   onOpenProject,
   onOpenCard,
@@ -93,7 +91,7 @@ const OverviewProjectColumn = memo(function OverviewProjectColumn({
       </ul>
     </section>
   );
-});
+};
 
 export function KanbanOverview({
   board,

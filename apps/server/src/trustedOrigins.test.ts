@@ -40,6 +40,13 @@ describe("trustedOrigins", () => {
         config,
       }),
     ).toBe(true);
+    expect(
+      isTrustedAppOrigin({
+        origin: "synara-canary://app",
+        requestOrigin: "http://127.0.0.1:58090",
+        config,
+      }),
+    ).toBe(true);
   });
 
   it("rejects unrelated browser origins but allows non-browser requests without Origin", () => {
@@ -107,6 +114,7 @@ describe("trustedOrigins", () => {
 
   it("normalizes desktop origins with trailing slashes", () => {
     expect(normalizeCorsOrigin("synara://app/")).toBe("synara://app");
+    expect(normalizeCorsOrigin("synara-canary://app/")).toBe("synara-canary://app");
   });
 
   it("rejects present but untrusted request origins for websocket-style gates", () => {

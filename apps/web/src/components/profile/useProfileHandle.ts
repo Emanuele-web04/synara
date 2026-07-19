@@ -3,7 +3,6 @@
 // server-derived default (home-dir basename) until the user overrides it. Local-only.
 // Layer: web profile feature.
 
-import { useCallback } from "react";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { Schema } from "effect";
 import { normalizeHandle } from "./profileFormatting";
@@ -18,16 +17,13 @@ export function useProfileHandle(defaultHandle: string) {
 
   const handle = stored.trim().length > 0 ? normalizeHandle(stored) : defaultHandle;
 
-  const setHandle = useCallback(
-    (next: string) => {
-      const normalized = normalizeHandle(next);
-      // Storing the bare default back as empty keeps "reset to default" behavior.
-      setStored(normalized === defaultHandle ? "" : normalized);
-    },
-    [defaultHandle, setStored],
-  );
+  const setHandle = (next: string) => {
+    const normalized = normalizeHandle(next);
+    // Storing the bare default back as empty keeps "reset to default" behavior.
+    setStored(normalized === defaultHandle ? "" : normalized);
+  };
 
-  const resetHandle = useCallback(() => setStored(""), [setStored]);
+  const resetHandle = () => setStored("");
 
   return { handle, setHandle, resetHandle, isCustom: stored.trim().length > 0 } as const;
 }

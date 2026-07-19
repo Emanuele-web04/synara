@@ -15,7 +15,6 @@ import type {
 } from "@synara/contracts";
 import {
   useEffect,
-  useMemo,
   useState,
   type Dispatch,
   type MutableRefObject,
@@ -89,9 +88,11 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
     setInteractionMode,
     onCreate,
   } = input;
-  const [composerCursor, setComposerCursor] = useState(() =>
+  const [composerCursorState, setComposerCursor] = useState(() =>
     collapseExpandedComposerCursor(prompt, prompt.length),
   );
+  // Clamped at read time so a prompt change never needs a state-syncing effect.
+  const composerCursor = clampCollapsedComposerCursor(prompt, composerCursorState);
   const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(() =>
     detectComposerTrigger(prompt, prompt.length),
   );
@@ -99,7 +100,6 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
 
   useEffect(() => {
     promptRef.current = prompt;
-    setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
   }, [prompt, promptRef]);
 
   const {
@@ -122,13 +122,10 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
     providerOrder,
     piAgentDir,
   });
-  const activeComposerMenuItem = useMemo(
-    () =>
-      composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
-      composerMenuItems[0] ??
-      null,
-    [composerHighlightedItemId, composerMenuItems],
-  );
+  const activeComposerMenuItem =
+    composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
+    composerMenuItems[0] ??
+    null;
   const editor = useKanbanTaskComposerEditor({
     promptRef,
     setPrompt,

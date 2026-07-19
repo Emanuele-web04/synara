@@ -58,7 +58,7 @@ describe("Codex Synara harness policy", () => {
     }
   });
 
-  it("resolves the gateway endpoint when each session environment is built", () => {
+  it("resolves the gateway endpoint when each session environment is built", async () => {
     const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-gateway-endpoint-"));
     const previousSynaraHome = process.env.SYNARA_HOME;
     process.env.SYNARA_HOME = path.join(homePath, "synara-home");
@@ -72,12 +72,12 @@ describe("Codex Synara harness policy", () => {
         },
       });
       endpointUrl = "http://127.0.0.1:48123/mcp";
-      const env = (
+      const env = await (
         manager as unknown as {
           buildSessionProcessEnv: (
             homePath: string | undefined,
             token: string | undefined,
-          ) => NodeJS.ProcessEnv;
+          ) => Promise<NodeJS.ProcessEnv>;
         }
       ).buildSessionProcessEnv(homePath, "token");
       const configPath = path.join(env.CODEX_HOME ?? homePath, "config.toml");
@@ -336,6 +336,12 @@ function createCollabNotificationHarness() {
     pending: new Map(),
     pendingApprovals: new Map(),
     pendingUserInputs: new Map(),
+    sessionApprovalOverride: undefined as
+      | undefined
+      | {
+          approvalPolicy: "never";
+          sandboxPolicy: { type: "dangerFullAccess" };
+        },
     collabReceiverTurns: new Map<string, string>(),
     collabReceiverParents: new Map<string, string>(),
     reviewTurnIds: new Set<string>(),
@@ -349,8 +355,44 @@ function createCollabNotificationHarness() {
   const updateSession = vi
     .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
     .mockImplementation(() => {});
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (threadId: ThreadId) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const writeMessage = vi
+    .spyOn(
+      manager as unknown as { writeMessage: (...args: unknown[]) => Promise<void> },
+      "writeMessage",
+    )
+    .mockResolvedValue(undefined);
 
-  return { manager, context, emitEvent, updateSession };
+  return { manager, context, emitEvent, updateSession, requireSession, writeMessage };
+}
+
+function handleServerNotificationForTest(
+  manager: CodexAppServerManager,
+  context: unknown,
+  notification: Record<string, unknown>,
+): void {
+  (
+    manager as unknown as {
+      handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+    }
+  ).handleServerNotification(context, notification);
+}
+
+async function handleServerRequestForTest(
+  manager: CodexAppServerManager,
+  context: unknown,
+  request: Record<string, unknown>,
+): Promise<void> {
+  await (
+    manager as unknown as {
+      handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
+    }
+  ).handleServerRequest(context, request);
 }
 
 function createProcessOutputHarness() {
@@ -486,7 +528,7 @@ describe("classifyCodexStderrLine", () => {
 });
 
 describe("buildCodexProcessEnv", () => {
-  it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
+  it("hydrates the active custom provider env_key from the effective CODEX_HOME", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     try {
       writeFileSync(
@@ -506,7 +548,7 @@ describe("buildCodexProcessEnv", () => {
         MY_COMPANY_PROXY_KEY: "proxy-secret",
       }));
 
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
@@ -529,10 +571,10 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("does not read shell env when the provider key is already present", () => {
+  it("does not read shell env when the provider key is already present", async () => {
     const readEnvironment = vi.fn();
 
-    const env = buildCodexProcessEnv({
+    const env = await buildCodexProcessEnv({
       env: {
         SHELL: "/bin/zsh",
         PATH: "/usr/bin",
@@ -547,8 +589,8 @@ describe("buildCodexProcessEnv", () => {
     expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
   });
 
-  it("allows the configured desktop browser-use socket in the Codex sandbox", () => {
-    const env = buildCodexProcessEnv({
+  it("allows the configured desktop browser-use socket in the Codex sandbox", async () => {
+    const env = await buildCodexProcessEnv({
       env: {
         SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
@@ -568,7 +610,7 @@ describe("buildCodexProcessEnv", () => {
     ).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
-  it("applies durable section suppressions inside Synara's Codex overlay", () => {
+  it("applies durable section suppressions inside Synara's Codex overlay", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
@@ -595,7 +637,7 @@ describe("buildCodexProcessEnv", () => {
         "utf8",
       );
 
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
@@ -618,7 +660,7 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("seeds markerless suppressions for conflicting local browser plugins", () => {
+  it("seeds markerless suppressions for conflicting local browser plugins", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
@@ -632,7 +674,7 @@ describe("buildCodexProcessEnv", () => {
       );
 
       const overlayHome = path.join(runtimeHome, "codex-home-overlay");
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
@@ -655,7 +697,7 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("preserves a recorded suppression after its plugin disappears from source config", () => {
+  it("preserves a recorded suppression after its plugin disappears from source config", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
@@ -672,7 +714,7 @@ describe("buildCodexProcessEnv", () => {
         "utf8",
       );
 
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
@@ -694,7 +736,7 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("repairs stale real files in Synara's Codex home overlay", () => {
+  it("repairs stale real files in Synara's Codex home overlay", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
@@ -707,7 +749,7 @@ describe("buildCodexProcessEnv", () => {
       mkdirSync(overlayHome, { recursive: true });
       writeFileSync(overlayMemoryPath, "stale-overlay-db", "utf8");
 
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
@@ -722,7 +764,7 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("repairs stale auth.json files in Synara's Codex home overlay", () => {
+  it("repairs stale auth.json files in Synara's Codex home overlay", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
@@ -735,7 +777,7 @@ describe("buildCodexProcessEnv", () => {
       mkdirSync(overlayHome, { recursive: true });
       writeFileSync(overlayAuthPath, '{"tokens":{"access_token":"stale"}}', "utf8");
 
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
@@ -751,7 +793,7 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("preserves real generated image directories in Synara's Codex home overlay", () => {
+  it("preserves real generated image directories in Synara's Codex home overlay", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
@@ -766,7 +808,7 @@ describe("buildCodexProcessEnv", () => {
       const overlayImagePath = path.join(overlayGeneratedImagesDir, "overlay.png");
       writeFileSync(overlayImagePath, "overlay-image", "utf8");
 
-      const env = buildCodexProcessEnv({
+      const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
@@ -2624,6 +2666,244 @@ describe("collab child conversation routing", () => {
         parentTurnId: "turn_parent",
         itemId: "msg_child_1",
         providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("routes unmapped child assistant notifications through the active provider thread", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "msg_child_unmapped",
+        delta: "working",
+      },
+    });
+    handleServerNotificationForTest(manager, context, {
+      method: "item/completed",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        item: {
+          type: "agentMessage",
+          id: "msg_child_unmapped",
+          text: "done",
+        },
+      },
+    });
+
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "item/agentMessage/delta",
+        turnId: "turn_child_unmapped",
+        itemId: "msg_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "item/completed",
+        turnId: "turn_child_unmapped",
+        itemId: "msg_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("does not infer a provider parent for active-parent or inactive-session notifications", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+        itemId: "msg_parent",
+        delta: "parent",
+      },
+    });
+    context.session.status = "ready";
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "another_provider_thread",
+        turnId: "turn_other",
+        itemId: "msg_other",
+        delta: "other",
+      },
+    });
+
+    const activeParentEvent = emitEvent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const inactiveSessionEvent = emitEvent.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(activeParentEvent.providerThreadId).toBe("provider_parent");
+    expect(activeParentEvent).not.toHaveProperty("providerParentThreadId");
+    expect(inactiveSessionEvent.providerThreadId).toBe("another_provider_thread");
+    expect(inactiveSessionEvent).not.toHaveProperty("providerParentThreadId");
+  });
+
+  it("prefers a mapped provider parent over the active-provider fallback", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_mapped_parent");
+
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        itemId: "msg_child_1",
+        delta: "mapped",
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_mapped_parent",
+      }),
+    );
+  });
+
+  it("preserves an inferred child approval route through the decision event", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 42,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "call_child_unmapped",
+        command: "bun install",
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 42,
+      result: { decision: "accept" },
+    });
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "request",
+        method: "item/commandExecution/requestApproval",
+        turnId: "turn_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/requestApproval/decision",
+        turnId: "turn_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("preserves an unmapped child user-input route through the answered event", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 43,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "tool_child_unmapped",
+        questions: [],
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingUserInputs.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    await manager.respondToUserInput(asThreadId("thread_1"), pendingRequest.requestId, {
+      scope: "child",
+    });
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 43,
+      result: {
+        answers: {
+          scope: { answers: ["child"] },
+        },
+      },
+    });
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "request",
+        method: "item/tool/requestUserInput",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/tool/requestUserInput/answered",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("preserves the inferred child route when session approvals resolve immediately", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+    context.sessionApprovalOverride = {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 44,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "file_child_unmapped",
+        path: "apps/server/src/example.ts",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 44,
+      result: { decision: "acceptForSession" },
+    });
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/requestApproval/decision",
+        turnId: "turn_child_unmapped",
+        itemId: "file_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
         providerParentThreadId: "provider_parent",
       }),
     );

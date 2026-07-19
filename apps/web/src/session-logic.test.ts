@@ -778,7 +778,33 @@ describe("deriveActiveBackgroundTasksState", () => {
 
     expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
       activeCount: 1,
+      taskIds: ["task-subagent-1"],
     });
+  });
+
+  it("retires paused tasks from active background work", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "background-task-start-paused",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "Task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-paused", taskType: "subagent" },
+      }),
+      makeActivity({
+        id: "background-task-paused",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.updated",
+        summary: "Task paused",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-paused", status: "paused" },
+      }),
+    ];
+
+    expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
   });
 });
 
@@ -2951,6 +2977,39 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+  });
+
+  it("keeps routed collab subagent rows when includeRoutedSubagentActivities is set", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "routed-agent-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Subagent task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            toolCallId: "toolu_x",
+            callId: "toolu_x",
+            toolName: "Agent",
+            input: {},
+            receiverThreadId: "toolu_x",
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      includeRoutedSubagentActivities: true,
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagents).toEqual([
+      expect.objectContaining({ threadId: "toolu_x", providerThreadId: "toolu_x" }),
+    ]);
   });
 
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {

@@ -643,24 +643,32 @@ export function BrowserPanel({
       return;
     }
 
+    // Timeout-0 keeps the reset writes asynchronous (no wasted pre-paint
+    // render), which also keeps this component eligible for React Compiler.
     let cancelled = false;
-    setWorkspaceReady(false);
-    setLocalError(null);
-
-    void runBrowserAction(() => api.browser.open({ threadId })).then((state) => {
+    const timeoutId = window.setTimeout(() => {
       if (cancelled) {
         return;
       }
-      if (!state) {
+      setWorkspaceReady(false);
+      setLocalError(null);
+
+      void runBrowserAction(() => api.browser.open({ threadId })).then((state) => {
+        if (cancelled) {
+          return;
+        }
+        if (!state) {
+          setWorkspaceReady(true);
+          return;
+        }
+        upsertThreadState(state);
         setWorkspaceReady(true);
-        return;
-      }
-      upsertThreadState(state);
-      setWorkspaceReady(true);
-    });
+      });
+    }, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       void api.browser.hide({ threadId });
     };
   }, [api, isLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
