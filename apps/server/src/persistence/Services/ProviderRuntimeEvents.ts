@@ -55,6 +55,7 @@ export interface ProviderRuntimeEventRepositoryShape {
     ReadonlyArray<PersistedProviderRuntimeEvent>,
     ProviderRuntimeEventRepositoryError
   >;
+  readonly pruneSettledOpenTurns: Effect.Effect<void, PersistenceSqlError>;
   readonly getConsumerCursor: (
     consumerName: string,
   ) => Effect.Effect<number, ProviderRuntimeEventRepositoryError>;

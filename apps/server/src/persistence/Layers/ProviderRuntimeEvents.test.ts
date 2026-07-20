@@ -1,6 +1,7 @@
 import { EventId, ThreadId, TurnId, type ProviderRuntimeEvent } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -128,6 +129,57 @@ layer("ProviderRuntimeEventRepository", (it) => {
         repository.append(runtimeEvent("runtime-event-1", "different")),
       );
       assert.strictEqual(conflict._tag, "PersistenceDecodeError");
+    }),
+  );
+
+  it.effect("prunes replay rows after their projected turn settles", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const event = runtimeEvent("runtime-event-settled-turn", "stale replay");
+      const persisted = yield* repository.append(event);
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        }),
+      );
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        ) VALUES (
+          ${event.threadId}, ${event.turnId}, 'running',
+          ${event.createdAt}, '[]'
+        )
+      `;
+
+      yield* repository.pruneSettledOpenTurns;
+      assert.lengthOf(
+        yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        }),
+        1,
+      );
+
+      yield* sql`
+        UPDATE projection_turns
+        SET state = 'interrupted', completed_at = ${"2026-07-14T00:01:01.000Z"}
+        WHERE thread_id = ${event.threadId} AND turn_id = ${event.turnId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+
+      assert.lengthOf(
+        yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        }),
+        0,
+      );
     }),
   );
 });
