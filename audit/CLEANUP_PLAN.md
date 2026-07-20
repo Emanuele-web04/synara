@@ -152,10 +152,10 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-024 | P2  | DONE   | Consolidate the duplicated projection message-row codec without changing SQL/query shape; retain the already-shared token-attribution CTE in its current owner.                              | focused codec plus selected repository/snapshot cases                       |
 | CLN-030 | P0  | DONE   | Extract only the packaged static-protocol routing policy from Electron `main.ts`; retain logging, updater, backend, window, IPC, and bootstrap lifecycles as cohesive owners.                 | focused resolver tests and targeted desktop bundle                          |
 | CLN-031 | P0  | DONE   | Extract only BrowserManager's long-lived Electron session/security policy; retain popup, tab-runtime, CDP, mutable state, timers, and event lifecycle behind the facade.                     | focused session-policy characterization and manager bundle                  |
-| CLN-032 | P1  | TODO   | Split AppSnap persistence, resumable download policy/engine/adapter, and desktop artifact build phases.                                                                                      | existing AppSnap/download/build tests                                       |
+| CLN-032 | P1  | DONE   | Extract only the pure resumable-update HTTP/retry/checksum/header policy behind its existing facade; retain AppSnap persistence, stream engine/adapter, and artifact build phases.           | selected existing resumable-download policy tests and bundle                |
 | CLN-033 | P1  | TODO   | Split contracts orchestration schema families and consolidate shared thread/browser API fields while preserving exports.                                                                     | contracts orchestration/rpc/ws tests; desktop preload/web API tests         |
 | CLN-034 | P2  | TODO   | Split shared subagent decoding from identity indexing and centralize alias-key readers.                                                                                                      | shared subagent tests                                                       |
-| CLN-035 | P2  | TODO   | Split native AppSnap capture only after a deterministic Swift characterization/smoke gate exists.                                                                                            | native build/smoke plus selection/limit checks                              |
+| CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                    | gate audit only; no safe implementation verification exists                 |
 | CLN-040 | P2  | TODO   | Final reference/duplicate/unused rescan; reassess `timelineHeight.ts`; update before/after metrics.                                                                                          | focused suites, then optional heavyweight pass only with user authorization |
 
 ## Ordered execution and safety gates
@@ -509,3 +509,33 @@ For every tracker item:
   `git diff --check` passed. Remaining risk: the live Electron session interceptor was not exercised
   and the existing broader manager characterization was intentionally not rerun. Popup/tab/runtime/
   state/timer/CDP lifecycles remain cohesive in the **2,017**-line manager.
+- 2026-07-20 — CLN-032 started with one accepted policy boundary. `resumableUpdateDownloadPolicy.ts`
+  will own the synchronous progress/content-range/checksum, response classification, retry budget,
+  redirect-origin credential, and request-header rules, re-exported through the existing downloader
+  facade. It changes independently from sockets/files/cancellation/Electron adapter lifecycle and is
+  already directly characterized. Retry `>` limits, immediate first reconnect after fresh progress,
+  response codes, origin/default-port equivalence, auth stripping against the original feed URL,
+  header casing, and SHA-512 compatibility must remain byte-for-byte equivalent. The benefit is
+  isolated security/retry policy; the tradeoff is one cohesive internal module with no meaningful
+  network/startup overhead. AppSnap persistence, streaming/flush/cancel/idle-timeout settlement, the
+  small adapter, and desktop artifact phase ordering are intentionally retained because extracting
+  them would cross durability, callback, teardown, or release safety gates.
+- 2026-07-20 — CLN-032 complete: the **191**-line policy module owns the unchanged synchronous
+  configuration, progress, content-range, checksum, HTTP response, retry-cap/backoff, origin, and
+  auth/header rules. `resumableUpdateDownload.ts` re-exports the same public facade and retains every
+  socket/file/cancellation/flush/idle-timeout/adapter path; all superseded policy implementations were
+  deleted. The benefit is isolated review and characterization of the security/retry rules; the
+  tradeoff is one internal import in the response/retry path with no extra passes or I/O. A single
+  filtered facade run passed **30/30** policy tests with seven lifecycle cases skipped, the combined
+  downloader/policy entrypoint bundled, both touched TypeScript files have **0 unused diagnostics**,
+  and `git diff --check` passed. Remaining risk: idle-timeout and stream/adapter integration tests were
+  intentionally not rerun because their code did not change.
+- 2026-07-20 — CLN-035 rejected after a deterministic-gate audit. Native `WindowCapture.swift`
+  directly reads live workspace/window/display state; selection, titled-window preference, filtering,
+  the 8,192-pixel cap, 10 MiB PNG limit, and 20-attempt reduction loop have no fixture-driven Swift
+  tests or helper self-test mode. Existing scripts prove compilation/signing/packaging only, Electron
+  smoke never invokes capture, and manager tests fake the helper protocol. Splitting the cohesive
+  **613**-line native owner would therefore move system-sensitive behavior without safety coverage.
+  Reconsider only after pure fixture-based selection/sizing/limit tests and a compiled-helper capture
+  smoke mode exist. Benefit of retention: no focus/attachment-limit regression; tradeoff: the large
+  native file remains intentionally cohesive.
