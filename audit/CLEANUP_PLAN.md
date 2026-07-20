@@ -151,7 +151,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-023 | P1  | DONE   | Extract Git status wire parsing and terminal subprocess probing behind the existing facades; retain process, mutation, PTY, output, persistence, and lifecycle orchestration.                | focused parser/probe tests plus one Git wiring filter                       |
 | CLN-024 | P2  | DONE   | Consolidate the duplicated projection message-row codec without changing SQL/query shape; retain the already-shared token-attribution CTE in its current owner.                              | focused codec plus selected repository/snapshot cases                       |
 | CLN-030 | P0  | DONE   | Extract only the packaged static-protocol routing policy from Electron `main.ts`; retain logging, updater, backend, window, IPC, and bootstrap lifecycles as cohesive owners.                 | focused resolver tests and targeted desktop bundle                          |
-| CLN-031 | P0  | TODO   | Split BrowserManager into popup, tab-runtime, and state operations behind its facade.                                                                                                        | new manager characterization + browser session tests                        |
+| CLN-031 | P0  | DONE   | Extract only BrowserManager's long-lived Electron session/security policy; retain popup, tab-runtime, CDP, mutable state, timers, and event lifecycle behind the facade.                     | focused session-policy characterization and manager bundle                  |
 | CLN-032 | P1  | TODO   | Split AppSnap persistence, resumable download policy/engine/adapter, and desktop artifact build phases.                                                                                      | existing AppSnap/download/build tests                                       |
 | CLN-033 | P1  | TODO   | Split contracts orchestration schema families and consolidate shared thread/browser API fields while preserving exports.                                                                     | contracts orchestration/rpc/ws tests; desktop preload/web API tests         |
 | CLN-034 | P2  | TODO   | Split shared subagent decoding from identity indexing and centralize alias-key readers.                                                                                                      | shared subagent tests                                                       |
@@ -486,3 +486,26 @@ For every tracker item:
   real Electron protocol callback and Windows path behavior were not runtime-smoked; broad desktop
   tests were intentionally not run. The cohesive **3,666**-line lifecycle entrypoint is otherwise
   intentionally retained rather than split for line count.
+- 2026-07-20 — CLN-031 started after rejecting popup, tab-runtime, and generic state controllers as
+  callback-heavy lifecycle moves. `BrowserSessionPolicy` is the accepted owner for the persistent
+  Electron partition, user-agent/client-hint/language header policy, per-WebContents UA application,
+  and hardened OAuth popup options. It changes with browser security/session compatibility and needs
+  no callbacks into BrowserManager. The benefit is independently testable security policy and removal
+  of header/session concerns from the manager; the tradeoff is one long-lived object plus delegation
+  during configuration and content creation. Configuration must remain once-per-manager but retry on
+  failure, keep both partition-wide and per-content UA application, preserve case-insensitive in-place
+  header replacement, and survive manager `dispose()`. Popup/tab listeners, microtask ordering, state
+  versioning, runtime budgets, CDP, timers, teardown, and event emission remain intentionally local.
+- 2026-07-20 — CLN-031 complete: the **102**-line `BrowserSessionPolicy` now owns the persistent
+  partition, cached Chrome-compatible identity, client-hint/language request headers, per-content UA
+  fallback, and hardened OAuth popup options. BrowserManager constructs it once and only delegates at
+  the original configuration/content/popup call sites; the partition constant remains re-exported
+  through the existing module. The superseded session fields, methods, shared-helper imports, and
+  header replacer were removed. The benefit is independently testable security/session policy; the
+  tradeoff is one long-lived object and a delegation call outside navigation/state hot paths. Focused
+  verification passed **5/5** once, covering configure-once, failure retry, case-insensitive in-place
+  headers without Electron tokens, shared UA identity, and popup hardening. The BrowserManager
+  production entrypoint bundled, the three touched TypeScript files have **0 unused diagnostics**, and
+  `git diff --check` passed. Remaining risk: the live Electron session interceptor was not exercised
+  and the existing broader manager characterization was intentionally not rerun. Popup/tab/runtime/
+  state/timer/CDP lifecycles remain cohesive in the **2,017**-line manager.

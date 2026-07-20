@@ -6,11 +6,9 @@
 import * as Crypto from "node:crypto";
 
 import {
-  app,
   BrowserWindow,
   clipboard,
   nativeImage,
-  session,
   webContents as electronWebContents,
   WebContentsView,
 } from "electron";
@@ -35,16 +33,17 @@ import type {
 import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
 import {
   BROWSER_BLANK_URL as ABOUT_BLANK_URL,
-  buildAcceptLanguageHeader,
-  buildChromeClientHints,
   classifyBrowserWindowOpen,
-  deriveChromeUserAgent,
   isBlankBrowserTabUrl,
   normalizeBrowserUrlInput as normalizeUrlInput,
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
+import {
+  BROWSER_SESSION_PARTITION,
+  BrowserSessionPolicy,
+} from "./browserSessionPolicy";
 
-export const BROWSER_SESSION_PARTITION = "persist:synara-browser";
+export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
 const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
@@ -257,8 +256,7 @@ export class DesktopBrowserManager {
   // OAuth/sign-in popups opened by pages via `window.open`. Tracked so they can be sized over
   // the panel and torn down cleanly without leaking native windows.
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
-  private spoofedUserAgent: string | null = null;
-  private sessionConfigured = false;
+  private readonly sessionPolicy = new BrowserSessionPolicy();
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   private runtimeSyncFlushScheduled = false;
@@ -308,77 +306,6 @@ export class DesktopBrowserManager {
     };
   }
 
-  // Desktop Chrome UA with the Electron/app product tokens stripped. Computed once from the
-  // running build so the Chrome version stays accurate instead of drifting against a hardcoded
-  // string. Centralized here (and in `@synara/shared/browserSession`) so every browser
-  // surface presents the same identity.
-  private resolveSpoofedUserAgent(): string {
-    if (this.spoofedUserAgent === null) {
-      this.spoofedUserAgent = deriveChromeUserAgent(app.userAgentFallback, [app.getName()]);
-    }
-    return this.spoofedUserAgent;
-  }
-
-  // Applies the spoofed UA to the shared persistent partition once. Every webContents in that
-  // session (native tabs, the adopted renderer <webview>, and OAuth popups) then inherits it,
-  // so we avoid duplicating the UA string across the desktop/web surfaces.
-  private ensureSessionConfigured(): void {
-    if (this.sessionConfigured) {
-      return;
-    }
-    this.sessionConfigured = true;
-    try {
-      const partitionSession = session.fromPartition(BROWSER_SESSION_PARTITION);
-      const userAgent = this.resolveSpoofedUserAgent();
-      partitionSession.setUserAgent(userAgent);
-
-      // `setUserAgent` fixes navigator.userAgent + the UA request header, but NOT the
-      // User-Agent Client Hints (`sec-ch-ua*`), which still leak the Electron brand. OAuth
-      // providers read those, so rewrite them (and Accept-Language) to a real desktop Chrome on
-      // every request in this partition — the same technique the Codex desktop app uses.
-      const clientHints = buildChromeClientHints(userAgent, process.platform);
-      const acceptLanguage = buildAcceptLanguageHeader(app.getPreferredSystemLanguages());
-      partitionSession.webRequest.onBeforeSendHeaders((details, callback) => {
-        const requestHeaders = withRequestHeadersCaseInsensitive(details.requestHeaders, {
-          "User-Agent": userAgent,
-          ...(acceptLanguage ? { "Accept-Language": acceptLanguage } : {}),
-          ...(clientHints ?? {}),
-        });
-        callback({ requestHeaders });
-      });
-    } catch {
-      // If the session can't be configured yet, leave it for the per-webContents fallback.
-      this.sessionConfigured = false;
-    }
-  }
-
-  // Options for an OAuth/sign-in popup. Stays on the shared persistent partition and keeps the
-  // hardened sandbox; `window.opener` is preserved by Electron because we allow (not deny) the
-  // open, which is what lets the auth callback `postMessage`/`window.close()` back to the page.
-  private buildOAuthPopupWindowOptions(): Electron.BrowserWindowConstructorOptions {
-    const options: Electron.BrowserWindowConstructorOptions = {
-      width: 480,
-      height: 640,
-      resizable: true,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      autoHideMenuBar: true,
-      skipTaskbar: true,
-      title: "Sign in",
-      webPreferences: {
-        partition: BROWSER_SESSION_PARTITION,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    };
-    if (this.window) {
-      options.parent = this.window;
-    }
-    return options;
-  }
-
   private configureWindowOpenHandling(
     webContents: WebContents,
     context: OAuthPopupContext,
@@ -407,7 +334,9 @@ export class DesktopBrowserManager {
         // `window.opener`, which the OAuth callback needs to message the page back.
         return {
           action: "allow",
-          overrideBrowserWindowOptions: this.buildOAuthPopupWindowOptions(),
+          overrideBrowserWindowOptions: this.sessionPolicy.buildOAuthPopupWindowOptions(
+            this.window,
+          ),
         };
       }
 
@@ -450,7 +379,7 @@ export class DesktopBrowserManager {
   private configureOAuthPopupRuntime(runtime: OAuthPopupRuntime): void {
     const { window: popup } = runtime;
     const { webContents } = popup;
-    webContents.setUserAgent(this.resolveSpoofedUserAgent());
+    this.sessionPolicy.applyUserAgent(webContents);
     const closeOnInput = (event: Electron.Event, input: Electron.Input) => {
       if (input.type !== "keyDown") {
         return;
@@ -1517,7 +1446,7 @@ export class DesktopBrowserManager {
 
     // Belt-and-suspenders alongside the session-level UA: also covers an adopted renderer
     // <webview> for any navigation after it attaches.
-    webContents.setUserAgent(this.resolveSpoofedUserAgent());
+    this.sessionPolicy.applyUserAgent(webContents);
 
     this.configureWindowOpenHandling(webContents, runtime, runtime.listenerDisposers);
 
@@ -1885,7 +1814,7 @@ export class DesktopBrowserManager {
   }
 
   private ensureWorkspace(threadId: ThreadId, initialUrl?: string): ThreadBrowserState {
-    this.ensureSessionConfigured();
+    this.sessionPolicy.ensureConfigured();
     const state = this.getOrCreateState(threadId);
     if (state.tabs.length === 0) {
       const initialTab = createBrowserTab(normalizeUrlInput(initialUrl));
@@ -1982,25 +1911,6 @@ export class DesktopBrowserManager {
       listener(snapshot);
     }
   }
-}
-
-// Applies spoofed request headers with one case-insensitive scan per request.
-function withRequestHeadersCaseInsensitive(
-  headers: Record<string, string>,
-  replacements: Record<string, string>,
-): Record<string, string> {
-  const replacementNamesByLower = new Set(
-    Object.keys(replacements).map((name) => name.toLowerCase()),
-  );
-  for (const existing of Object.keys(headers)) {
-    if (replacementNamesByLower.has(existing.toLowerCase())) {
-      delete headers[existing];
-    }
-  }
-  for (const [name, value] of Object.entries(replacements)) {
-    headers[name] = value;
-  }
-  return headers;
 }
 
 function setIfChanged<T>(current: T, next: T, apply: (value: T) => void): boolean {
