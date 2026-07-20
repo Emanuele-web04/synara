@@ -3,7 +3,12 @@
  *
  * @module AcpAdapterSupport
  */
-import { type ProviderApprovalDecision, type ProviderKind, type ThreadId } from "@synara/contracts";
+import {
+  type ProviderApprovalDecision,
+  type ProviderKind,
+  type ThreadId,
+  type ToolLifecycleItemType,
+} from "@synara/contracts";
 import { Schema } from "effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
@@ -12,6 +17,22 @@ import {
   ProviderAdapterSessionClosedError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+
+export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
+  switch (kind) {
+    case "execute":
+      return "command_execution";
+    case "edit":
+    case "delete":
+    case "move":
+      return "file_change";
+    case "fetch":
+      return "web_search";
+    case "search":
+    default:
+      return "dynamic_tool_call";
+  }
+}
 
 function acpRequestErrorDetail(error: EffectAcpErrors.AcpRequestError): string {
   const message = error.message.trim();

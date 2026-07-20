@@ -81,16 +81,13 @@ import {
   type ProviderKind,
   ThreadId,
   type GitStatusResult,
-  type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
-  type ServerLocalServerProcess,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
-import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
   type SidebarProjectSortOrder,
@@ -98,16 +95,12 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { isElectron } from "../env";
-import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
-import {
-  reconcileDeletedThreadFromClient,
-  reconcileDeletedThreadsFromClient,
-} from "../lib/deletedThreadClientReconciliation";
+import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
-import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
+import { getThreadFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -121,18 +114,9 @@ import {
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
   createSidebarTreeThreadsSelector,
-  createThreadSelector,
 } from "../storeSelectors";
-import {
-  derivePendingApprovals,
-  derivePendingUserInputs,
-  isThreadRunningTurn,
-} from "../session-logic";
-import {
-  gitRemoveWorktreeMutationOptions,
-  gitResolvePullRequestQueryOptions,
-  gitStatusQueryOptions,
-} from "../lib/gitReactQuery";
+import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
+import { gitResolvePullRequestQueryOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
@@ -142,7 +126,6 @@ import {
   resolveLatestProjectTargetId,
   resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
-import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
   pullRequestQueryKeys,
   pullRequestReviewRequestCountQueryOptions,
@@ -152,17 +135,8 @@ import {
   resolveNewThreadModelPrefetchCwd,
   resolveNewThreadModelPrefetchProvider,
 } from "../lib/providerModelPrefetch";
-import {
-  serverConfigQueryOptions,
-  serverQueryKeys,
-  sidebarLocalServersQueryOptions,
-} from "../lib/serverReactQuery";
+import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
-import {
-  archiveThreadFromClient,
-  isThreadAlreadyUnarchivedError,
-  unarchiveThreadFromClient,
-} from "../lib/threadArchive";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import {
   collectStudioProjectIds,
@@ -184,7 +158,6 @@ import {
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
-import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
 import { FolderClosed } from "./FolderClosed";
@@ -210,9 +183,12 @@ import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
+import {
+  SidebarThreadRowContent,
+  type SidebarThreadTerminalStatus,
+} from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
-import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import {
   SidebarSearchPalette,
   type ImportProviderKind,
@@ -224,12 +200,6 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
-import { useProjectRunStore, type ProjectRunState } from "../projectRunStore";
-import {
-  selectPrimaryProjectRunCommand,
-  upsertProjectRunCommandScripts,
-} from "../projectRunTargets";
-import { projectScriptRuntimeEnv } from "../projectScripts";
 import { toastManager } from "./ui/toast";
 import {
   normalizeSidebarProjectThreadListCwd,
@@ -289,17 +259,13 @@ import {
   SidebarTrigger,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import {
   describeAddProjectError,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
-  derivePinnedThreadIdsForSidebar,
   createSidebarThreadHoverAnchorId,
-  findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
-  getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
   getUnpinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
@@ -310,7 +276,6 @@ import {
   groupSidebarThreadsByProjectId,
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedProjectMutation,
-  isLatestPinnedThreadMutation,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
   resolvePullRequestReviewBadge,
@@ -336,7 +301,6 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
@@ -367,17 +331,17 @@ import {
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
-import {
-  resolveSplitViewFocusedThreadId,
-  resolveSplitViewPaneIdForThread,
-  selectSplitView,
-  useSplitViewStore,
-} from "../splitViewStore";
+import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
+import {
+  firstLocalServerUrl,
+  useSidebarProjectRunController,
+} from "../hooks/useSidebarProjectRunController";
+import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
-import { usePinnedThreadsStore } from "../pinnedThreadsStore";
+import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
@@ -387,6 +351,7 @@ import type {
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { waitForRecoverableProjectInReadModel } from "../lib/projectCreateRecovery";
 import {
   createOrRecoverProjectFromPath,
@@ -397,9 +362,6 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
 // Each "Show more" click reveals this many extra rows; "Show less" hides them again page by page.
 const THREAD_PREVIEW_PAGE_SIZE = 5;
-// How long the "Undo archive" toast lingers (visible time only — it pauses while
-// the tab is hidden) before auto-dismissing.
-const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -479,20 +441,6 @@ function ProjectContextMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
       <Icon aria-hidden="true" />
     </span>
   );
-}
-
-function firstLocalServerUrl(server: ServerLocalServerProcess): string | null {
-  return server.addresses.find((address) => address.url)?.url ?? null;
-}
-
-function findTrackedProjectRunServer(
-  run: ProjectRunState | null | undefined,
-  servers: readonly ServerLocalServerProcess[],
-): ServerLocalServerProcess | null {
-  if (!run) {
-    return null;
-  }
-  return servers.find((server) => localServerMatchesRun(server, run)) ?? null;
 }
 
 type DebugFeatureFlagsWindow = Window & {
@@ -726,169 +674,6 @@ function resolveThreadRowMetaChips(input: {
   return chips;
 }
 
-function ProviderAvatarWithTerminal({
-  provider,
-  handoffSourceProvider,
-  handoffTooltip,
-  terminalStatus,
-  terminalCount,
-}: {
-  provider: ProviderKind;
-  handoffSourceProvider?: ProviderKind | null;
-  handoffTooltip?: string | null;
-  terminalStatus: TerminalStatusIndicator | null;
-  terminalCount: number;
-}) {
-  const showBadge = terminalCount > 1 || terminalStatus !== null;
-  const badgeTooltip =
-    terminalCount > 1
-      ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
-      : (terminalStatus?.label ?? "Terminal open");
-  const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
-
-  const hasHandoff = Boolean(handoffSourceProvider);
-  const containerClass = hasHandoff
-    ? "relative inline-flex h-3 w-4.5 shrink-0 items-center"
-    : "relative inline-flex size-3 shrink-0 items-center justify-center";
-
-  const avatarNode = hasHandoff ? (
-    <span className={containerClass}>
-      <span className="sidebar-icon-chip absolute left-0 top-1/2 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
-        <ProviderIcon provider={handoffSourceProvider!} className="size-2" />
-      </span>
-      <span className="sidebar-icon-chip absolute right-0 top-1/2 z-10 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
-        <ProviderIcon provider={provider} className="size-2" />
-      </span>
-    </span>
-  ) : (
-    <span className={containerClass}>
-      <ProviderIcon provider={provider} className="size-3" />
-    </span>
-  );
-
-  const wrappedAvatar =
-    hasHandoff && handoffTooltip ? (
-      <Tooltip>
-        <TooltipTrigger render={avatarNode} />
-        <TooltipPopup side="top">{handoffTooltip}</TooltipPopup>
-      </Tooltip>
-    ) : (
-      avatarNode
-    );
-
-  return (
-    <span className="relative inline-flex shrink-0 items-center">
-      {wrappedAvatar}
-      {showBadge ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                aria-label={badgeTooltip}
-                className="sidebar-icon-chip absolute -top-1.5 -right-1.5 inline-flex size-3 min-w-3 items-center justify-center rounded-full px-px"
-              >
-                {terminalCount > 1 ? (
-                  <span
-                    className={cn(
-                      "text-[8px] font-semibold leading-none tabular-nums",
-                      badgeColorClass,
-                    )}
-                  >
-                    {terminalCount}
-                  </span>
-                ) : (
-                  <TerminalIcon className={cn("size-2.5", badgeColorClass)} />
-                )}
-              </span>
-            }
-          />
-          <TooltipPopup side="top">{badgeTooltip}</TooltipPopup>
-        </Tooltip>
-      ) : null}
-    </span>
-  );
-}
-
-function renderSubagentLabel(input: {
-  threadId: string;
-  parentThreadId?: string | null | undefined;
-  agentId?: string | null | undefined;
-  nickname?: string | null | undefined;
-  role?: string | null | undefined;
-  title?: string | null | undefined;
-  threads?: ReadonlyArray<Thread> | undefined;
-  titleClassName?: string | undefined;
-  roleClassName?: string | undefined;
-}) {
-  const presentation = resolveSubagentPresentationForThread({
-    thread: {
-      id: input.threadId,
-      parentThreadId: input.parentThreadId,
-      subagentAgentId: input.agentId,
-      subagentNickname: input.nickname,
-      subagentRole: input.role,
-      title: input.title,
-    },
-    threads: input.threads,
-  });
-  const supportingLabel =
-    presentation.role ??
-    (presentation.nickname && presentation.title && presentation.title !== presentation.nickname
-      ? presentation.title
-      : null);
-
-  return (
-    <span className="min-w-0 truncate">
-      <span
-        className={cn("font-medium", input.titleClassName)}
-        style={{ color: presentation.accentColor }}
-      >
-        {presentation.nickname ?? presentation.primaryLabel}
-      </span>
-      {supportingLabel ? (
-        <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
-          {presentation.role ? `(${presentation.role})` : supportingLabel}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function SidebarSubagentLabel(props: {
-  threadId: ThreadId;
-  parentThreadId?: ThreadId | null | undefined;
-  agentId?: string | null | undefined;
-  nickname?: string | null | undefined;
-  role?: string | null | undefined;
-  title?: string | null | undefined;
-  titleClassName?: string | undefined;
-  roleClassName?: string | undefined;
-}) {
-  const selectParentThread = useMemo(
-    () => createThreadSelector(props.parentThreadId ?? null),
-    [props.parentThreadId],
-  );
-  const parentThread = useStore(selectParentThread);
-
-  return renderSubagentLabel({
-    threadId: props.threadId,
-    parentThreadId: props.parentThreadId,
-    agentId: props.agentId,
-    nickname: props.nickname,
-    role: props.role,
-    title: props.title,
-    threads: parentThread ? [parentThread] : undefined,
-    titleClassName: props.titleClassName,
-    roleClassName: props.roleClassName,
-  });
-}
-
-interface TerminalStatusIndicator {
-  label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
-  colorClass: string;
-  pulse: boolean;
-}
-
 interface PrStatusIndicator {
   label: PrStatePresentation["label"];
   colorClass: string;
@@ -936,7 +721,7 @@ function toThreadPr(
 function terminalStatusFromThreadState(input: {
   runningTerminalIds: string[];
   terminalAttentionStatesById: Record<string, "attention" | "review">;
-}): TerminalStatusIndicator | null {
+}): SidebarThreadTerminalStatus | null {
   const terminalAttentionStates = Object.values(input.terminalAttentionStatesById ?? {});
   if (terminalAttentionStates.includes("attention")) {
     return {
@@ -1395,7 +1180,6 @@ export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
-  const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
@@ -1408,29 +1192,17 @@ export default function Sidebar() {
   const removeDeletedProjectFromClientState = useStore(
     (store) => store.removeDeletedProjectFromClientState,
   );
-  const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
-  const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
-  const storeUpsertProjectRun = useProjectRunStore((state) => state.upsertRun);
-  const storeRemoveProjectRun = useProjectRunStore((state) => state.removeRun);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
   const openChatThreadPage = useTerminalStateStore((state) => state.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
   const clearProjectDraftThreads = useComposerDraftStore((store) => store.clearProjectDraftThreads);
-  const clearProjectDraftThreadById = useComposerDraftStore(
-    (store) => store.clearProjectDraftThreadById,
-  );
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
-  const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
   const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
   const unpinProject = usePinnedProjectsStore((store) => store.unpinProject);
   const prunePinnedProjects = usePinnedProjectsStore((store) => store.prunePinnedProjects);
-  const persistedPinnedThreadIds = usePinnedThreadsStore((store) => store.pinnedThreadIds);
-  const pinThreadLocally = usePinnedThreadsStore((store) => store.pinThread);
-  const unpinThread = usePinnedThreadsStore((store) => store.unpinThread);
-  const prunePinnedThreads = usePinnedThreadsStore((store) => store.prunePinnedThreads);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
   const createWorkspace = useWorkspaceStore((store) => store.createWorkspace);
   const renameWorkspace = useWorkspaceStore((store) => store.renameWorkspace);
@@ -1591,7 +1363,6 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
-  const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
@@ -1600,7 +1371,6 @@ export default function Sidebar() {
     ...serverConfigQueryOptions(),
     select: (config) => config.cwd ?? null,
   });
-  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [addingProject, setAddingProject] = useState(false);
@@ -1609,10 +1379,6 @@ export default function Sidebar() {
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
-  const [projectRunDialogProjectId, setProjectRunDialogProjectId] = useState<ProjectId | null>(
-    null,
-  );
-  const [projectRunDialogCommandDraft, setProjectRunDialogCommandDraft] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -1622,8 +1388,6 @@ export default function Sidebar() {
     [addProjectError],
   );
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
-  const archivePendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
-  const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
@@ -1655,18 +1419,12 @@ export default function Sidebar() {
   } | null>(null);
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
-  const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
-  const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
-  const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
   const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
   const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
-  const [optimisticPinnedStateByThreadId, setOptimisticPinnedStateByThreadId] = useState<
-    ReadonlyMap<ThreadId, boolean>
-  >(() => new Map());
   const [optimisticPinnedStateByProjectId, setOptimisticPinnedStateByProjectId] = useState<
     ReadonlyMap<ProjectId, boolean>
   >(() => new Map());
@@ -1687,10 +1445,8 @@ export default function Sidebar() {
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
-  const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const selectSidebarTreeThreads = useMemo(() => createSidebarTreeThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
-  const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
@@ -1701,13 +1457,6 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
       [sidebarThreads, studioProjectIdSet],
     );
-  const {
-    nonStudioThreads: nonStudioSidebarDisplayThreads,
-    studioThreads: studioSidebarDisplayThreads,
-  } = useMemo(
-    () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
-    [sidebarDisplayThreads, studioProjectIdSet],
-  );
   const { nonStudioThreads: nonStudioSidebarTreeThreads, studioThreads: studioSidebarTreeThreads } =
     useMemo(
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
@@ -1808,23 +1557,54 @@ export default function Sidebar() {
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
-  // Pin state must derive from the child-inclusive tree list: project trees
-  // render child rows with the pin action, and a pin stored for a child would
-  // otherwise never surface in the pinned section (root-only display list).
-  const pinnedThreadIds = useMemo(
-    () =>
-      derivePinnedThreadIdsForSidebar({
-        threads: sidebarTreeThreads,
-        persistedPinnedThreadIds,
-        optimisticPinnedStateByThreadId,
-      }),
-    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarTreeThreads],
-  );
-  const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const projectById = useMemo(
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  const {
+    pinnedThreadIds,
+    pinnedThreadIdSet,
+    toggleThreadPinned,
+    deleteThread,
+    confirmAndDeleteThread,
+    archiveThread,
+    archiveThreadWithUndo,
+    confirmAndArchiveThread,
+    archiveAllThreadsInProject,
+    deleteProjectThreads,
+  } = useSidebarThreadActions({
+    activeSplitView,
+    appSettings,
+    clearTerminalState,
+    handleNewChat,
+    projectById,
+    routeSplitViewId: routeSearch.splitViewId ?? null,
+    routeThreadId,
+    sidebarThreads,
+    sidebarTreeThreads,
+    sidebarThreadSummaryById,
+    threadsHydrated,
+  });
+  const {
+    projectRunsByProjectId,
+    projectRunServerByProjectId,
+    projectRunDialogProjectId,
+    projectRunDialogProject,
+    projectRunDialogExistingRun,
+    projectRunDialogCommandDraft,
+    setProjectRunDialogCommandDraft,
+    projectRunDialogCommandIsValid,
+    openProjectRunDialog,
+    closeProjectRunDialog,
+    handleConfirmProjectRun,
+    handleStopProjectRun,
+    handleOpenProjectRunServer,
+  } = useSidebarProjectRunController({
+    projects,
+    projectById,
+    homeDir,
+    chatWorkspaceRoot,
+  });
   // Resolve the active thread's project for real threads AND not-yet-persisted draft threads.
   // Without the draft fallback, opening a fresh Studio chat (a draft at /$threadId) would drop
   // out of the Studio surface and snap the segmented picker back to Projects.
@@ -1857,136 +1637,6 @@ export default function Sidebar() {
       ),
     [isOnStudio, nonStudioSidebarTreeThreads, pinnedThreadIds, studioSidebarTreeThreads],
   );
-  useEffect(() => {
-    sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
-  }, [sidebarThreadSummaryById]);
-  const setOptimisticThreadPinned = useCallback((threadId: ThreadId, isPinned: boolean) => {
-    optimisticPinnedStateByThreadIdRef.current.set(threadId, isPinned);
-    setOptimisticPinnedStateByThreadId((current) => {
-      if (current.get(threadId) === isPinned) {
-        return current;
-      }
-      const next = new Map(current);
-      next.set(threadId, isPinned);
-      return next;
-    });
-  }, []);
-  const clearOptimisticThreadPinned = useCallback((threadId: ThreadId) => {
-    optimisticPinnedStateByThreadIdRef.current.delete(threadId);
-    setOptimisticPinnedStateByThreadId((current) => {
-      if (!current.has(threadId)) {
-        return current;
-      }
-      const next = new Map(current);
-      next.delete(threadId);
-      return next;
-    });
-  }, []);
-  const dispatchThreadPinnedState = useCallback(async (threadId: ThreadId, isPinned: boolean) => {
-    const api = readNativeApi();
-    if (!api) return;
-    await api.orchestration.dispatchCommand({
-      type: "thread.meta.update",
-      commandId: newCommandId(),
-      threadId,
-      isPinned,
-    });
-  }, []);
-  const setThreadPinned = useCallback(
-    async (threadId: ThreadId, isPinned: boolean) => {
-      const api = readNativeApi();
-      if (!api) return;
-      const requestVersion =
-        (latestPinnedMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
-      latestPinnedMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
-
-      setOptimisticThreadPinned(threadId, isPinned);
-      if (isPinned) {
-        pinThreadLocally(threadId);
-      } else {
-        unpinThread(threadId);
-      }
-
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId,
-          isPinned,
-        });
-      } catch (error) {
-        if (
-          !isLatestPinnedThreadMutation({
-            threadId,
-            requestVersion,
-            latestMutationVersionByThreadId: latestPinnedMutationVersionByThreadIdRef.current,
-          })
-        ) {
-          return;
-        }
-
-        const confirmedPinned = sidebarThreadSummaryByIdRef.current[threadId]?.isPinned === true;
-        if (confirmedPinned) {
-          pinThreadLocally(threadId);
-        } else {
-          unpinThread(threadId);
-        }
-        clearOptimisticThreadPinned(threadId);
-        throw error;
-      }
-    },
-    [clearOptimisticThreadPinned, pinThreadLocally, setOptimisticThreadPinned, unpinThread],
-  );
-  const toggleThreadPinned = useCallback(
-    (threadId: ThreadId) => {
-      const isPinned = pinnedThreadIdSet.has(threadId);
-      void setThreadPinned(threadId, !isPinned).catch((error) => {
-        console.error("Failed to update pinned thread state", {
-          threadId,
-          error,
-        });
-        toastManager.add({
-          type: "error",
-          title: isPinned ? "Unable to unpin thread" : "Unable to pin thread",
-        });
-      });
-    },
-    [pinnedThreadIdSet, setThreadPinned],
-  );
-  useEffect(() => {
-    if (optimisticPinnedStateByThreadId.size === 0) {
-      return;
-    }
-
-    const serverPinnedStateByThreadId = new Map(
-      sidebarThreads.map((thread) => [thread.id, thread.isPinned === true] as const),
-    );
-    // Reconciliation drops optimistic entries the server has confirmed while syncing
-    // the mirror ref. Deferring the setState off render (async is allowed) leaves the
-    // derived pinned lists unchanged, since a confirmed entry is redundant either way.
-    const settle = window.setTimeout(() => {
-      setOptimisticPinnedStateByThreadId((current) => {
-        let next: Map<ThreadId, boolean> | null = null;
-        const confirmedThreadIds: ThreadId[] = [];
-        for (const [threadId, desiredPinned] of current) {
-          const serverPinned = serverPinnedStateByThreadId.get(threadId);
-          if (serverPinned !== undefined && serverPinned !== desiredPinned) {
-            continue;
-          }
-          next ??= new Map(current);
-          next.delete(threadId);
-          confirmedThreadIds.push(threadId);
-        }
-        if (next) {
-          for (const threadId of confirmedThreadIds) {
-            optimisticPinnedStateByThreadIdRef.current.delete(threadId);
-          }
-        }
-        return next ?? current;
-      });
-    }, 0);
-    return () => window.clearTimeout(settle);
-  }, [optimisticPinnedStateByThreadId, sidebarThreads]);
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2013,12 +1663,6 @@ export default function Sidebar() {
     [projects],
   );
   const projectByIdRef = useRef(projectById);
-  const projectRunCommandByProjectIdRef = useRef<
-    Map<ProjectId, ReturnType<typeof selectPrimaryProjectRunCommand>>
-  >(new Map());
-  const projectRunServerByProjectIdRef = useRef<Map<ProjectId, ServerLocalServerProcess>>(
-    new Map(),
-  );
   useEffect(() => {
     projectByIdRef.current = projectById;
   }, [projectById]);
@@ -2149,23 +1793,14 @@ export default function Sidebar() {
     // derived pinned lists unchanged, since a confirmed entry is redundant either way.
     const settle = window.setTimeout(() => {
       setOptimisticPinnedStateByProjectId((current) => {
-        let next: Map<ProjectId, boolean> | null = null;
-        const confirmedProjectIds: ProjectId[] = [];
-        for (const [projectId, desiredPinned] of current) {
-          const serverPinned = serverPinnedStateByProjectId.get(projectId);
-          if (serverPinned !== undefined && serverPinned !== desiredPinned) {
-            continue;
-          }
-          next ??= new Map(current);
-          next.delete(projectId);
-          confirmedProjectIds.push(projectId);
+        const reconciled = reconcileOptimisticPinState({
+          optimisticPinnedStateById: current,
+          serverPinnedStateById: serverPinnedStateByProjectId,
+        });
+        for (const projectId of reconciled.settledIds) {
+          optimisticPinnedStateByProjectIdRef.current.delete(projectId);
         }
-        if (next) {
-          for (const projectId of confirmedProjectIds) {
-            optimisticPinnedStateByProjectIdRef.current.delete(projectId);
-          }
-        }
-        return next ?? current;
+        return reconciled.optimisticPinnedStateById;
       });
     }, 0);
     return () => window.clearTimeout(settle);
@@ -3116,181 +2751,6 @@ export default function Sidebar() {
     [prewarmThreadDetailForIntent, resolveBackToStudioTarget, resolveBackToThreadsTarget],
   );
 
-  /**
-   * Delete a single thread: stop session, close terminal, dispatch delete,
-   * clean up drafts/state, and optionally remove orphaned worktree.
-   * Callers handle thread-level confirmation; this still prompts for worktree removal.
-   */
-  const deleteThread = useCallback(
-    async (
-      threadId: ThreadId,
-      opts: {
-        deletedThreadIds?: ReadonlySet<ThreadId>;
-        reconcileDeletedThread?: boolean;
-        worktreeCleanupMode?: "prompt" | "skip";
-      } = {},
-    ): Promise<void> => {
-      const api = readNativeApi();
-      if (!api) return;
-      const state = useStore.getState();
-      const thread = getThreadFromState(state, threadId);
-      if (!thread) return;
-      const threadProject = projectById.get(thread.projectId);
-      const allThreads = getThreadsFromState(state);
-      // When bulk-deleting, exclude the other threads being deleted so
-      // getOrphanedWorktreePathForThread correctly detects that no surviving
-      // threads will reference this worktree.
-      const deletedIds = opts.deletedThreadIds;
-      const survivingThreads =
-        deletedIds && deletedIds.size > 0
-          ? allThreads.filter((t) => t.id === threadId || !deletedIds.has(t.id))
-          : allThreads;
-      const orphanedWorktreePath = getOrphanedWorktreePathForThread(survivingThreads, threadId);
-      const displayWorktreePath = orphanedWorktreePath
-        ? formatWorktreePathForDisplay(orphanedWorktreePath)
-        : null;
-      const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== undefined;
-      const worktreeCleanupMode = opts.worktreeCleanupMode ?? "prompt";
-      const shouldDeleteWorktree =
-        worktreeCleanupMode === "prompt" &&
-        canDeleteWorktree &&
-        (await api.dialogs.confirm(
-          [
-            "This thread is the only one linked to this worktree:",
-            displayWorktreePath ?? orphanedWorktreePath,
-            "",
-            "Delete the worktree too?",
-          ].join("\n"),
-        ));
-
-      if (thread.session && thread.session.status !== "closed") {
-        await api.orchestration
-          .dispatchCommand({
-            type: "thread.session.stop",
-            commandId: newCommandId(),
-            threadId,
-            createdAt: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-      }
-
-      try {
-        terminalRuntimeRegistry.disposeThread(threadId);
-        await api.terminal.close({ threadId, deleteHistory: true });
-      } catch {
-        // Terminal may already be closed
-      }
-
-      const allDeletedIds = deletedIds ?? new Set<ThreadId>();
-      const shouldNavigateToFallback = routeThreadId === threadId;
-      const fallbackThreadId = getFallbackThreadIdAfterDelete({
-        threads: sidebarThreads,
-        deletedThreadId: threadId,
-        deletedThreadIds: allDeletedIds,
-        sortOrder: appSettings.sidebarThreadSortOrder,
-      });
-      const activeSplitViewId = routeSearch.splitViewId ?? null;
-      const deletedPaneInActiveSplit = activeSplitView
-        ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
-        : null;
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
-        threadId,
-      });
-      if (opts.reconcileDeletedThread ?? true) {
-        void reconcileDeletedThreadFromClient({
-          threadId,
-          removeDeletedThreadFromClientState:
-            useStore.getState().removeDeletedThreadFromClientState,
-        });
-      }
-      unpinThread(threadId);
-      clearComposerDraftForThread(threadId);
-      clearProjectDraftThreadById(thread.projectId, thread.id);
-      clearTerminalState(threadId);
-      removeThreadFromSplitViews(threadId);
-      clearTemporaryThread(threadId);
-
-      if (activeSplitViewId && deletedPaneInActiveSplit) {
-        const nextActiveSplitView =
-          useSplitViewStore.getState().splitViewsById[activeSplitViewId] ?? null;
-        const nextFocusedThreadId = nextActiveSplitView
-          ? resolveSplitViewFocusedThreadId(nextActiveSplitView)
-          : null;
-        if (nextActiveSplitView && nextFocusedThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: nextFocusedThreadId },
-            replace: true,
-            search: () => ({ splitViewId: nextActiveSplitView.id }),
-          });
-        } else if (shouldNavigateToFallback && fallbackThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: fallbackThreadId },
-            replace: true,
-          });
-        } else if (shouldNavigateToFallback) {
-          void handleNewChat({ fresh: true });
-        }
-      } else if (shouldNavigateToFallback) {
-        if (fallbackThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: fallbackThreadId },
-            replace: true,
-          });
-        } else {
-          void handleNewChat({ fresh: true });
-        }
-      }
-
-      if (!shouldDeleteWorktree || !orphanedWorktreePath || !threadProject) {
-        return;
-      }
-
-      try {
-        await removeWorktreeMutation.mutateAsync({
-          cwd: threadProject.cwd,
-          path: orphanedWorktreePath,
-          force: true,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
-        console.error("Failed to remove orphaned worktree after thread deletion", {
-          threadId,
-          projectCwd: threadProject.cwd,
-          worktreePath: orphanedWorktreePath,
-          error,
-        });
-        toastManager.add({
-          type: "error",
-          title: "Thread deleted, but worktree removal failed",
-          description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
-        });
-      }
-    },
-    [
-      appSettings.sidebarThreadSortOrder,
-      clearComposerDraftForThread,
-      clearProjectDraftThreadById,
-      clearTerminalState,
-      handleNewChat,
-      navigate,
-      projectById,
-      removeWorktreeMutation,
-      routeThreadId,
-      routeSearch.splitViewId,
-      activeSplitView,
-      removeThreadFromSplitViews,
-      clearTemporaryThread,
-      sidebarThreads,
-      syncServerShellSnapshot,
-      unpinThread,
-    ],
-  );
-
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
   const handoffThread = useCallback(
@@ -3309,450 +2769,6 @@ export default function Sidebar() {
       }
     },
     [createThreadHandoff],
-  );
-  const confirmAndDeleteThread = useCallback(
-    async (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
-      if (!thread) return;
-
-      if (appSettings.confirmThreadDelete) {
-        const api = readNativeApi();
-        const confirmationMessage = [
-          `Delete thread "${thread.title}"?`,
-          "This permanently clears conversation history for this thread.",
-        ].join("\n");
-        const confirmed = api
-          ? await api.dialogs.confirm(confirmationMessage)
-          : await showConfirmDialogFallback(confirmationMessage);
-        if (!confirmed) return;
-      }
-
-      await deleteThread(threadId);
-    },
-    [appSettings.confirmThreadDelete, deleteThread, sidebarThreadSummaryById],
-  );
-
-  /**
-   * Archive a thread when it is idle, then move the active view away if needed.
-   * Archived threads are hidden from the sidebar but can be restored later.
-   */
-  const archiveThread = useCallback(
-    async (threadId: ThreadId): Promise<boolean> => {
-      const api = readNativeApi();
-      if (!api) return false;
-      const thread = getThreadFromState(useStore.getState(), threadId);
-      if (!thread) return false;
-
-      // Cannot archive a running thread
-      if (isThreadRunningTurn(thread)) {
-        toastManager.add({
-          type: "error",
-          title: "Cannot archive",
-          description: "Stop the running session before archiving this thread.",
-        });
-        return false;
-      }
-
-      const pendingThreadIds = archivePendingThreadIdsRef.current;
-      if (pendingThreadIds.has(threadId)) return false;
-
-      pendingThreadIds.add(threadId);
-      const runArchive = async (): Promise<boolean> => {
-        await archiveThreadFromClient(api.orchestration, threadId);
-
-        // Navigate away before surfacing Undo so a quick restore cannot be
-        // overwritten by the fallback route change for the archived thread.
-        if (routeThreadId === threadId) {
-          const fallbackThreadId = getFallbackThreadIdAfterDelete({
-            threads: sidebarThreads,
-            deletedThreadId: threadId,
-            deletedThreadIds: new Set<ThreadId>(),
-            sortOrder: appSettings.sidebarThreadSortOrder,
-          });
-          if (fallbackThreadId) {
-            await navigate({
-              to: "/$threadId",
-              params: { threadId: fallbackThreadId },
-              replace: true,
-            });
-          } else {
-            await handleNewChat({ fresh: true });
-          }
-        }
-
-        return true;
-      };
-      return runArchive().finally(() => {
-        pendingThreadIds.delete(threadId);
-      });
-    },
-    [appSettings.sidebarThreadSortOrder, handleNewChat, navigate, routeThreadId, sidebarThreads],
-  );
-
-  // Restore an archived thread (used by the inline "Undo" affordance).
-  const unarchiveArchivedThread = useCallback(async (threadId: ThreadId): Promise<void> => {
-    const api = readNativeApi();
-    if (!api) {
-      throw new Error("Unable to connect to the app server.");
-    }
-    await unarchiveThreadFromClient(api.orchestration, threadId);
-  }, []);
-
-  // Serializes restore attempts per thread so repeated Undo clicks do not race
-  // into duplicate unarchive commands.
-  const restoreArchivedThreadFromToast = useCallback(
-    async (input: { threadId: ThreadId; returnToThreadOnUndo: boolean }): Promise<boolean> => {
-      const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
-      if (pendingThreadIds.has(input.threadId)) return false;
-
-      pendingThreadIds.add(input.threadId);
-      const runRestore = async (): Promise<boolean> => {
-        try {
-          const currentThread = getThreadFromState(useStore.getState(), input.threadId);
-          if (!currentThread) {
-            toastManager.add({
-              type: "error",
-              title: "Could not restore thread",
-              description: "The thread no longer exists.",
-            });
-            return false;
-          }
-          try {
-            await unarchiveArchivedThread(input.threadId);
-          } catch (error) {
-            // The archive event reaches the browser store asynchronously. Undo must
-            // still send the server command, then treat an already-restored thread as success.
-            if (!isThreadAlreadyUnarchivedError(error, input.threadId)) {
-              throw error;
-            }
-          }
-          if (input.returnToThreadOnUndo) {
-            void navigate({
-              to: "/$threadId",
-              params: { threadId: input.threadId },
-              replace: true,
-            });
-          }
-          return true;
-        } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Could not restore thread",
-            description: error instanceof Error ? error.message : "Unable to restore the thread.",
-          });
-          return false;
-        }
-      };
-      return runRestore().finally(() => {
-        pendingThreadIds.delete(input.threadId);
-      });
-    },
-    [navigate, unarchiveArchivedThread],
-  );
-
-  // Surface the "Undo or view archived chats in Settings" toast after an archive.
-  // The toast is global (cross-thread) since archiving navigates away from the row.
-  const showArchiveUndoToast = useCallback(
-    (threadId: ThreadId, options?: { returnToThreadOnUndo?: boolean }) => {
-      // Use a fresh instance id so Base UI never revives a closing toast with
-      // stale local state such as a pending Undo button.
-      const toastId = `archive-undo:${threadId}:${randomUUID()}`;
-      toastManager.add({
-        id: toastId,
-        timeout: 0,
-        data: {
-          allowCrossThreadVisibility: true,
-          dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
-          archiveUndo: {
-            onUndo: () =>
-              restoreArchivedThreadFromToast({
-                threadId,
-                returnToThreadOnUndo: options?.returnToThreadOnUndo === true,
-              }),
-            onViewArchived: () => {
-              void navigate({ to: "/settings", search: { section: "archived" } });
-            },
-          },
-        },
-      });
-    },
-    [navigate, restoreArchivedThreadFromToast],
-  );
-
-  // Archive immediately and surface the Undo toast. The toast is the safety net,
-  // so the inline row affordance archives instantly without a confirmation step.
-  const archiveThreadWithUndo = useCallback(
-    async (threadId: ThreadId) => {
-      try {
-        const returnToThreadOnUndo = routeThreadId === threadId;
-        const archived = await archiveThread(threadId);
-        if (archived) {
-          showArchiveUndoToast(threadId, { returnToThreadOnUndo });
-        }
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not archive thread",
-          description: error instanceof Error ? error.message : "Unable to archive the thread.",
-        });
-      }
-    },
-    [archiveThread, routeThreadId, showArchiveUndoToast],
-  );
-
-  // Context-menu archive still honors the opt-in `confirmThreadArchive` dialog
-  // before archiving; the undo toast follows either way.
-  const confirmAndArchiveThread = useCallback(
-    async (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
-      if (!thread) return;
-
-      if (appSettings.confirmThreadArchive) {
-        const api = readNativeApi();
-        const confirmationMessage = [
-          `Archive thread "${thread.title}"?`,
-          "Archived threads are hidden from the sidebar but can be restored later.",
-        ].join("\n");
-        const confirmed = api
-          ? await api.dialogs.confirm(confirmationMessage)
-          : await showConfirmDialogFallback(confirmationMessage);
-        if (!confirmed) return;
-      }
-
-      await archiveThreadWithUndo(threadId);
-    },
-    [appSettings.confirmThreadArchive, archiveThreadWithUndo, sidebarThreadSummaryById],
-  );
-
-  /**
-   * Archive every non-archived thread for a given project in one pass.
-   * Skips (and reports) threads with a running session since the server
-   * rejects archiving an active turn. Confirms the batch once up-front
-   * rather than prompting per-thread to avoid dialog spam on large projects.
-   */
-  const archiveAllThreadsInProject = useCallback(
-    async (projectId: ProjectId): Promise<void> => {
-      const api = readNativeApi();
-      if (!api) return;
-      const project = projectById.get(projectId);
-      if (!project) return;
-
-      const projectThreads = sidebarThreads.filter(
-        (thread) => thread.projectId === projectId && thread.archivedAt == null,
-      );
-      if (projectThreads.length === 0) {
-        toastManager.add({
-          type: "info",
-          title: "Nothing to archive",
-          description: `"${project.name}" has no threads to archive.`,
-        });
-        return;
-      }
-
-      const archivableThreads = projectThreads.filter((thread) => !isThreadRunningTurn(thread));
-      const runningCount = projectThreads.length - archivableThreads.length;
-
-      if (archivableThreads.length === 0) {
-        toastManager.add({
-          type: "error",
-          title: "Cannot archive threads",
-          description:
-            runningCount === 1
-              ? "The only thread in this project is running. Stop it before archiving."
-              : `All ${runningCount} threads in this project are running. Stop them before archiving.`,
-        });
-        return;
-      }
-
-      // Bulk archive always confirms — this is a folder-level operation, and
-      // `appSettings.confirmThreadArchive` (default `false`) is scoped to
-      // single-thread archiving where the user explicitly picked one row.
-      const archiveLines = [
-        `Archive ${archivableThreads.length} ${pluralize(archivableThreads.length, "thread")} in "${project.name}"?`,
-        "Archived threads are hidden from the sidebar but can be restored later.",
-      ];
-      if (runningCount > 0) {
-        archiveLines.push(
-          "",
-          `${runningCount} running ${pluralize(runningCount, "thread is", "threads are")} currently active and will be skipped.`,
-        );
-      }
-      const archiveConfirmed = api
-        ? await api.dialogs.confirm(archiveLines.join("\n"))
-        : await showConfirmDialogFallback(archiveLines.join("\n"));
-      if (!archiveConfirmed) return;
-
-      let archivedCount = 0;
-      let failureCount = 0;
-      for (const thread of archivableThreads) {
-        try {
-          const archived = await archiveThread(thread.id);
-          if (archived) {
-            archivedCount += 1;
-          } else {
-            failureCount += 1;
-          }
-        } catch (error) {
-          failureCount += 1;
-          console.error("Failed to archive thread during bulk archive", {
-            threadId: thread.id,
-            projectId,
-            error,
-          });
-        }
-      }
-
-      // Clear any transient selection that pointed at just-archived rows.
-      removeFromSelection(archivableThreads.map((thread) => thread.id));
-
-      if (archivedCount > 0) {
-        const skippedDescription =
-          runningCount > 0
-            ? ` Skipped ${runningCount} running ${pluralize(runningCount, "thread")}.`
-            : "";
-        toastManager.add({
-          type: failureCount > 0 ? "warning" : "success",
-          title: archivedCount === 1 ? "Thread archived" : `Archived ${archivedCount} threads`,
-          description:
-            failureCount > 0
-              ? `Failed to archive ${failureCount} ${pluralize(failureCount, "thread")}.${skippedDescription}`
-              : runningCount > 0
-                ? skippedDescription.trim()
-                : `"${project.name}" cleared.`,
-        });
-      } else if (failureCount > 0) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to archive threads",
-          description: `Could not archive ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
-        });
-      }
-    },
-    [archiveThread, projectById, removeFromSelection, sidebarThreads],
-  );
-
-  /**
-   * Delete every thread for a given project in one pass. Uses the shared
-   * `deleteThread` helper so running sessions are stopped, worktrees are
-   * cleaned up, and draft/pinned/split view state is pruned consistently.
-   * A single `deletedThreadIds` set is passed through so orphan-worktree
-   * detection treats the whole batch as "going away" at once.
-   */
-  const deleteProjectThreads = useCallback(
-    async (
-      projectId: ProjectId,
-      options?: {
-        confirmMessage?: string | null;
-        showEmptyToast?: boolean;
-        showResultToast?: boolean;
-        worktreeCleanupMode?: "prompt" | "skip";
-      },
-    ): Promise<{
-      deletedCount: number;
-      failureCount: number;
-      totalCount: number;
-      projectName: string;
-    } | null> => {
-      const api = readNativeApi();
-      if (!api) return null;
-      const project = projectById.get(projectId);
-      if (!project) return null;
-
-      const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
-      if (projectThreads.length === 0) {
-        if (options?.showEmptyToast ?? true) {
-          toastManager.add({
-            type: "info",
-            title: "Nothing to delete",
-            description: `"${project.name}" has no threads to delete.`,
-          });
-        }
-        return {
-          deletedCount: 0,
-          failureCount: 0,
-          totalCount: 0,
-          projectName: project.name,
-        };
-      }
-
-      const deleteConfirmationMessage =
-        options?.confirmMessage === undefined
-          ? [
-              `Delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
-              "This permanently clears conversation history for these threads.",
-            ].join("\n")
-          : options.confirmMessage;
-      if (deleteConfirmationMessage !== null) {
-        // Bulk delete always confirms unless a caller already collected a higher-level confirmation.
-        const deleteConfirmed = await api.dialogs.confirm(deleteConfirmationMessage);
-        if (!deleteConfirmed) return null;
-      }
-
-      const deletedIds = new Set<ThreadId>(projectThreads.map((thread) => thread.id));
-      const successfullyDeletedIds: ThreadId[] = [];
-      let deletedCount = 0;
-      let failureCount = 0;
-      for (const thread of projectThreads) {
-        try {
-          await deleteThread(thread.id, {
-            deletedThreadIds: deletedIds,
-            reconcileDeletedThread: false,
-            ...(options?.worktreeCleanupMode
-              ? { worktreeCleanupMode: options.worktreeCleanupMode }
-              : {}),
-          });
-          successfullyDeletedIds.push(thread.id);
-          deletedCount += 1;
-        } catch (error) {
-          failureCount += 1;
-          console.error("Failed to delete thread during bulk delete", {
-            threadId: thread.id,
-            projectId,
-            error,
-          });
-        }
-      }
-
-      void reconcileDeletedThreadsFromClient({
-        threadIds: successfullyDeletedIds,
-        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
-      });
-      removeFromSelection([...deletedIds]);
-
-      if (options?.showResultToast ?? true) {
-        if (deletedCount > 0) {
-          toastManager.add({
-            type: failureCount > 0 ? "warning" : "success",
-            title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
-            description:
-              failureCount > 0
-                ? `Failed to delete ${failureCount} ${pluralize(failureCount, "thread")}.`
-                : `"${project.name}" cleared.`,
-          });
-        } else if (failureCount > 0) {
-          toastManager.add({
-            type: "error",
-            title: "Failed to delete threads",
-            description: `Could not delete ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
-          });
-        }
-      }
-
-      return {
-        deletedCount,
-        failureCount,
-        totalCount: projectThreads.length,
-        projectName: project.name,
-      };
-    },
-    [deleteThread, projectById, removeFromSelection, sidebarThreads],
-  );
-
-  const deleteAllThreadsInProject = useCallback(
-    async (projectId: ProjectId): Promise<void> => {
-      await deleteProjectThreads(projectId);
-    },
-    [deleteProjectThreads],
   );
 
   const handleThreadContextMenu = useCallback(
@@ -4107,118 +3123,6 @@ export default function Sidebar() {
     terminalStateByThreadId,
   });
 
-  const handleStartProjectRun = useCallback(
-    async (projectId: ProjectId, commandOverride?: string) => {
-      const api = readNativeApi();
-      const project = projectById.get(projectId);
-      const runCommand = projectRunCommandByProjectIdRef.current.get(projectId);
-      if (!api || !project || !runCommand) {
-        return;
-      }
-      if (projectRunsByProjectId[projectId]) {
-        return;
-      }
-      // The dialog lets the user edit the default command before launching, so an
-      // explicit override wins over the resolved default while reusing its cwd.
-      const command = commandOverride?.trim() || runCommand.command;
-      // Dev servers run from the project root; mirror the env the terminal runner
-      // would otherwise inject so scripts resolve project paths identically.
-      const env = projectScriptRuntimeEnv({
-        project: { cwd: project.cwd },
-        worktreePath: null,
-      });
-
-      // Optimistically reflect the pending launch so the sidebar dot lights up
-      // immediately; the server's authoritative snapshot replaces this on success.
-      storeUpsertProjectRun({
-        projectId,
-        command,
-        cwd: runCommand.cwd,
-        pid: null,
-        startedAt: new Date().toISOString(),
-        status: "starting",
-      });
-      try {
-        const { server } = await api.projects.runDevServer({
-          projectId,
-          command,
-          cwd: runCommand.cwd,
-          env,
-        });
-        storeUpsertProjectRun(server);
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
-      } catch (error) {
-        storeRemoveProjectRun(projectId);
-        toastManager.add({
-          type: "error",
-          title: `Failed to run "${project.name}"`,
-          description: error instanceof Error ? error.message : "Unable to start the run command.",
-        });
-      }
-    },
-    [
-      projectById,
-      projectRunsByProjectId,
-      queryClient,
-      storeRemoveProjectRun,
-      storeUpsertProjectRun,
-    ],
-  );
-
-  const handleStopProjectRun = useCallback(
-    async (projectId: ProjectId) => {
-      const api = readNativeApi();
-      if (!api) {
-        storeRemoveProjectRun(projectId);
-        return;
-      }
-      // Optimistically clear the indicator; the server owns the process lifecycle
-      // and will broadcast a `removed` event that keeps every client consistent.
-      storeRemoveProjectRun(projectId);
-      const runStop = async (): Promise<void> => {
-        try {
-          await api.projects.stopDevServer({ projectId });
-        } catch (error) {
-          // The optimistic removal may have been wrong (e.g. the stop failed), so
-          // resync from the authoritative server registry before surfacing the error.
-          try {
-            const { servers } = await api.projects.listDevServers();
-            useProjectRunStore.getState().replaceAll(servers);
-          } catch {
-            // Ignore resync failures; the dev-server event stream will reconcile.
-          }
-          toastManager.add({
-            type: "error",
-            title: "Failed to stop run",
-            description: error instanceof Error ? error.message : "Unable to stop the dev server.",
-          });
-        }
-      };
-      await runStop().finally(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
-      });
-    },
-    [queryClient, storeRemoveProjectRun],
-  );
-
-  const handleOpenProjectRunServer = useCallback(async (projectId: ProjectId) => {
-    const api = readNativeApi();
-    const server = projectRunServerByProjectIdRef.current.get(projectId);
-    const url = server ? firstLocalServerUrl(server) : null;
-    if (!api || !server || !url) {
-      return;
-    }
-    try {
-      await api.shell.openExternal(url);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: `Unable to open ${localServerAddressLabel(server)}`,
-        description: error instanceof Error ? error.message : "Unable to open the local server.",
-      });
-    }
-  }, []);
-
   const handleProjectContextMenuAction = useCallback(
     async (projectId: ProjectId, clicked: ProjectContextMenuId) => {
       setProjectContextMenuState(null);
@@ -4251,7 +3155,7 @@ export default function Sidebar() {
         return;
       }
       if (clicked === "start-dev") {
-        setProjectRunDialogProjectId(projectId);
+        openProjectRunDialog(projectId);
         return;
       }
       if (clicked === "stop-dev") {
@@ -4275,7 +3179,7 @@ export default function Sidebar() {
         return;
       }
       if (clicked === "delete-threads") {
-        await deleteAllThreadsInProject(projectId);
+        await deleteProjectThreads(projectId);
         return;
       }
       if (clicked !== "delete") return;
@@ -4340,10 +3244,10 @@ export default function Sidebar() {
       clearProjectDraftThreads,
       copyPathToClipboard,
       deleteProjectThreads,
-      deleteAllThreadsInProject,
       handleOpenProjectRunServer,
       handleStopProjectRun,
       navigate,
+      openProjectRunDialog,
       projectById,
       removeDeletedProjectFromClientState,
       sidebarThreads,
@@ -4582,152 +3486,6 @@ export default function Sidebar() {
     () => orderPinnedProjectsForSidebar(standardProjectsBase, pinnedProjectIds),
     [pinnedProjectIds, standardProjectsBase],
   );
-  const projectScriptDiscoveryQueries = useQueries({
-    queries: standardProjects.map((project) =>
-      projectDiscoverScriptsQueryOptions({
-        cwd: project.cwd,
-        enabled:
-          project.kind === "project" &&
-          !project.scripts.some((script) => !script.runOnWorktreeCreate),
-      }),
-    ),
-  });
-  const discoveredScriptTargetsByProjectId = useMemo(() => {
-    const targetsByProjectId = new Map<ProjectId, readonly ProjectDiscoveredScriptTarget[]>();
-    for (let index = 0; index < standardProjects.length; index += 1) {
-      const project = standardProjects[index];
-      if (!project) continue;
-      targetsByProjectId.set(project.id, projectScriptDiscoveryQueries[index]?.data?.targets ?? []);
-    }
-    return targetsByProjectId;
-  }, [projectScriptDiscoveryQueries, standardProjects]);
-  const projectRunCommandByProjectId = useMemo(() => {
-    const commandByProjectId = new Map<
-      ProjectId,
-      ReturnType<typeof selectPrimaryProjectRunCommand>
-    >();
-    for (const project of standardProjects) {
-      commandByProjectId.set(
-        project.id,
-        selectPrimaryProjectRunCommand({
-          project,
-          discoveredTargets: discoveredScriptTargetsByProjectId.get(project.id) ?? [],
-        }),
-      );
-    }
-    return commandByProjectId;
-  }, [discoveredScriptTargetsByProjectId, standardProjects]);
-  useEffect(() => {
-    projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
-  }, [projectRunCommandByProjectId]);
-  // Keep manual server attribution alive without repeating the expensive
-  // port/process scan while no Synara-owned run needs near-real-time status.
-  const hasActiveProjectRun = useMemo(
-    () => Object.keys(projectRunsByProjectId).length > 0,
-    [projectRunsByProjectId],
-  );
-  const projectRunLocalServersQuery = useQuery(
-    sidebarLocalServersQueryOptions({
-      hasActiveProjectRun,
-      hasProjects: standardProjects.length > 0,
-    }),
-  );
-  const projectRunServerByProjectId = useMemo(() => {
-    const servers = projectRunLocalServersQuery.data?.servers ?? [];
-    const serverByProjectId = new Map<ProjectId, ServerLocalServerProcess>();
-    // 1. Authoritative: Synara-tracked runs matched by pid/ppid.
-    for (const run of Object.values(projectRunsByProjectId)) {
-      const server = findTrackedProjectRunServer(run, servers);
-      if (server) {
-        serverByProjectId.set(run.projectId, server);
-      }
-    }
-    // 2. Fallback: attribute remaining servers to a project by cwd, so dev
-    //    servers started outside Synara still light up the running indicator.
-    for (const server of servers) {
-      if (!server.cwd) {
-        continue;
-      }
-      const project = findDeepestWorkspaceRootMatch(
-        standardProjects,
-        server.cwd,
-        (candidate) => candidate.cwd,
-      );
-      if (project && !serverByProjectId.has(project.id)) {
-        serverByProjectId.set(project.id, server);
-      }
-    }
-    return serverByProjectId;
-  }, [projectRunLocalServersQuery.data?.servers, projectRunsByProjectId, standardProjects]);
-  useEffect(() => {
-    projectRunServerByProjectIdRef.current = projectRunServerByProjectId;
-  }, [projectRunServerByProjectId]);
-  const projectRunDialogProject = projectRunDialogProjectId
-    ? (projectById.get(projectRunDialogProjectId) ?? null)
-    : null;
-  const projectRunDialogExistingRun = projectRunDialogProjectId
-    ? (projectRunsByProjectId[projectRunDialogProjectId] ?? null)
-    : null;
-  const closeProjectRunDialog = useCallback(() => {
-    setProjectRunDialogProjectId(null);
-  }, []);
-  // Seed the editable command field with the resolved default each time the dialog
-  // opens for a project, without clobbering edits while it stays open.
-  useEffect(() => {
-    if (projectRunDialogProjectId === null) {
-      return;
-    }
-    const defaultCommand =
-      projectRunCommandByProjectIdRef.current.get(projectRunDialogProjectId)?.command ?? "";
-    // Seed off the initial commit (async setState is allowed). useEffect already runs
-    // post-paint, so the deferral matches the original timing.
-    const settle = window.setTimeout(() => {
-      setProjectRunDialogCommandDraft(defaultCommand);
-    }, 0);
-    return () => window.clearTimeout(settle);
-  }, [projectRunDialogProjectId]);
-  const projectRunDialogCommandIsValid = projectRunDialogCommandDraft.trim().length > 0;
-  // Remember the launched command as the project's primary run script so the
-  // dialog defaults to it next time. No-ops when unchanged.
-  const persistProjectRunCommand = useCallback(
-    async (projectId: ProjectId, command: string) => {
-      const api = readNativeApi();
-      if (!api) return;
-      const project = projectById.get(projectId);
-      if (!project) return;
-      const nextScripts = upsertProjectRunCommandScripts({ scripts: project.scripts, command });
-      if (!nextScripts) return;
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "project.meta.update",
-          commandId: newCommandId(),
-          projectId,
-          scripts: nextScripts,
-        });
-      } catch (error) {
-        console.error("Failed to save project run command", { projectId, error });
-      }
-    },
-    [projectById],
-  );
-  const handleConfirmProjectRun = useCallback(() => {
-    const projectId = projectRunDialogProjectId;
-    if (!projectId) {
-      return;
-    }
-    const command = projectRunDialogCommandDraft.trim();
-    if (!command) {
-      return;
-    }
-    setProjectRunDialogProjectId(null);
-    void persistProjectRunCommand(projectId, command);
-    void handleStartProjectRun(projectId, command);
-  }, [
-    handleStartProjectRun,
-    persistProjectRunCommand,
-    projectRunDialogCommandDraft,
-    projectRunDialogProjectId,
-  ]);
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
     shouldShowProjectPathEntry,
@@ -4816,47 +3574,8 @@ export default function Sidebar() {
     if (!shouldPrunePinnedThreads({ threadsHydrated })) {
       return;
     }
-    prunePinnedThreads(sidebarThreads.map((thread) => thread.id));
-  }, [prunePinnedThreads, sidebarThreads, threadsHydrated]);
-
-  useEffect(() => {
-    if (!shouldPrunePinnedThreads({ threadsHydrated })) {
-      return;
-    }
     prunePinnedProjects(standardProjectsBase.map((project) => project.id));
   }, [prunePinnedProjects, standardProjectsBase, threadsHydrated]);
-
-  useEffect(() => {
-    if (!threadsHydrated || persistedPinnedThreadIds.length === 0) {
-      return;
-    }
-
-    // Older builds stored pins only in localStorage; mirror them to the server
-    // projection so the retention job can protect those threads too.
-    const threadsById = new Map(sidebarThreads.map((thread) => [thread.id, thread] as const));
-    for (const threadId of persistedPinnedThreadIds) {
-      const thread = threadsById.get(threadId);
-      if (
-        !thread ||
-        thread.isPinned === true ||
-        optimisticPinnedStateByThreadIdRef.current.has(threadId) ||
-        legacyPinMigrationThreadIdsRef.current.has(threadId)
-      ) {
-        continue;
-      }
-      legacyPinMigrationThreadIdsRef.current.add(threadId);
-      void dispatchThreadPinnedState(threadId, true)
-        .catch((error) => {
-          console.error("Failed to migrate pinned thread state", {
-            threadId,
-            error,
-          });
-        })
-        .finally(() => {
-          legacyPinMigrationThreadIdsRef.current.delete(threadId);
-        });
-    }
-  }, [dispatchThreadPinnedState, persistedPinnedThreadIds, sidebarThreads, threadsHydrated]);
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
@@ -5446,7 +4165,6 @@ export default function Sidebar() {
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
         ? null
         : prStatus;
-    const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5455,7 +4173,6 @@ export default function Sidebar() {
     // occupies the status slot. In that state the right-aligned project label needs a
     // hair of clearance so it stops kissing the worktree chip — see the margin below.
     const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
-    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
       threadId: thread.id,
@@ -5520,64 +4237,36 @@ export default function Sidebar() {
               });
             }}
           >
-            {threadEntryPoint === "terminal" ? (
-              <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-            ) : showThreadProviderAvatar ? (
-              <ProviderAvatarWithTerminal
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
-                handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
-                handoffTooltip={handoffBadgeLabel}
-                terminalStatus={terminalStatus}
-                terminalCount={terminalCount}
-              />
-            ) : null}
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5",
-                  isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                )}
-                data-testid={`thread-title-${thread.id}`}
-              >
-                {isSubagentThread ? (
-                  <SidebarSubagentLabel
-                    threadId={thread.id}
-                    parentThreadId={thread.parentThreadId}
-                    agentId={thread.subagentAgentId}
-                    nickname={thread.subagentNickname}
-                    role={thread.subagentRole}
-                    title={thread.title}
-                  />
-                ) : (
-                  thread.title
-                )}
-              </span>
-              {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
-                <span
-                  aria-label="Pending approval"
-                  className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
-                >
-                  Pending
-                </span>
-              ) : null}
-            </div>
-            {projectLabel ? (
-              // Right-aligned project context for the flattened pinned list. The title
-              // (flex-1) pushes it to the content edge, so it shows in full when the row
-              // has room and only truncates under real pressure, shifting left as the
-              // trailing reserve grows on hover/status. When a live status glyph occupies
-              // the trailing slot (e.g. the running spinner), the absolute cluster reaches
-              // a few px past the reserve — a small margin keeps the folder name from
-              // touching the worktree chip. It costs no space when the row is idle.
-              <span
-                className={cn(
-                  "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
-                  hasTrailingStatusGlyph && "mr-2",
-                )}
-              >
-                {projectLabel}
-              </span>
-            ) : null}
+            <SidebarThreadRowContent
+              thread={thread}
+              terminalEntryPoint={threadEntryPoint === "terminal"}
+              terminalStatus={terminalStatus}
+              terminalCount={terminalCount}
+              isActive={isActive}
+              variant="pinned"
+              pendingStatusColorClass={
+                threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
+              }
+              suffix={
+                projectLabel ? (
+                  // Right-aligned project context for the flattened pinned list. The title
+                  // (flex-1) pushes it to the content edge, so it shows in full when the row
+                  // has room and only truncates under real pressure, shifting left as the
+                  // trailing reserve grows on hover/status. When a live status glyph occupies
+                  // the trailing slot (e.g. the running spinner), the absolute cluster reaches
+                  // a few px past the reserve — a small margin keeps the folder name from
+                  // touching the worktree chip. It costs no space when the row is idle.
+                  <span
+                    className={cn(
+                      "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                      hasTrailingStatusGlyph && "mr-2",
+                    )}
+                  >
+                    {projectLabel}
+                  </span>
+                ) : null
+              }
+            />
             <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
@@ -5645,27 +4334,12 @@ export default function Sidebar() {
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
         ? null
         : prStatus;
-    const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
-    const subagentPresentation = isSubagentThread
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
     const canToggleSubagents = childCount > 0;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // Untouched draft chat threads are intentionally text-only until they get a real title.
-    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const childCountLabel = `${childCount} ${pluralize(childCount, "subagent")}`;
     const toggleButtonClassName = isHighlighted
       ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
@@ -5766,109 +4440,60 @@ export default function Sidebar() {
               />
             }
           >
-            {isSubagentThread ? (
-              <span
-                aria-hidden="true"
-                className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
-                style={{ marginLeft: `${subagentIndentPx}px` }}
-              >
-                <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-                <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-                <span
-                  className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-                  style={{ backgroundColor: subagentPresentation?.accentColor }}
-                />
-              </span>
-            ) : threadEntryPoint === "terminal" ? (
-              <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-            ) : showThreadProviderAvatar ? (
-              <ProviderAvatarWithTerminal
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
-                handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
-                handoffTooltip={handoffBadgeLabel}
-                terminalStatus={terminalStatus}
-                terminalCount={terminalCount}
-              />
-            ) : null}
-            <div
-              className={cn(
-                "flex min-w-0 flex-1 items-center text-left",
-                isSubagentThread ? "gap-[5px]" : "gap-1.5",
-              )}
-            >
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]",
-                  // Inactive thread names share the resting label color with
-                  // project/folder headers; the active row still pops via its
-                  // background + full-foreground color from resolveThreadRowClassName.
-                  isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                  isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
-                )}
-              >
-                {isSubagentThread ? (
-                  <SidebarSubagentLabel
-                    threadId={thread.id}
-                    parentThreadId={thread.parentThreadId}
-                    agentId={thread.subagentAgentId}
-                    nickname={thread.subagentNickname}
-                    role={thread.subagentRole}
-                    title={thread.title}
-                    roleClassName="text-muted-foreground/42"
-                  />
-                ) : (
-                  thread.title
-                )}
-              </span>
-              {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
-                <span
-                  aria-label="Pending approval"
-                  className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
-                >
-                  Pending
-                </span>
-              ) : null}
-            </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-              {canToggleSubagents ? (
-                <button
-                  type="button"
-                  data-thread-selection-safe
-                  aria-label={`${isExpanded ? "Collapse" : "Expand"} ${childCountLabel}`}
-                  title={childCountLabel}
-                  className={cn(
-                    "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-[5px] transition-colors",
-                    toggleButtonClassName,
-                  )}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    toggleSubagentParent(thread.id);
-                  }}
-                >
-                  <span className="text-[9px] font-medium leading-none tabular-nums">
-                    {childCount}
-                  </span>
-                  {isExpanded ? (
-                    <SidebarGlyph icon={ChevronDownIcon} variant="chevron" />
-                  ) : (
-                    <SidebarGlyph icon={ChevronRightIcon} variant="chevron" />
-                  )}
-                </button>
-              ) : null}
-              {showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                        <TemporaryThreadIcon />
+            <SidebarThreadRowContent
+              thread={thread}
+              terminalEntryPoint={threadEntryPoint === "terminal"}
+              terminalStatus={terminalStatus}
+              terminalCount={terminalCount}
+              isActive={isActive}
+              variant="standard"
+              subagentIndentPx={subagentIndentPx}
+              pendingStatusColorClass={
+                threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
+              }
+              suffix={
+                <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
+                  {canToggleSubagents ? (
+                    <button
+                      type="button"
+                      data-thread-selection-safe
+                      aria-label={`${isExpanded ? "Collapse" : "Expand"} ${childCountLabel}`}
+                      title={childCountLabel}
+                      className={cn(
+                        "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-[5px] transition-colors",
+                        toggleButtonClassName,
+                      )}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        toggleSubagentParent(thread.id);
+                      }}
+                    >
+                      <span className="text-[9px] font-medium leading-none tabular-nums">
+                        {childCount}
                       </span>
-                    }
-                  />
-                  <TooltipPopup side="top">Temporary chat</TooltipPopup>
-                </Tooltip>
-              ) : null}
-            </div>
+                      {isExpanded ? (
+                        <SidebarGlyph icon={ChevronDownIcon} variant="chevron" />
+                      ) : (
+                        <SidebarGlyph icon={ChevronRightIcon} variant="chevron" />
+                      )}
+                    </button>
+                  ) : null}
+                  {showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
+                            <TemporaryThreadIcon />
+                          </span>
+                        }
+                      />
+                      <TooltipPopup side="top">Temporary chat</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                </div>
+              }
+            />
             <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
@@ -5893,30 +4518,6 @@ export default function Sidebar() {
           {renderThreadHoverCardPopup(thread, hoverAnchorId)}
         </Tooltip>
       </SidebarMenuSubItem>
-    );
-  }
-
-  function renderChatItem(row: (typeof visibleChatThreadRows)[number]) {
-    return renderThreadRow(
-      row.thread,
-      visibleChatThreadIds,
-      row.depth,
-      row.childCount,
-      row.isExpanded,
-      true,
-    );
-  }
-
-  function renderStudioChatItem(row: (typeof studioChatThreadRows)[number]) {
-    // Studio rows are a flat top-level list like home Chats: the indented column
-    // is reserved for project-nested threads.
-    return renderThreadRow(
-      row.thread,
-      studioChatThreadIds,
-      row.depth,
-      row.childCount,
-      row.isExpanded,
-      true,
     );
   }
 
@@ -7172,7 +5773,16 @@ export default function Sidebar() {
                   )}
                   <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
                     {studioChatThreadRows.length > 0 ? (
-                      studioChatThreadRows.map((row) => renderStudioChatItem(row))
+                      studioChatThreadRows.map((row) =>
+                        renderThreadRow(
+                          row.thread,
+                          studioChatThreadIds,
+                          row.depth,
+                          row.childCount,
+                          row.isExpanded,
+                          true,
+                        ),
+                      )
                     ) : (
                       <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
                         {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
@@ -7429,7 +6039,16 @@ export default function Sidebar() {
                     className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
                   >
                     {visibleChatThreadRows.length > 0 ? (
-                      renderedChatEntries.map((entry) => renderChatItem(entry.row))
+                      renderedChatEntries.map((entry) =>
+                        renderThreadRow(
+                          entry.row.thread,
+                          visibleChatThreadIds,
+                          entry.row.depth,
+                          entry.row.childCount,
+                          entry.row.isExpanded,
+                          true,
+                        ),
+                      )
                     ) : (
                       <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
                         No chats yet

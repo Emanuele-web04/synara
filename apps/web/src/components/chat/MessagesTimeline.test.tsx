@@ -7,7 +7,7 @@ import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
-import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 
@@ -2186,93 +2186,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("apps/web/src/session-logic.ts:55: toolDetails");
     expect(markup).not.toContain("Stdout");
     expect(markup).toContain("Searched");
-  });
-
-  it("finds tool details entries attached inline to assistant message rows", async () => {
-    const { findToolDetailsEntryById } = await import("./MessagesTimeline");
-    const entry = findToolDetailsEntryById(
-      [
-        {
-          kind: "message",
-          id: "row-assistant-inline-work",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          message: {
-            id: MessageId.makeUnsafe("assistant-inline-work"),
-            role: "assistant",
-            text: "done",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            streaming: false,
-          },
-          inlineWorkEntries: [
-            {
-              id: "inline-command-details",
-              createdAt: "2026-03-17T19:12:27.000Z",
-              label: "Ran command",
-              tone: "tool",
-              itemType: "command_execution",
-              toolDetails: {
-                kind: "command",
-                title: "Searched",
-                command: "rg toolDetails",
-              },
-            },
-          ],
-          durationStart: "2026-03-17T19:12:27.000Z",
-          showAssistantCopyButton: true,
-          assistantCopyStreaming: false,
-        },
-      ],
-      "inline-command-details",
-    );
-
-    expect(entry?.toolDetails?.kind).toBe("command");
-    expect(entry?.toolDetails?.command).toBe("rg toolDetails");
-  });
-
-  it("finds tool details entries inside collapsed assistant work disclosures", async () => {
-    const { findToolDetailsEntryById } = await import("./MessagesTimeline");
-    const entry = findToolDetailsEntryById(
-      [
-        {
-          kind: "message",
-          id: "row-assistant-collapsed-work",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          message: {
-            id: MessageId.makeUnsafe("assistant-collapsed-work"),
-            role: "assistant",
-            text: "done",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            streaming: false,
-          },
-          collapsedTurnItems: [
-            {
-              kind: "work",
-              id: "collapsed-command-details",
-              entry: {
-                id: "collapsed-command-details",
-                createdAt: "2026-03-17T19:12:27.000Z",
-                label: "Ran command",
-                tone: "tool",
-                itemType: "command_execution",
-                toolDetails: {
-                  kind: "command",
-                  title: "Searched",
-                  command: "rg collapsed",
-                },
-              },
-            },
-          ],
-          collapsedWorkElapsed: "1s",
-          durationStart: "2026-03-17T19:12:27.000Z",
-          showAssistantCopyButton: true,
-          assistantCopyStreaming: false,
-        },
-      ],
-      "collapsed-command-details",
-    );
-
-    expect(entry?.toolDetails?.kind).toBe("command");
-    expect(entry?.toolDetails?.command).toBe("rg collapsed");
   });
 
   it("renders command text even when commandActions provide a short preview", async () => {

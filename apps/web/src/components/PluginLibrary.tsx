@@ -10,7 +10,7 @@ import {
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import React, { useMemo, type ReactNode, useDeferredValue, useEffect, useState } from "react";
+import React, { useMemo, type ReactNode, useDeferredValue, useState } from "react";
 import type { IconType } from "react-icons";
 import {
   SiCanva,

@@ -1,5 +1,6 @@
 import type {
   ProjectEntry,
+  ProviderAgentDescriptor,
   ProviderNativeCommandDescriptor,
   ProviderKind,
   ProviderMentionReference,
@@ -28,13 +29,15 @@ import {
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
+import type { ProviderModelOption } from "../providerModelOptions";
+import { compareProvidersByOrder } from "../providerOrdering";
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
   mention: ProviderMentionReference;
 };
 
-type SearchableModelOption = {
+export type SearchableModelOption = {
   provider: ProviderKind;
   providerLabel: string;
   slug: string;
@@ -44,6 +47,41 @@ type SearchableModelOption = {
   searchProvider: string;
   searchUpstreamProvider: string;
 };
+
+export function buildSearchableModelOptions(input: {
+  providerOptions: ReadonlyArray<{ value: ProviderKind; label: string }>;
+  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  providerOrder: readonly ProviderKind[];
+  hiddenProviders: readonly ProviderKind[];
+  protectedProviders: readonly ProviderKind[];
+  lockedProvider?: ProviderKind | null;
+}): SearchableModelOption[] {
+  const hiddenProviderSet = new Set(input.hiddenProviders);
+  const protectedProviderSet = new Set(input.protectedProviders);
+  return input.providerOptions
+    .toSorted((left, right) =>
+      compareProvidersByOrder(input.providerOrder, left.value, right.value),
+    )
+    .filter((option) =>
+      input.lockedProvider
+        ? option.value === input.lockedProvider
+        : protectedProviderSet.has(option.value) || !hiddenProviderSet.has(option.value),
+    )
+    .flatMap((option) =>
+      input.modelOptionsByProvider[option.value].map(
+        ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+          provider: option.value,
+          providerLabel: option.label,
+          slug,
+          name,
+          searchSlug: slug.toLowerCase(),
+          searchName: name.toLowerCase(),
+          searchProvider: option.label.toLowerCase(),
+          searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+        }),
+      ),
+    );
+}
 
 export function useComposerCommandMenuItems(input: {
   composerTrigger: ComposerTrigger | null;
@@ -60,7 +98,7 @@ export function useComposerCommandMenuItems(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
-  dynamicAgents: readonly { name: string; displayName: string; description?: string }[];
+  dynamicAgents: readonly ProviderAgentDescriptor[];
 }): ComposerCommandItem[] {
   const {
     composerTrigger,

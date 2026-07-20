@@ -95,31 +95,6 @@ export function formatUsd(amount: number): string {
   }).format(amount);
 }
 
-/** Recursively collect every nested object that owns a finite `key`. */
-export function collectRecordsWithKey(value: unknown, key: string): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  const visit = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        visit(item);
-      }
-      return;
-    }
-    const record = asRecord(node);
-    if (!record) {
-      return;
-    }
-    if (asFiniteNumber(record[key]) !== undefined) {
-      out.push(record);
-    }
-    for (const child of Object.values(record)) {
-      visit(child);
-    }
-  };
-  visit(value);
-  return out;
-}
-
 export interface SnapshotInput {
   provider: ProviderKind;
   nowMs: number;

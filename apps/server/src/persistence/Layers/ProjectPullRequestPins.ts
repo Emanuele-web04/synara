@@ -2,7 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
+import { toPersistenceSqlOrDecodeError } from "../Errors.ts";
 import {
   ListProjectPullRequestPinsByProjectIdsInput,
   PROJECT_PULL_REQUEST_PIN_LIMIT,
@@ -13,16 +13,6 @@ import {
   type ProjectPullRequestPinsShape,
   SetProjectPullRequestPinnedInput,
 } from "../Services/ProjectPullRequestPins.ts";
-
-function toPersistenceSqlOrDecodeError(
-  sqlOperation: string,
-  decodeOperation: string,
-): (cause: unknown) => ProjectPullRequestPinsError {
-  return (cause) =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
 
 const makeProjectPullRequestPins = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

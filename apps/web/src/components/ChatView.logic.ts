@@ -141,6 +141,13 @@ export function buildComposerMenuSelectionKey(input: {
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
 }
 
+export function buildTranscriptAutoFollowSignal(input: {
+  readonly messageCount: number;
+  readonly tailKey: string;
+}): string {
+  return `${input.messageCount}\u001f${input.tailKey}`;
+}
+
 export interface PromptHistoryNavigationState {
   index: number;
   draft: string;
