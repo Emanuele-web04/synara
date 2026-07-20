@@ -42,7 +42,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
     if (imageFiles.length > 0) {
       props.onAddPhotos(imageFiles);
     }
-    if (genericFiles.length > 0) {
+    if (props.supportsFileAttachments && genericFiles.length > 0) {
       props.onAddFiles(genericFiles);
     }
     event.target.value = "";
@@ -54,8 +54,9 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
         id={inputId}
         ref={fileInputRef}
         data-testid="composer-photo-input"
-        aria-label="Add attachment"
+        aria-label={props.supportsFileAttachments ? "Add attachment" : "Add image"}
         type="file"
+        accept={props.supportsFileAttachments ? undefined : "image/*"}
         multiple
         className="sr-only"
         onChange={handleFileInputChange}
@@ -80,7 +81,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             }}
           >
             <PaperclipIcon className="size-4 shrink-0" />
-            Add attachment
+            {props.supportsFileAttachments ? "Add attachment" : "Add image"}
           </MenuItem>
 
           <MenuSeparator />
