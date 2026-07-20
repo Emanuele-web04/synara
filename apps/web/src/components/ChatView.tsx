@@ -131,6 +131,7 @@ import {
   buildComposerFileAttachmentsFromFiles,
   IMAGE_SIZE_LIMIT_LABEL,
   buildComposerImageAttachmentsFromFiles,
+  providerSupportsGenericFileAttachments,
   stageUploadComposerAttachments,
   cloneComposerImageAttachment,
   effectiveComposerAttachmentCount,
@@ -5887,6 +5888,20 @@ export default function ChatView({
     [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
   );
 
+  const composerAcceptsGenericFiles = providerSupportsGenericFileAttachments(selectedProvider);
+
+  // Picker/paste intake for providers whose adapters accept non-image files:
+  // images keep the preview path while other files stage as file attachments.
+  const addComposerAttachments = useCallback(
+    (files: readonly File[]) => {
+      const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+      const genericFiles = files.filter((file) => !file.type.startsWith("image/"));
+      if (imageFiles.length > 0) addComposerImages(imageFiles);
+      if (genericFiles.length > 0) addComposerFiles(genericFiles);
+    },
+    [addComposerFiles, addComposerImages],
+  );
+
   const removeComposerFile = (fileId: string) => {
     discardPromptHistoryNavigationForComposerMutation();
     removeComposerDraftFile(threadId, fileId);
@@ -9700,8 +9715,9 @@ export default function ChatView({
       <ComposerExtrasMenu
         interactionMode={interactionMode}
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+        supportsFileAttachments={composerAcceptsGenericFiles}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
-        onAddPhotos={addComposerImages}
+        onAddPhotos={composerAcceptsGenericFiles ? addComposerAttachments : addComposerImages}
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />
