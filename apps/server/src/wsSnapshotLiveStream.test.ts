@@ -74,12 +74,19 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
 
   it("requires a fresh snapshot instead of replaying an unbounded attach gap", async () => {
     let replayStarted = false;
+    const reports: Array<{
+      readonly snapshotSequence: number;
+      readonly highWaterSequence: number;
+      readonly replayCount: number;
+      readonly replayLimit: number;
+    }> = [];
     const program = Effect.scoped(
       makeCursorSafeSnapshotLiveStream({
         subscribeLive: Effect.succeed(Stream.empty),
         snapshot: Effect.succeed({ snapshotSequence: 1 }),
         snapshotSequence: (snapshot) => snapshot.snapshotSequence,
         getHighWaterSequence: Effect.succeed(ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 2),
+        onResnapshotRequired: (report) => Effect.sync(() => reports.push(report)),
         replay: () => {
           replayStarted = true;
           return Stream.empty;
@@ -92,5 +99,13 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       retryable: true,
     });
     expect(replayStarted).toBe(false);
+    expect(reports).toEqual([
+      {
+        snapshotSequence: 1,
+        highWaterSequence: ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 2,
+        replayCount: ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 1,
+        replayLimit: ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT,
+      },
+    ]);
   });
 });

@@ -390,11 +390,7 @@ export function KanbanNewTaskDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogPopup
-        surface="solid"
-        className="max-w-3xl rounded-3xl"
-        onKeyDown={handleSubmitShortcut}
-      >
+      <DialogPopup className="max-w-3xl rounded-3xl" onKeyDown={handleSubmitShortcut}>
         {/* Linear-style breadcrumb header: project chip › title, same type size. */}
         <DialogHeader className="px-4 pt-3.5 pb-0">
           <div className="flex min-w-0 items-center gap-2">

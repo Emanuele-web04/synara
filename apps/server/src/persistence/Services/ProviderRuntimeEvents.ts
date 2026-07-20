@@ -28,6 +28,25 @@ export interface ProviderRuntimeEventRepositoryShape {
     ReadonlyArray<PersistedProviderRuntimeEvent>,
     ProviderRuntimeEventRepositoryError
   >;
+  readonly getThreadCoverage: (threadId: string) => Effect.Effect<
+    {
+      readonly retainedCount: number;
+      readonly oldestSequence: number | null;
+      readonly highWaterSequence: number;
+    },
+    PersistenceSqlError
+  >;
+  readonly readThreadEvents: (input: {
+    readonly threadId: string;
+    readonly throughSequenceInclusive: number;
+    readonly beforeSequenceExclusive?: number;
+    readonly limit: number;
+    readonly turnId?: string;
+    readonly eventTypes?: ReadonlyArray<string>;
+  }) => Effect.Effect<
+    ReadonlyArray<PersistedProviderRuntimeEvent>,
+    ProviderRuntimeEventRepositoryError
+  >;
   readonly readAcceptedOpenTurnEvents: (input: {
     readonly consumerName: string;
     readonly sequenceExclusive: number;

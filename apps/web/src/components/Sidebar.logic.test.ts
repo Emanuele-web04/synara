@@ -126,11 +126,8 @@ describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
     expect(
       hasUnseenCompletion({
-        interactionMode: "default",
         latestTurn: makeLatestTurn(),
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
-        proposedPlans: [],
-        session: null,
       }),
     ).toBe(true);
   });
@@ -1094,7 +1091,7 @@ describe("getRenderedThreadsForSidebarProject", () => {
 });
 
 describe("buildProjectThreadTree", () => {
-  it("keeps child threads hidden until their parent is expanded", () => {
+  it("keeps inactive child threads out of the sidebar", () => {
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({
@@ -1113,13 +1110,11 @@ describe("buildProjectThreadTree", () => {
       expect.objectContaining({
         thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-parent") }),
         depth: 0,
-        childCount: 1,
-        isExpanded: false,
       }),
     ]);
   });
 
-  it("auto-reveals the selected child thread by expanding its ancestors", () => {
+  it("reveals the active child thread and its ancestors", () => {
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({
@@ -1140,10 +1135,10 @@ describe("buildProjectThreadTree", () => {
       forceVisibleThreadId: ThreadId.makeUnsafe("thread-grandchild"),
     });
 
-    expect(rows.map((row) => [row.thread.id, row.depth, row.isExpanded])).toEqual([
-      [ThreadId.makeUnsafe("thread-parent"), 0, true],
-      [ThreadId.makeUnsafe("thread-child"), 1, true],
-      [ThreadId.makeUnsafe("thread-grandchild"), 2, false],
+    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
+      [ThreadId.makeUnsafe("thread-parent"), 0],
+      [ThreadId.makeUnsafe("thread-child"), 1],
+      [ThreadId.makeUnsafe("thread-grandchild"), 2],
     ]);
   });
 });
@@ -1304,7 +1299,7 @@ describe("getVisibleSidebarThreadIds", () => {
     ]);
   });
 
-  it("reveals selected subagent children even when only the parent is expanded implicitly", () => {
+  it("reveals an active subagent without persistent expansion state", () => {
     const visibleThreadIds = getVisibleSidebarThreadIds({
       projects: [makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true })],
       threads: [
@@ -1327,7 +1322,6 @@ describe("getVisibleSidebarThreadIds", () => {
       ],
       activeThreadId: ThreadId.makeUnsafe("thread-child"),
       threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
-      expandedSubagentParentIds: new Set<ThreadId>([ThreadId.makeUnsafe("thread-parent")]),
       previewLimit: 6,
       previewPageSize: 5,
       threadSortOrder: "created_at",
@@ -1336,41 +1330,6 @@ describe("getVisibleSidebarThreadIds", () => {
     expect(visibleThreadIds).toEqual([
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
-      ThreadId.makeUnsafe("thread-other"),
-    ]);
-  });
-
-  it("respects manual subagent collapse even when a child thread is active", () => {
-    const visibleThreadIds = getVisibleSidebarThreadIds({
-      projects: [makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true })],
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-parent"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          createdAt: "2026-03-09T10:03:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-child"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-other"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-      activeThreadId: ThreadId.makeUnsafe("thread-child"),
-      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
-      expandedSubagentParentIds: new Set<ThreadId>(),
-      previewLimit: 6,
-      previewPageSize: 5,
-      threadSortOrder: "created_at",
-    });
-
-    expect(visibleThreadIds).toEqual([
-      ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-other"),
     ]);
   });
@@ -1598,7 +1557,6 @@ describe("deriveSidebarProjectData", () => {
         unpinnedThread,
       ]),
       pinnedThreadIds: [pinnedThread.id],
-      expandedParentThreadIds: new Set(),
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: undefined,
@@ -1639,7 +1597,6 @@ describe("deriveSidebarProjectData", () => {
         standaloneThread,
       ]),
       pinnedThreadIds: [],
-      expandedParentThreadIds: new Set(),
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: undefined,
@@ -1681,7 +1638,6 @@ describe("deriveSidebarProjectData", () => {
         threadThree,
       ]),
       pinnedThreadIds: [],
-      expandedParentThreadIds: new Set(),
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: threadThree.id,
@@ -1712,7 +1668,6 @@ describe("deriveSidebarProjectData", () => {
       projects: [project],
       sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne]),
       pinnedThreadIds: [],
-      expandedParentThreadIds: new Set(),
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: undefined,
@@ -1739,7 +1694,6 @@ describe("deriveSidebarProjectData", () => {
         projects: [project],
         sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId(threads),
         pinnedThreadIds: [],
-        expandedParentThreadIds: new Set(),
         threadListExtraPagesByProjectCwd: new Map([[project.cwd, requestedExtraPages]]),
         normalizeProjectCwd: (cwd) => cwd,
         activeSidebarThreadId: undefined,
@@ -1894,6 +1848,119 @@ describe("sortThreadsForSidebar", () => {
     expect(sorted.map((thread) => thread.id)).toEqual([
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
+    ]);
+  });
+
+  it("floats a finished thread the user has not opened above newer threads", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-finished"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+          lastVisitedAt: "2026-03-09T10:01:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newer"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-finished"),
+      ThreadId.makeUnsafe("thread-newer"),
+    ]);
+  });
+
+  it("returns an opened finished thread to plain timestamp order", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-finished"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+          lastVisitedAt: "2026-03-09T10:06:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newer"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newer"),
+      ThreadId.makeUnsafe("thread-finished"),
+    ]);
+  });
+
+  it("floats live threads above unseen finished and plain threads", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newest-plain"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        {
+          ...makeThread({
+            id: ThreadId.makeUnsafe("thread-working"),
+            createdAt: "2026-03-09T09:00:00.000Z",
+            updatedAt: "2026-03-09T09:00:00.000Z",
+          }),
+          hasLiveTailWork: true,
+        },
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-finished"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-working"),
+      ThreadId.makeUnsafe("thread-finished"),
+      ThreadId.makeUnsafe("thread-newest-plain"),
+    ]);
+  });
+
+  it("treats a running session with no settled turn as live", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-newer"),
+          createdAt: "2026-03-09T11:00:00.000Z",
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-running"),
+          createdAt: "2026-03-09T09:00:00.000Z",
+          updatedAt: "2026-03-09T09:00:00.000Z",
+          session: {
+            provider: "codex" as const,
+            status: "running" as const,
+            createdAt: "2026-03-09T09:00:00.000Z",
+            updatedAt: "2026-03-09T09:00:00.000Z",
+            orchestrationStatus: "running" as const,
+          },
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-running"),
+      ThreadId.makeUnsafe("thread-newer"),
     ]);
   });
 });

@@ -41,6 +41,8 @@ import { AutomationRepositoryLive } from "./persistence/Layers/AutomationReposit
 import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
+import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
+import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
@@ -149,6 +151,9 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
+    Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
+    Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
+    Layer.provideMerge(ThreadDiagnosticsQueryLive),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
   );

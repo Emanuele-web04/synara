@@ -8,9 +8,8 @@
  * @module DevinAcpSupport
  */
 import { Effect, Layer, Scope, ServiceMap } from "effect";
-import type * as EffectAcpErrors from "effect-acp/errors";
-import * as EffectAcpErrorsRuntime from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
+import * as AcpErrors from "./AcpErrors.ts";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { collectSessionConfigOptionValues, findSessionConfigOption } from "./AcpRuntimeModel.ts";
@@ -78,15 +77,15 @@ export function buildDevinAcpSpawnInput(
 }
 
 function availableAuthMethodIds(
-  initializeResult: EffectAcpSchema.InitializeResponse,
+  initializeResult: Acp.InitializeResponse,
 ): ReadonlySet<string> {
   return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
 }
 
 export const resolveDevinAcpAuthMethodId = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
+  initializeResult: Acp.InitializeResponse,
   env: NodeJS.ProcessEnv = process.env,
-): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
     const hasApiKey = hasDevinApiKeyEnv(env);
@@ -101,7 +100,7 @@ export const resolveDevinAcpAuthMethodId = (
       return DEVIN_BROWSER_LOGIN_AUTH_METHOD_ID;
     }
 
-    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+    return yield* new AcpErrors.AcpRequestError({
       code: -32602,
       errorMessage: "Devin ACP authentication is unavailable.",
       data: {
@@ -114,9 +113,9 @@ export const resolveDevinAcpAuthMethodId = (
   });
 
 export const resolveDevinAcpAuthMethodIdForDiscovery = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
+  initializeResult: Acp.InitializeResponse,
   env: NodeJS.ProcessEnv = process.env,
-): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
     const hasApiKey = hasDevinApiKeyEnv(env);
@@ -125,7 +124,7 @@ export const resolveDevinAcpAuthMethodIdForDiscovery = (
       return DEVIN_WINDSURF_API_KEY_AUTH_METHOD_ID;
     }
 
-    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+    return yield* new AcpErrors.AcpRequestError({
       code: -32602,
       errorMessage: "Devin ACP model discovery requires non-interactive authentication.",
       data: {
@@ -138,11 +137,11 @@ export const resolveDevinAcpAuthMethodIdForDiscovery = (
   });
 
 function devinAuthSetupHeuristic(
-  initializeResult: EffectAcpSchema.InitializeResponse,
+  initializeResult: Acp.InitializeResponse,
   setupResult:
-    | EffectAcpSchema.NewSessionResponse
-    | EffectAcpSchema.LoadSessionResponse
-    | EffectAcpSchema.ResumeSessionResponse,
+    | Acp.NewSessionResponse
+    | Acp.LoadSessionResponse
+    | Acp.ResumeSessionResponse,
 ): boolean {
   const modelOption = findSessionConfigOption(setupResult.configOptions ?? [], "model");
   const availableModels =
@@ -152,7 +151,7 @@ function devinAuthSetupHeuristic(
 
 export const makeDevinAcpRuntime = (
   input: DevinAcpRuntimeInput,
-): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
+): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({

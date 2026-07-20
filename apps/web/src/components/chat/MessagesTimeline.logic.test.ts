@@ -2,17 +2,23 @@ import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
+  capOpenWorkEntryRenderChunks,
+  chunkCollapsedTurnItems,
+  chunkWorkEntries,
   computeMessageDurationStart,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
+  findLastLiveWorkGroupId,
   normalizeCompactToolLabel,
+  planWorkEntryRenderChunks,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
+  type CollapsedTurnItem,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import type { TimelineEntry } from "../../session-logic";
+import type { TimelineEntry, WorkLogEntry } from "../../session-logic";
 import type { TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
 
 function makeSummary(
@@ -1249,5 +1255,324 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     expect(rows.map((row) => row.kind)).toEqual(["message", "working"]);
+  });
+});
+
+const toolItem = (
+  id: string,
+  overrides: Partial<WorkLogEntry> = {},
+): Extract<CollapsedTurnItem, { kind: "work" }> => ({
+  kind: "work",
+  id,
+  entry: {
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    label: `tool ${id}`,
+    tone: "tool",
+    ...overrides,
+  },
+});
+
+const narrationItem = (id: string): CollapsedTurnItem => ({
+  kind: "narration",
+  id,
+  message: {
+    id: MessageId.makeUnsafe(id),
+    role: "assistant",
+    text: "narration",
+    createdAt: "2026-01-01T00:00:00Z",
+    streaming: false,
+  },
+});
+
+const chunkSignature = (items: ReadonlyArray<CollapsedTurnItem>): string[] =>
+  chunkCollapsedTurnItems(items).map((chunk) =>
+    chunk.kind === "tool-group"
+      ? `group:${chunk.id}:${chunk.entries.map((entry) => entry.id).join("+")}`
+      : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
+  );
+
+describe("chunkCollapsedTurnItems", () => {
+  it("folds consecutive tool runs and lets narration split them", () => {
+    expect(
+      chunkSignature([
+        toolItem("w1"),
+        toolItem("w2"),
+        narrationItem("a1"),
+        toolItem("w3"),
+        toolItem("w4"),
+        toolItem("w5"),
+      ]),
+    ).toEqual(["group:w1:w1+w2", "item:narration:a1", "group:w3:w3+w4+w5"]);
+  });
+
+  it("keeps singleton runs as individual items", () => {
+    expect(chunkSignature([toolItem("w1"), narrationItem("a1"), toolItem("w2")])).toEqual([
+      "item:work:w1",
+      "item:narration:a1",
+      "item:work:w2",
+    ]);
+  });
+
+  it("lets non-summarizable work rows split runs and render individually", () => {
+    expect(
+      chunkSignature([
+        toolItem("w1"),
+        toolItem("w2"),
+        toolItem("err", { tone: "error" }),
+        toolItem("w3"),
+        toolItem("w4"),
+      ]),
+    ).toEqual(["group:w1:w1+w2", "item:work:err", "group:w3:w3+w4"]);
+  });
+});
+
+describe("chunkWorkEntries", () => {
+  it("preserves rich rows between independently collapsible tool runs", () => {
+    const entries = [
+      toolItem("w1").entry,
+      toolItem("w2").entry,
+      toolItem("err", { tone: "error" }).entry,
+      toolItem("w3").entry,
+      toolItem("w4").entry,
+    ];
+
+    expect(
+      chunkWorkEntries(entries).map((chunk) =>
+        chunk.kind === "tool-group"
+          ? `group:${chunk.entries.map((entry) => entry.id).join("+")}`
+          : `item:${chunk.entry.id}`,
+      ),
+    ).toEqual(["group:w1+w2", "item:err", "group:w3+w4"]);
+  });
+});
+
+const planSignature = (
+  entries: ReadonlyArray<WorkLogEntry>,
+  options: { tailIsLive: boolean },
+): string[] =>
+  planWorkEntryRenderChunks(entries, options).map((chunk) => {
+    const ids = chunk.entries.map((entry) => entry.id).join("+");
+    return chunk.summary === null ? `open:${ids}` : `collapsed:${ids}`;
+  });
+
+describe("planWorkEntryRenderChunks", () => {
+  it("collapses the earlier run across a thinking boundary while the live tail stays open", () => {
+    expect(
+      planSignature(
+        [
+          toolItem("w1").entry,
+          toolItem("w2").entry,
+          toolItem("think", { tone: "thinking" }).entry,
+          toolItem("w3").entry,
+          toolItem("w4").entry,
+        ],
+        { tailIsLive: true },
+      ),
+    ).toEqual(["collapsed:w1+w2", "open:think", "open:w3+w4"]);
+  });
+
+  it("collapses every run when narration is the trailing block", () => {
+    expect(
+      planSignature(
+        [toolItem("w1").entry, toolItem("w2").entry, toolItem("think", { tone: "thinking" }).entry],
+        { tailIsLive: true },
+      ),
+    ).toEqual(["collapsed:w1+w2", "open:think"]);
+  });
+
+  it("collapses the trailing run once the tail is no longer live", () => {
+    expect(
+      planSignature([toolItem("w1").entry, toolItem("w2").entry], { tailIsLive: false }),
+    ).toEqual(["collapsed:w1+w2"]);
+  });
+
+  it("never collapses a run that still has running work", () => {
+    expect(
+      planSignature(
+        [
+          toolItem("w1", { toolStatus: "running" }).entry,
+          toolItem("w2").entry,
+          toolItem("think", { tone: "thinking" }).entry,
+          toolItem("w3").entry,
+          toolItem("w4").entry,
+        ],
+        { tailIsLive: false },
+      ),
+    ).toEqual(["open:w1+w2", "open:think", "collapsed:w3+w4"]);
+  });
+
+  it("keeps singleton runs open: nothing to summarize", () => {
+    expect(
+      planSignature(
+        [toolItem("w1").entry, toolItem("think", { tone: "thinking" }).entry, toolItem("w2").entry],
+        { tailIsLive: false },
+      ),
+    ).toEqual(["open:w1", "open:think", "open:w2"]);
+  });
+});
+
+describe("capOpenWorkEntryRenderChunks", () => {
+  it("preserves collapsed summaries while limiting later open entries", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [
+        toolItem("w1").entry,
+        toolItem("w2").entry,
+        toolItem("think", { tone: "thinking" }).entry,
+        toolItem("w3").entry,
+        toolItem("w4").entry,
+        toolItem("w5").entry,
+        toolItem("w6").entry,
+        toolItem("w7").entry,
+      ],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: false,
+      maxVisibleEntries: 3,
+      keep: "last",
+    });
+
+    expect(
+      result.chunks.map((chunk) => ({
+        ids: chunk.entries.map((entry) => entry.id),
+        collapsed: chunk.summary !== null,
+      })),
+    ).toEqual([
+      { ids: ["w1", "w2"], collapsed: true },
+      { ids: [], collapsed: false },
+      { ids: ["w5", "w6", "w7"], collapsed: false },
+    ]);
+    expect(result.hasOverflow).toBe(true);
+    expect(result.hiddenEntryCount).toBe(3);
+  });
+
+  it("does not count separately rendered status boundaries against the tool cap", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [
+        toolItem("w1").entry,
+        toolItem("w2").entry,
+        toolItem("think", { tone: "thinking" }).entry,
+        toolItem("w3").entry,
+        toolItem("w4").entry,
+        toolItem("w5").entry,
+      ],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: false,
+      maxVisibleEntries: 2,
+      keep: "first",
+      shouldCapEntry: (entry) => entry.tone === "tool",
+    });
+
+    expect(result.chunks.map((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
+      ["w1", "w2"],
+      ["think"],
+      ["w3", "w4"],
+    ]);
+    expect(result.hiddenEntryCount).toBe(1);
+  });
+
+  it("restores every open entry when expanded while retaining overflow state", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: true,
+      maxVisibleEntries: 2,
+      keep: "last",
+    });
+
+    expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
+      "w1",
+      "w2",
+      "w3",
+    ]);
+    expect(result.hasOverflow).toBe(true);
+    expect(result.hiddenEntryCount).toBe(0);
+  });
+});
+
+const workRow = (id: string): MessagesTimelineRow => ({
+  kind: "work",
+  id,
+  createdAt: "2026-01-01T00:00:00Z",
+  groupedEntries: [{ id, createdAt: "2026-01-01T00:00:00Z", label: "tool", tone: "tool" }],
+});
+
+const messageRowOf = (
+  id: string,
+  role: "user" | "assistant",
+  groups: { leadingWorkGroupId?: string; inlineWorkGroupId?: string } = {},
+): MessagesTimelineRow => ({
+  kind: "message",
+  id: `row-${id}`,
+  createdAt: "2026-01-01T00:00:00Z",
+  message: {
+    id: MessageId.makeUnsafe(id),
+    role,
+    text: "text",
+    createdAt: "2026-01-01T00:00:00Z",
+    streaming: false,
+  },
+  durationStart: "2026-01-01T00:00:00Z",
+  showAssistantCopyButton: false,
+  assistantCopyStreaming: false,
+  ...groups,
+});
+
+const workingRow: MessagesTimelineRow = {
+  kind: "working",
+  id: "working-indicator-row",
+  createdAt: null,
+};
+
+describe("findLastLiveWorkGroupId", () => {
+  it("returns the trailing standalone work row", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("u1", "user"),
+        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
+        workRow("g2"),
+        workingRow,
+      ]),
+    ).toBe("g2");
+  });
+
+  it("prefers a message's inline group over its leading group", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("u1", "user"),
+        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1", inlineWorkGroupId: "g2" }),
+      ]),
+    ).toBe("g2");
+  });
+
+  it("falls back to the leading group when no inline group exists", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("u1", "user"),
+        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1" }),
+      ]),
+    ).toBe("g1");
+  });
+
+  it("stops at a trailing user message: the next turn has no live group yet", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
+        messageRowOf("u2", "user"),
+        workingRow,
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null when the transcript has no work groups", () => {
+    expect(findLastLiveWorkGroupId([messageRowOf("u1", "user")])).toBeNull();
   });
 });

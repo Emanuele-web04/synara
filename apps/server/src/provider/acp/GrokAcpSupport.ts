@@ -5,9 +5,8 @@
  */
 import { type GrokModelOptions } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
-import type * as EffectAcpErrors from "effect-acp/errors";
-import * as EffectAcpErrorsRuntime from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -34,7 +33,7 @@ export interface GrokAcpRuntimeInput extends Omit<
 }
 
 export interface GrokAcpModelSelectionErrorContext {
-  readonly cause: EffectAcpErrors.AcpError;
+  readonly cause: AcpErrors.AcpError;
   readonly method: "session/set_config_option";
 }
 
@@ -83,15 +82,13 @@ export function buildGrokAcpSpawnInput(
   };
 }
 
-function availableAuthMethodIds(
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): ReadonlySet<string> {
+function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): ReadonlySet<string> {
   return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
 }
 
 export const resolveGrokAcpAuthMethodId = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+  initializeResult: Acp.InitializeResponse,
+): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
     if (hasGrokApiKeyEnv() && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
@@ -100,7 +97,7 @@ export const resolveGrokAcpAuthMethodId = (
     if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
       return GROK_CACHED_TOKEN_AUTH_METHOD_ID;
     }
-    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+    return yield* new AcpErrors.AcpRequestError({
       code: -32602,
       errorMessage: "Grok ACP authentication is unavailable.",
       data: {
@@ -112,7 +109,7 @@ export const resolveGrokAcpAuthMethodId = (
 
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
-): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
+): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({

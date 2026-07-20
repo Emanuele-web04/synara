@@ -6,6 +6,7 @@
 import { Cause } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ORCHESTRATION_WS_METHODS,
   WS_CHANNELS,
   WS_COMPATIBILITY_QUERY,
   WS_PROTOCOL_EPOCH,
@@ -16,6 +17,7 @@ import {
 
 import {
   shouldKeepServerLifecycleStream,
+  getStreamCapacityRetryDelayMs,
   getTerminalCompatibilityError,
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
@@ -78,6 +80,33 @@ class MockWebSocket {
 
 const originalWebSocket = globalThis.WebSocket;
 
+interface WsTransportInternals {
+  readonly streamCleanups: Map<string, () => void>;
+  readonly streamSettled: Map<string, Promise<void>>;
+  readonly streamCapacityRetries: Map<string, number>;
+  readonly streamCapacityRetryTimers: Map<string, number>;
+  readonly activeThreadStreamInputs: Map<string, unknown>;
+  readonly threadSubscriptions: Map<string, unknown>;
+  startThreadStream(client: unknown, threadId: string, input: unknown): Promise<void>;
+}
+
+function makeBareTransport(): {
+  readonly transport: WsTransport;
+  readonly internals: WsTransportInternals;
+} {
+  const transport = Object.create(WsTransport.prototype) as WsTransport;
+  const internals = transport as unknown as WsTransportInternals;
+  Object.assign(internals, {
+    streamCleanups: new Map(),
+    streamSettled: new Map(),
+    streamCapacityRetries: new Map(),
+    streamCapacityRetryTimers: new Map(),
+    activeThreadStreamInputs: new Map(),
+    threadSubscriptions: new Map(),
+  });
+  return { transport, internals };
+}
+
 beforeEach(() => {
   sockets.length = 0;
   vi.stubEnv("VITE_WS_URL", "");
@@ -87,6 +116,8 @@ beforeEach(() => {
     value: {
       location: { protocol: "http:", hostname: "localhost", port: "3020" },
       desktopBridge: undefined,
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
     },
   });
 
@@ -127,6 +158,104 @@ describe("WsTransport", () => {
         retryable: false,
       }),
     ).toBe(true);
+  });
+
+  it("retries capacity-rejected streams in place with the server-provided delay", () => {
+    expect(
+      getStreamCapacityRetryDelayMs(
+        Cause.fail({
+          code: "THREAD_STREAM_CAPACITY_EXCEEDED",
+          retryable: true,
+          retryAfterMs: 1_000,
+        }),
+      ),
+    ).toBe(1_000);
+    expect(
+      getStreamCapacityRetryDelayMs(
+        Cause.fail({ code: "STREAM_CAPACITY_EXCEEDED", retryable: true }),
+      ),
+    ).toBe(1_000);
+    expect(
+      getStreamCapacityRetryDelayMs(
+        Cause.fail({ code: "STREAM_DUPLICATE_SUBSCRIPTION", retryable: false }),
+      ),
+    ).toBeNull();
+    expect(getStreamCapacityRetryDelayMs(Cause.fail(new Error("transient")))).toBeNull();
+    expect(
+      getStreamCapacityRetryDelayMs(
+        Cause.fail({ code: "WS_PROTOCOL_INCOMPATIBLE", retryable: false }),
+      ),
+    ).toBeNull();
+  });
+
+  it("waits for a thread stream to settle before resolving unsubscribe", async () => {
+    const { transport, internals } = makeBareTransport();
+    const threadId = "thread-release-order";
+    const key = `orchestration.thread:${threadId}`;
+    let settleStream: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      settleStream = resolve;
+    });
+    const cleanup = vi.fn();
+    internals.threadSubscriptions.set(threadId, { threadId });
+    internals.streamCleanups.set(key, cleanup);
+    internals.streamSettled.set(key, settled);
+
+    let unsubscribeResolved = false;
+    const unsubscribe = transport
+      .request(ORCHESTRATION_WS_METHODS.unsubscribeThread, { threadId })
+      .then(() => {
+        unsubscribeResolved = true;
+      });
+    await Promise.resolve();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(unsubscribeResolved).toBe(false);
+
+    settleStream();
+    await unsubscribe;
+    expect(unsubscribeResolved).toBe(true);
+  });
+
+  it("cancels owned capacity retry timers when a stream stops", async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const key = "orchestration.thread:thread-cancel-retry";
+      const retry = vi.fn();
+      const timeoutId = window.setTimeout(retry, 1_000);
+      internals.streamCapacityRetries.set(key, 2);
+      internals.streamCapacityRetryTimers.set(key, timeoutId);
+
+      await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, {
+        threadId: "thread-cancel-retry",
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(retry).not.toHaveBeenCalled();
+      expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
+      expect(internals.streamCapacityRetries.has(key)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let stale or duplicate thread restarts replace the active stream", async () => {
+    const { internals } = makeBareTransport();
+    const threadId = "thread-current-generation";
+    const key = `orchestration.thread:${threadId}`;
+    const currentInput = { threadId, generation: "current" };
+    const staleInput = { threadId, generation: "stale" };
+    const cleanup = vi.fn();
+    internals.threadSubscriptions.set(threadId, currentInput);
+    internals.streamCleanups.set(key, cleanup);
+    internals.activeThreadStreamInputs.set(key, currentInput);
+
+    await internals.startThreadStream({}, threadId, staleInput);
+    await internals.startThreadStream({}, threadId, currentInput);
+
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(internals.streamCleanups.get(key)).toBe(cleanup);
   });
 
   it("latches terminal compatibility guidance for late UI subscribers", () => {

@@ -815,7 +815,7 @@ export function AutomationDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogPopup surface="solid" showCloseButton={false} className="max-w-3xl">
+      <DialogPopup showCloseButton={false} className="max-w-3xl">
         <DialogTitle className="sr-only">
           {editing ? "Edit automation" : "New automation"}
         </DialogTitle>

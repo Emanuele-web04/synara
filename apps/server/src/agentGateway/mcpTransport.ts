@@ -69,11 +69,7 @@ export function makeAgentGatewayMcpTransport(input: {
             typeof rawArgs === "object" && rawArgs !== null && !Array.isArray(rawArgs)
               ? (rawArgs as Record<string, unknown>)
               : {};
-          const requiredCapability = tool.requiresActiveTurn
-            ? toolName.includes("automation")
-              ? "automation:write"
-              : "thread:write"
-            : "thread:read";
+          const requiredCapability = tool.requiredCapability;
           if (!context.callerCapabilities.has(requiredCapability)) {
             return jsonRpcResult(
               request.id,

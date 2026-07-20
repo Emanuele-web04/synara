@@ -40,7 +40,6 @@ import {
 import { getDefaultModel, getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
-import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import {
   buildPromptThreadTitleFallback,
@@ -71,7 +70,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
-  gitCreateWorktreeMutationOptions,
+  gitCreateDetachedWorktreeMutationOptions,
   gitGithubRepositoryQueryOptions,
   gitBranchesQueryOptions,
 } from "~/lib/gitReactQuery";
@@ -1108,7 +1107,9 @@ export default function ChatView({
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
-  const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const createWorktreeMutation = useMutation(
+    gitCreateDetachedWorktreeMutationOptions({ queryClient }),
+  );
   const isEditorRail = presentationMode === "editor";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
@@ -7016,6 +7017,9 @@ export default function ChatView({
     let nextThreadEnvMode = envModeForSend;
     let nextThreadBranch = activeThread.branch;
     let nextThreadWorktreePath = activeThread.worktreePath;
+    let nextAssociatedWorktreePath = activeThread.associatedWorktreePath ?? null;
+    let nextAssociatedWorktreeBranch = activeThread.associatedWorktreeBranch ?? null;
+    let nextAssociatedWorktreeRef = activeThread.associatedWorktreeRef ?? null;
 
     if (isFirstMessage && isContainerLandingProject && firstSendTarget.kind !== "current") {
       if (firstSendTarget.kind === "create-project") {
@@ -7081,6 +7085,9 @@ export default function ChatView({
       nextThreadEnvMode = "local";
       nextThreadBranch = null;
       nextThreadWorktreePath = null;
+      nextAssociatedWorktreePath = null;
+      nextAssociatedWorktreeBranch = null;
+      nextAssociatedWorktreeRef = null;
     }
 
     // The branch query can finish just after the user chooses New worktree. Use the
@@ -7252,14 +7259,17 @@ export default function ChatView({
     }
 
     let createdServerThreadForLocalDraft = false;
+    let createdWorktreeForSendPath: string | null = null;
     let turnStartSucceeded = false;
     await (async () => {
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
         const result = await createWorktreeMutation.mutateAsync({
           cwd: targetProjectCwdForSend,
-          branch: baseBranchForWorktree,
-          newBranch: buildTemporaryWorktreeBranchName(),
+          ref: baseBranchForWorktree,
+          ...(baseBranchForWorktree === activeRootBranch
+            ? { copyChangesFrom: targetProjectCwdForSend }
+            : {}),
         });
         beginLocalDispatch({
           worktreeSetupStepId: "prepare-thread",
@@ -7267,10 +7277,15 @@ export default function ChatView({
         });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
-        const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
-          branch: result.worktree.branch,
-          worktreePath: result.worktree.path,
-        });
+        createdWorktreeForSendPath = result.worktree.path;
+        const nextAssociatedWorktree = {
+          associatedWorktreePath: result.worktree.path,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: result.worktree.ref,
+        };
+        nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
+        nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
+        nextAssociatedWorktreeRef = nextAssociatedWorktree.associatedWorktreeRef;
         if (isServerThread) {
           await api.orchestration.dispatchCommand({
             type: "thread.meta.update",
@@ -7324,6 +7339,9 @@ export default function ChatView({
             envMode: nextThreadEnvMode,
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
+            associatedWorktreePath: nextAssociatedWorktreePath,
+            associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+            associatedWorktreeRef: nextAssociatedWorktreeRef,
             lastKnownPr: activeThread.lastKnownPr ?? null,
             createdAt: activeThread.createdAt,
           },
@@ -7472,6 +7490,43 @@ export default function ChatView({
             threadId: threadIdForSend,
           })
           .catch(() => undefined);
+      }
+      if (createdWorktreeForSendPath && !turnStartSucceeded) {
+        const removed = await api.git
+          .removeWorktree({
+            cwd: targetProjectCwdForSend,
+            path: createdWorktreeForSendPath,
+            force: true,
+          })
+          .then(
+            () => true,
+            () => false,
+          );
+        if (removed && isServerThread) {
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              envMode: "local",
+              branch: null,
+              worktreePath: null,
+              associatedWorktreePath: null,
+              associatedWorktreeBranch: null,
+              associatedWorktreeRef: null,
+            })
+            .then(
+              () =>
+                setStoreThreadWorkspace(threadIdForSend, {
+                  branch: null,
+                  worktreePath: null,
+                  associatedWorktreePath: null,
+                  associatedWorktreeBranch: null,
+                  associatedWorktreeRef: null,
+                }),
+              () => undefined,
+            );
+        }
       }
       if (
         queuedChatTurn === null &&

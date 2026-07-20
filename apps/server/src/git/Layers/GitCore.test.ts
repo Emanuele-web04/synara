@@ -3,6 +3,7 @@
 // Layer: Server Git service tests
 // Depends on: Effect test layers plus real temporary Git repositories.
 import { existsSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1166,7 +1167,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(wtPath, "untracked.txt"), "do not remove\n");
         expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
           verified: false,
-          reason: "worktree has uncommitted changes",
+          reason: "worktree state changed",
         });
         yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
         yield* core.deleteBranchIfUnchanged({
@@ -1174,6 +1175,100 @@ it.layer(TestLayer)("git integration", (it) => {
           branch: "wt-owned",
           expectedHead: proof.head,
         });
+      }),
+    );
+
+    it.effect("verifies ownership of a detached worktree", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-detached-owned");
+        yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
+
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "detached-operation-token",
+        });
+
+        expect(proof.branch).toBeNull();
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath });
+      }),
+    );
+
+    it.effect("copies checkout changes and .worktreeinclude files into a detached worktree", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), ".env\n");
+        yield* writeTextFile(path.join(tmp, ".worktreeinclude"), ".env\n");
+        yield* git(tmp, ["add", ".gitignore", ".worktreeinclude"]);
+        yield* git(tmp, ["commit", "-m", "configure worktree files"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# locally edited\n");
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
+        yield* writeTextFile(path.join(tmp, ".env"), "LOCAL_ONLY=yes\n");
+
+        const core = yield* GitCore;
+        const expectedHead = yield* git(tmp, ["rev-parse", "HEAD"]);
+        const wtPath = path.join(tmp, "wt-copied-state");
+        const result = yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        expect(result.worktree).toEqual({ path: wtPath, ref: expectedHead, branch: null });
+        expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe("# locally edited\n");
+        expect(yield* readTextFile(path.join(wtPath, "notes.txt"))).toBe("untracked note\n");
+        expect(yield* readTextFile(path.join(wtPath, ".env"))).toBe("LOCAL_ONLY=yes\n");
+
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "copied-state-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+        yield* writeTextFile(path.join(wtPath, ".env"), "LOCAL_ONLY=changed\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree state changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("atomically replaces an incomplete worktree snapshot", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "README.md"), "snapshot change\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "preserve me\n");
+
+        const snapshotRoot = yield* makeTmpDir("worktree-snapshot-test-");
+        const outputPath = path.join(snapshotRoot, "thread-1");
+        yield* Effect.promise(() => fs.mkdir(outputPath, { recursive: true }));
+        yield* writeTextFile(path.join(outputPath, "partial.tmp"), "incomplete\n");
+
+        const core = yield* GitCore;
+        yield* core.snapshotWorktree({ cwd: tmp, outputPath });
+
+        expect(existsSync(path.join(outputPath, "snapshot.json"))).toBe(true);
+        expect(existsSync(path.join(outputPath, "partial.tmp"))).toBe(false);
+        expect(yield* readTextFile(path.join(outputPath, "files", "untracked.txt"))).toBe(
+          "preserve me\n",
+        );
+        expect(yield* readTextFile(path.join(outputPath, "changes.patch"))).toContain(
+          "snapshot change",
+        );
       }),
     );
 
@@ -1470,6 +1565,31 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(localBranches).toContain("feature/pr-fetch");
         const currentBranch = yield* git(tmp, ["branch", "--show-current"]);
         expect(currentBranch).toBe(initialBranch);
+      }),
+    );
+  });
+
+  describe("fetchPullRequestCommit", () => {
+    it.effect("rejects a pull-request URL for a repository other than the fetch remote", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["remote", "add", "origin", "https://github.com/acme/current.git"]);
+
+        const exit = yield* (yield* GitCore)
+          .fetchPullRequestCommit({
+            cwd: tmp,
+            prNumber: 42,
+            expectedRepositoryNameWithOwner: "acme/other",
+          })
+          .pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          expect(String(exit.cause)).toContain(
+            "Pull request URL targets acme/other, but remote origin targets acme/current.",
+          );
+        }
       }),
     );
   });

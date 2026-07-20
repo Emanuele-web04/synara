@@ -2,7 +2,7 @@
 // Purpose: Regression test for atomic session/update capture during the setSessionEpoch transition window.
 // Layer: Provider ACP runtime tests
 
-import * as OfficialAcp from "@agentclientprotocol/sdk";
+import * as Acp from "@agentclientprotocol/sdk";
 import { Deferred, Effect, Fiber, Layer, Option, Queue, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,7 @@ import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 const FINAL_SESSION_ID = "session-epoch-final";
 
 /**
- * Bridges an in-memory OfficialAcp.agent() to the runtime through a fake
+ * Bridges an in-memory Acp.agent() to the runtime through a fake
  * ChildProcessSpawner: the "child" stdin/stdout are Queue-bridged to the
  * agent's ReadableStream/WritableStream transport.
  */
@@ -20,7 +20,7 @@ function makeInMemoryAgentSpawner() {
   const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
   const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
 
-  let agentConnection: OfficialAcp.AgentConnection | undefined;
+  let agentConnection: Acp.AgentConnection | undefined;
 
   const agentInput = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -35,18 +35,18 @@ function makeInMemoryAgentSpawner() {
     },
   });
 
-  const agentApp = OfficialAcp.agent({ name: "epoch-test-agent" })
-    .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+  const agentApp = Acp.agent({ name: "epoch-test-agent" })
+    .onRequest(Acp.methods.agent.initialize, () => ({
       protocolVersion: 1,
       agentCapabilities: {},
       authMethods: [],
     }))
-    .onRequest(OfficialAcp.methods.agent.session.new, () => ({
+    .onRequest(Acp.methods.agent.session.new, () => ({
       sessionId: FINAL_SESSION_ID,
     }));
 
   const connectAgent = () => {
-    agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
+    agentConnection = agentApp.connect(Acp.ndJsonStream(agentOutput, agentInput));
     return agentConnection;
   };
 
@@ -117,7 +117,7 @@ describe("AcpSessionRuntime session epoch transition", () => {
       // Deliver a session/update for the final session id inside the window
       // and let it settle into the pending buffer.
       yield* Effect.promise(() =>
-        getAgentConnection().client.notify(OfficialAcp.methods.client.session.update, {
+        getAgentConnection().client.notify(Acp.methods.client.session.update, {
           sessionId: FINAL_SESSION_ID,
           update: {
             sessionUpdate: "available_commands_update",

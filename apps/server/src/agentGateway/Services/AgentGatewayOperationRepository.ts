@@ -55,10 +55,11 @@ export interface AgentGatewayOperationRepositoryShape {
     readonly index: number;
     readonly workspaceRoot: string;
     readonly path: string;
-    readonly branch: string;
+    readonly branch: string | null;
     readonly token: string;
     readonly gitDir: string;
     readonly head: string;
+    readonly stateHash?: string;
     readonly now: string;
   }) => Effect.Effect<boolean, Error>;
   readonly markCompensating: (input: {

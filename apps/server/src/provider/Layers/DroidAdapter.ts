@@ -36,7 +36,7 @@ import {
   Stream,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
@@ -112,6 +112,7 @@ import { cancelDroidTurnAndWait } from "../acp/DroidTurnCancellation.ts";
 import {
   elicitationQuestionsFromRequest,
   elicitationResponseFromAnswers,
+  isFormElicitationRequest,
 } from "../acp/AcpElicitationSupport.ts";
 import { DroidAdapter, type DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -296,7 +297,7 @@ type DroidPermissionPolicyOutcome =
 export function resolveDroidPermissionPolicy(input: {
   readonly runtimeMode: "approval-required" | "full-access";
   readonly interactionMode: ProviderInteractionMode | undefined;
-  readonly options: ReadonlyArray<Pick<EffectAcpSchema.PermissionOption, "kind" | "optionId">>;
+  readonly options: ReadonlyArray<Pick<Acp.PermissionOption, "kind" | "optionId">>;
 }): DroidPermissionPolicyOutcome | undefined {
   if (input.interactionMode === "plan") {
     const rejectedOptionId = selectAcpPermissionOptionId("decline", input.options);
@@ -791,7 +792,7 @@ export function makeDroidAdapter(
             clientInfo: { name: "Synara", version: "0.0.0" },
             ...(agentGatewayCredentials
               ? {
-                  buildMcpServers: (initializeResult: EffectAcpSchema.InitializeResponse) =>
+                  buildMcpServers: (initializeResult: Acp.InitializeResponse) =>
                     buildAcpSynaraMcpServers({
                       connection: gatewaySessionLease!.connection,
                       initializeResult,
@@ -911,12 +912,12 @@ export function makeDroidAdapter(
             yield* acp.handleElicitation((params) =>
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/elicitation", params);
-                if (params.mode !== "form") {
-                  return { action: { action: "decline" as const } };
+                if (!isFormElicitationRequest(params)) {
+                  return { action: "decline" as const };
                 }
                 const questions = elicitationQuestionsFromRequest(params);
                 if (questions.length === 0) {
-                  return { action: { action: "decline" as const } };
+                  return { action: "decline" as const };
                 }
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
@@ -1420,7 +1421,7 @@ export function makeDroidAdapter(
             }),
           ),
         );
-        const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+        const promptParts: Array<Acp.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: appendProviderReferencesPromptBlock({
             text: input.input?.trim()

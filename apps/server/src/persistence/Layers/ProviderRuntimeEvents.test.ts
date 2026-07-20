@@ -50,6 +50,22 @@ layer("ProviderRuntimeEventRepository", (it) => {
           [second.sequence, "runtime-event-2"],
         ],
       );
+      assert.deepStrictEqual(yield* repository.getThreadCoverage("thread-runtime-journal"), {
+        retainedCount: 2,
+        oldestSequence: first.sequence,
+        highWaterSequence: second.sequence,
+      });
+      assert.deepStrictEqual(
+        (yield* repository.readThreadEvents({
+          threadId: "thread-runtime-journal",
+          throughSequenceInclusive: second.sequence,
+          beforeSequenceExclusive: second.sequence,
+          turnId: "turn-runtime-journal",
+          eventTypes: ["content.delta"],
+          limit: 10,
+        })).map((row) => row.event.eventId),
+        ["runtime-event-1"],
+      );
 
       const skipped = yield* repository.advanceConsumerCursor({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,

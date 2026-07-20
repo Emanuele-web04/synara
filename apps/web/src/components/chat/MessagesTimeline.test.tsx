@@ -1425,7 +1425,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("```tsx");
   });
 
-  it("keeps the latest inline tool calls visible while the turn is still active", async () => {
+  it("collapses a leading tool run behind its summary once the assistant text follows, even mid-turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1530,11 +1530,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
+    // The assistant's text block already follows the run, so it compacts
+    // behind the summary row even while the turn is still live.
+    expect(markup).toContain("Ran 6 tool calls");
     expect(markup).not.toContain("Tool 1");
-    expect(markup).not.toContain("Tool 2");
-    expect(markup).toContain("Tool 3");
-    expect(markup).toContain("Tool 6");
-    expect(markup).toContain("+2 more tool calls");
+    expect(markup).not.toContain("Tool 6");
+    expect(markup).not.toContain("+2 more tool calls");
   });
 
   it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
@@ -1780,7 +1781,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("expands inline tool calls when the group is toggled open", async () => {
+  it("expands live inline tool calls past the cap when the group is toggled open", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1789,6 +1790,20 @@ describe("MessagesTimeline", () => {
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
+          // The message comes first so the tools are the turn's live inline
+          // tail: the run stays expanded and keeps the +N cap behavior.
+          {
+            id: "entry-assistant-inline-tools-expanded",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:27.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-inline-tools-expanded"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:27.000Z",
+              streaming: true,
+            },
+          },
           {
             id: "entry-inline-tools-expanded",
             kind: "work",
@@ -1842,19 +1857,6 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.400Z",
               label: "tool 5",
               tone: "tool",
-            },
-          },
-          {
-            id: "entry-assistant-inline-tools-expanded",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-assistant-inline-tools-expanded"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
             },
           },
         ]}
@@ -2073,11 +2075,13 @@ describe("MessagesTimeline", () => {
 
   it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    // Rendered as a live turn: once settled, consecutive command rows fold into
+    // a closed "Ran N commands" summary and individual rows are not in markup.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
         isWorking={false}
-        activeTurnInProgress={false}
+        activeTurnInProgress={true}
         activeTurnStartedAt={null}
         timelineEntries={[
           {

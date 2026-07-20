@@ -785,7 +785,8 @@ export function ChatHeader({
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
               {handoffActionTargetProviders.map((provider) => (
                 <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
+                  {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
+                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
                   <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
                 </MenuItem>
               ))}

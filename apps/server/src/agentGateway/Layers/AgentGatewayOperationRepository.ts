@@ -152,6 +152,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
             token: input.token,
             gitDir: input.gitDir,
             head: input.head,
+            ...(input.stateHash ? { stateHash: input.stateHash } : {}),
             recordedAt: input.now,
           });
           const updated = yield* sql<{ readonly operationId: string }>`

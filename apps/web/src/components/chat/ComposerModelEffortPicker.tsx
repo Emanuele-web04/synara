@@ -166,7 +166,8 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
       <ProviderIcon
         aria-hidden="true"
         className={cn(
-          "size-3.5 shrink-0",
+          // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
+          "size-3.5 shrink-0 opacity-100",
           getProviderIconClassName(activeProvider, "text-[var(--color-text-foreground)]"),
         )}
       />
