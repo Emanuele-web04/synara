@@ -39,7 +39,12 @@ async function withGatewayServer(
               threadId,
               provider: "cursor",
               issuedAt: 1,
-              capabilities: new Set(["thread:read", "thread:write", "automation:write"]),
+              capabilities: new Set([
+                "thread:read",
+                "thread:write",
+                "automation:write",
+                "diagnostics:read",
+              ]),
             }
           : null,
       bindWriteAuthority: (token, turnId) =>

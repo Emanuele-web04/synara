@@ -2073,11 +2073,13 @@ describe("MessagesTimeline", () => {
 
   it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    // Rendered as a live turn: once settled, consecutive command rows fold into
+    // a closed "Ran N commands" summary and individual rows are not in markup.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
         isWorking={false}
-        activeTurnInProgress={false}
+        activeTurnInProgress={true}
         activeTurnStartedAt={null}
         timelineEntries={[
           {

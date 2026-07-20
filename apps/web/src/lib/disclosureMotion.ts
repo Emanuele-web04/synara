@@ -7,6 +7,9 @@
 
 import { cn } from "~/lib/utils";
 
+export const DISCLOSURE_TRANSITION_MS = 220;
+export const DISCLOSURE_CLEANUP_BUFFER_MS = 40;
+
 /** Shell grid that animates height via grid-template-rows + fade. */
 export const DISCLOSURE_SHELL_MOTION_CLASS =
   "grid transition-[grid-template-rows,opacity] duration-220 ease-out motion-reduce:transition-none";

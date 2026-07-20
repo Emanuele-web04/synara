@@ -20,6 +20,12 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
     fromSequenceExclusive: number,
     throughSequenceInclusive: number,
   ) => Stream.Stream<OrchestrationEvent, E>;
+  readonly onResnapshotRequired?: (report: {
+    readonly snapshotSequence: number;
+    readonly highWaterSequence: number;
+    readonly replayCount: number;
+    readonly replayLimit: number;
+  }) => Effect.Effect<void, never>;
 }): Stream.Stream<SnapshotLiveStreamItem<Snapshot>, E | WsRpcError> {
   return Stream.unwrap(
     Effect.gen(function* () {
@@ -34,6 +40,14 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
       const highWaterSequence = yield* input.getHighWaterSequence;
       const replayCount = Math.max(0, highWaterSequence - snapshotSequence);
       if (replayCount > ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
+        if (input.onResnapshotRequired) {
+          yield* input.onResnapshotRequired({
+            snapshotSequence,
+            highWaterSequence,
+            replayCount,
+            replayLimit: ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT,
+          });
+        }
         return yield* new WsRpcError({
           message: `Orchestration snapshot is ${replayCount} events behind; restart the stream for a fresh snapshot.`,
           code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",

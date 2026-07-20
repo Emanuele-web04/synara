@@ -114,6 +114,67 @@ const make = Effect.gen(function* () {
     });
   };
 
+  const getThreadCoverage: ProviderRuntimeEventRepositoryShape["getThreadCoverage"] = (threadId) =>
+    sql<{
+      readonly retainedCount: number;
+      readonly oldestSequence: number | null;
+      readonly highWaterSequence: number;
+    }>`
+      SELECT
+        COUNT(*) AS "retainedCount",
+        MIN(sequence) AS "oldestSequence",
+        COALESCE(MAX(sequence), 0) AS "highWaterSequence"
+      FROM provider_runtime_events
+      WHERE thread_id = ${threadId}
+    `.pipe(
+      Effect.map(
+        (rows) => rows[0] ?? { retainedCount: 0, oldestSequence: null, highWaterSequence: 0 },
+      ),
+      Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.getThreadCoverage")),
+    );
+
+  const readThreadEvents: ProviderRuntimeEventRepositoryShape["readThreadEvents"] = (input) => {
+    const beforeSequence = input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER;
+    const turnFilter = input.turnId === undefined ? sql`` : sql`AND turn_id = ${input.turnId}`;
+    const typeFilter =
+      input.eventTypes === undefined || input.eventTypes.length === 0
+        ? sql``
+        : sql`AND event_type IN ${sql.in(input.eventTypes)}`;
+    return Effect.gen(function* () {
+      const rows = yield* sql<Record<string, unknown>>`
+        SELECT sequence, event_json AS "eventJson"
+        FROM provider_runtime_events
+        WHERE thread_id = ${input.threadId}
+          AND sequence <= ${input.throughSequenceInclusive}
+          AND sequence < ${beforeSequence}
+          ${turnFilter}
+          ${typeFilter}
+        ORDER BY sequence DESC
+        LIMIT ${Math.max(1, Math.min(201, Math.floor(input.limit)))}
+      `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readThreadEvents")));
+      return yield* Effect.forEach(
+        rows,
+        (unknownRow) =>
+          Effect.gen(function* () {
+            const row = yield* decodeStoredRow(unknownRow).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError("ProviderRuntimeEvent.readThreadEvents.row"),
+              ),
+            );
+            const event = yield* decodeEvent(row.eventJson).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError(
+                  `ProviderRuntimeEvent.readThreadEvents(sequence=${row.sequence})`,
+                ),
+              ),
+            );
+            return { sequence: row.sequence, event } satisfies PersistedProviderRuntimeEvent;
+          }),
+        { concurrency: 1 },
+      );
+    });
+  };
+
   const readAcceptedOpenTurnEvents: ProviderRuntimeEventRepositoryShape["readAcceptedOpenTurnEvents"] =
     (input) => {
       const limit = Math.max(1, Math.min(1_000, Math.floor(input.limit)));
@@ -297,6 +358,8 @@ const make = Effect.gen(function* () {
     append,
     getHighWaterSequence,
     readAfter,
+    getThreadCoverage,
+    readThreadEvents,
     readAcceptedOpenTurnEvents,
     getConsumerCursor,
     advanceConsumerCursor,

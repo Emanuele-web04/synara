@@ -1108,6 +1108,15 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       },
     };
   }
+  if (tag === WS_METHODS.gitCreateDetachedWorktree) {
+    return {
+      worktree: {
+        path: "/repo/.codex/worktrees/generated/synara",
+        ref: "0123456789abcdef0123456789abcdef01234567",
+        branch: null,
+      },
+    };
+  }
   if (tag === WS_METHODS.projectsSearchEntries) {
     return {
       entries: [],
@@ -1146,14 +1155,16 @@ function installDeterministicSendNativeApi(): () => void {
       ...wsNativeApi,
       git: {
         ...wsNativeApi.git,
-        createWorktree: async (input: Parameters<typeof wsNativeApi.git.createWorktree>[0]) => {
+        createDetachedWorktree: async (
+          input: Parameters<typeof wsNativeApi.git.createDetachedWorktree>[0],
+        ) => {
           const request: WsRequestEnvelope["body"] = {
-            _tag: WS_METHODS.gitCreateWorktree,
+            _tag: WS_METHODS.gitCreateDetachedWorktree,
             ...input,
           };
           wsRequests.push(request);
           return resolveWsRpc(request) as Awaited<
-            ReturnType<typeof wsNativeApi.git.createWorktree>
+            ReturnType<typeof wsNativeApi.git.createDetachedWorktree>
           >;
         },
       },
@@ -4474,7 +4485,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("creates a temporary branch-backed worktree on first send in New worktree mode", async () => {
+  it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -4539,18 +4550,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const createWorktreeRequest = wsRequests.find(
             (request) =>
-              request._tag === WS_METHODS.gitCreateWorktree &&
+              request._tag === WS_METHODS.gitCreateDetachedWorktree &&
               request.cwd === "/repo/project" &&
-              request.branch === "main" &&
-              typeof request.newBranch === "string",
+              request.ref === "main" &&
+              request.copyChangesFrom === "/repo/project",
           );
           expect(createWorktreeRequest).toBeTruthy();
-          expect(createWorktreeRequest?.newBranch).toMatch(/^synara\/[0-9a-f]{8}$/);
-
-          const detachedRequest = wsRequests.find(
-            (request) => request._tag === WS_METHODS.gitCreateDetachedWorktree,
-          );
-          expect(detachedRequest).toBeUndefined();
 
           const createThreadRequest = wsRequests.find(
             (request) =>
@@ -4565,8 +4570,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(createThreadRequest).toBeTruthy();
           expect(createThreadRequest?.command).toMatchObject({
             envMode: "worktree",
-            branch: createWorktreeRequest?.newBranch,
-            worktreePath: `/repo/.codex/worktrees/project/${String(createWorktreeRequest?.newBranch).replaceAll("/", "-")}`,
+            branch: null,
+            worktreePath: "/repo/.codex/worktrees/generated/synara",
+            associatedWorktreePath: "/repo/.codex/worktrees/generated/synara",
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: "0123456789abcdef0123456789abcdef01234567",
           });
         },
         { timeout: 8_000, interval: 16 },
@@ -4661,10 +4669,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const request = wsRequests.find(
             (candidate) =>
-              candidate._tag === WS_METHODS.gitCreateWorktree &&
+              candidate._tag === WS_METHODS.gitCreateDetachedWorktree &&
               candidate.cwd === "/repo/project" &&
-              candidate.branch === "main" &&
-              typeof candidate.newBranch === "string",
+              candidate.ref === "main",
           );
           expect(
             request,
@@ -4680,7 +4687,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
               .slice(-40)
               .join(", ")}`,
           ).toBeTruthy();
-          if (!request || request._tag !== WS_METHODS.gitCreateWorktree) {
+          if (!request || request._tag !== WS_METHODS.gitCreateDetachedWorktree) {
             throw new Error("Expected create worktree request.");
           }
           return request;
@@ -4688,9 +4695,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 10_000, interval: 16 },
       );
       const createWorktreeIndex = wsRequests.indexOf(createWorktreeRequest);
-      const worktreePath = `/repo/.codex/worktrees/project/${String(
-        createWorktreeRequest.newBranch,
-      ).replaceAll("/", "-")}`;
+      const worktreePath = "/repo/.codex/worktrees/generated/synara";
 
       const terminalOpenRequest = await vi.waitFor(
         () => {

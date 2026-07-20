@@ -7,6 +7,10 @@ import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import {
+  isSummarizableToolCallEntry,
+  MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
+} from "./toolCallGroup.logic";
+import {
   type ChatMessage,
   type ProposedPlan,
   type TurnDiffSummary,
@@ -22,6 +26,85 @@ export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 export type CollapsedTurnItem =
   | { kind: "work"; id: string; entry: WorkLogEntry }
   | { kind: "narration"; id: string; message: ChatMessage };
+
+// A settled turn's collapsed items re-chunked for rendering: consecutive
+// summarizable tool rows fold into one "Ran N commands..." disclosure while
+// narration and rich rows pass through individually.
+export type CollapsedTurnChunk =
+  | { kind: "item"; item: CollapsedTurnItem }
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
+
+export type WorkEntryChunk =
+  | { kind: "item"; id: string; entry: WorkLogEntry }
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
+
+export function chunkCollapsedTurnItems(
+  items: ReadonlyArray<CollapsedTurnItem>,
+): CollapsedTurnChunk[] {
+  const chunks: CollapsedTurnChunk[] = [];
+  let pendingRun: Extract<CollapsedTurnItem, { kind: "work" }>[] = [];
+
+  const flushPendingRun = () => {
+    if (pendingRun.length === 0) return;
+    if (pendingRun.length >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
+      chunks.push({
+        kind: "tool-group",
+        id: pendingRun[0]!.id,
+        entries: pendingRun.map((item) => item.entry),
+      });
+    } else {
+      for (const item of pendingRun) {
+        chunks.push({ kind: "item", item });
+      }
+    }
+    pendingRun = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === "work" && isSummarizableToolCallEntry(item.entry)) {
+      pendingRun.push(item);
+      continue;
+    }
+    flushPendingRun();
+    chunks.push({ kind: "item", item });
+  }
+  flushPendingRun();
+  return chunks;
+}
+
+export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntryChunk[] {
+  return chunkCollapsedTurnItems(
+    entries.map((entry) => ({ kind: "work" as const, id: entry.id, entry })),
+  ).map((chunk) => {
+    if (chunk.kind === "tool-group") return chunk;
+    if (chunk.item.kind !== "work") {
+      throw new Error("Work-entry chunking produced an unexpected narration item.");
+    }
+    return { kind: "item", id: chunk.item.id, entry: chunk.item.entry };
+  });
+}
+
+// The newest work group in the transcript — the one still allowed to render its
+// rows inline while the turn is live. Everything older collapses to a summary.
+export function findLastLiveWorkGroupId(rows: ReadonlyArray<MessagesTimelineRow>): string | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.kind === "work") {
+      return row.id;
+    }
+    if (row.kind === "message") {
+      const groupId = row.inlineWorkGroupId ?? row.leadingWorkGroupId;
+      if (groupId) {
+        return groupId;
+      }
+      // A user message closes the previous turn: nothing before it is live.
+      if (row.message.role === "user") {
+        return null;
+      }
+    }
+  }
+  return null;
+}
 
 export interface TimelineDurationMessage {
   id: string;

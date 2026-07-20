@@ -13,6 +13,60 @@ const layer = it.layer(
 );
 
 layer("OrchestrationEventStore", (it) => {
+  it.effect("reads stable newest-first pages from one thread stream", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const now = "2026-07-20T12:00:00.000Z";
+      const threadId = ThreadId.makeUnsafe("thread-diagnostic-page");
+      const first = yield* eventStore.append({
+        type: "thread.archived",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-first"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, archivedAt: now, updatedAt: now },
+      });
+      const second = yield* eventStore.append({
+        type: "thread.unarchived",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-second"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, updatedAt: now },
+      });
+
+      assert.equal(yield* eventStore.getThreadHighWaterSequence(threadId), second.sequence);
+      const latest = yield* eventStore.readThreadEvents({
+        threadId,
+        throughSequenceInclusive: second.sequence,
+        limit: 1,
+      });
+      assert.deepEqual(
+        latest.map((event) => event.sequence),
+        [second.sequence],
+      );
+      const older = yield* eventStore.readThreadEvents({
+        threadId,
+        throughSequenceInclusive: second.sequence,
+        beforeSequenceExclusive: second.sequence,
+        limit: 10,
+        eventTypes: ["thread.archived"],
+      });
+      assert.deepEqual(
+        older.map((event) => event.sequence),
+        [first.sequence],
+      );
+    }),
+  );
+
   it.effect("stores json columns as strings and replays decoded events", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;

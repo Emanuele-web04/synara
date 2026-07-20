@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseRecoverableCreationPlan,
   redactCreationPlanForPurgedCaller,
+  recordCreatedWorktreeInPlan,
 } from "./operationPlan.ts";
 
 describe("agent gateway operation plans", () => {
@@ -71,5 +72,40 @@ describe("agent gateway operation plans", () => {
     );
 
     expect(entry?.worktreeOwnership).toBeNull();
+  });
+
+  it("records detached worktree ownership without inventing a branch", () => {
+    const operationId = "gateway:create:detached";
+    const planJson = recordCreatedWorktreeInPlan({
+      planJson: JSON.stringify([
+        {
+          workspaceRoot: "/repo",
+          environment: "worktree",
+          worktreeRef: "0123456789abcdef",
+          newBranch: null,
+          plannedWorktreePath: "/worktrees/detached",
+          ownershipPreflightPassed: true,
+          ids: {
+            threadId: "agent:detached-child",
+            compensateCommandId: "agent:detached-child:delete",
+          },
+        },
+      ]),
+      operationId,
+      index: 0,
+      workspaceRoot: "/repo",
+      path: "/worktrees/detached",
+      branch: null,
+      token: "detached-owner",
+      gitDir: "/repo/.git/worktrees/detached",
+      head: "0123456789abcdef",
+      recordedAt: "2026-07-20T00:00:00.000Z",
+    });
+
+    expect(parseRecoverableCreationPlan(planJson, operationId)[0]).toMatchObject({
+      worktreeRef: "0123456789abcdef",
+      newBranch: null,
+      worktreeOwnership: { branch: null, head: "0123456789abcdef" },
+    });
   });
 });

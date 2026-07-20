@@ -32,7 +32,12 @@ export function makeAgentGatewaySessionRegistry(options?: {
         threadId,
         provider,
         issuedAt,
-        capabilities: new Set(["thread:read", "thread:write", "automation:write"]),
+        capabilities: new Set([
+          "thread:read",
+          "thread:write",
+          "automation:write",
+          "diagnostics:read",
+        ]),
       };
       sessions.set(token, identity);
       sessionsByKey.set(sessionKey, identity);

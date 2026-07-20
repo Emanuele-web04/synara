@@ -301,6 +301,13 @@ export function resolveQuickAction(
   const isDiverged = isAhead && isBehind;
 
   if (!hasBranch) {
+    if (shouldOfferCreateBranch) {
+      return {
+        label: "Create Branch",
+        disabled: false,
+        kind: "create_branch",
+      };
+    }
     return {
       label: "Commit",
       disabled: true,
@@ -472,7 +479,7 @@ export function shouldOfferCreateBranchPrompt(input: {
   createBranchFlowCompleted?: boolean;
 }): boolean {
   if (!input.activeWorktreePath) return false;
-  if (!input.gitStatus?.branch) return false;
+  if (!input.gitStatus) return false;
   if (input.gitStatus.hasUpstream) return false;
   if (input.createBranchFlowCompleted) return false;
   return true;

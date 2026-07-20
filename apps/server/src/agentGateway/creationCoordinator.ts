@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import {
   CommandId,
@@ -14,6 +14,7 @@ import {
   type SynaraCreateThreadsResult,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { Cause, Effect, Option, Semaphore } from "effect";
 
 import type { ServerConfigShape } from "../config.ts";
@@ -21,12 +22,12 @@ import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
+import { runWorktreeSetupScript } from "../worktreeSetup.ts";
 import type { AgentGatewayOperationRepositoryShape } from "./Services/AgentGatewayOperationRepository.ts";
 import {
   canonicalJson,
   gatewayIsoNow,
   makeAgentCreationIds,
-  slugifyAgentTask,
   stableGatewayDigest,
 } from "./creationUtils.ts";
 import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
@@ -39,6 +40,31 @@ import { ToolInputError, errorText } from "./toolInput.ts";
 import { GatewayToolError, gatewayToolErrorResult, type ToolContext } from "./toolRuntime.ts";
 
 const CREATION_REPLAY_WAIT_MS = 60_000;
+
+interface PullRequestSelector {
+  readonly number: number;
+  readonly repositoryNameWithOwner?: string;
+}
+
+function parsePullRequestSelector(ref: string): PullRequestSelector | null {
+  const trimmed = ref.trim();
+  const shorthandMatch = /^#(\d+)$/u.exec(trimmed);
+  const urlMatch = /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/iu.exec(
+    trimmed,
+  );
+  const rawNumber = shorthandMatch?.[1] ?? urlMatch?.[1];
+  if (!rawNumber) return null;
+  const value = Number(rawNumber);
+  if (!Number.isSafeInteger(value) || value <= 0) return null;
+  const repositoryNameWithOwner = urlMatch
+    ? parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(trimmed)
+    : null;
+  if (urlMatch && !repositoryNameWithOwner) return null;
+  return {
+    number: value,
+    ...(repositoryNameWithOwner ? { repositoryNameWithOwner } : {}),
+  };
+}
 
 interface CreationCoordinatorDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
@@ -257,6 +283,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         }
         return yield* awaitCreationReplay(existingOperation.operationId);
       }
+      const deprecatedBranchName = input.threads.find((spec) => spec.branchName !== undefined);
+      if (deprecatedBranchName) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            '"branchName" is no longer supported for managed worktrees. Synara creates a detached HEAD; create a branch inside the new thread when the work is ready.',
+          ),
+        );
+      }
       const callerIsolatedInWorktree = caller.envMode === "worktree";
       const providerAvailabilities = yield* loadProviderAvailabilities;
 
@@ -298,51 +332,77 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           }
           const runtimeMode = spec.runtimeMode ?? caller.runtimeMode;
           const title = spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
-          let baseBranch: string | null = null;
-          let newBranch: string | null = null;
+          let worktreeRef: string | null = null;
+          let copyChangesFrom: string | null = null;
           let plannedWorktreePath: string | null = null;
           if (environment === "worktree") {
-            const callerBranch =
-              callerIsolatedInWorktree && caller.projectId === projectId
-                ? (caller.branch ?? null)
-                : null;
-            baseBranch =
-              spec.baseBranch ??
-              callerBranch ??
-              (yield* git.statusDetails(project.workspaceRoot).pipe(
+            if (spec.baseRef && spec.baseBranch && spec.baseRef !== spec.baseBranch) {
+              return yield* Effect.fail(
+                new ToolInputError("baseRef and its deprecated baseBranch alias must match."),
+              );
+            }
+            const requestedRef = spec.baseRef ?? spec.baseBranch ?? "HEAD";
+            // Named refs are shared across linked worktrees, while HEAD is checkout-local.
+            // Always resolve same-project requests from the caller's selected checkout so
+            // an explicit baseRef:"HEAD" cannot silently jump back to the primary checkout.
+            const sourceCwd =
+              caller.projectId === projectId
+                ? (caller.worktreePath ?? project.workspaceRoot)
+                : project.workspaceRoot;
+            const pullRequest = parsePullRequestSelector(requestedRef);
+            worktreeRef = yield* (
+              pullRequest === null
+                ? git.execute({
+                    operation: "AgentGateway.resolveWorktreeRef",
+                    cwd: sourceCwd,
+                    args: ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
+                    timeoutMs: 5_000,
+                  })
+                : git.withMutation(
+                    project.workspaceRoot,
+                    git
+                      .fetchPullRequestCommit({
+                        cwd: project.workspaceRoot,
+                        prNumber: pullRequest.number,
+                        ...(pullRequest.repositoryNameWithOwner
+                          ? { expectedRepositoryNameWithOwner: pullRequest.repositoryNameWithOwner }
+                          : {}),
+                      })
+                      .pipe(Effect.map((ref) => ({ code: 0, stdout: ref, stderr: "" }))),
+                  )
+            ).pipe(
+              Effect.map((result) => result.stdout.trim()),
+              Effect.filterOrFail(
+                (ref) => ref.length > 0,
+                () => new Error("git returned an empty commit id"),
+              ),
+              Effect.mapError(
+                (error) =>
+                  new ToolInputError(
+                    `Git revision "${requestedRef}" is unavailable. Pass a local ref/commit, #PR, or GitHub pull-request URL. ${errorText(error)}`,
+                  ),
+              ),
+            );
+            const sourceHead = yield* git
+              .execute({
+                operation: "AgentGateway.resolveWorktreeCopySource",
+                cwd: sourceCwd,
+                args: ["rev-parse", "--verify", "HEAD^{commit}"],
+                timeoutMs: 5_000,
+              })
+              .pipe(
+                Effect.map((result) => result.stdout.trim()),
                 Effect.mapError((error) => new ToolInputError(errorText(error))),
-                Effect.flatMap((status) =>
-                  status.isRepo && status.branch
-                    ? Effect.succeed(status.branch)
-                    : Effect.fail(
-                        new ToolInputError(
-                          'The project is not on a git branch; pass baseBranch or use environment "local".',
-                        ),
-                      ),
-                ),
-              ));
-            newBranch =
-              spec.branchName ??
-              `agent/${slugifyAgentTask(title)}-${stableGatewayDigest({ operationId, index }, 8)}`;
+              );
+            copyChangesFrom = sourceHead === worktreeRef ? sourceCwd : null;
             plannedWorktreePath = join(
               serverConfig.worktreesDir,
-              basename(project.workspaceRoot),
-              newBranch.replace(/\//g, "-"),
+              stableGatewayDigest({ operationId, index }, 12),
             );
             if (existsSync(plannedWorktreePath)) {
               return yield* Effect.fail(
                 new ToolInputError(
                   `Worktree path "${plannedWorktreePath}" already exists. Synara will not reuse or remove a pre-existing path.`,
-                ),
-              );
-            }
-            const branches = yield* git
-              .listBranches({ cwd: project.workspaceRoot })
-              .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-            if (branches.branches.some((branch) => !branch.isRemote && branch.name === newBranch)) {
-              return yield* Effect.fail(
-                new ToolInputError(
-                  `Branch "${newBranch}" already exists. Synara will not reuse or remove a pre-existing branch.`,
                 ),
               );
             }
@@ -356,8 +416,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             environment,
             runtimeMode,
             title,
-            baseBranch,
-            newBranch,
+            projectScripts: project.scripts,
+            worktreeRef,
+            copyChangesFrom,
+            newBranch: null,
             plannedWorktreePath,
             ownershipPreflightPassed: true,
             ids: makeAgentCreationIds(operationId, index),
@@ -371,7 +433,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       if (new Set(plannedWorktrees).size !== plannedWorktrees.length) {
         return yield* Effect.fail(
           new ToolInputError(
-            "The creation plan resolves multiple entries to the same worktree path. Use distinct branchName values.",
+            "The creation plan resolves multiple entries to the same generated worktree path.",
           ),
         );
       }
@@ -382,12 +444,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       const createdWorktrees: Array<{
         readonly cwd: string;
         readonly path: string;
-        readonly branch: string;
+        readonly branch: string | null;
         proof: {
           readonly token: string;
           readonly gitDir: string;
-          readonly branch: string;
+          readonly branch: string | null;
           readonly head: string;
+          readonly stateHash?: string;
         } | null;
       }> = [];
 
@@ -442,15 +505,22 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         .removeWorktree({
                           cwd: worktree.cwd,
                           path: worktree.path,
-                          force: false,
+                          // Ownership was never recorded for this path: creation failed
+                          // right after the worktree appeared, or the interruptible setup
+                          // script failed or was interrupted. Copied baseline changes and
+                          // partial setup output make a non-forced removal fail by
+                          // construction.
+                          force: true,
                         })
                         .pipe(
                           Effect.flatMap(() =>
-                            git.deleteBranch({
-                              cwd: worktree.cwd,
-                              branch: worktree.branch,
-                              force: false,
-                            }),
+                            worktree.branch === null
+                              ? Effect.void
+                              : git.deleteBranch({
+                                  cwd: worktree.cwd,
+                                  branch: worktree.branch,
+                                  force: false,
+                                }),
                           ),
                         )
                     : git
@@ -472,15 +542,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                             git.removeWorktree({
                               cwd: worktree.cwd,
                               path: worktree.path,
-                              force: false,
+                              force: true,
                             }),
                           ),
                           Effect.flatMap(() =>
-                            git.deleteBranchIfUnchanged({
-                              cwd: worktree.cwd,
-                              branch: worktree.branch,
-                              expectedHead: worktree.proof!.head,
-                            }),
+                            worktree.branch === null
+                              ? Effect.void
+                              : git.deleteBranchIfUnchanged({
+                                  cwd: worktree.cwd,
+                                  branch: worktree.branch,
+                                  expectedHead: worktree.proof!.head,
+                                }),
                           ),
                         ),
                 )
@@ -597,7 +669,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,
                   runtimeMode: entry.runtimeMode,
-                  baseBranch: entry.baseBranch,
+                  worktreeRef: entry.worktreeRef,
                   newBranch: entry.newBranch,
                   plannedWorktreePath: entry.plannedWorktreePath,
                   ownershipPreflightPassed: entry.ownershipPreflightPassed,
@@ -677,14 +749,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   yield* context.assertCallerTurnActive();
                   let branch: string | null = null;
                   let worktreePath: string | null = null;
+                  let associatedWorktreeRef: string | null = null;
                   if (entry.environment === "worktree") {
-                    const created = yield* Effect.uninterruptible(
+                    const { created, trackedWorktree } = yield* Effect.uninterruptible(
                       Effect.gen(function* () {
-                        const created = yield* git.createWorktree({
+                        const created = yield* git.createDetachedWorktree({
                           cwd: entry.workspaceRoot,
-                          branch: entry.baseBranch!,
-                          newBranch: entry.newBranch!,
+                          ref: entry.worktreeRef!,
                           path: entry.plannedWorktreePath,
+                          ...(entry.copyChangesFrom
+                            ? { copyChangesFrom: entry.copyChangesFrom }
+                            : {}),
                         });
                         const trackedWorktree = {
                           cwd: entry.workspaceRoot,
@@ -693,6 +768,20 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           proof: null as (typeof createdWorktrees)[number]["proof"],
                         };
                         createdWorktrees.push(trackedWorktree);
+                        return { created, trackedWorktree };
+                      }),
+                    );
+                    // The setup script can run for minutes, so it must stay
+                    // interruptible: the abort signal kills the child process and
+                    // the tracked, still-ownerless worktree is compensated away.
+                    yield* Effect.tryPromise({
+                      try: (signal) =>
+                        runWorktreeSetupScript(entry.projectScripts, trackedWorktree.path, signal),
+                      catch: (cause) =>
+                        new Error(`Worktree setup script failed: ${errorText(cause)}`),
+                    });
+                    yield* Effect.uninterruptible(
+                      Effect.gen(function* () {
                         const proof = yield* git.recordWorktreeOwnership({
                           path: trackedWorktree.path,
                           branch: trackedWorktree.branch,
@@ -708,6 +797,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           token: proof.token,
                           gitDir: proof.gitDir,
                           head: proof.head,
+                          ...(proof.stateHash ? { stateHash: proof.stateHash } : {}),
                           now: gatewayIsoNow(),
                         });
                         if (!ownershipRecorded) {
@@ -717,11 +807,11 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                             ),
                           );
                         }
-                        return created;
                       }),
                     );
                     branch = created.worktree.branch;
                     worktreePath = created.worktree.path;
+                    associatedWorktreeRef = created.worktree.ref;
                   }
 
                   yield* context.assertCallerTurnActive();
@@ -747,7 +837,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         ? {
                             associatedWorktreePath: worktreePath,
                             associatedWorktreeBranch: branch,
-                            associatedWorktreeRef: branch,
+                            associatedWorktreeRef,
                           }
                         : {}),
                       createdAt: gatewayIsoNow(),

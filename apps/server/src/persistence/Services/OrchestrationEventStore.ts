@@ -34,6 +34,20 @@ export interface OrchestrationEventStoreShape {
   /** Capture the latest durable sequence for a finite replay fence. */
   readonly getHighWaterSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
 
+  /** Capture the latest durable sequence for one thread stream. */
+  readonly getThreadHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Read one stable, newest-first page from a thread's durable event stream. */
+  readonly readThreadEvents: (input: {
+    readonly threadId: string;
+    readonly throughSequenceInclusive: number;
+    readonly beforeSequenceExclusive?: number;
+    readonly limit: number;
+    readonly eventTypes?: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, OrchestrationEventStoreError>;
+
   /**
    * Replay events after the provided sequence.
    *

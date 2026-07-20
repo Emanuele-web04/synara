@@ -2,6 +2,7 @@ import type { ProviderKind } from "@synara/contracts";
 import type { Effect } from "effect";
 
 import type { AgentGatewayTargetError } from "./targetResolver.ts";
+import type { AgentGatewayCapability } from "./Services/AgentGatewaySessionRegistry.ts";
 import {
   mcpToolResultJson,
   type JsonRpcId,
@@ -27,7 +28,7 @@ export interface ToolContext {
   readonly callerThreadId: string;
   readonly callerSessionKey: string;
   readonly callerProvider: ProviderKind;
-  readonly callerCapabilities: ReadonlySet<"thread:read" | "thread:write" | "automation:write">;
+  readonly callerCapabilities: ReadonlySet<AgentGatewayCapability>;
   readonly callerTurnId: string | null;
   readonly assertCallerTurnActive: () => Effect.Effect<void, GatewayToolError>;
   readonly jsonRpcRequestId: JsonRpcId;
@@ -41,6 +42,7 @@ export type ToolHandler = (
 export interface ToolEntry {
   readonly definition: McpToolDefinition;
   readonly handler: ToolHandler;
+  readonly requiredCapability: AgentGatewayCapability;
   readonly requiresActiveTurn?: boolean;
 }
 

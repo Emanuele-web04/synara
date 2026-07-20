@@ -78,6 +78,19 @@ export function readBooleanArg(args: Record<string, unknown>, name: string): boo
   return value;
 }
 
+export function readIsoTimestampArg(
+  args: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = readStringArg(args, name);
+  if (value === undefined) return undefined;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new ToolInputError(`Argument "${name}" must be a valid ISO timestamp.`);
+  }
+  return new Date(timestamp).toISOString();
+}
+
 export function readRecordArg(
   args: Record<string, unknown>,
   name: string,
@@ -88,6 +101,21 @@ export function readRecordArg(
     throw new ToolInputError(`Argument "${name}" must be an object.`);
   }
   return value as Record<string, unknown>;
+}
+
+export function readStringArrayArg(
+  args: Record<string, unknown>,
+  name: string,
+): ReadonlyArray<string> | undefined {
+  const value = args[name];
+  if (value === undefined || value === null) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== "string" || entry.trim().length === 0)
+  ) {
+    throw new ToolInputError(`Argument "${name}" must be an array of non-empty strings.`);
+  }
+  return value.map((entry) => (entry as string).trim());
 }
 
 export function parseProviderKind(raw: string): ProviderKind {

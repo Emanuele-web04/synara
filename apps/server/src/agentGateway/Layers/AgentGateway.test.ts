@@ -3,6 +3,7 @@ import type {
   AutomationCreateInput,
   AutomationDefinition,
   OrchestrationCommand,
+  OrchestrationEvent,
   OrchestrationProjectShell,
   OrchestrationThread,
   OrchestrationThreadShell,
@@ -12,6 +13,7 @@ import type {
 } from "@synara/contracts";
 import {
   AutomationId,
+  EventId,
   MessageId,
   ModelSelection,
   ProjectId,
@@ -27,6 +29,18 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
+import {
+  ProviderRuntimeEventRepository,
+  type PersistedProviderRuntimeEvent,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import { ThreadDiagnosticsQuery } from "../../diagnostics/Services/ThreadDiagnosticsQuery.ts";
+import type {
+  DiagnosticThreadActivity,
+  OperationalDiagnostic,
+} from "../../diagnostics/Services/ThreadDiagnosticsQuery.ts";
+import type { ProviderBlockingDeliveryEvidence } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerConfig } from "../../config.ts";
@@ -43,14 +57,16 @@ import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
 
-function makeProjectShell(): OrchestrationProjectShell {
+function makeProjectShell(
+  scripts: OrchestrationProjectShell["scripts"] = [],
+): OrchestrationProjectShell {
   return {
     id: PROJECT_ID,
     kind: "project",
     title: "Demo project",
     workspaceRoot: "/tmp/demo",
     defaultModelSelection: null,
-    scripts: [],
+    scripts,
     isPinned: false,
     createdAt: NOW,
     updatedAt: NOW,
@@ -122,7 +138,15 @@ interface GatewayHarness {
   readonly automationCreates: Array<AutomationCreateInput>;
   readonly automationUpdates: Array<{ id: string; enabled?: boolean | undefined }>;
   readonly automationDeletes: Array<{ id: string }>;
-  readonly worktreeCreates: Array<{ newBranch?: string; path?: string }>;
+  readonly worktreeCreates: Array<{
+    ref?: string;
+    newBranch?: string;
+    path?: string;
+    copyChangesFrom?: string;
+  }>;
+  readonly gitExecutions: Array<{ operation: string; cwd: string; args: ReadonlyArray<string> }>;
+  readonly fetchedPullRequests: number[];
+  readonly fetchedPullRequestRepositories: Array<string | undefined>;
   readonly worktreeRemoves: Array<{ path: string }>;
   readonly branchDeletes: Array<{ branch: string }>;
   readonly setThreadDetail: (thread: OrchestrationThread) => void;
@@ -231,13 +255,31 @@ function makeHarnessLayer(
       readonly turnId: string;
       readonly state?: "running" | "completed" | "interrupted";
     };
+    readonly projectScripts?: OrchestrationProjectShell["scripts"];
+    readonly diagnosticActivities?: ReadonlyArray<DiagnosticThreadActivity>;
+    readonly diagnosticEvents?: ReadonlyArray<OrchestrationEvent>;
+    readonly providerRuntimeEvents?: ReadonlyArray<PersistedProviderRuntimeEvent>;
+    readonly operationalDiagnostics?: ReadonlyArray<OperationalDiagnostic>;
+    readonly providerDeliveryBlockers?: ReadonlyArray<ProviderBlockingDeliveryEvidence>;
   } = {},
 ) {
   const dispatched: Array<OrchestrationCommand> = [];
   const automationCreates: Array<AutomationCreateInput> = [];
   const automationUpdates: Array<{ id: string; enabled?: boolean | undefined }> = [];
   const automationDeletes: Array<{ id: string }> = [];
-  const worktreeCreates: Array<{ newBranch?: string; path?: string }> = [];
+  const worktreeCreates: Array<{
+    ref?: string;
+    newBranch?: string;
+    path?: string;
+    copyChangesFrom?: string;
+  }> = [];
+  const gitExecutions: Array<{
+    operation: string;
+    cwd: string;
+    args: ReadonlyArray<string>;
+  }> = [];
+  const fetchedPullRequests: number[] = [];
+  const fetchedPullRequestRepositories: Array<string | undefined> = [];
   const worktreeRemoves: Array<{ path: string }> = [];
   const branchDeletes: Array<{ branch: string }> = [];
   const branchWorktreePaths = new Map<string, string | null>(
@@ -265,7 +307,12 @@ function makeHarnessLayer(
             capabilities:
               token === "token-parent-readonly"
                 ? new Set(["thread:read"] as const)
-                : new Set(["thread:read", "thread:write", "automation:write"] as const),
+                : new Set([
+                    "thread:read",
+                    "thread:write",
+                    "automation:write",
+                    "diagnostics:read",
+                  ] as const),
           }
         : null;
     },
@@ -309,7 +356,7 @@ function makeHarnessLayer(
     getShellSnapshot: () =>
       Effect.succeed({
         snapshotSequence: 1,
-        projects: [makeProjectShell()],
+        projects: [makeProjectShell(options.projectScripts)],
         threads: [...threadsById.values()],
         updatedAt: NOW,
       }),
@@ -318,7 +365,7 @@ function makeHarnessLayer(
     getProjectShellById: (projectId: string) =>
       Effect.succeed(
         projectId === (PROJECT_ID as string)
-          ? Option.some(makeProjectShell())
+          ? Option.some(makeProjectShell(options.projectScripts))
           : Option.none<OrchestrationProjectShell>(),
       ),
     getThreadDetailById: (threadId: ThreadIdType) =>
@@ -335,6 +382,127 @@ function makeHarnessLayer(
         );
       }),
   } as unknown as (typeof ProjectionSnapshotQuery)["Service"]);
+
+  const diagnosticsLayer = Layer.succeed(ThreadDiagnosticsQuery, {
+    getActivityCoverage: (threadId: string) =>
+      Effect.succeed({
+        highWaterSequence: Math.max(
+          0,
+          ...(options.diagnosticActivities ?? [])
+            .filter((activity) => activity.threadId === threadId)
+            .map((activity) => activity.sequence),
+        ),
+        unsequencedCount: 0,
+      }),
+    listActivities: (input: {
+      threadId: string;
+      throughSequenceInclusive?: number;
+      beforeSequenceExclusive?: number;
+      limit: number;
+      turnId?: string;
+      kinds?: ReadonlyArray<string>;
+    }) =>
+      Effect.succeed(
+        (options.diagnosticActivities ?? [])
+          .filter((activity) => activity.threadId === input.threadId)
+          .filter(
+            (activity) =>
+              activity.sequence <= (input.throughSequenceInclusive ?? Number.MAX_SAFE_INTEGER),
+          )
+          .filter(
+            (activity) =>
+              activity.sequence < (input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER),
+          )
+          .filter((activity) => input.turnId === undefined || activity.turnId === input.turnId)
+          .filter((activity) => input.kinds === undefined || input.kinds.includes(activity.kind))
+          .toSorted((left, right) => right.sequence - left.sequence)
+          .slice(0, input.limit),
+      ),
+    recordOperationalDiagnostic: () => Effect.void,
+    listOperationalDiagnostics: (input: { threadId: string; limit: number }) =>
+      Effect.succeed(
+        (options.operationalDiagnostics ?? [])
+          .filter((incident) => incident.threadId === input.threadId)
+          .slice(0, input.limit),
+      ),
+  });
+  const eventStoreLayer = Layer.succeed(OrchestrationEventStore, {
+    append: () => Effect.die("append is not used by the gateway harness"),
+    getHighWaterSequence: () => Effect.succeed(0),
+    getThreadHighWaterSequence: (threadId: string) =>
+      Effect.succeed(
+        Math.max(
+          0,
+          ...(options.diagnosticEvents ?? [])
+            .filter((event) => event.aggregateId === threadId)
+            .map((event) => event.sequence),
+        ),
+      ),
+    readThreadEvents: (input: {
+      threadId: string;
+      throughSequenceInclusive: number;
+      beforeSequenceExclusive?: number;
+      limit: number;
+      eventTypes?: ReadonlyArray<string>;
+    }) =>
+      Effect.succeed(
+        (options.diagnosticEvents ?? [])
+          .filter((event) => event.aggregateId === input.threadId)
+          .filter((event) => event.sequence <= input.throughSequenceInclusive)
+          .filter(
+            (event) => event.sequence < (input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER),
+          )
+          .filter(
+            (event) => input.eventTypes === undefined || input.eventTypes.includes(event.type),
+          )
+          .toSorted((left, right) => right.sequence - left.sequence)
+          .slice(0, input.limit),
+      ),
+    readFromSequence: () => Stream.empty,
+    readAll: () => Stream.empty,
+  });
+  const eventDeliveriesLayer = Layer.succeed(OrchestrationEventDeliveryRepository, {
+    listBlockingDeliveries: (input: { threadId?: string; limit: number }) =>
+      Effect.succeed(
+        (options.providerDeliveryBlockers ?? [])
+          .filter((blocker) => input.threadId === undefined || blocker.threadId === input.threadId)
+          .slice(0, input.limit),
+      ),
+  } as unknown as (typeof OrchestrationEventDeliveryRepository)["Service"]);
+  const providerRuntimeEventsLayer = Layer.succeed(ProviderRuntimeEventRepository, {
+    getThreadCoverage: (threadId: string) => {
+      const events = (options.providerRuntimeEvents ?? []).filter(
+        (row) => row.event.threadId === threadId,
+      );
+      return Effect.succeed({
+        retainedCount: events.length,
+        oldestSequence: events.length === 0 ? null : Math.min(...events.map((row) => row.sequence)),
+        highWaterSequence: Math.max(0, ...events.map((row) => row.sequence)),
+      });
+    },
+    readThreadEvents: (input: {
+      threadId: string;
+      throughSequenceInclusive: number;
+      beforeSequenceExclusive?: number;
+      limit: number;
+      turnId?: string;
+      eventTypes?: ReadonlyArray<string>;
+    }) =>
+      Effect.succeed(
+        (options.providerRuntimeEvents ?? [])
+          .filter((row) => row.event.threadId === input.threadId)
+          .filter((row) => row.sequence <= input.throughSequenceInclusive)
+          .filter(
+            (row) => row.sequence < (input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER),
+          )
+          .filter((row) => input.turnId === undefined || row.event.turnId === input.turnId)
+          .filter(
+            (row) => input.eventTypes === undefined || input.eventTypes.includes(row.event.type),
+          )
+          .toSorted((left, right) => right.sequence - left.sequence)
+          .slice(0, input.limit),
+      ),
+  } as unknown as (typeof ProviderRuntimeEventRepository)["Service"]);
 
   const engineLayer = Layer.succeed(OrchestrationEngineService, {
     dispatch: (command: OrchestrationCommand) =>
@@ -415,6 +583,15 @@ function makeHarnessLayer(
 
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
+    execute: (input: { operation: string; cwd: string; args: ReadonlyArray<string> }) =>
+      Effect.sync(() => {
+        gitExecutions.push(input);
+        return {
+          code: 0,
+          stdout: "0123456789abcdef0123456789abcdef01234567\n",
+          stderr: "",
+        };
+      }),
     statusDetails: () => Effect.succeed({ isRepo: true, branch: "main" }),
     listBranches: () =>
       Effect.succeed({
@@ -441,7 +618,31 @@ function makeHarnessLayer(
           },
         };
       }),
-    recordWorktreeOwnership: (input: { path: string; branch: string; token: string }) =>
+    createDetachedWorktree: (input: { ref: string; path?: string }) =>
+      Effect.gen(function* () {
+        worktreeCreates.push(input);
+        if (options.pauseAfterWorktreeCreate) {
+          yield* Deferred.succeed(options.pauseAfterWorktreeCreate.entered, undefined);
+          yield* Deferred.await(options.pauseAfterWorktreeCreate.release);
+        }
+        return {
+          worktree: {
+            path: input.path ?? "/tmp/worktrees/generated/synara",
+            ref: input.ref,
+            branch: null,
+          },
+        };
+      }),
+    fetchPullRequestCommit: (input: {
+      prNumber: number;
+      expectedRepositoryNameWithOwner?: string;
+    }) =>
+      Effect.sync(() => {
+        fetchedPullRequests.push(input.prNumber);
+        fetchedPullRequestRepositories.push(input.expectedRepositoryNameWithOwner);
+        return "fedcba9876543210fedcba9876543210fedcba98";
+      }),
+    recordWorktreeOwnership: (input: { path: string; branch: string | null; token: string }) =>
       options.failRecordWorktreeOwnership
         ? Effect.fail(new Error("injected ownership marker failure"))
         : Effect.sync(() => {
@@ -450,7 +651,7 @@ function makeHarnessLayer(
               token: input.token,
               gitDir: `/tmp/git-admin/${input.token}`,
               branch: input.branch,
-              head: `head:${input.branch}`,
+              head: `head:${input.branch ?? "detached"}`,
             };
           }),
     verifyWorktreeOwnership: (input: { proof: { token: string } }) =>
@@ -616,7 +817,7 @@ function makeHarnessLayer(
       index: number;
       workspaceRoot: string;
       path: string;
-      branch: string;
+      branch: string | null;
       token: string;
       gitDir: string;
       head: string;
@@ -842,6 +1043,10 @@ function makeHarnessLayer(
     Layer.provide(ServerSettingsService.layerTest()),
     Layer.provide(operationLayer),
     Layer.provide(projectionTurnsLayer),
+    Layer.provide(diagnosticsLayer),
+    Layer.provide(eventStoreLayer),
+    Layer.provide(eventDeliveriesLayer),
+    Layer.provide(providerRuntimeEventsLayer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provide(NodeServices.layer),
   );
@@ -872,6 +1077,9 @@ function makeHarnessLayer(
       automationUpdates,
       automationDeletes,
       worktreeCreates,
+      gitExecutions,
+      fetchedPullRequests,
+      fetchedPullRequestRepositories,
       worktreeRemoves,
       branchDeletes,
       setThreadDetail: (thread) => {
@@ -1039,6 +1247,24 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("requires the explicit diagnostics capability for forensic tools", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_diagnose_thread",
+        args: { threadId: "thread-parent" },
+      });
+      const error = toolResultJson(response.result).error as {
+        code: string;
+        details: { requiredCapability: string };
+      };
+      assert.equal(error.code, "capability_denied");
+      assert.equal(error.details.requiredCapability, "diagnostics:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -1100,7 +1326,16 @@ describe("AgentGateway", () => {
         authorizationHeader: "Bearer token-parent",
         body: { jsonrpc: "2.0", id: 2, method: "tools/list" },
       });
-      const tools = (list.body as { result: { tools: Array<{ name: string }> } }).result.tools;
+      const tools = (
+        list.body as {
+          result: {
+            tools: Array<{
+              name: string;
+              inputSchema: { properties?: Record<string, unknown> };
+            }>;
+          };
+        }
+      ).result.tools;
       const names = tools.map((tool) => tool.name);
       assert.includeMembers(names, [
         "synara_context",
@@ -1108,6 +1343,10 @@ describe("AgentGateway", () => {
         "synara_list_projects",
         "synara_list_threads",
         "synara_read_thread",
+        "synara_read_thread_activity",
+        "synara_read_thread_events",
+        "synara_read_thread_runtime_events",
+        "synara_diagnose_thread",
         "synara_wait_for_threads",
         "synara_create_threads",
         "synara_create_thread",
@@ -1119,6 +1358,11 @@ describe("AgentGateway", () => {
         "synara_list_automations",
         "synara_cancel_automation",
       ]);
+      const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")
+        ?.inputSchema.properties;
+      assert.property(createThreadProperties, "baseRef");
+      assert.notProperty(createThreadProperties, "baseBranch");
+      assert.notProperty(createThreadProperties, "branchName");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -1251,6 +1495,263 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect(
+    "filters thread discovery by provider, status, title, source, and update window",
+    () => {
+      const threads = [
+        makeThreadShell("thread-parent", {
+          title: "Investigate stream gap",
+          creationSource: "synara_mcp",
+          updatedAt: "2026-03-02T10:00:00.000Z",
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-running"),
+            state: "running",
+            requestedAt: NOW,
+            startedAt: NOW,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+        makeThreadShell("thread-other", {
+          title: "Unrelated task",
+          modelSelection: { provider: "claudeAgent", model: "opus-4.8" },
+          updatedAt: "2026-02-01T10:00:00.000Z",
+        }),
+      ];
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(threads);
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_list_threads",
+          args: {
+            provider: "codex",
+            status: "working",
+            titleContains: "STREAM",
+            creationSource: "synara_mcp",
+            updatedAfter: "2026-03-01T00:00:00.000Z",
+            updatedBefore: "2026-03-03T00:00:00.000Z",
+          },
+        });
+        const payload = toolResultJson(response.result);
+        assert.equal(payload.totalMatching, 1);
+        assert.equal(
+          (payload.threads as Array<{ threadId: string }>)[0]?.threadId,
+          "thread-parent",
+        );
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
+
+  it.effect("pages thread activity with an opaque stable cursor", () => {
+    const activities: ReadonlyArray<DiagnosticThreadActivity> = [1, 2, 3].map((sequence) => ({
+      activityId: `activity-${sequence}`,
+      threadId: "thread-parent",
+      turnId: "turn-parent",
+      tone: "info",
+      kind: "tool",
+      summary: `activity ${sequence}`,
+      payload: { sequence },
+      sequence,
+      createdAt: NOW,
+    }));
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      diagnosticActivities: activities,
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const first = toolResultJson(
+        (yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_read_thread_activity",
+          args: { threadId: "thread-parent", limit: 1, includeDetails: true },
+        })).result,
+      );
+      assert.equal((first.activities as Array<{ sequence: number }>)[0]?.sequence, 3);
+      assert.isString(first.nextCursor);
+      const second = toolResultJson(
+        (yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_read_thread_activity",
+          args: { threadId: "thread-parent", limit: 1, cursor: first.nextCursor },
+        })).result,
+      );
+      assert.equal((second.activities as Array<{ sequence: number }>)[0]?.sequence, 2);
+      assert.deepInclude(second.coverage as Record<string, unknown>, {
+        highWaterSequence: 3,
+        sourceComplete: true,
+      });
+      const changedFilter = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_thread_activity",
+        args: {
+          threadId: "thread-parent",
+          limit: 1,
+          kinds: ["error"],
+          cursor: first.nextCursor,
+        },
+      });
+      assert.isTrue(isToolError(changedFilter.result));
+      assert.include(toolErrorText(changedFilter.result), "not a valid activity cursor");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("paginates coalesced message updates as one logical event", () => {
+    const threadId = ThreadId.makeUnsafe("thread-parent");
+    const messageEvents = Array.from({ length: 301 }, (_, index) => {
+      const sequence = index + 2;
+      return {
+        sequence,
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe(`event-message-${sequence}`),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: NOW,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-streamed"),
+          role: "assistant",
+          text: `delta-${sequence}`,
+          turnId: TurnId.makeUnsafe("turn-parent"),
+          streaming: sequence !== 302,
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      } as OrchestrationEvent;
+    });
+    const olderEvent = {
+      sequence: 1,
+      type: "thread.archived",
+      eventId: EventId.makeUnsafe("event-archived-1"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      occurredAt: NOW,
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      payload: { threadId, archivedAt: NOW, updatedAt: NOW },
+    } as OrchestrationEvent;
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      diagnosticEvents: [olderEvent, ...messageEvents],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const first = toolResultJson(
+        (yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_read_thread_events",
+          args: { threadId, limit: 1 },
+        })).result,
+      );
+      assert.deepInclude((first.events as Array<Record<string, unknown>>)[0] ?? {}, {
+        sequence: 302,
+        coalescedEventCount: 301,
+      });
+      assert.isString(first.nextCursor);
+
+      const second = toolResultJson(
+        (yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_read_thread_events",
+          args: { threadId, limit: 1, cursor: first.nextCursor },
+        })).result,
+      );
+      assert.deepInclude((second.events as Array<Record<string, unknown>>)[0] ?? {}, {
+        sequence: 1,
+        type: "thread.archived",
+      });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("combines durable events, delivery blockers, and stream incidents in diagnosis", () => {
+    const threadId = ThreadId.makeUnsafe("thread-parent");
+    const events: ReadonlyArray<OrchestrationEvent> = [
+      {
+        sequence: 7,
+        type: "thread.archived",
+        eventId: EventId.makeUnsafe("event-diagnostic-7"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: NOW,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, archivedAt: NOW, updatedAt: NOW },
+      },
+    ];
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      diagnosticEvents: events,
+      providerRuntimeEvents: [
+        {
+          sequence: 9,
+          event: {
+            type: "runtime.error",
+            eventId: EventId.makeUnsafe("runtime-event-diagnostic-9"),
+            provider: "codex",
+            threadId,
+            turnId: TurnId.makeUnsafe("turn-parent"),
+            createdAt: NOW,
+            payload: { message: "stream failed" },
+          },
+        },
+      ],
+      operationalDiagnostics: [
+        {
+          sequence: 1,
+          threadId: "thread-parent",
+          source: "server",
+          kind: "ws.stream-admission-rejected",
+          severity: "warning",
+          code: "THREAD_STREAM_CAPACITY_EXCEEDED",
+          detail: { reason: "thread-capacity" },
+          occurredAt: NOW,
+        },
+      ],
+      providerDeliveryBlockers: [
+        {
+          consumerName: "provider-command-reactor.v1",
+          eventSequence: 7,
+          eventId: EventId.makeUnsafe("event-diagnostic-7"),
+          eventType: "thread.turn-start-requested",
+          occurredAt: NOW,
+          threadId,
+          state: "dead",
+          attemptCount: 3,
+          lastError: "provider failed",
+          updatedAt: NOW,
+          lastReconciliationOutcome: null,
+          lastReconciledAt: null,
+          lastReconciledBy: null,
+          lastReconciliationNote: null,
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const payload = toolResultJson(
+        (yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_diagnose_thread",
+          args: { threadId: "thread-parent" },
+        })).result,
+      );
+      assert.equal((payload.recentEvents as Array<{ sequence: number }>)[0]?.sequence, 7);
+      assert.equal((payload.recentRuntimeEvents as Array<{ sequence: number }>)[0]?.sequence, 9);
+      assert.lengthOf(payload.providerDeliveryBlockers as Array<unknown>, 1);
+      assert.lengthOf(payload.operationalIncidents as Array<unknown>, 1);
+      assert.includeMembers(
+        (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
+        ["provider_delivery_blocked", "THREAD_STREAM_CAPACITY_EXCEEDED"],
+      );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("creates a standalone cross-provider thread and dispatches the initial turn", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -1289,7 +1790,7 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("creates an isolated worktree when environment=worktree", () => {
+  it.effect("creates a detached worktree when environment=worktree", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
@@ -1301,18 +1802,102 @@ describe("AgentGateway", () => {
           prompt: "refactor module X",
           provider: "claudeAgent",
           environment: "worktree",
-          branchName: "agent/refactor-x",
         },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       const payload = toolResultJson(response.result);
-      assert.equal(payload.branch, "agent/refactor-x");
+      assert.isNull(payload.branch);
       assert.equal(payload.worktreePath, harness.worktreeCreates[0]?.path);
+      assert.equal(harness.worktreeCreates[0]?.ref, "0123456789abcdef0123456789abcdef01234567");
       const create = harness.dispatched[0]!;
       if (create.type === "thread.create") {
         assert.equal(create.envMode, "worktree");
-        assert.equal(create.branch, "agent/refactor-x");
+        assert.isNull(create.branch);
+        assert.equal(create.associatedWorktreeRef, "0123456789abcdef0123456789abcdef01234567");
       }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("resolves an explicit HEAD from the caller's linked worktree", () => {
+    const isolatedParent = makeThreadShell("thread-parent", {
+      envMode: "worktree",
+      branch: null,
+      worktreePath: "/tmp/caller-worktree",
+      associatedWorktreePath: "/tmp/caller-worktree",
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: "0123456789abcdef0123456789abcdef01234567",
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([isolatedParent]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: {
+          requestId: "explicit-head-from-caller-worktree",
+          prompt: "continue from this checkout",
+          provider: "codex",
+          environment: "worktree",
+          baseRef: "HEAD",
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const resolution = harness.gitExecutions.find(
+        (entry) => entry.operation === "AgentGateway.resolveWorktreeRef",
+      );
+      assert.equal(resolution?.cwd, "/tmp/caller-worktree");
+      assert.equal(harness.worktreeCreates[0]?.copyChangesFrom, "/tmp/caller-worktree");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("fetches a GitHub pull-request head without creating a local branch", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: {
+          requestId: "github-pr-head",
+          prompt: "review the pull request",
+          provider: "codex",
+          environment: "worktree",
+          baseRef: "https://github.com/example/repo/pull/425",
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(harness.fetchedPullRequests, [425]);
+      assert.deepEqual(harness.fetchedPullRequestRepositories, ["example/repo"]);
+      assert.equal(harness.worktreeCreates[0]?.ref, "fedcba9876543210fedcba9876543210fedcba98");
+      assert.equal(harness.worktreeCreates[0]?.newBranch, undefined);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("resolves local refs containing pull path segments as Git revisions", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: {
+          requestId: "local-pull-path-ref",
+          prompt: "continue from the local ref",
+          provider: "codex",
+          environment: "worktree",
+          baseRef: "feature/pull/425",
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(harness.fetchedPullRequests, []);
+      assert.deepEqual(
+        harness.gitExecutions.find((entry) => entry.operation === "AgentGateway.resolveWorktreeRef")
+          ?.args,
+        ["rev-parse", "--verify", "--end-of-options", "feature/pull/425^{commit}"],
+      );
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -1690,7 +2275,61 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("rejects a pre-existing worktree branch before reservation or cleanup", () => {
+  it.effect("recovers a detached worktree without deleting any branch", () => {
+    const plannedPath = process.cwd();
+    const interrupted: AgentGatewayOperationRecord = {
+      operationId: "gateway:create:detached-recovery",
+      callerThreadId: "thread-parent",
+      callerTurnId: "turn-parent-active",
+      operationKind: "create_threads",
+      requestId: "detached-recovery-request",
+      fingerprint: "detached-recovery-fingerprint",
+      requestedCount: 1,
+      planJson: JSON.stringify([
+        {
+          workspaceRoot: "/tmp/demo",
+          environment: "worktree",
+          worktreeRef: "0123456789abcdef",
+          newBranch: null,
+          plannedWorktreePath: plannedPath,
+          ownershipPreflightPassed: true,
+          worktreeOwnership: {
+            operationId: "gateway:create:detached-recovery",
+            path: plannedPath,
+            branch: null,
+            token: "ownership-detached-recovery",
+            gitDir: "/tmp/git-admin/detached-recovery",
+            head: "0123456789abcdef",
+            recordedAt: NOW,
+          },
+          ids: {
+            threadId: "agent:detached-recovery-child",
+            compensateCommandId: "agent:detached-recovery-child:compensate-delete",
+          },
+        },
+      ]),
+      status: "dispatching",
+      resultJson: null,
+      errorJson: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      interruptedOperations: [interrupted],
+      verifiedOwnershipTokens: ["ownership-detached-recovery"],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      assert.deepEqual(
+        harness.worktreeRemoves.map(({ path }) => path),
+        [plannedPath],
+      );
+      assert.deepEqual(harness.branchDeletes, []);
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects deprecated branchName before reserving or creating resources", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       existingBranches: ["agent/user-owned"],
     });
@@ -1712,7 +2351,7 @@ describe("AgentGateway", () => {
         },
       });
       assert.isTrue(isToolError(response.result));
-      assert.include(toolErrorText(response.result), "already exists");
+      assert.include(toolErrorText(response.result), '"branchName" is no longer supported');
       assert.equal(harness.dispatched.length, 0);
       assert.equal(harness.worktreeCreates.length, 0);
       assert.equal(harness.worktreeRemoves.length, 0);
@@ -1783,7 +2422,6 @@ describe("AgentGateway", () => {
                     prompt: "worker from turn A",
                     target: { provider: "codex", model: "gpt-5.5" },
                     environment: "worktree",
-                    branchName: "agent/interrupted-worker",
                   },
                 ],
               },
@@ -1834,7 +2472,7 @@ describe("AgentGateway", () => {
       );
       assert.equal(harness.worktreeCreates.length, 1);
       assert.equal(harness.worktreeRemoves.length, 1);
-      assert.equal(harness.branchDeletes.length, 1);
+      assert.equal(harness.branchDeletes.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -2041,7 +2679,6 @@ describe("AgentGateway", () => {
                 prompt: "one exact worker",
                 target: { provider: "codex", model: "gpt-5.5" },
                 environment: "worktree",
-                branchName: "agent/concurrent-exact-plan",
               },
             ],
           },
@@ -2245,7 +2882,6 @@ describe("AgentGateway", () => {
                 prompt: "must not leak a worktree",
                 target: { provider: "codex", model: "gpt-5.5" },
                 environment: "worktree",
-                branchName: "agent/ownership-marker-failure",
               },
             ],
           },
@@ -2257,10 +2893,7 @@ describe("AgentGateway", () => {
         );
         assert.equal(harness.worktreeCreates.length, 1);
         assert.equal(harness.worktreeRemoves.length, 1);
-        assert.deepEqual(
-          harness.branchDeletes.map(({ branch }) => branch),
-          ["agent/ownership-marker-failure"],
-        );
+        assert.equal(harness.branchDeletes.length, 0);
         assert.equal(harness.dispatched.length, 0);
         assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
       }).pipe(Effect.provide(gatewayLayer));
@@ -2284,7 +2917,6 @@ describe("AgentGateway", () => {
               prompt: "retain cleanup evidence",
               target: { provider: "codex", model: "gpt-5.5" },
               environment: "worktree",
-              branchName: "agent/ownership-marker-and-cleanup-failure",
             },
           ],
         },
@@ -2368,7 +3000,6 @@ describe("AgentGateway", () => {
                 prompt: "must compensate the interrupted worktree",
                 target: { provider: "codex", model: "gpt-5.5" },
                 environment: "worktree",
-                branchName: "agent/interrupted-worktree",
               },
             ],
           },
@@ -2385,10 +3016,66 @@ describe("AgentGateway", () => {
       assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
       assert.equal(harness.worktreeCreates.length, 1);
       assert.equal(harness.worktreeRemoves.length, 1);
-      assert.deepEqual(
-        harness.branchDeletes.map(({ branch }) => branch),
-        ["agent/interrupted-worktree"],
+      assert.equal(harness.branchDeletes.length, 0);
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.create").length,
+        0,
       );
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+      assert.equal(harness.getOperationErrorCode("turn-parent-active"), "request_interrupted");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  // Regression guard: with the setup script inside the uninterruptible creation
+  // section, the interrupt below would stall for the script's full 30s runtime
+  // and trip the test timeout instead of compensating promptly.
+  it.effect("interrupts a long worktree setup script instead of waiting it out", () => {
+    const worktreeCreated = Deferred.makeUnsafe<void>();
+    const releaseWorktreeCreate = Deferred.makeUnsafe<void>();
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pauseAfterWorktreeCreate: {
+        entered: worktreeCreated,
+        release: releaseWorktreeCreate,
+      },
+      projectScripts: [
+        {
+          id: "setup",
+          name: "Setup",
+          command: 'node -e "setTimeout(() => {}, 30000)"',
+          icon: "configure",
+          runOnWorktreeCreate: true,
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const requestFiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: "interrupt-during-setup-script",
+            threads: [
+              {
+                prompt: "must not block interruption on the setup script",
+                target: { provider: "codex", model: "gpt-5.5" },
+                environment: "worktree",
+              },
+            ],
+          },
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(worktreeCreated);
+      const interruptFiber = yield* Fiber.interrupt(requestFiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseWorktreeCreate, undefined);
+      yield* Fiber.join(interruptFiber);
+
+      const exit = yield* Fiber.await(requestFiber);
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      assert.equal(harness.worktreeCreates.length, 1);
+      assert.equal(harness.worktreeRemoves.length, 1);
       assert.equal(
         harness.dispatched.filter((command) => command.type === "thread.create").length,
         0,
@@ -2527,13 +3214,11 @@ describe("AgentGateway", () => {
               prompt: "first",
               target: { provider: "codex", model: "gpt-5.5" },
               environment: "worktree",
-              branchName: "agent/compensate-first",
             },
             {
               prompt: "second",
               target: { provider: "claudeAgent", model: "claude-sonnet-5" },
               environment: "worktree",
-              branchName: "agent/compensate-second",
             },
           ],
         },
@@ -2553,7 +3238,7 @@ describe("AgentGateway", () => {
       );
       assert.equal(harness.worktreeCreates.length, 2);
       assert.equal(harness.worktreeRemoves.length, 2);
-      assert.equal(harness.branchDeletes.length, 2);
+      assert.equal(harness.branchDeletes.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

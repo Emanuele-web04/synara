@@ -44,6 +44,14 @@ describe("agent gateway contracts", () => {
     assert.throws(() => decodeCreate({ requestId: "x".repeat(257), threads: [thread] }));
   });
 
+  it("accepts an exact Git base ref for detached worktree creation", () => {
+    const decoded = decodeCreate({
+      requestId: "detached-ref",
+      threads: [{ ...thread, environment: "worktree", baseRef: "0123456789abcdef" }],
+    });
+    assert.equal(decoded.threads[0]?.baseRef, "0123456789abcdef");
+  });
+
   it("decodes provider-specific model options without folding them into the slug", () => {
     const decoded = decodeCreate({ requestId: "terra-low", threads: [thread] });
     assert.deepEqual(decoded.threads[0]?.target, thread.target);

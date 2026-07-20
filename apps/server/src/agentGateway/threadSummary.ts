@@ -53,6 +53,7 @@ export interface AgentThreadListItem {
   readonly model: string;
   readonly status: AgentThreadStatus;
   readonly parentThreadId: string | null;
+  readonly creationSource: string | null;
   readonly envMode: string;
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -73,6 +74,7 @@ export function summarizeThreadShell(
     model: thread.modelSelection.model,
     status: deriveAgentThreadStatus(thread),
     parentThreadId: thread.parentThreadId ?? null,
+    creationSource: thread.creationSource ?? null,
     envMode: thread.envMode ?? "local",
     branch: thread.branch,
     worktreePath: thread.worktreePath,
@@ -201,6 +203,7 @@ export interface AgentThreadDetail {
   readonly sessionStatus: string | null;
   readonly latestTurnState: string | null;
   readonly parentThreadId: string | null;
+  readonly creationSource: string | null;
   readonly envMode: string;
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -237,6 +240,7 @@ export function summarizeThreadDetail(input: {
     sessionStatus: thread.session?.status ?? null,
     latestTurnState: thread.latestTurn?.state ?? null,
     parentThreadId: thread.parentThreadId ?? null,
+    creationSource: thread.creationSource ?? null,
     envMode: thread.envMode ?? "local",
     branch: thread.branch,
     worktreePath: thread.worktreePath,

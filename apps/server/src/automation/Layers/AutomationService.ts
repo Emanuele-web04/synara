@@ -32,6 +32,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { AutomationServiceError } from "../Errors.ts";
@@ -466,20 +467,6 @@ function mergeDefinitionUpdate(
   return providerOptions ? { ...nextDefinition, providerOptions } : nextDefinition;
 }
 
-function makeAutomationBranchName(definition: AutomationDefinition, runId: AutomationRunId) {
-  const nameSlug = definition.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  const safeName = nameSlug.length > 0 ? nameSlug : "run";
-  const suffix = runId
-    .replace(/[^a-z0-9]+/gi, "-")
-    .slice(-12)
-    .toLowerCase();
-  return `automation/${safeName}/${suffix}`;
-}
-
 type ThreadEnvironment = {
   readonly envMode: ThreadEnvironmentMode;
   readonly branch: string | null;
@@ -534,11 +521,7 @@ export const AutomationServiceLive = Layer.effect(
       if (input.environment.envMode !== "worktree" || !path) {
         return Effect.void;
       }
-      const expectedBranch = makeAutomationBranchName(input.definition, input.run.id);
-      // Only delete the branch minted for this not-yet-owned automation worktree.
-      const branch =
-        input.environment.associatedWorktreeBranch === expectedBranch ? expectedBranch : null;
-      const removeWorktree = git
+      return git
         .removeWorktree({
           cwd: input.project.workspaceRoot,
           path,
@@ -556,28 +539,6 @@ export const AutomationServiceLive = Layer.effect(
           ),
           Effect.asVoid,
         );
-      const deleteBranch = branch
-        ? git
-            .deleteBranch({
-              cwd: input.project.workspaceRoot,
-              branch,
-              force: true,
-            })
-            .pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("automation unattached branch cleanup failed", {
-                  automationId: input.definition.id,
-                  runId: input.run.id,
-                  branch,
-                  reason: input.reason,
-                  error: errorMessage(error),
-                }),
-              ),
-              Effect.asVoid,
-            )
-        : Effect.void;
-
-      return removeWorktree.pipe(Effect.flatMap(() => deleteBranch));
     };
 
     const requireDefinition = (id: AutomationId) =>
@@ -739,7 +700,6 @@ export const AutomationServiceLive = Layer.effect(
     const resolveThreadEnvironment = (
       definition: AutomationDefinition,
       project: OrchestrationProjectShell,
-      runId: AutomationRunId,
       beforeWorktreeCreate: () => Effect.Effect<void, AutomationServiceError> = () => Effect.void,
     ): Effect.Effect<ThreadEnvironment, AutomationServiceError> => {
       const requireLocalCheckoutAcknowledgement = () =>
@@ -758,38 +718,36 @@ export const AutomationServiceLive = Layer.effect(
       return git.statusDetails(project.workspaceRoot).pipe(
         Effect.mapError(toServiceError("Failed to inspect project Git status.")),
         Effect.flatMap((status) => {
-          if (!status.isRepo || !status.branch) {
+          if (!status.isRepo) {
             return definition.worktreeMode === "worktree"
               ? Effect.fail(
                   new AutomationServiceError({
                     message:
-                      "Automation requires a Git worktree, but the project is not on a branch.",
+                      "Automation requires a Git worktree, but the project is not a Git repository.",
                   }),
                 )
               : requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
           }
 
-          const sourceBranch = status.branch;
-          const branch = makeAutomationBranchName(definition, runId);
           return beforeWorktreeCreate().pipe(
             Effect.flatMap(() =>
               git
-                .createWorktree({
+                .createDetachedWorktree({
                   cwd: project.workspaceRoot,
-                  branch: sourceBranch,
-                  newBranch: branch,
+                  ref: "HEAD",
                   path: null,
+                  copyChangesFrom: project.workspaceRoot,
                 })
                 .pipe(
                   Effect.mapError(toServiceError("Failed to create automation worktree.")),
                   Effect.map(
                     (result): ThreadEnvironment => ({
                       envMode: "worktree",
-                      branch: result.worktree.branch,
+                      branch: null,
                       worktreePath: result.worktree.path,
                       associatedWorktreePath: result.worktree.path,
-                      associatedWorktreeBranch: result.worktree.branch,
-                      associatedWorktreeRef: result.worktree.branch,
+                      associatedWorktreeBranch: null,
+                      associatedWorktreeRef: result.worktree.ref,
                     }),
                   ),
                 ),
@@ -995,7 +953,7 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
         const started = yield* markRunDispatchStarted(plannedThreadId, threadCreateCommandId);
-        const environment = yield* resolveThreadEnvironment(definition, project, run.id, () =>
+        const environment = yield* resolveThreadEnvironment(definition, project, () =>
           requireRunStillDispatching(
             "Automation run was cancelled before creating the automation worktree.",
           ).pipe(Effect.asVoid),
@@ -1013,6 +971,28 @@ export const AutomationServiceLive = Layer.effect(
             }).pipe(Effect.flatMap(() => Effect.fail(error))),
           ),
         );
+
+        if (environment.worktreePath) {
+          yield* Effect.tryPromise({
+            try: (signal) =>
+              runWorktreeSetupScript(project.scripts, environment.worktreePath!, signal),
+            catch: (cause) =>
+              new AutomationServiceError({
+                message: `Automation worktree setup failed: ${errorMessage(cause)}`,
+                cause,
+              }),
+          }).pipe(
+            Effect.catch((error) =>
+              cleanupUnattachedWorktree({
+                definition,
+                run,
+                project,
+                environment,
+                reason: "setup-failed",
+              }).pipe(Effect.flatMap(() => Effect.fail(error))),
+            ),
+          );
+        }
 
         yield* orchestrationEngine
           .dispatch({

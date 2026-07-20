@@ -21,9 +21,13 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import * as nodeFs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
+import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import {
@@ -41,7 +45,6 @@ import {
   type ExecuteGitResult,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
-import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -56,6 +59,7 @@ const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
+const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -88,6 +92,7 @@ interface ExecuteGitOptions {
   fallbackErrorMessage?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   progress?: ExecuteGitProgress | undefined;
+  maxOutputBytes?: number | undefined;
 }
 
 type WorkingTreeStatSummary = ReturnType<typeof summarizeGitNumstatOutputs>;
@@ -683,6 +688,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         ...(options.env ? { env: options.env } : {}),
         ...(options.progress ? { progress: options.progress } : {}),
+        ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
       }).pipe(
         Effect.flatMap((result) => {
           if (options.allowNonZeroExit || result.code === 0) {
@@ -2059,6 +2065,287 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const parseNullSeparatedPaths = (stdout: string): ReadonlyArray<string> =>
+      stdout
+        .split("\0")
+        .filter((entry) => entry.length > 0)
+        .filter(
+          (entry) =>
+            !nodePath.isAbsolute(entry) &&
+            entry !== ".." &&
+            !entry.startsWith(`..${nodePath.sep}`) &&
+            !entry.split(/[\\/]/u).includes(".."),
+        );
+
+    const updateHashFromFile = async (
+      hash: ReturnType<typeof createHash>,
+      filePath: string,
+    ): Promise<void> => {
+      for await (const chunk of createReadStream(filePath)) {
+        hash.update(chunk);
+      }
+    };
+
+    const listWorktreeTransferPaths = (cwd: string) =>
+      Effect.gen(function* () {
+        const untracked = yield* executeGit(
+          "GitCore.listWorktreeTransferPaths.untracked",
+          cwd,
+          ["ls-files", "--others", "--exclude-standard", "-z"],
+          { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+        ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)));
+        const includeFile = nodePath.join(cwd, ".worktreeinclude");
+        const hasIncludeFile = yield* Effect.tryPromise({
+          try: () =>
+            nodeFs
+              .stat(includeFile)
+              .then((entry) => entry.isFile())
+              .catch((cause: unknown) => {
+                if (hasNodeErrorCode(cause, "ENOENT")) return false;
+                throw cause;
+              }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.listWorktreeTransferPaths",
+              cwd,
+              ["worktree", "include", "read"],
+              "could not inspect .worktreeinclude.",
+              cause,
+            ),
+        });
+        const included = hasIncludeFile
+          ? yield* executeGit(
+              "GitCore.listWorktreeTransferPaths.included",
+              cwd,
+              ["ls-files", "--others", "--ignored", "--exclude-from=.worktreeinclude", "-z"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)))
+          : [];
+        return [...new Set([...untracked, ...included])].sort();
+      });
+
+    const readWorktreeStateHash = (cwd: string) =>
+      Effect.gen(function* () {
+        const [staged, unstaged, transferPaths] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.readWorktreeStateHash.staged",
+              cwd,
+              ["diff", "--cached", "--binary", "--full-index", "HEAD", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ),
+            executeGit(
+              "GitCore.readWorktreeStateHash.unstaged",
+              cwd,
+              ["diff", "--binary", "--full-index", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ),
+            listWorktreeTransferPaths(cwd),
+          ],
+          { concurrency: "unbounded" },
+        );
+        return yield* Effect.tryPromise({
+          try: async () => {
+            const hash = createHash("sha256");
+            hash.update("staged\0").update(staged.stdout);
+            hash.update("unstaged\0").update(unstaged.stdout);
+            for (const relativePath of transferPaths) {
+              const absolutePath = nodePath.join(cwd, relativePath);
+              const entry = await nodeFs.lstat(absolutePath);
+              hash.update("path\0").update(relativePath).update("\0");
+              if (entry.isSymbolicLink()) {
+                hash.update("symlink\0").update(await nodeFs.readlink(absolutePath));
+              } else if (entry.isFile()) {
+                hash.update("file\0");
+                await updateHashFromFile(hash, absolutePath);
+              } else {
+                hash.update("other\0").update(String(entry.mode));
+              }
+            }
+            return hash.digest("hex");
+          },
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.readWorktreeStateHash",
+              cwd,
+              ["worktree", "state", "hash"],
+              "could not fingerprint the linked worktree state.",
+              cause,
+            ),
+        });
+      });
+
+    const copyCheckoutChanges = (sourceCwd: string, worktreePath: string) =>
+      Effect.gen(function* () {
+        const [patch, listedTransferPaths] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.copyCheckoutChanges.patch",
+              sourceCwd,
+              ["diff", "--binary", "--full-index", "HEAD", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(Effect.map((result) => result.stdout)),
+            listWorktreeTransferPaths(sourceCwd),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const transferPaths = listedTransferPaths.filter((relativePath) => {
+          const relativeToTarget = nodePath.relative(
+            worktreePath,
+            nodePath.join(sourceCwd, relativePath),
+          );
+          return (
+            relativeToTarget === ".." ||
+            relativeToTarget.startsWith(`..${nodePath.sep}`) ||
+            nodePath.isAbsolute(relativeToTarget)
+          );
+        });
+
+        if (patch.length > 0) {
+          yield* Effect.acquireUseRelease(
+            Effect.tryPromise({
+              try: () => nodeFs.mkdtemp(nodePath.join(tmpdir(), "synara-worktree-patch-")),
+              catch: (cause) =>
+                createGitCommandError(
+                  "GitCore.copyCheckoutChanges",
+                  sourceCwd,
+                  ["worktree", "copy", "changes"],
+                  "could not create a temporary patch directory.",
+                  cause,
+                ),
+            }),
+            (temporaryDirectory) =>
+              Effect.gen(function* () {
+                const patchPath = nodePath.join(temporaryDirectory, "changes.patch");
+                yield* Effect.tryPromise({
+                  try: () => nodeFs.writeFile(patchPath, patch, "utf8"),
+                  catch: (cause) =>
+                    createGitCommandError(
+                      "GitCore.copyCheckoutChanges",
+                      sourceCwd,
+                      ["worktree", "copy", "changes"],
+                      "could not write the temporary worktree patch.",
+                      cause,
+                    ),
+                });
+                yield* executeGit(
+                  "GitCore.copyCheckoutChanges.apply",
+                  worktreePath,
+                  ["apply", "--whitespace=nowarn", patchPath],
+                  { timeoutMs: 30_000 },
+                );
+              }),
+            (temporaryDirectory) =>
+              Effect.promise(() =>
+                nodeFs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {}),
+              ),
+          );
+        }
+
+        yield* Effect.forEach(
+          transferPaths,
+          (relativePath) =>
+            Effect.tryPromise({
+              try: async () => {
+                const sourcePath = nodePath.join(sourceCwd, relativePath);
+                const targetPath = nodePath.join(worktreePath, relativePath);
+                await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
+                await nodeFs.cp(sourcePath, targetPath, {
+                  recursive: true,
+                  force: false,
+                  errorOnExist: true,
+                  preserveTimestamps: true,
+                });
+              },
+              catch: (cause) =>
+                createGitCommandError(
+                  "GitCore.copyCheckoutChanges",
+                  sourceCwd,
+                  ["worktree", "copy", relativePath],
+                  `could not copy ${relativePath} into the detached worktree.`,
+                  cause,
+                ),
+            }),
+          { discard: true, concurrency: 4 },
+        );
+      });
+
+    const snapshotWorktree: GitCoreShape["snapshotWorktree"] = (input) =>
+      Effect.gen(function* () {
+        const [patch, transferPaths, head] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.snapshotWorktree.patch",
+              input.cwd,
+              ["diff", "--binary", "--full-index", "HEAD", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(Effect.map((result) => result.stdout)),
+            listWorktreeTransferPaths(input.cwd),
+            executeGit("GitCore.snapshotWorktree.head", input.cwd, [
+              "rev-parse",
+              "--verify",
+              "HEAD^{commit}",
+            ]).pipe(Effect.map((result) => result.stdout.trim())),
+          ],
+          { concurrency: "unbounded" },
+        );
+        yield* Effect.tryPromise({
+          try: async () => {
+            const outputParent = nodePath.dirname(input.outputPath);
+            const temporaryPath = await nodeFs.mkdtemp(
+              nodePath.join(outputParent, `${nodePath.basename(input.outputPath)}.tmp-`),
+            );
+            try {
+              await nodeFs.chmod(temporaryPath, 0o700);
+              await nodeFs.writeFile(nodePath.join(temporaryPath, "changes.patch"), patch, {
+                encoding: "utf8",
+                mode: 0o600,
+              });
+              const filesRoot = nodePath.join(temporaryPath, "files");
+              for (const relativePath of transferPaths) {
+                const targetPath = nodePath.join(filesRoot, relativePath);
+                await nodeFs.mkdir(nodePath.dirname(targetPath), {
+                  recursive: true,
+                  mode: 0o700,
+                });
+                await nodeFs.cp(nodePath.join(input.cwd, relativePath), targetPath, {
+                  recursive: true,
+                  force: false,
+                  errorOnExist: true,
+                  preserveTimestamps: true,
+                });
+              }
+              await nodeFs.writeFile(
+                nodePath.join(temporaryPath, "snapshot.json"),
+                JSON.stringify(
+                  {
+                    sourceWorktree: input.cwd,
+                    head,
+                    copiedPaths: transferPaths,
+                    createdAt: new Date().toISOString(),
+                  },
+                  null,
+                  2,
+                ),
+                { encoding: "utf8", mode: 0o600 },
+              );
+              await nodeFs.rm(input.outputPath, { recursive: true, force: true });
+              await nodeFs.rename(temporaryPath, input.outputPath);
+            } finally {
+              await nodeFs.rm(temporaryPath, { recursive: true, force: true }).catch(() => {});
+            }
+          },
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.snapshotWorktree",
+              input.cwd,
+              ["worktree", "snapshot", input.outputPath],
+              "could not snapshot the managed worktree.",
+              cause,
+            ),
+        });
+      });
+
     const readWorktreeIdentity = (worktreePath: string) =>
       Effect.gen(function* () {
         const gitDirResult = yield* executeGit(
@@ -2070,6 +2357,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           "GitCore.readWorktreeIdentity.branch",
           worktreePath,
           ["symbolic-ref", "--quiet", "--short", "HEAD"],
+          { allowNonZeroExit: true },
         );
         const headResult = yield* executeGit("GitCore.readWorktreeIdentity.head", worktreePath, [
           "rev-parse",
@@ -2095,7 +2383,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         });
         return {
           gitDir,
-          branch: branchResult.stdout.trim(),
+          branch: branchResult.code === 0 ? branchResult.stdout.trim() || null : null,
           head: headResult.stdout.trim(),
           clean: statusResult.stdout.length === 0,
         };
@@ -2104,22 +2392,23 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const recordWorktreeOwnership: GitCoreShape["recordWorktreeOwnership"] = (input) =>
       Effect.gen(function* () {
         const identity = yield* readWorktreeIdentity(input.path);
-        if (identity.branch !== input.branch || !identity.clean) {
+        if (identity.branch !== input.branch) {
           return yield* new GitCommandError({
             operation: "GitCore.recordWorktreeOwnership",
             command: "git worktree ownership record",
             cwd: input.path,
-            detail:
-              identity.branch !== input.branch
-                ? `Expected branch ${input.branch}, found ${identity.branch || "detached HEAD"}.`
-                : "The newly-created worktree was already dirty.",
+            detail: `Expected ${input.branch ? `branch ${input.branch}` : "detached HEAD"}, found ${
+              identity.branch ? `branch ${identity.branch}` : "detached HEAD"
+            }.`,
           });
         }
+        const stateHash = yield* readWorktreeStateHash(input.path);
         const proof = {
           token: input.token,
           gitDir: identity.gitDir,
           branch: identity.branch,
           head: identity.head,
+          stateHash,
         };
         const markerPath = nodePath.join(identity.gitDir, WORKTREE_OWNERSHIP_MARKER);
         yield* Effect.tryPromise({
@@ -2182,7 +2471,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           !("branch" in marker) ||
           marker.branch !== input.proof.branch ||
           !("head" in marker) ||
-          marker.head !== input.proof.head
+          marker.head !== input.proof.head ||
+          (input.proof.stateHash === undefined
+            ? "stateHash" in marker
+            : !("stateHash" in marker) || marker.stateHash !== input.proof.stateHash)
         ) {
           return { verified: false, reason: "ownership marker does not match" };
         }
@@ -2192,14 +2484,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         if (identity.head !== input.proof.head) {
           return { verified: false, reason: "worktree HEAD changed" };
         }
-        if (!identity.clean) {
-          return { verified: false, reason: "worktree has uncommitted changes" };
+        if (input.proof.stateHash === undefined) {
+          if (!identity.clean) {
+            return { verified: false, reason: "worktree has uncommitted changes" };
+          }
+        } else {
+          const stateHash = yield* readWorktreeStateHash(input.path);
+          if (stateHash !== input.proof.stateHash) {
+            return { verified: false, reason: "worktree state changed" };
+          }
         }
         return { verified: true, reason: null };
       });
 
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
       Effect.gen(function* () {
+        const refResult = yield* executeGit(
+          "GitCore.createDetachedWorktree.resolveRef",
+          input.cwd,
+          ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
+        );
+        const resolvedRef = refResult.stdout.trim();
+        if (input.copyChangesFrom) {
+          const sourceHead = yield* executeGit(
+            "GitCore.createDetachedWorktree.resolveCopySource",
+            input.copyChangesFrom,
+            ["rev-parse", "--verify", "HEAD^{commit}"],
+          ).pipe(Effect.map((result) => result.stdout.trim()));
+          if (sourceHead !== resolvedRef) {
+            return yield* createGitCommandError(
+              "GitCore.createDetachedWorktree",
+              input.cwd,
+              ["worktree", "add", "--detach", "<path>", input.ref],
+              "Cannot copy checkout changes because the selected ref is not that checkout's HEAD.",
+            );
+          }
+        }
         const worktreePath =
           input.path ??
           (yield* buildGeneratedDetachedWorktreePath().pipe(
@@ -2219,13 +2539,26 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           "add",
           "--detach",
           worktreePath,
-          input.ref,
+          resolvedRef,
         ]);
+
+        if (input.copyChangesFrom) {
+          yield* copyCheckoutChanges(input.copyChangesFrom, worktreePath).pipe(
+            Effect.onError(() =>
+              executeGit(
+                "GitCore.createDetachedWorktree.rollback",
+                input.cwd,
+                ["worktree", "remove", "--force", worktreePath],
+                { allowNonZeroExit: true },
+              ).pipe(Effect.ignore),
+            ),
+          );
+        }
 
         return {
           worktree: {
             path: worktreePath,
-            ref: input.ref,
+            ref: resolvedRef,
             branch: null,
           },
         };
@@ -2249,6 +2582,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           },
         );
       }).pipe(Effect.asVoid);
+
+    const fetchPullRequestCommit: GitCoreShape["fetchPullRequestCommit"] = (input) =>
+      Effect.gen(function* () {
+        const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+        if (input.expectedRepositoryNameWithOwner) {
+          const remoteUrl = yield* runGitStdout(
+            "GitCore.fetchPullRequestCommit.remoteUrl",
+            input.cwd,
+            ["remote", "get-url", remoteName],
+          );
+          const actualRepositoryNameWithOwner =
+            parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+          if (
+            actualRepositoryNameWithOwner?.toLowerCase() !==
+            input.expectedRepositoryNameWithOwner.toLowerCase()
+          ) {
+            return yield* createGitCommandError(
+              "GitCore.fetchPullRequestCommit.remoteMismatch",
+              input.cwd,
+              ["remote", "get-url", remoteName],
+              `Pull request URL targets ${input.expectedRepositoryNameWithOwner}, but remote ${remoteName} targets ${actualRepositoryNameWithOwner ?? "a non-GitHub repository"}.`,
+            );
+          }
+        }
+        yield* executeGit(
+          "GitCore.fetchPullRequestCommit",
+          input.cwd,
+          ["fetch", "--quiet", "--no-tags", remoteName, `refs/pull/${input.prNumber}/head`],
+          { fallbackErrorMessage: "git fetch pull request head failed" },
+        );
+        return yield* executeGit("GitCore.fetchPullRequestCommit.resolve", input.cwd, [
+          "rev-parse",
+          "--verify",
+          "FETCH_HEAD^{commit}",
+        ]).pipe(Effect.map((result) => result.stdout.trim()));
+      });
 
     const fetchRemoteBranch: GitCoreShape["fetchRemoteBranch"] = (input) =>
       Effect.gen(function* () {
@@ -2731,8 +3100,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       createWorktree,
       recordWorktreeOwnership,
       verifyWorktreeOwnership,
+      snapshotWorktree,
       createDetachedWorktree,
       fetchPullRequestBranch,
+      fetchPullRequestCommit,
       ensureRemote,
       fetchRemoteBranch,
       setBranchUpstream,

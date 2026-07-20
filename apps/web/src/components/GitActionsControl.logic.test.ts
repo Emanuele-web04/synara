@@ -803,6 +803,21 @@ describe("when: HEAD is detached and there are no local changes", () => {
     assert.deepInclude(quick, { kind: "show_hint", label: "Commit", disabled: true });
   });
 
+  it("resolveQuickAction offers to attach the managed worktree to a branch", () => {
+    const quick = resolveQuickAction(
+      status({ branch: null, hasWorkingTreeChanges: false, hasUpstream: false }),
+      false,
+      false,
+      true,
+      true,
+    );
+    assert.deepEqual(quick, {
+      label: "Create Branch",
+      disabled: false,
+      kind: "create_branch",
+    });
+  });
+
   it("buildMenuItems keeps commit, push, and PR disabled", () => {
     const items = buildMenuItems(status({ branch: null, hasWorkingTreeChanges: false }), false);
     assert.deepEqual(items, [
@@ -1391,6 +1406,18 @@ describe("resolveLiveThreadBranchUpdate", () => {
 
 describe("shouldOfferCreateBranchPrompt", () => {
   const temporaryBranch = "synara/deadbeef";
+
+  it("shows the create-branch prompt for detached managed worktrees", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/detached",
+        gitStatus: {
+          branch: null,
+          hasUpstream: false,
+        },
+      }),
+    );
+  });
 
   it("shows the create-branch prompt for temporary worktree branches without upstream", () => {
     assert.isTrue(

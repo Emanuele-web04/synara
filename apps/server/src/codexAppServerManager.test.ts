@@ -55,7 +55,7 @@ describe("Codex Synara harness policy", () => {
       expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
       expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
       expect(instructions).toContain("Synara is the host and harness");
-      expect(instructions).toContain("synara_create_threads exactly once");
+      expect(instructions).toContain("one exact synara_create_threads plan");
     }
   });
 

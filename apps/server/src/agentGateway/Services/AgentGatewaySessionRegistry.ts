@@ -1,12 +1,18 @@
 import type { ProviderKind, ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 
+export type AgentGatewayCapability =
+  | "thread:read"
+  | "thread:write"
+  | "automation:write"
+  | "diagnostics:read";
+
 export interface AgentGatewaySessionIdentity {
   readonly sessionKey: string;
   readonly threadId: ThreadId;
   readonly provider: ProviderKind;
   readonly issuedAt: number;
-  readonly capabilities: ReadonlySet<"thread:read" | "thread:write" | "automation:write">;
+  readonly capabilities: ReadonlySet<AgentGatewayCapability>;
 }
 
 export interface AgentGatewayIssuedSession extends AgentGatewaySessionIdentity {

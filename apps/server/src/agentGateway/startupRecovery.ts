@@ -84,20 +84,21 @@ export function recoverInterruptedAgentGatewayOperations(input: {
           yield* Effect.forEach(
             [...plan].reverse(),
             (entry) =>
-              entry.environment === "worktree" && entry.plannedWorktreePath && entry.newBranch
+              entry.environment === "worktree" && entry.plannedWorktreePath
                 ? input.git
                     .withMutation(
                       entry.workspaceRoot,
                       Effect.gen(function* () {
                         const plannedWorktreePath = entry.plannedWorktreePath;
                         const newBranch = entry.newBranch;
-                        if (plannedWorktreePath === null || newBranch === null) return;
-                        const branches = yield* input.git.listBranches({
-                          cwd: entry.workspaceRoot,
-                        });
-                        const branch = branches.branches.find(
-                          (candidate) => !candidate.isRemote && candidate.name === entry.newBranch,
-                        );
+                        if (plannedWorktreePath === null) return;
+                        const branch = newBranch
+                          ? (yield* input.git.listBranches({
+                              cwd: entry.workspaceRoot,
+                            })).branches.find(
+                              (candidate) => !candidate.isRemote && candidate.name === newBranch,
+                            )
+                          : null;
                         if (!entry.worktreeOwnership) {
                           if (existsSync(plannedWorktreePath) || branch) {
                             return yield* Effect.fail(
@@ -118,7 +119,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                           }
                           return;
                         }
-                        if (branch?.worktreePath !== plannedWorktreePath) {
+                        if (newBranch !== null && branch?.worktreePath !== plannedWorktreePath) {
                           return yield* Effect.fail(
                             new Error(
                               `Refusing to clean worktree ${plannedWorktreePath}: git does not register the operation-owned branch at that path.`,
@@ -132,6 +133,9 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                             gitDir: entry.worktreeOwnership.gitDir,
                             branch: entry.worktreeOwnership.branch,
                             head: entry.worktreeOwnership.head,
+                            ...(entry.worktreeOwnership.stateHash
+                              ? { stateHash: entry.worktreeOwnership.stateHash }
+                              : {}),
                           },
                         });
                         if (!verification.verified) {
@@ -144,13 +148,17 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                         yield* input.git.removeWorktree({
                           cwd: entry.workspaceRoot,
                           path: plannedWorktreePath,
-                          force: false,
+                          // A verified baseline may intentionally contain copied local
+                          // changes, so Git requires force even though ownership is proven.
+                          force: true,
                         });
-                        yield* input.git.deleteBranchIfUnchanged({
-                          cwd: entry.workspaceRoot,
-                          branch: newBranch,
-                          expectedHead: entry.worktreeOwnership.head,
-                        });
+                        if (newBranch !== null) {
+                          yield* input.git.deleteBranchIfUnchanged({
+                            cwd: entry.workspaceRoot,
+                            branch: newBranch,
+                            expectedHead: entry.worktreeOwnership.head,
+                          });
+                        }
                       }),
                     )
                     .pipe(
