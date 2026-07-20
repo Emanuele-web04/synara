@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Deferred, Effect, Exit, Scope } from "effect";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
   assistantItemId,
@@ -127,7 +127,7 @@ describe("decodeSetSessionConfigOptionResponse", () => {
       currentValue: "gpt-5.6-luna",
       options: [{ value: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
     },
-  ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  ] satisfies ReadonlyArray<Acp.SessionConfigOption>;
 
   it("uses the matching config update for an empty response", () => {
     const decoded = Effect.runSync(
@@ -174,7 +174,7 @@ describe("sessionConfigOptionsFromSetup", () => {
       currentValue: "gpt-5.6-luna",
       options: [{ value: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
     },
-  ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  ] satisfies ReadonlyArray<Acp.SessionConfigOption>;
 
   it("preserves config retained from replay when setup omits configOptions", () => {
     expect(sessionConfigOptionsFromSetup({}, replayedConfigOptions)).toBe(replayedConfigOptions);

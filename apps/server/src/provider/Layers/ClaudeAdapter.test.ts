@@ -1787,6 +1787,17 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       harness.query.emit({
+        type: "tool_progress",
+        tool_use_id: "tool-subagent-heartbeat-1",
+        tool_name: "Grep",
+        parent_tool_use_id: "tool-task-1",
+        elapsed_time_seconds: 5,
+        heartbeat: true,
+        session_id: "sdk-session-subagent",
+        uuid: "tool-progress-subagent-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
         type: "system",
         subtype: "task_progress",
         task_id: "task-1",
@@ -1828,6 +1839,12 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(
         childEvents.some((event) => event.type === "turn.started"),
+        true,
+      );
+      assert.equal(
+        childEvents.some(
+          (event) => event.type === "tool.progress" && event.payload.toolName === "Grep",
+        ),
         true,
       );
 
@@ -1874,6 +1891,112 @@ describe("ClaudeAdapterLive", () => {
       if (childTurnCompleted?.type === "turn.completed") {
         assert.equal(childTurnCompleted.payload.state, "completed");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps async Bash progress on the parent thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "run the browser tests",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-async-bash",
+        uuid: "stream-async-bash-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-bash-1",
+            name: "Bash",
+            input: { command: "bun run test:browser" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bash-1",
+        task_type: "local_bash",
+        tool_use_id: "tool-bash-1",
+        description: "Run browser tests",
+        session_id: "sdk-session-async-bash",
+        uuid: "task-started-async-bash-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "tool_progress",
+        tool_use_id: "tool-bash-1-heartbeat-0",
+        tool_name: "Bash",
+        parent_tool_use_id: "tool-bash-1",
+        elapsed_time_seconds: 30,
+        heartbeat: true,
+        session_id: "sdk-session-async-bash",
+        uuid: "tool-progress-async-bash-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-async-bash",
+        uuid: "user-async-bash-result-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-bash-1",
+              content: "Tests passed",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-async-bash",
+        uuid: "result-async-bash-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(
+        runtimeEvents.some((event) => event.providerRefs?.providerThreadId !== undefined),
+        false,
+      );
+      const progress = runtimeEvents.find(
+        (event) => event.type === "tool.progress" && event.payload.toolName === "Bash",
+      );
+      assert.equal(progress?.type, "tool.progress");
+      assert.equal(progress?.providerRefs?.providerThreadId, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

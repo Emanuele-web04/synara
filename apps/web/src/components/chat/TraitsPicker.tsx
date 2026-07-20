@@ -594,7 +594,6 @@ export const TraitsPicker = memo(function TraitsPicker({
     </span>
   ) : isCodexStyle ? (
     <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-      <SettingsIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
       <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
         {visiblePrimaryTriggerLabel ? (
           <span className="truncate">{visiblePrimaryTriggerLabel}</span>
@@ -623,7 +622,6 @@ export const TraitsPicker = memo(function TraitsPicker({
     </span>
   ) : (
     <>
-      <SettingsIcon aria-hidden="true" className="size-3.5 opacity-75" />
       <span className="inline-flex items-center gap-1.5">
         <span>{visiblePrimaryTriggerLabel ?? "Options"}</span>
         {showsFastBadge ? (

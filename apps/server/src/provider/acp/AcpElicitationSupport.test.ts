@@ -69,10 +69,8 @@ describe("ACP elicitation mapping", () => {
         notify: "Yes",
       }),
     ).toEqual({
-      action: {
-        action: "accept",
-        content: { environment: "Production", replicas: 3, notify: true },
-      },
+      action: "accept",
+      content: { environment: "Production", replicas: 3, notify: true },
     });
   });
 });

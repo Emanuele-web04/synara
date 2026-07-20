@@ -1408,7 +1408,7 @@ function sdkNativeItemId(message: SDKMessage): string | undefined {
   return undefined;
 }
 
-function subagentParentToolUseId(message: SDKMessage): string | undefined {
+function parentToolUseId(message: SDKMessage): string | undefined {
   if (
     message.type !== "assistant" &&
     message.type !== "user" &&
@@ -1420,6 +1420,29 @@ function subagentParentToolUseId(message: SDKMessage): string | undefined {
   return typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
     ? message.parent_tool_use_id
     : undefined;
+}
+
+function isRecognizedSubagentToolUseId(
+  context: ClaudeSessionContext,
+  toolUseId: string,
+): boolean {
+  if (context.subagentRuns.has(toolUseId) || context.settledSubagentToolUseIds.has(toolUseId)) {
+    return true;
+  }
+  for (const tool of context.inFlightTools.values()) {
+    if (tool.itemId === toolUseId && tool.itemType === "collab_agent_tool_call") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function recognizedSubagentParentToolUseId(
+  context: ClaudeSessionContext,
+  message: SDKMessage,
+): string | undefined {
+  const toolUseId = parentToolUseId(message);
+  return toolUseId && isRecognizedSubagentToolUseId(context, toolUseId) ? toolUseId : undefined;
 }
 
 function claudeTaskTurnStatus(
@@ -3803,11 +3826,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       Effect.gen(function* () {
         yield* logNativeSdkMessage(context, message);
 
-        // Subagent traffic (Task tool spawns) is tagged with parent_tool_use_id.
-        // Route it through the run's scoped context so it projects onto the child
-        // thread instead of folding into the parent turn, and keep it away from
-        // the parent's resume cursor.
-        const subagentToolUseId = subagentParentToolUseId(message);
+        // Claude also sets parent_tool_use_id on async Bash progress, so route only
+        // ids already recognized as Task/Agent tools onto child threads.
+        const subagentToolUseId = recognizedSubagentParentToolUseId(context, message);
         if (subagentToolUseId !== undefined) {
           // A settled task's zombie tail (messages already in flight when the
           // stop landed) is dropped, not projected onto the settled child.

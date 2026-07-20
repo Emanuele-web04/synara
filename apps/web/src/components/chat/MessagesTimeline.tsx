@@ -86,12 +86,13 @@ import {
   type UserTurnMarkerKind,
 } from "./userTurnMarker";
 import {
+  capOpenWorkEntryRenderChunks,
   chunkCollapsedTurnItems,
-  chunkWorkEntries,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   findLastLiveWorkGroupId,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
+  planWorkEntryRenderChunks,
   type CollapsedTurnChunk,
   type CollapsedTurnItem,
   type MessagesTimelineRow,
@@ -968,42 +969,58 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
           const isLiveGroup =
             groupId === lastLiveWorkGroupId && (activeTurnInProgress || isWorking);
-          const groupedEntryChunks = chunkWorkEntries(groupedEntries);
-          const collapsibleChunks = groupedEntryChunks.flatMap((chunk) =>
-            chunk.kind === "tool-group" ? [chunk] : [],
-          );
-          const canCollapseChunks =
-            !isLiveGroup &&
-            collapsibleChunks.length > 0 &&
-            collapsibleChunks.every(
-              (chunk) => !summarizeToolCallGroup(chunk.entries)?.hasRunningEntry,
-            );
-          if (canCollapseChunks) {
+          const isExpanded = expandedWorkGroupsState[groupId] ?? false;
+          const plannedRenderChunks = planWorkEntryRenderChunks(groupedEntries, {
+            tailIsLive: isLiveGroup,
+          });
+          const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
+            expanded: isExpanded,
+            maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
+            keep: "last",
+          });
+          const renderChunks = cappedRenderPlan.chunks;
+          const hasCollapsedChunk = renderChunks.some((chunk) => chunk.summary !== null);
+          if (hasCollapsedChunk) {
             return (
-              <div className="space-y-0.5">
-                {groupedEntryChunks.map((chunk) => {
-                  if (chunk.kind === "item") return renderEntryRow(chunk.entry);
-                  const summary = summarizeToolCallGroup(chunk.entries)!;
-                  const summaryKey = `${groupId}:${chunk.id}`;
-                  return (
-                    <ToolCallGroupSummaryRow
-                      key={`tool-summary:${summaryKey}`}
-                      summary={summary}
-                      open={toolGroupSummaryOverrides[summaryKey] ?? false}
-                      onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
-                      fontSizePx={normalizedChatFontSizePx}
-                      renderChildren={() => (
-                        <div className="space-y-0.5 pt-0.5">
-                          {chunk.entries.map(renderEntryRow)}
-                        </div>
-                      )}
-                    />
-                  );
-                })}
+              <div>
+                <div className="space-y-0.5">
+                  {renderChunks.map((chunk) => {
+                    if (!chunk.summary) return chunk.entries.map(renderEntryRow);
+                    const summary = chunk.summary;
+                    const summaryKey = `${groupId}:${chunk.id}`;
+                    return (
+                      <ToolCallGroupSummaryRow
+                        key={`tool-summary:${summaryKey}`}
+                        summary={summary}
+                        open={toolGroupSummaryOverrides[summaryKey] ?? false}
+                        onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
+                        fontSizePx={normalizedChatFontSizePx}
+                        renderChildren={() => (
+                          <div className="space-y-0.5 pt-0.5">
+                            {chunk.entries.map(renderEntryRow)}
+                          </div>
+                        )}
+                      />
+                    );
+                  })}
+                </div>
+                {cappedRenderPlan.hasOverflow && (
+                  <div className="mt-1.5 flex items-center justify-start gap-2 px-0.5">
+                    <button
+                      type="button"
+                      className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
+                      onClick={() => handleToggleWorkGroup(groupId)}
+                    >
+                      {isExpanded
+                        ? "Show less"
+                        : `Show ${cappedRenderPlan.hiddenEntryCount} more`}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           }
-          const isExpanded = expandedWorkGroupsState[groupId] ?? false;
           const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
           const visibleEntries =
             hasOverflow && !isExpanded
@@ -1295,6 +1312,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               statusEntries,
               toolGroupId,
               toolExpanded,
+              // Ordered (tool + narration interleaved) so chunking sees the
+              // thinking/info boundaries that split tool runs mid-turn.
+              orderedRenderableEntries: displayEntries.filter(isRenderableToolEntry),
               renderableToolEntries: toolEntries.filter(isRenderableToolEntry),
               visibleRenderableToolEntries: visibleToolEntries.filter(isRenderableToolEntry),
               hiddenToolCount: toolEntries.length - visibleToolEntries.length,
@@ -1404,16 +1424,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               display.toolGroupId !== null &&
               display.toolGroupId === lastLiveWorkGroupId &&
               (activeTurnInProgress || isWorking);
-            const inlineToolChunks = chunkWorkEntries(display.renderableToolEntries);
-            const collapsibleInlineChunks = inlineToolChunks.flatMap((chunk) =>
-              chunk.kind === "tool-group" ? [chunk] : [],
+            // Leading groups are never a live tail: the message's own text
+            // already follows them, so their last tool run collapses too.
+            const plannedRenderChunks = planWorkEntryRenderChunks(
+              display.orderedRenderableEntries,
+              {
+                tailIsLive: placement === "inline" && isLiveGroup,
+              },
             );
-            const collapseAsSummary =
-              !isLiveGroup &&
-              collapsibleInlineChunks.length > 0 &&
-              collapsibleInlineChunks.every(
-                (chunk) => !summarizeToolCallGroup(chunk.entries)?.hasRunningEntry,
-              );
+            const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
+              expanded: display.toolExpanded,
+              maxVisibleEntries: MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+              keep: activeTurnInProgress ? "last" : "first",
+              shouldCapEntry: (workEntry) => workEntry.tone === "tool",
+            });
+            const renderChunks = cappedRenderPlan.chunks;
+            const collapseAsSummary = renderChunks.some((chunk) => chunk.summary !== null);
             return (
               <>
                 {!hasCollapsedWork &&
@@ -1421,9 +1447,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   display.renderableToolEntries.length > 0 && (
                     <div className={placement === "leading" ? "mb-1.5" : "mt-1.5"}>
                       <div className="space-y-px">
-                        {inlineToolChunks.map((chunk) => {
-                          if (chunk.kind === "item") return renderInlineToolRow(chunk.entry);
-                          const summary = summarizeToolCallGroup(chunk.entries)!;
+                        {renderChunks.map((chunk) => {
+                          if (!chunk.summary) {
+                            // Narration-tone entries render in the status block
+                            // below; here they only serve as run boundaries.
+                            return chunk.entries
+                              .filter((workEntry) => workEntry.tone === "tool")
+                              .map(renderInlineToolRow);
+                          }
+                          const summary = chunk.summary;
                           // Message ids stay stable while a live group's first-entry id can drift.
                           const summaryOverrideKey = `${placement}:${row.message.id}:${chunk.id}`;
                           return (
@@ -1442,6 +1474,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           );
                         })}
                       </div>
+                      {display.toolGroupId && cappedRenderPlan.hasOverflow && (
+                        <div className="py-0.5">
+                          <button
+                            type="button"
+                            className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                            onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
+                          >
+                            {display.toolExpanded
+                              ? "Show less"
+                              : `+${cappedRenderPlan.hiddenEntryCount} more tool calls`}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 {!hasCollapsedWork &&

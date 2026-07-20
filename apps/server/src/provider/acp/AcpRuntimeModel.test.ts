@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
   extractModelConfigId,
@@ -22,7 +22,7 @@ describe("AcpRuntimeModel", () => {
         ],
       },
       configOptions: [],
-    } satisfies EffectAcpSchema.NewSessionResponse);
+    } satisfies Acp.NewSessionResponse);
 
     expect(modeState).toEqual({
       currentModeId: "code",
@@ -54,7 +54,7 @@ describe("AcpRuntimeModel", () => {
           options: [{ value: "default", name: "Auto" }],
         },
       ],
-    } satisfies EffectAcpSchema.NewSessionResponse);
+    } satisfies Acp.NewSessionResponse);
 
     expect(modelConfigId).toBe("model");
   });
@@ -82,7 +82,7 @@ describe("AcpRuntimeModel", () => {
           },
         ],
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(created.events).toEqual([
       {
@@ -147,7 +147,7 @@ describe("AcpRuntimeModel", () => {
         status: "completed",
         rawOutput: { exitCode: 0 },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(updated.events).toHaveLength(1);
     expect(updated.events[0]?._tag).toBe("ToolCallUpdated");
@@ -177,7 +177,7 @@ describe("AcpRuntimeModel", () => {
           truncated: false,
         },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(searchCompleted.events).toHaveLength(1);
     expect(searchCompleted.events[0]).toMatchObject({
@@ -202,7 +202,7 @@ describe("AcpRuntimeModel", () => {
           content: "one\ntwo\n",
         },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(readCompleted.events[0]).toMatchObject({
       _tag: "ToolCallUpdated",
@@ -226,7 +226,7 @@ describe("AcpRuntimeModel", () => {
         rawInput: {},
         locations: [{ path: "src/index.ts", line: 12 }],
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(locatedRead.events[0]).toMatchObject({
       _tag: "ToolCallUpdated",
@@ -249,7 +249,7 @@ describe("AcpRuntimeModel", () => {
         status: "pending",
         rawInput: {},
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(findPending.events[0]).toMatchObject({
       _tag: "ToolCallUpdated",
@@ -272,7 +272,7 @@ describe("AcpRuntimeModel", () => {
         status: "pending",
         rawInput: {},
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(readPending.events[0]).toMatchObject({
       _tag: "ToolCallUpdated",
@@ -297,7 +297,7 @@ describe("AcpRuntimeModel", () => {
         status: "pending",
         rawInput: {},
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
     const completed = parseSessionUpdateEvent({
       sessionId: "session-1",
       update: {
@@ -310,7 +310,7 @@ describe("AcpRuntimeModel", () => {
           truncated: false,
         },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     const pendingEvent = pending.events[0];
     const completedEvent = completed.events[0];
@@ -332,7 +332,7 @@ describe("AcpRuntimeModel", () => {
         sessionUpdate: "current_mode_update",
         currentModeId: " code ",
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(result.modeId).toBe("code");
     expect(result.events).toEqual([
@@ -353,7 +353,7 @@ describe("AcpRuntimeModel", () => {
           { content: "", priority: "medium", status: "in_progress" },
         ],
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(planResult.events).toEqual([
       {
@@ -386,7 +386,7 @@ describe("AcpRuntimeModel", () => {
           text: "hello from acp",
         },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(contentResult.events).toEqual([
       {
@@ -416,7 +416,7 @@ describe("AcpRuntimeModel", () => {
           text: "checking files",
         },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(thoughtResult.events).toEqual([
       {
@@ -451,7 +451,7 @@ describe("AcpRuntimeModel", () => {
           currency: "USD",
         },
       },
-    } satisfies EffectAcpSchema.SessionNotification);
+    } satisfies Acp.SessionNotification);
 
     expect(result.events).toEqual([
       {

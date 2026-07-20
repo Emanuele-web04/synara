@@ -159,7 +159,7 @@ describe("threadDetailSubscriptionRetention", () => {
     }
 
     expect(getRetainedThreadDetailIdsSnapshot().length).toBeLessThanOrEqual(
-      WS_STREAM_LIMITS.threadPerClient,
+      WS_STREAM_LIMITS.threadPerClient - 1,
     );
   });
 

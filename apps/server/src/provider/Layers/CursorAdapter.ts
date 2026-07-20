@@ -38,7 +38,7 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
@@ -242,7 +242,7 @@ function completeCursorAssistantItemTurnId(
 
 function recordCursorSessionCost(
   ctx: CursorSessionContext,
-  cost: EffectAcpSchema.Cost | null | undefined,
+  cost: Acp.Cost | null | undefined,
 ): void {
   const sessionCostUsd = readAcpUsdCost(cost);
   if (sessionCostUsd === undefined) {
@@ -296,7 +296,7 @@ function applyRequestedSessionConfiguration<E>(input: {
       }
     | undefined;
   readonly mapError: (context: {
-    readonly cause: import("effect-acp/errors").AcpError;
+    readonly cause: import("../acp/AcpErrors.ts").AcpError;
     readonly method: "session/set_config_option" | "session/set_mode";
   }) => E;
 }): Effect.Effect<void, E> {
@@ -1067,7 +1067,7 @@ export function makeCursorAdapter(
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
-        const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+        const promptParts: Array<Acp.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: input.input?.trim()
             ? withCursorPlanModePrompt({

@@ -9,6 +9,8 @@ import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../
 import {
   isSummarizableToolCallEntry,
   MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
+  summarizeToolCallGroup,
+  type ToolCallGroupSummary,
 } from "./toolCallGroup.logic";
 import {
   type ChatMessage,
@@ -82,6 +84,89 @@ export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntr
     }
     return { kind: "item", id: chunk.item.id, entry: chunk.item.entry };
   });
+}
+
+// One renderable block of a work group: `summary` is non-null when the block
+// renders collapsed behind a "Ran N commands..." disclosure.
+export interface WorkEntryRenderPlanChunk {
+  id: string;
+  entries: WorkLogEntry[];
+  summary: ToolCallGroupSummary | null;
+}
+
+// Plans a work group's entries block by block. Boundaries are the entries a
+// summary can never absorb — thinking/info narration, errors, rich cards — so
+// each tool run between boundaries folds independently. A run stays expanded
+// only while it still has running work, or while it is the trailing block of
+// the live transcript tail (`tailIsLive`): the moment a new narration block
+// starts after it, it stops being the tail and collapses mid-turn.
+export function planWorkEntryRenderChunks(
+  entries: ReadonlyArray<WorkLogEntry>,
+  options: { tailIsLive: boolean },
+): WorkEntryRenderPlanChunk[] {
+  const chunks = chunkWorkEntries(entries);
+  return chunks.map((chunk, index) => {
+    if (chunk.kind === "item") {
+      return { id: chunk.id, entries: [chunk.entry], summary: null };
+    }
+    const summary = summarizeToolCallGroup(chunk.entries);
+    const isLiveTail = options.tailIsLive && index === chunks.length - 1;
+    const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
+    return { id: chunk.id, entries: chunk.entries, summary: collapsed ? summary : null };
+  });
+}
+
+export interface CappedWorkEntryRenderPlan {
+  chunks: WorkEntryRenderPlanChunk[];
+  hasOverflow: boolean;
+  hiddenEntryCount: number;
+}
+
+// Keeps collapsed summaries intact while bounding only the entries that still
+// render openly. Callers can exclude boundary/status rows from the budget when
+// those rows are rendered separately from tool calls.
+export function capOpenWorkEntryRenderChunks(
+  chunks: ReadonlyArray<WorkEntryRenderPlanChunk>,
+  options: {
+    expanded: boolean;
+    maxVisibleEntries: number;
+    keep: "first" | "last";
+    shouldCapEntry?: (entry: WorkLogEntry) => boolean;
+  },
+): CappedWorkEntryRenderPlan {
+  const shouldCapEntry = options.shouldCapEntry ?? (() => true);
+  const openEntries = chunks.flatMap((chunk) =>
+    chunk.summary === null ? chunk.entries.filter(shouldCapEntry) : [],
+  );
+  const maxVisibleEntries = Math.max(0, options.maxVisibleEntries);
+  const hiddenEntryCount = Math.max(0, openEntries.length - maxVisibleEntries);
+  const hasOverflow = hiddenEntryCount > 0;
+
+  if (!hasOverflow || options.expanded) {
+    return { chunks: [...chunks], hasOverflow, hiddenEntryCount: 0 };
+  }
+
+  const visibleEntries =
+    maxVisibleEntries === 0
+      ? []
+      : options.keep === "last"
+        ? openEntries.slice(-maxVisibleEntries)
+        : openEntries.slice(0, maxVisibleEntries);
+  const visibleEntrySet = new Set(visibleEntries);
+
+  return {
+    chunks: chunks.map((chunk) => {
+      if (chunk.summary !== null) return chunk;
+      return {
+        ...chunk,
+        entries: chunk.entries.filter(
+          (entry) => !shouldCapEntry(entry) || visibleEntrySet.has(entry),
+        ),
+      };
+    }),
+    hasOverflow,
+    hiddenEntryCount,
+  };
 }
 
 // The newest work group in the transcript — the one still allowed to render its

@@ -7,8 +7,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Effect } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -20,7 +20,7 @@ import {
   resolveDroidCliBinaryPath,
 } from "./DroidAcpSupport.ts";
 
-function initializeWithAuthMethods(ids: ReadonlyArray<string>): EffectAcpSchema.InitializeResponse {
+function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeResponse {
   return {
     protocolVersion: 1,
     authMethods: ids.map((id) => ({ id, name: id })),
@@ -83,7 +83,7 @@ describe("applyDroidAcpModelSelection", () => {
         setConfigOption: (configId: string, value: string | boolean) => {
           if (configId === failFor) {
             return Effect.fail(
-              new EffectAcpErrors.AcpRequestError({
+              new AcpErrors.AcpRequestError({
                 code: -32602,
                 errorMessage: `Unknown config option: ${configId}`,
               }),
@@ -190,7 +190,7 @@ describe("applyDroidAcpInteractionMode", () => {
     const runtime = {
       setMode: () =>
         Effect.fail(
-          new EffectAcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
+          new AcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
         ),
       setConfigOption: (configId: string, value: string | boolean) => {
         calls.push({ configId, value });
@@ -212,7 +212,7 @@ describe("applyDroidAcpInteractionMode", () => {
 describe("discoverDroidAcpModels", () => {
   it("reads each model's reasoning choices from session config options", async () => {
     let currentModel = "model-a";
-    const configOptions = (): ReadonlyArray<EffectAcpSchema.SessionConfigOption> => [
+    const configOptions = (): ReadonlyArray<Acp.SessionConfigOption> => [
       {
         id: "model",
         name: "Model",
@@ -252,7 +252,7 @@ describe("discoverDroidAcpModels", () => {
         if (configId === "model") {
           currentModel = String(value);
         }
-        return Effect.succeed({ configOptions: configOptions() });
+        return Effect.succeed({ configOptions: [...configOptions()] });
       },
     };
 
@@ -317,6 +317,6 @@ describe("resolveDroidAcpAuthMethodId", () => {
     const error = await Effect.runPromise(
       resolveDroidAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
     );
-    expect(error).toBeInstanceOf(EffectAcpErrors.AcpRequestError);
+    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
   });
 });

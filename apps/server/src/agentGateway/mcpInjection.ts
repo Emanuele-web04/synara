@@ -14,7 +14,7 @@
  *
  * @module agentGateway/mcpInjection
  */
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import type { AgentGatewayMcpConnection } from "./Services/AgentGatewayCredentials";
 
@@ -237,7 +237,7 @@ export function buildAcpSynaraMcpServers(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly initializeResult: AcpInitializeCapabilitiesView;
   readonly stdioProxy: AcpStdioProxySpawn;
-}): ReadonlyArray<EffectAcpSchema.McpServer> {
+}): Array<Acp.McpServer> {
   const supportsHttp = input.initializeResult.agentCapabilities?.mcpCapabilities?.http === true;
   if (supportsHttp) {
     return [

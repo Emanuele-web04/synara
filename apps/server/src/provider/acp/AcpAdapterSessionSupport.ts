@@ -14,7 +14,7 @@ import type {
   TurnId,
 } from "@synara/contracts";
 import { Deferred, Effect, Option, Semaphore, SynchronizedRef } from "effect";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import type { AcpSessionMode, AcpSessionModeState, AcpToolCallState } from "./AcpRuntimeModel.ts";
 
@@ -153,7 +153,7 @@ export function settleAcpPendingUserInputsAsEmptyAnswers(
 }
 
 // Accepts only finite, non-negative USD totals from ACP cost notifications.
-export function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
+export function readAcpUsdCost(cost: Acp.Cost | null | undefined): number | undefined {
   if (!cost || cost.currency.toUpperCase() !== "USD" || !Number.isFinite(cost.amount)) {
     return undefined;
   }
@@ -162,7 +162,7 @@ export function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): n
 
 export function recordAcpSessionCost(
   context: { latestSessionCostUsd: number | undefined },
-  cost: EffectAcpSchema.Cost | null | undefined,
+  cost: Acp.Cost | null | undefined,
 ): void {
   const sessionCostUsd = readAcpUsdCost(cost);
   if (sessionCostUsd !== undefined) {

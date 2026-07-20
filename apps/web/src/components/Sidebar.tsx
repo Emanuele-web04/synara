@@ -1109,8 +1109,16 @@ export function SidebarSegmentedPicker({
           )}
           style={{ left: chipLeft, width: chipWidth }}
         />
-        {views.map((view) => {
+        {views.map((view, index) => {
           const active = displayedView === view;
+          // The end-segment chip grows outward by 0.125rem + 1px + OVERHANG, so its visual
+          // center sits half that off the cell center. Follow it with the label (same motion
+          // as the thumb) so the text stays centered inside the chip.
+          const isOuterSegment = index === 0 || index === segmentCount - 1;
+          const labelShift =
+            active && isOuterSegment
+              ? `calc(${index === 0 ? "-1 * " : ""}(0.125rem + 1px + ${OVERHANG}) / 2)`
+              : "0px";
           return (
             <button
               key={view}
@@ -1128,7 +1136,12 @@ export function SidebarSegmentedPicker({
               }}
               onClick={() => handleSelectView(view)}
             >
-              {SIDEBAR_VIEW_LABELS[view]}
+              <span
+                className="block transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+                style={{ transform: `translateX(${labelShift})` }}
+              >
+                {SIDEBAR_VIEW_LABELS[view]}
+              </span>
             </button>
           );
         })}

@@ -10,13 +10,9 @@ import {
   type ToolLifecycleItemType,
 } from "@synara/contracts";
 import { Schema } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
+import * as AcpErrors from "./AcpErrors.ts";
 
-import {
-  ProviderAdapterRequestError,
-  ProviderAdapterSessionClosedError,
-  type ProviderAdapterError,
-} from "../Errors.ts";
+import { ProviderAdapterRequestError, type ProviderAdapterError } from "../Errors.ts";
 
 export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
   switch (kind) {
@@ -34,7 +30,7 @@ export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): Tool
   }
 }
 
-function acpRequestErrorDetail(error: EffectAcpErrors.AcpRequestError): string {
+function acpRequestErrorDetail(error: AcpErrors.AcpRequestError): string {
   const message = error.message.trim();
   const dataDetail =
     typeof error.data === "string"
@@ -55,18 +51,11 @@ function acpRequestErrorDetail(error: EffectAcpErrors.AcpRequestError): string {
 
 export function mapAcpToAdapterError(
   provider: ProviderKind,
-  threadId: ThreadId,
+  _threadId: ThreadId,
   method: string,
-  error: EffectAcpErrors.AcpError,
+  error: AcpErrors.AcpError,
 ): ProviderAdapterError {
-  if (Schema.is(EffectAcpErrors.AcpProcessExitedError)(error)) {
-    return new ProviderAdapterSessionClosedError({
-      provider,
-      threadId,
-      cause: error,
-    });
-  }
-  if (Schema.is(EffectAcpErrors.AcpRequestError)(error)) {
+  if (Schema.is(AcpErrors.AcpRequestError)(error)) {
     return new ProviderAdapterRequestError({
       provider,
       method,
