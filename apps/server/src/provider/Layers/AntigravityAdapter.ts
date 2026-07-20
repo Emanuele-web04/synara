@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, Layer, Queue, Stream } from "effect";
 
 import { ServerConfig } from "../../config.ts";
@@ -38,8 +39,49 @@ const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
 const MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 30_000;
-const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
+export const ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES = 128 * 1024;
 const WINDOWS_PROMPT_MAX_CHARS = 24_000;
+
+type SpawnProcess = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options: SpawnOptions,
+) => ChildProcess;
+
+type TeardownProcessTree = (child: ChildProcess) => Promise<unknown>;
+
+export interface AntigravityProcessDependencies {
+  readonly spawnProcess?: SpawnProcess;
+  readonly prepareProcess?: typeof prepareWindowsSafeProcess;
+  readonly teardownProcessTree?: TeardownProcessTree;
+}
+
+export interface AntigravityProcessOutput {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly outputTruncated: boolean;
+  readonly retainedOutputBytes: number;
+}
+
+export interface AntigravityTurnProcessResult extends AntigravityProcessOutput {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly spawnError?: unknown;
+  readonly teardownError?: unknown;
+  readonly teardownRequested: boolean;
+}
+
+export interface AntigravityTurnProcessLifecycle {
+  readonly child: ChildProcess;
+  readonly finalization: Promise<AntigravityTurnProcessResult>;
+  readonly teardownAndFinalize: () => Promise<AntigravityTurnProcessResult>;
+}
+
+export interface AntigravityAdapterLiveOptions extends AntigravityProcessDependencies {
+  readonly installCapturePlugin?: (binaryPath: string) => Promise<void>;
+  readonly beforeTurnFinalization?: (result: AntigravityTurnProcessResult) => Promise<void>;
+  readonly pollIntervalMs?: number;
+}
 
 type TranscriptStep = {
   readonly step_index?: number;
@@ -72,7 +114,7 @@ type AntigravitySessionContext = {
   readonly binaryPath: string;
   readonly turns: StoredTurn[];
   activeTurnId?: TurnId | undefined;
-  activeProcess?: ChildProcess | undefined;
+  activeLifecycle?: AntigravityTurnProcessLifecycle | undefined;
   activePrompt?: string | undefined;
   eventFile?: string | undefined;
   transcriptPath?: string | undefined;
@@ -166,53 +208,289 @@ export function buildAntigravityHookConfig(
   };
 }
 
-function appendBoundedOutput(current: string, chunk: unknown): string {
-  const next = current + String(chunk);
-  return next.length > HELPER_OUTPUT_MAX_CHARS ? next.slice(-HELPER_OUTPUT_MAX_CHARS) : next;
+function completeUtf8Prefix(buffer: Buffer): Buffer {
+  if (buffer.length === 0) return buffer;
+
+  let leadIndex = buffer.length - 1;
+  while (leadIndex >= 0 && (buffer[leadIndex]! & 0xc0) === 0x80) leadIndex -= 1;
+  if (leadIndex < 0) return Buffer.alloc(0);
+
+  const lead = buffer[leadIndex]!;
+  const expectedBytes =
+    lead < 0x80
+      ? 1
+      : (lead & 0xe0) === 0xc0
+        ? 2
+        : (lead & 0xf0) === 0xe0
+          ? 3
+          : (lead & 0xf8) === 0xf0
+            ? 4
+            : 1;
+  return buffer.length - leadIndex < expectedBytes ? buffer.subarray(0, leadIndex) : buffer;
+}
+
+function makeBoundedProcessOutput() {
+  const chunks: Record<"stdout" | "stderr", Buffer[]> = { stdout: [], stderr: [] };
+  let acceptedBytes = 0;
+  let outputTruncated = false;
+
+  const append = (stream: "stdout" | "stderr", chunk: unknown): void => {
+    if (outputTruncated) return;
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    if (bytes.length === 0) return;
+    const remaining = ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES - acceptedBytes;
+    if (bytes.length <= remaining) {
+      chunks[stream].push(Buffer.from(bytes));
+      acceptedBytes += bytes.length;
+      return;
+    }
+
+    outputTruncated = true;
+    if (remaining > 0) {
+      chunks[stream].push(Buffer.from(bytes.subarray(0, remaining)));
+      acceptedBytes += remaining;
+    }
+  };
+
+  const snapshot = (): AntigravityProcessOutput => {
+    const stdoutBytes = completeUtf8Prefix(Buffer.concat(chunks.stdout));
+    const stderrBytes = completeUtf8Prefix(Buffer.concat(chunks.stderr));
+    return {
+      stdout: stdoutBytes.toString("utf8"),
+      stderr: stderrBytes.toString("utf8"),
+      outputTruncated,
+      retainedOutputBytes: stdoutBytes.length + stderrBytes.length,
+    };
+  };
+
+  return { append, snapshot };
+}
+
+function spawnAntigravityProcess(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: {
+    readonly cwd?: string;
+    readonly env: NodeJS.ProcessEnv;
+    readonly dependencies?: AntigravityProcessDependencies;
+  },
+): ChildProcess {
+  const prepared = (options.dependencies?.prepareProcess ?? prepareWindowsSafeProcess)(
+    command,
+    args,
+    {
+      cwd: options.cwd,
+      env: options.env,
+    },
+  );
+  return (options.dependencies?.spawnProcess ?? spawn)(prepared.command, prepared.args, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: options.env,
+    shell: prepared.shell,
+    ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
 }
 
 export async function runAntigravityHelperProcess(
   command: string,
   args: string[],
-  options: { cwd?: string; timeoutMs?: number } = {},
-): Promise<{
-  stdout: string;
-  stderr: string;
-  code: number;
-}> {
+  options: {
+    cwd?: string;
+    timeoutMs?: number;
+    dependencies?: AntigravityProcessDependencies;
+  } = {},
+): Promise<AntigravityProcessOutput & { code: number }> {
+  const env = buildProviderChildEnvironment({ provider: PROVIDER });
+  const child = spawnAntigravityProcess(command, args, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env,
+    ...(options.dependencies ? { dependencies: options.dependencies } : {}),
+  });
+  if (!child.stdout || !child.stderr) {
+    throw new Error("Antigravity helper process did not expose piped output streams.");
+  }
+  const stdout = child.stdout;
+  const stderr = child.stderr;
+
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: buildProviderChildEnvironment({ provider: PROVIDER }),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
+    const output = makeBoundedProcessOutput();
+    let claimed = false;
+    let teardown: Promise<unknown> | undefined;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
-    const finish = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
+    const onStdout = (chunk: unknown) => output.append("stdout", chunk);
+    const onStderr = (chunk: unknown) => output.append("stderr", chunk);
+    const cleanup = () => {
       clearTimeout(timer);
-      callback();
+      stdout.removeListener("data", onStdout);
+      stderr.removeListener("data", onStderr);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+    };
+    const claim = (): boolean => {
+      if (claimed) return false;
+      claimed = true;
+      cleanup();
+      return true;
+    };
+    const beginTeardown = (): Promise<unknown> => {
+      if (!teardown) {
+        try {
+          teardown = Promise.resolve(
+            (options.dependencies?.teardownProcessTree ?? teardownChildProcessTree)(child),
+          );
+        } catch (cause) {
+          teardown = Promise.reject(cause);
+        }
+      }
+      return teardown;
+    };
+    const onError = (cause: Error) => {
+      if (claim()) reject(cause);
+    };
+    const onClose = (code: number | null) => {
+      if (claim()) resolve({ ...output.snapshot(), code: code ?? 1 });
     };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(() =>
-        reject(
-          new Error(
-            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+      if (!claim()) return;
+      void beginTeardown().then(
+        () =>
+          reject(
+            new Error(
+              `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+            ),
           ),
-        ),
+        reject,
       );
     }, timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
-    child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
-    child.once("error", (cause) => finish(() => reject(cause)));
-    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
+
+    stdout.on("data", onStdout);
+    stderr.on("data", onStderr);
+    child.once("error", onError);
+    child.once("close", onClose);
   });
+}
+
+export function startAntigravityTurnProcess(input: {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly dependencies?: AntigravityProcessDependencies;
+  readonly onFinalize: (result: AntigravityTurnProcessResult) => Promise<void>;
+}): AntigravityTurnProcessLifecycle {
+  const child = spawnAntigravityProcess(input.command, input.args, {
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+    env: input.env,
+    ...(input.dependencies ? { dependencies: input.dependencies } : {}),
+  });
+  if (!child.stdout || !child.stderr) {
+    throw new Error("Antigravity turn process did not expose piped output streams.");
+  }
+
+  const output = makeBoundedProcessOutput();
+  let teardown: Promise<unknown> | undefined;
+  let teardownRequested = false;
+  let finalizationStarted = false;
+  let resolveFinalization!: (result: AntigravityTurnProcessResult) => void;
+  let rejectFinalization!: (cause: unknown) => void;
+  const finalization = new Promise<AntigravityTurnProcessResult>((resolve, reject) => {
+    resolveFinalization = resolve;
+    rejectFinalization = reject;
+  });
+  void finalization.catch(() => undefined);
+
+  const onStdout = (chunk: unknown) => output.append("stdout", chunk);
+  const onStderr = (chunk: unknown) => output.append("stderr", chunk);
+  const cleanup = () => {
+    child.stdout?.removeListener("data", onStdout);
+    child.stderr?.removeListener("data", onStderr);
+    child.removeListener("error", onError);
+    child.removeListener("close", onClose);
+  };
+  const beginTeardown = (): Promise<unknown> => {
+    teardownRequested = true;
+    if (!teardown) {
+      try {
+        teardown = Promise.resolve(
+          (input.dependencies?.teardownProcessTree ?? teardownChildProcessTree)(child),
+        );
+      } catch (cause) {
+        teardown = Promise.reject(cause);
+      }
+    }
+    return teardown;
+  };
+  const beginFinalization = (terminal: {
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+    readonly spawnError?: unknown;
+    readonly teardownError?: unknown;
+  }): void => {
+    if (finalizationStarted) return;
+    finalizationStarted = true;
+    cleanup();
+    void (async () => {
+      let teardownError = terminal.teardownError;
+      const abnormalExit = terminal.signal !== null || (terminal.code ?? 1) !== 0;
+      const mustAwaitTeardown = teardownRequested || (!terminal.spawnError && abnormalExit);
+      if (mustAwaitTeardown && !teardownError) {
+        try {
+          await beginTeardown();
+        } catch (cause) {
+          teardownError = cause;
+        }
+      }
+      const result: AntigravityTurnProcessResult = {
+        ...output.snapshot(),
+        code: terminal.code,
+        signal: terminal.signal,
+        ...(terminal.spawnError ? { spawnError: terminal.spawnError } : {}),
+        ...(teardownError ? { teardownError } : {}),
+        teardownRequested,
+      };
+      try {
+        await input.onFinalize(result);
+      } catch (cause) {
+        rejectFinalization(teardownError ?? cause);
+        return;
+      }
+      if (teardownError) {
+        rejectFinalization(teardownError);
+      } else if (terminal.spawnError) {
+        rejectFinalization(terminal.spawnError);
+      } else {
+        resolveFinalization(result);
+      }
+    })();
+  };
+  const onError = (cause: Error) => {
+    beginFinalization({ code: child.exitCode, signal: child.signalCode, spawnError: cause });
+  };
+  const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+    beginFinalization({ code, signal });
+  };
+  const teardownAndFinalize = async (): Promise<AntigravityTurnProcessResult> => {
+    if (finalizationStarted) return await finalization;
+    try {
+      await beginTeardown();
+    } catch (cause) {
+      beginFinalization({
+        code: child.exitCode,
+        signal: child.signalCode,
+        teardownError: cause,
+      });
+    }
+    return await finalization;
+  };
+
+  child.stdout.on("data", onStdout);
+  child.stderr.on("data", onStderr);
+  child.once("error", onError);
+  child.once("close", onClose);
+
+  return { child, finalization, teardownAndFinalize };
 }
 
 export async function readCompleteAntigravityLines(
@@ -243,7 +521,10 @@ export async function readCompleteAntigravityLines(
   }
 }
 
-async function ensureCapturePlugin(binaryPath: string): Promise<void> {
+async function ensureCapturePlugin(
+  binaryPath: string,
+  dependencies?: AntigravityProcessDependencies,
+): Promise<void> {
   const pluginDir = path.join(
     os.homedir(),
     ".gemini",
@@ -275,7 +556,10 @@ async function ensureCapturePlugin(binaryPath: string): Promise<void> {
   const installed = await runAntigravityHelperProcess(
     binaryPath,
     ["plugin", "install", pluginDir],
-    { timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS },
+    {
+      timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS,
+      ...(dependencies ? { dependencies } : {}),
+    },
   );
   if (installed.code !== 0) {
     throw new Error(installed.stderr.trim() || installed.stdout.trim() || "Plugin install failed.");
@@ -425,7 +709,7 @@ export function makeAntigravityRuntimeEventBase(input: {
   };
 }
 
-const makeAntigravityAdapter = Effect.gen(function* () {
+const makeAntigravityAdapter = Effect.fn(function* (options: AntigravityAdapterLiveOptions = {}) {
   const serverConfig = yield* ServerConfig;
   const events = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, AntigravitySessionContext>();
@@ -473,10 +757,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
     context: AntigravitySessionContext,
     method: string,
   ): Effect.Effect<void, ProviderAdapterRequestError> => {
-    const child = context.activeProcess;
-    if (!child) return Effect.void;
+    const lifecycle = context.activeLifecycle;
+    if (!lifecycle) return Effect.void;
     return Effect.tryPromise({
-      try: () => teardownChildProcessTree(child),
+      try: () => lifecycle.teardownAndFinalize(),
       catch: (cause) =>
         new ProviderAdapterRequestError({
           provider: PROVIDER,
@@ -707,7 +991,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       }
       const binaryPath = trim(input.providerOptions?.antigravity?.binaryPath) ?? "agy";
       yield* Effect.tryPromise({
-        try: () => ensureCapturePlugin(binaryPath),
+        try: () =>
+          options.installCapturePlugin
+            ? options.installCapturePlugin(binaryPath)
+            : ensureCapturePlugin(binaryPath, options),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -778,7 +1065,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
   const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
     Effect.gen(function* () {
       const context = yield* requireSession(input.threadId);
-      if (context.activeProcess) {
+      if (context.activeLifecycle) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "turn/start",
@@ -861,12 +1148,6 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         activeTurnId: turnId,
         updatedAt: new Date().toISOString(),
       };
-      offer({
-        ...base(context),
-        type: "turn.started",
-        payload: { model },
-      } satisfies ProviderRuntimeEvent);
-
       const conversationId = context.conversationId;
       const args: string[] = [
         ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
@@ -880,99 +1161,153 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         "-p",
         normalizedPrompt,
       ];
-      const child = spawn(context.binaryPath, args, {
-        cwd: context.session.cwd ?? serverConfig.cwd,
-        env: buildProviderChildEnvironment({
-          provider: PROVIDER,
-          inheritedSynaraKeys: ["SYNARA_ANTIGRAVITY_EVENTS", "SYNARA_ANTIGRAVITY_HOOK_DECISION"],
-          overrides: {
-            SYNARA_ANTIGRAVITY_EVENTS: eventFile,
-            SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
-          },
-        }),
-        stdio: ["ignore", "pipe", "pipe"],
+      const cwd = context.session.cwd ?? serverConfig.cwd;
+      const env = buildProviderChildEnvironment({
+        provider: PROVIDER,
+        inheritedSynaraKeys: ["SYNARA_ANTIGRAVITY_EVENTS", "SYNARA_ANTIGRAVITY_HOOK_DECISION"],
+        overrides: {
+          SYNARA_ANTIGRAVITY_EVENTS: eventFile,
+          SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+        },
       });
-      context.activeProcess = child;
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => (stdout += chunk));
-      child.stderr.on("data", (chunk) => (stderr += chunk));
-      const timer = setInterval(() => void pollHookFile(context), POLL_INTERVAL_MS);
-      child.once("error", (cause) => {
-        clearInterval(timer);
-        if (sessions.get(input.threadId) !== context || context.activeProcess !== child) return;
-        offer({
-          ...base(context, { includeTurn: false }),
-          type: "runtime.error",
-          payload: {
-            message: messageFromCause(cause, "Failed to launch Antigravity CLI."),
-            class: "transport_error",
-          },
-          raw: raw("process-error", cause),
-        } satisfies ProviderRuntimeEvent);
-      });
-      child.once("close", (code, signal) => {
-        clearInterval(timer);
-        void (async () => {
-          if (sessions.get(input.threadId) !== context || context.activeProcess !== child) {
-            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-            return;
-          }
-          await pollHookFile(context);
-          if (!context.sawAssistant && stdout.trim()) {
-            emitTextItem(
-              context,
-              { step_index: Number.MAX_SAFE_INTEGER, type: "PRINT_OUTPUT", content: stdout.trim() },
-              "assistant_message",
-              "assistant_text",
-            );
-          }
-          const completionBase = base(context);
-          const interrupted = context.interrupted || signal !== null;
-          const failed = !interrupted && (code ?? 1) !== 0;
-          if (failed && stderr.trim()) {
+      let pollTimer: ReturnType<typeof setInterval> | undefined;
+      let lifecycle!: AntigravityTurnProcessLifecycle;
+      try {
+        lifecycle = startAntigravityTurnProcess({
+          command: context.binaryPath,
+          args,
+          cwd,
+          env,
+          dependencies: options,
+          onFinalize: async (result) => {
+            if (pollTimer) clearInterval(pollTimer);
+            if (sessions.get(input.threadId) !== context || context.activeLifecycle !== lifecycle) {
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              return;
+            }
+
+            await pollHookFile(context);
+            if (!context.sawAssistant && result.stdout.trim()) {
+              emitTextItem(
+                context,
+                {
+                  step_index: Number.MAX_SAFE_INTEGER,
+                  type: "PRINT_OUTPUT",
+                  content: result.stdout.trim(),
+                },
+                "assistant_message",
+                "assistant_text",
+              );
+            }
+            let finalizationHookError: unknown;
+            if (options.beforeTurnFinalization) {
+              try {
+                await options.beforeTurnFinalization(result);
+              } catch (cause) {
+                finalizationHookError = cause;
+              }
+            }
+
+            const completionBase = base(context);
+            const lifecycleCause =
+              result.teardownError ?? result.spawnError ?? finalizationHookError;
+            const interrupted = !lifecycleCause && (context.interrupted || result.signal !== null);
+            const failed = Boolean(lifecycleCause) || (!interrupted && (result.code ?? 1) !== 0);
+            const failureMessage = lifecycleCause
+              ? messageFromCause(
+                  lifecycleCause,
+                  "Failed to prove the Antigravity process tree exited.",
+                )
+              : result.stderr.trim() || `Antigravity CLI exited with code ${result.code ?? 1}.`;
+            if (failed) {
+              offer({
+                ...base(context, { includeTurn: false }),
+                type: "runtime.error",
+                payload: {
+                  message: failureMessage,
+                  class: result.spawnError ? "transport_error" : "provider_error",
+                },
+                raw: raw(result.spawnError ? "process-error" : "stderr", {
+                  code: result.code,
+                  signal: result.signal,
+                  stderr: result.stderr,
+                  outputTruncated: result.outputTruncated,
+                  retainedOutputBytes: result.retainedOutputBytes,
+                }),
+              } satisfies ProviderRuntimeEvent);
+            }
+            delete context.activeLifecycle;
+            delete context.activeTurnId;
+            delete context.activePrompt;
+            delete context.eventFile;
+            const {
+              activeTurnId: _activeTurnId,
+              lastError: _lastError,
+              ...inactiveSession
+            } = context.session;
+            context.session = {
+              ...inactiveSession,
+              status: failed ? "error" : "ready",
+              ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+              updatedAt: new Date().toISOString(),
+              ...(failed ? { lastError: failureMessage } : {}),
+            };
             offer({
-              ...base(context, { includeTurn: false }),
-              type: "runtime.error",
-              payload: { message: stderr.trim(), class: "provider_error" },
-              raw: raw("stderr", { code, stderr }),
+              ...completionBase,
+              type: "turn.completed",
+              payload: interrupted
+                ? { state: "interrupted", stopReason: "interrupted" }
+                : failed
+                  ? {
+                      state: "failed",
+                      stopReason: "error",
+                      errorMessage: failureMessage,
+                    }
+                  : { state: "completed", stopReason: "model_stop" },
+              raw: raw("process-exit", {
+                code: result.code,
+                signal: result.signal,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                outputTruncated: result.outputTruncated,
+                retainedOutputBytes: result.retainedOutputBytes,
+              }),
             } satisfies ProviderRuntimeEvent);
-          }
-          delete context.activeProcess;
-          delete context.activeTurnId;
-          const {
-            activeTurnId: _activeTurnId,
-            lastError: _lastError,
-            ...inactiveSession
-          } = context.session;
-          context.session = {
-            ...inactiveSession,
-            status: failed ? "error" : "ready",
-            ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
-            updatedAt: new Date().toISOString(),
-            ...(failed
-              ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
-              : {}),
-          };
-          offer({
-            ...completionBase,
-            type: "turn.completed",
-            payload: interrupted
-              ? { state: "interrupted", stopReason: "interrupted" }
-              : failed
-                ? {
-                    state: "failed",
-                    stopReason: "error",
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
-                  }
-                : { state: "completed", stopReason: "model_stop" },
-            raw: raw("process-exit", { code, signal, stdout, stderr }),
-          } satisfies ProviderRuntimeEvent);
-          await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-        })();
-      });
+            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+            if (finalizationHookError) throw finalizationHookError;
+          },
+        });
+      } catch (cause) {
+        context.turns.pop();
+        delete context.activeTurnId;
+        delete context.activePrompt;
+        delete context.eventFile;
+        const { activeTurnId: _activeTurnId, ...inactiveSession } = context.session;
+        context.session = {
+          ...inactiveSession,
+          status: "ready",
+          updatedAt: new Date().toISOString(),
+        };
+        yield* Effect.promise(() =>
+          fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined),
+        );
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/start",
+          detail: messageFromCause(cause, "Failed to launch Antigravity CLI."),
+          cause,
+        });
+      }
+      context.activeLifecycle = lifecycle;
+      pollTimer = setInterval(
+        () => void pollHookFile(context),
+        options.pollIntervalMs ?? POLL_INTERVAL_MS,
+      );
+      offer({
+        ...base(context),
+        type: "turn.started",
+        payload: { model },
+      } satisfies ProviderRuntimeEvent);
       return {
         threadId: input.threadId,
         turnId,
@@ -1045,6 +1380,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           {
             ...(input.cwd ? { cwd: input.cwd } : {}),
             timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+            dependencies: options,
           },
         );
         if (result.code !== 0) throw new Error(result.stderr || "agy models failed");
@@ -1117,8 +1453,8 @@ const makeAntigravityAdapter = Effect.gen(function* () {
   } satisfies AntigravityAdapterShape;
 });
 
-export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter);
+export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter());
 
-export function makeAntigravityAdapterLive() {
-  return Layer.effect(AntigravityAdapter, makeAntigravityAdapter);
+export function makeAntigravityAdapterLive(options: AntigravityAdapterLiveOptions = {}) {
+  return Layer.effect(AntigravityAdapter, makeAntigravityAdapter(options));
 }
