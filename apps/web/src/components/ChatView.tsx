@@ -2170,7 +2170,7 @@ export default function ChatView({
       provider: "devin",
       binaryPath: settings.devinBinaryPath || null,
       cwd: providerModelDiscoveryCwd,
-      enabled: selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen,
+      enabled: selectedProvider === "devin" || lockedProvider === "devin",
     }),
   );
   const antigravityModelsQuery = useQuery(
@@ -2257,8 +2257,7 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
-  const devinModelDiscoveryEnabled =
-    selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen;
+  const devinModelDiscoveryEnabled = selectedProvider === "devin" || lockedProvider === "devin";
   const hasResolvedDevinModelDiscovery =
     devinDynamicModelsQuery.data?.source?.startsWith("devin.acp") === true &&
     (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -2440,6 +2439,32 @@ export default function ChatView({
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+    ],
+  );
+  const discoveryErrorsByProvider = useMemo(
+    () => ({
+      claudeAgent: claudeDynamicModelsQuery.data?.error,
+      codex: codexDynamicModelsQuery.data?.error,
+      cursor: cursorDynamicModelsQuery.data?.error,
+      devin: devinDynamicModelsQuery.data?.error,
+      antigravity: antigravityModelsQuery.data?.error,
+      grok: grokDynamicModelsQuery.data?.error,
+      droid: droidDynamicModelsQuery.data?.error,
+      kilo: kiloDynamicModelsQuery.data?.error,
+      opencode: openCodeDynamicModelsQuery.data?.error,
+      pi: piDynamicModelsQuery.data?.error,
+    }),
+    [
+      claudeDynamicModelsQuery.data?.error,
+      codexDynamicModelsQuery.data?.error,
+      cursorDynamicModelsQuery.data?.error,
+      devinDynamicModelsQuery.data?.error,
+      antigravityModelsQuery.data?.error,
+      grokDynamicModelsQuery.data?.error,
+      droidDynamicModelsQuery.data?.error,
+      kiloDynamicModelsQuery.data?.error,
+      openCodeDynamicModelsQuery.data?.error,
+      piDynamicModelsQuery.data?.error,
     ],
   );
   const providerModelsQueryByProvider = {
@@ -9458,6 +9483,7 @@ export default function ChatView({
           opencode: openCodeModelDiscoveryPending,
           pi: piModelDiscoveryPending,
         }}
+        discoveryErrorsByProvider={discoveryErrorsByProvider}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={onProviderModelSelect}
@@ -9502,6 +9528,7 @@ export default function ChatView({
         opencode: openCodeModelDiscoveryPending,
         pi: piModelDiscoveryPending,
       }}
+      discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
       threadId={threadId}

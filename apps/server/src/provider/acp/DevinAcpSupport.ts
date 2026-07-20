@@ -13,6 +13,7 @@ import * as EffectAcpErrorsRuntime from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { collectSessionConfigOptionValues, findSessionConfigOption } from "./AcpRuntimeModel.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -136,6 +137,19 @@ export const resolveDevinAcpAuthMethodIdForDiscovery = (
     });
   });
 
+function devinAuthSetupHeuristic(
+  initializeResult: EffectAcpSchema.InitializeResponse,
+  setupResult:
+    | EffectAcpSchema.NewSessionResponse
+    | EffectAcpSchema.LoadSessionResponse
+    | EffectAcpSchema.ResumeSessionResponse,
+): boolean {
+  const modelOption = findSessionConfigOption(setupResult.configOptions ?? [], "model");
+  const availableModels =
+    modelOption?.type === "select" ? collectSessionConfigOptionValues(modelOption) : [];
+  return availableModels.length === 0 && (initializeResult.authMethods?.length ?? 0) > 0;
+}
+
 export const makeDevinAcpRuntime = (
   input: DevinAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
@@ -147,6 +161,7 @@ export const makeDevinAcpRuntime = (
         resolveAuthMethodId: input.resolveAuthMethodId ?? resolveDevinAcpAuthMethodId,
         authenticateMeta: { headless: true },
         authPolicy: "on-demand",
+        authSetupHeuristic: devinAuthSetupHeuristic,
         clientCapabilities: {
           ...input.clientCapabilities,
           elicitation: { form: {} },

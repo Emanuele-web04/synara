@@ -155,6 +155,15 @@ describe("providerModelsPrefetchQueryOptions", () => {
       ),
     );
 
+    const devinOptions = providerModelsPrefetchQueryOptions({
+      provider: "devin",
+      settings: makeSettings({ devinBinaryPath: "/bin/devin" }),
+      cwd: "/tmp/project",
+    });
+    expect(devinOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("devin", "/bin/devin", null, null, "/tmp/project"),
+    );
+
     const codexOptions = providerModelsPrefetchQueryOptions({
       provider: "codex",
       settings,

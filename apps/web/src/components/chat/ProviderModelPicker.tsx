@@ -175,6 +175,7 @@ type ProviderModelMenuItemsProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   disabled?: boolean;
@@ -308,6 +309,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           })
         : groupProviderModelOptions(filteredOptions);
 
+    const discoveryError = props.discoveryErrorsByProvider?.[provider];
+    const discoveryErrorElement = discoveryError ? (
+      <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+    ) : null;
+
     const content =
       groupedOptions.length > 0 ? (
         <MenuRadioGroup
@@ -339,18 +345,26 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         shouldUseCollapsibleModelGroups(groupedOptions.length, false);
       if (needsScrollContainer) {
         return (
-          <div
-            className={cn(
-              "overflow-y-auto overscroll-contain py-0.5",
-              COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
-              COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
-            )}
-          >
-            {content}
-          </div>
+          <>
+            {discoveryErrorElement}
+            <div
+              className={cn(
+                "overflow-y-auto overscroll-contain py-0.5",
+                COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+                COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+              )}
+            >
+              {content}
+            </div>
+          </>
         );
       }
-      return content;
+      return (
+        <>
+          {discoveryErrorElement}
+          {content}
+        </>
+      );
     }
 
     return (
@@ -364,6 +378,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         bleedParentPadding
         listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
       >
+        {discoveryErrorElement}
         {content}
       </PickerPanelShell>
     );
@@ -464,6 +479,7 @@ type ProviderModelPickerProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   activeProviderIconClassName?: string;
@@ -583,6 +599,9 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           modelOptionsByProvider={props.modelOptionsByProvider}
           {...(props.loadingModelProviders
             ? { loadingModelProviders: props.loadingModelProviders }
+            : {})}
+          {...(props.discoveryErrorsByProvider
+            ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Deferred, Effect, Exit, Scope } from "effect";
+import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
@@ -8,6 +8,7 @@ import {
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   makeAcpIncomingFrameGuard,
+  makeStartupInteractionRegistry,
   sessionConfigOptionsFromSetup,
   teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
@@ -182,5 +183,80 @@ describe("sessionConfigOptionsFromSetup", () => {
 
   it("uses an explicit setup inventory instead of replayed config", () => {
     expect(sessionConfigOptionsFromSetup({ configOptions: [] }, replayedConfigOptions)).toEqual([]);
+  });
+});
+
+describe("makeStartupInteractionRegistry", () => {
+  it("buffers dispatches before startup completes and flushes them on complete", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
+      const handled: string[] = [];
+      const response = "ok";
+
+      const dispatchFiber1 = yield* registry.dispatch("a").pipe(Effect.forkChild);
+      const dispatchFiber2 = yield* registry.dispatch("b").pipe(Effect.forkChild);
+
+      yield* registry.register((req) =>
+        Effect.sync(() => {
+          handled.push(req);
+          return response;
+        }),
+      );
+
+      yield* registry.complete();
+
+      const results = yield* Effect.all([Fiber.join(dispatchFiber1), Fiber.join(dispatchFiber2)]);
+
+      expect(handled).toEqual(["a", "b"]);
+      expect(results).toEqual([response, response]);
+    });
+
+    await Effect.runPromise(program);
+  });
+
+  it("routes dispatches directly to the handler after startup completes", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
+
+      yield* registry.register((req) => Effect.succeed(`handled:${req}`));
+      yield* registry.complete();
+
+      const result = yield* registry.dispatch("x");
+      expect(result).toBe("handled:x");
+    });
+
+    await Effect.runPromise(program);
+  });
+
+  it("cancels pending dispatches on begin and when explicitly cancelled", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("cancelled");
+
+      const fiber = yield* registry.dispatch("a").pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* registry.begin();
+      const result = yield* Fiber.join(fiber);
+      expect(result).toBe("cancelled");
+    });
+
+    await Effect.runPromise(program);
+  });
+
+  it("rejects dispatches once the buffer is exhausted", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
+
+      for (let i = 0; i < 256; i++) {
+        yield* registry.dispatch(String(i)).pipe(Effect.forkChild);
+      }
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const error = yield* registry.dispatch("overflow").pipe(Effect.flip);
+      expect(error._tag).toBe("AcpRequestError");
+    });
+
+    await Effect.runPromise(program);
   });
 });

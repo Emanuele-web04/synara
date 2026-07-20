@@ -187,6 +187,7 @@ export function KanbanNewTaskDialog({
   const {
     modelOptionsByProvider,
     loadingModelProviders,
+    discoveryErrorsByProvider,
     runtimeModelsByProvider,
     selectedRuntimeModel,
     selectedRuntimeAgents,
@@ -525,6 +526,7 @@ export function KanbanNewTaskDialog({
                     providers={providerStatuses}
                     modelOptionsByProvider={modelOptionsByProvider}
                     loadingModelProviders={loadingModelProviders}
+                    discoveryErrorsByProvider={discoveryErrorsByProvider}
                     hiddenProviders={settings.hiddenProviders}
                     providerOrder={settings.providerOrder}
                     onProviderModelChange={handleProviderModelChange}

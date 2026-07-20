@@ -35,6 +35,8 @@ export interface ProviderModelCatalog {
    * must feed them through (see {@link selectedRuntimeModel}).
    */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
+  /** Concise discovery failure messages per provider (e.g. static fallback warnings). */
+  discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>>;
   /** The runtime descriptor matching `selectedProvider` + its selected-model hint. */
   selectedRuntimeModel: ProviderModelDescriptor | undefined;
   /** Runtime-discovered agents/modes for the selected provider (kilo/opencode/claude/codex). */
@@ -78,7 +80,7 @@ export function useProviderModelCatalog(input: {
       provider: "devin",
       binaryPath: settings.devinBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "devin" || discoveryEnabled,
+      enabled: selectedProvider === "devin",
     }),
   );
   const antigravityModelsQuery = useQuery(
@@ -306,6 +308,19 @@ export function useProviderModelCatalog(input: {
     pi: piDynamicModelsQuery.data?.models ?? [],
   };
 
+  const discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>> = {
+    claudeAgent: claudeDynamicModelsQuery.data?.error,
+    codex: codexDynamicModelsQuery.data?.error,
+    cursor: cursorDynamicModelsQuery.data?.error,
+    devin: devinDynamicModelsQuery.data?.error,
+    antigravity: antigravityModelsQuery.data?.error,
+    grok: grokDynamicModelsQuery.data?.error,
+    droid: droidDynamicModelsQuery.data?.error,
+    kilo: kiloDynamicModelsQuery.data?.error,
+    opencode: openCodeDynamicModelsQuery.data?.error,
+    pi: piDynamicModelsQuery.data?.error,
+  };
+
   const selectedRuntimeModel = resolveRuntimeModelDescriptor({
     provider: selectedProvider,
     model: modelHintByProvider?.[selectedProvider] ?? null,
@@ -331,6 +346,7 @@ export function useProviderModelCatalog(input: {
     modelOptionsByProvider,
     loadingModelProviders,
     runtimeModelsByProvider,
+    discoveryErrorsByProvider,
     selectedRuntimeModel,
     selectedRuntimeAgents,
   };
