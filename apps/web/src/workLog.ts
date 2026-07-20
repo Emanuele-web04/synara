@@ -12,6 +12,10 @@ import {
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
 } from "@synara/shared/subagents";
+import {
+  approvalRequestKindFromRequestType,
+  type ApprovalRequestKind,
+} from "@synara/shared/threadSummary";
 import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 import { pluralize } from "@synara/shared/text";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -31,7 +35,7 @@ import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
 
-export type WorkLogRequestKind = "command" | "file-read" | "file-change";
+export type WorkLogRequestKind = ApprovalRequestKind;
 
 export interface WorkLogEntry {
   id: string;
@@ -188,21 +192,6 @@ export function orderedActivities(
     : activities.toSorted(compareActivitiesByOrder);
   orderedActivitiesCache.set(activities, ordered);
   return ordered;
-}
-
-export function requestKindFromRequestType(requestType: unknown): WorkLogRequestKind | null {
-  switch (requestType) {
-    case "command_execution_approval":
-    case "exec_command_approval":
-      return "command";
-    case "file_read_approval":
-      return "file-read";
-    case "file_change_approval":
-    case "apply_patch_approval":
-      return "file-change";
-    default:
-      return null;
-  }
 }
 
 function shouldOmitRoutedCollabAgentToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -1523,7 +1512,7 @@ function extractWorkLogRequestKind(
   ) {
     return payload.requestKind;
   }
-  return requestKindFromRequestType(payload?.requestType) ?? undefined;
+  return approvalRequestKindFromRequestType(payload?.requestType) ?? undefined;
 }
 
 function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {

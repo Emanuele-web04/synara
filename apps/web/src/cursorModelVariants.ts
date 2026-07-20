@@ -1,4 +1,5 @@
 import type { ProviderModelDescriptor } from "@synara/contracts";
+import { parseCursorCliReasoningEffort } from "@synara/shared/model";
 
 function uniqueByValue<T extends { readonly value: string }>(values: ReadonlyArray<T>): T[] {
   const seen = new Set<string>();
@@ -22,32 +23,6 @@ function cursorReasoningLabel(value: string): string {
     default:
       return value.charAt(0).toUpperCase() + value.slice(1);
   }
-}
-
-function parseCursorCliReasoningEffort(model: string): string | undefined {
-  const tokens = model.trim().toLowerCase().split("-");
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    const token = tokens[index];
-    if (!token) {
-      continue;
-    }
-    if (token === "xhigh") {
-      return "xhigh";
-    }
-    if (token === "high" && tokens[index - 1] === "extra") {
-      return "xhigh";
-    }
-    if (
-      token === "max" ||
-      token === "none" ||
-      token === "low" ||
-      token === "medium" ||
-      token === "high"
-    ) {
-      return token;
-    }
-  }
-  return undefined;
 }
 
 function stripCursorParameterizedSuffix(value: string): string {

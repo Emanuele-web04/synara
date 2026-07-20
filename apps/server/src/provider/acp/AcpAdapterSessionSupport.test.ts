@@ -6,12 +6,87 @@ import {
   finalizeAcpActiveTurnCost,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
+  resolveRequestedAcpSessionModeId,
   scopeAcpRuntimeItemIdForTurn,
   scopeAcpToolCallStateForTurn,
   withAcpPlanModePrompt,
 } from "./AcpAdapterSessionSupport.ts";
 
 describe("ACP adapter session support", () => {
+  it("resolves plan, approval, full-access, and fallback ACP modes in policy order", () => {
+    const aliases = {
+      plan: ["plan", "architect"],
+      implement: ["code", "agent", "default", "chat", "implement"],
+      approval: ["ask"],
+    } as const;
+    const modeState = {
+      currentModeId: "current",
+      availableModes: [
+        { id: "architecture", name: "Architect", description: "Plan changes" },
+        { id: "ask", name: "Ask" },
+        { id: "code", name: "Code" },
+      ],
+    };
+
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        modeState,
+        aliases,
+      }),
+    ).toBe("architecture");
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        modeState,
+        aliases,
+      }),
+    ).toBe("ask");
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        modeState,
+        aliases,
+      }),
+    ).toBe("code");
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        modeState: {
+          currentModeId: "current",
+          availableModes: [
+            { id: "plan", name: "Plan" },
+            { id: "custom", name: "Custom" },
+          ],
+        },
+        aliases,
+      }),
+    ).toBe("custom");
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        modeState: {
+          currentModeId: "current",
+          availableModes: [{ id: "plan", name: "Plan" }],
+        },
+        aliases,
+      }),
+    ).toBe("current");
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        modeState: undefined,
+        aliases,
+      }),
+    ).toBeUndefined();
+  });
+
   it("scopes reused runtime and tool ids while preserving the provider id", () => {
     const turnId = TurnId.makeUnsafe("turn-1");
     expect(scopeAcpRuntimeItemIdForTurn("grok", turnId, "item-1")).toBe("grok:turn-1:item-1");

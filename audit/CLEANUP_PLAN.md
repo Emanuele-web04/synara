@@ -156,7 +156,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-033 | P1  | DONE   | Consolidate the 19 duplicate browser commands plus identical state subscription inside `ipc.ts`; retain runtime orchestration schema families and distinct event surfaces.                 | selected bridge adapter tests and targeted bundles                          |
 | CLN-034 | P2  | DONE   | Consolidate repeated alias scans inside the existing canonical subagent-state decoder; retain the cohesive decoder/index module and context-specific alias sets.                           | one filtered shared decoder characterization and bundle                     |
 | CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                    | gate audit only; no safe implementation verification exists                 |
-| CLN-040 | P2  | TODO   | Final reference/duplicate/unused rescan; reassess `timelineHeight.ts`; update before/after metrics.                                                                                          | focused suites, then optional heavyweight pass only with user authorization |
+| CLN-040 | P2  | IN_PROGRESS | Final reference/duplicate/unused rescan, retained-monolith review, `timelineHeight.ts` reassessment, and before/after metrics; no broad tests without authorization.                        | static scans and targeted source/reference checks                           |
 
 ## Ordered execution and safety gates
 
@@ -578,3 +578,21 @@ For every tracker item:
   **0 unused diagnostics**, and `git diff --check` passed. Remaining risk is uncommon alias
   combinations beyond the matrix, mitigated by unchanged alias arrays and ordering; the broader
   shared suite and workspace typecheck were intentionally not run.
+- 2026-07-20 — CLN-040 started as a read-only closeout gate. The rescan covers repo-owned source
+  references, unused symbols/exports/files, exact/near duplicated logic/views/CSS/functions, and the
+  largest retained files including `timelineHeight.ts`. Only true P0/P1 findings with a stable owner
+  and focused safety gate may reopen implementation; large cohesive files, trust-boundary checks, and
+  semantic variants will be recorded as intentionally retained. No broad tests, formatter, lint, or
+  workspace typecheck will run without explicit authorization.
+- 2026-07-20 — CLN-040's first rescan reopened four P1 pure mappings and all four are now
+  consolidated in existing owners. `model.ts` owns Cursor CLI reasoning-effort parsing (two copies
+  deleted); `threadSummary.ts` owns approval request-kind mapping (the work-log copy deleted);
+  `AcpAdapterSupport.ts` owns ACP tool-kind canonicalization (two copies deleted); and
+  `AcpAdapterSessionSupport.ts` owns requested session-mode alias/fallback selection (Cursor/Grok
+  copies deleted while provider alias arrays stay local). No lifecycle, event order, schema, or new
+  production file was introduced. Focused verification ran once: Cursor parser **8/8**, server/web
+  integration **1/1** each; approval mapping **7/7**; ACP tool/mode policy **2/2** with 12 unrelated
+  cases skipped. All affected shared/server/web entrypoints bundled, the 15 touched files have
+  **0 unused diagnostics**, and `git diff --check` passed. Remaining risk: live ACP configuration,
+  broad work-log/model suites, bundle-size impact, and workspace typecheck were intentionally not run;
+  call-site ordering and pure mapping bodies remain unchanged.

@@ -23,6 +23,7 @@ export interface PendingThreadRequestIds {
 }
 
 export type PendingThreadRequestKind = "approval" | "user-input";
+export type ApprovalRequestKind = "command" | "file-read" | "file-change";
 
 export function pendingRequestInstanceKey(requestId: string, lifecycleGeneration?: string): string {
   return `${requestId}\u0000${lifecycleGeneration ?? "legacy"}`;
@@ -52,9 +53,9 @@ function toPayloadRecord(payload: unknown): Record<string, unknown> | null {
   return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
 }
 
-function requestKindFromRequestType(
+export function approvalRequestKindFromRequestType(
   requestType: unknown,
-): "command" | "file-read" | "file-change" | null {
+): ApprovalRequestKind | null {
   switch (requestType) {
     case "command_execution_approval":
     case "exec_command_approval":
@@ -201,7 +202,7 @@ export function derivePendingThreadRequestIds(input: {
         payload?.requestKind === "file-read" ||
         payload?.requestKind === "file-change"
           ? payload.requestKind
-          : requestKindFromRequestType(payload?.requestType);
+          : approvalRequestKindFromRequestType(payload?.requestType);
       if (requestKind) {
         replaceOpenRequest(openApprovals, requestId, lifecycleGeneration);
       }

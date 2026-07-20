@@ -105,6 +105,32 @@ export function formatModelDisplayName(model: string | null | undefined): string
 
 // ── Effort helpers ────────────────────────────────────────────────────
 
+export function parseCursorCliReasoningEffort(model: string): string | undefined {
+  const tokens = model.trim().toLowerCase().split("-");
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (!token) {
+      continue;
+    }
+    if (token === "xhigh") {
+      return "xhigh";
+    }
+    if (token === "high" && tokens[index - 1] === "extra") {
+      return "xhigh";
+    }
+    if (
+      token === "max" ||
+      token === "none" ||
+      token === "low" ||
+      token === "medium" ||
+      token === "high"
+    ) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
 /** Check whether a capabilities object includes a given effort value. */
 export function hasEffortLevel(caps: ModelCapabilities, value: string): boolean {
   return caps.reasoningEffortLevels.some((l) => l.value === value);

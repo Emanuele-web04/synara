@@ -10,12 +10,94 @@ import type {
   ProviderInteractionMode,
   ProviderSession,
   ProviderUserInputAnswers,
+  RuntimeMode,
   TurnId,
 } from "@synara/contracts";
 import { Deferred, Effect, Option, Semaphore, SynchronizedRef } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import type { AcpToolCallState } from "./AcpRuntimeModel.ts";
+import type {
+  AcpSessionMode,
+  AcpSessionModeState,
+  AcpToolCallState,
+} from "./AcpRuntimeModel.ts";
+
+export interface AcpSessionModeAliases {
+  readonly plan: ReadonlyArray<string>;
+  readonly implement: ReadonlyArray<string>;
+  readonly approval: ReadonlyArray<string>;
+}
+
+function normalizeAcpModeSearchText(mode: AcpSessionMode): string {
+  return [mode.id, mode.name, mode.description]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function findAcpModeByAliases(
+  modes: ReadonlyArray<AcpSessionMode>,
+  aliases: ReadonlyArray<string>,
+): AcpSessionMode | undefined {
+  const normalizedAliases = aliases.map((alias) => alias.toLowerCase());
+  for (const alias of normalizedAliases) {
+    const exact = modes.find((mode) => {
+      const id = mode.id.toLowerCase();
+      const name = mode.name.toLowerCase();
+      return id === alias || name === alias;
+    });
+    if (exact) {
+      return exact;
+    }
+  }
+  for (const alias of normalizedAliases) {
+    const partial = modes.find((mode) => normalizeAcpModeSearchText(mode).includes(alias));
+    if (partial) {
+      return partial;
+    }
+  }
+  return undefined;
+}
+
+function isAcpPlanMode(mode: AcpSessionMode, planAliases: ReadonlyArray<string>): boolean {
+  return findAcpModeByAliases([mode], planAliases) !== undefined;
+}
+
+export function resolveRequestedAcpSessionModeId(input: {
+  readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly runtimeMode: RuntimeMode;
+  readonly modeState: AcpSessionModeState | undefined;
+  readonly aliases: AcpSessionModeAliases;
+}): string | undefined {
+  const modeState = input.modeState;
+  if (!modeState) {
+    return undefined;
+  }
+
+  if (input.interactionMode === "plan") {
+    return findAcpModeByAliases(modeState.availableModes, input.aliases.plan)?.id;
+  }
+
+  if (input.runtimeMode === "approval-required") {
+    return (
+      findAcpModeByAliases(modeState.availableModes, input.aliases.approval)?.id ??
+      findAcpModeByAliases(modeState.availableModes, input.aliases.implement)?.id ??
+      modeState.availableModes.find(
+        (mode) => !isAcpPlanMode(mode, input.aliases.plan),
+      )?.id ??
+      modeState.currentModeId
+    );
+  }
+
+  return (
+    findAcpModeByAliases(modeState.availableModes, input.aliases.implement)?.id ??
+    findAcpModeByAliases(modeState.availableModes, input.aliases.approval)?.id ??
+    modeState.availableModes.find((mode) => !isAcpPlanMode(mode, input.aliases.plan))?.id ??
+    modeState.currentModeId
+  );
+}
 
 export interface AcpThreadLock {
   <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R>;

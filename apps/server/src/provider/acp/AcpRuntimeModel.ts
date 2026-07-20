@@ -7,6 +7,7 @@ import type {
 import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
 import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
+import { canonicalItemTypeFromAcpToolKind } from "./AcpAdapterSupport.ts";
 
 type AcpTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 
@@ -348,22 +349,6 @@ function inferToolKindFromProviderTitle(title: string | undefined): string | und
       return "execute";
     default:
       return undefined;
-  }
-}
-
-function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
-  switch (kind) {
-    case "execute":
-      return "command_execution";
-    case "edit":
-    case "delete":
-    case "move":
-      return "file_change";
-    case "fetch":
-      return "web_search";
-    case "search":
-    default:
-      return "dynamic_tool_call";
   }
 }
 
