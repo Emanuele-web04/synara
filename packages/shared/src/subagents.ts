@@ -342,12 +342,7 @@ function buildSubagentAgentState(
   ]);
   const prompt = firstStringValue(object, ["prompt", "task", "message"]);
   const status = firstStringValue(object, ["status", "state"]);
-  const message = firstStringValue(object, [
-    "summary",
-    "message",
-    "latestUpdate",
-    "latest_update",
-  ]);
+  const message = firstStringValue(object, ["summary", "message", "latestUpdate", "latest_update"]);
 
   return {
     threadId,

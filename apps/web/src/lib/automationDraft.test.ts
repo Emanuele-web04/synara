@@ -112,11 +112,7 @@ describe("automation draft warnings", () => {
 
   it("immutably updates warning acknowledgements", () => {
     const initial = new Set<AutomationDraftWarningId>(["full-access"]);
-    const added = updateAutomationDraftWarningAcknowledgement(
-      initial,
-      "local-checkout",
-      true,
-    );
+    const added = updateAutomationDraftWarningAcknowledgement(initial, "local-checkout", true);
     const removed = updateAutomationDraftWarningAcknowledgement(added, "full-access", false);
 
     expect(Array.from(initial)).toEqual(["full-access"]);

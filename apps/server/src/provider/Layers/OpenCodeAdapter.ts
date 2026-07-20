@@ -79,11 +79,7 @@ import {
   mergeOpenCodeCliModelDescriptors,
   resolvePreferredOpenCodeModelProviders,
 } from "../OpenCodeDiscovery.ts";
-import {
-  nonNegativeFiniteNumber,
-  nonNegativeInteger,
-  positiveInteger,
-} from "../tokenUsage.ts";
+import { nonNegativeFiniteNumber, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
 
 export { flattenOpenCodeCliModels, flattenOpenCodeModels, resolvePreferredOpenCodeModelProviders };
 

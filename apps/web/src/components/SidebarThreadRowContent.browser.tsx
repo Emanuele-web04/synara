@@ -11,9 +11,7 @@ import { render } from "vitest-browser-react";
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
 import { SidebarThreadRowContent } from "./SidebarThreadRowContent";
 
-function makeThread(
-  overrides: Partial<SidebarThreadSummary> = {},
-): SidebarThreadSummary {
+function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
     id: ThreadId.makeUnsafe("thread-row-content"),
     projectId: ProjectId.makeUnsafe("project-row-content"),
@@ -54,9 +52,9 @@ describe("SidebarThreadRowContent", () => {
       />,
     );
 
-    await expect.element(screen.getByTestId(`thread-title-${thread.id}`)).toHaveTextContent(
-      "Shared thread row",
-    );
+    await expect
+      .element(screen.getByTestId(`thread-title-${thread.id}`))
+      .toHaveTextContent("Shared thread row");
     await expect.element(screen.getByLabelText("Pending approval")).toHaveTextContent("Pending");
     await expect.element(screen.getByLabelText("2 terminals open")).toBeVisible();
     await expect.element(screen.getByText("Project Alpha")).toBeVisible();

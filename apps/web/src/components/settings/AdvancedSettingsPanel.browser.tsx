@@ -56,11 +56,7 @@ describe("AdvancedSettingsPanel", () => {
   it("owns recovery eligibility, shared disclosure motion, and the release-history handoff", async () => {
     const onOpenReleaseHistory = vi.fn();
     await render(
-      <AdvancedSettingsPanel
-        active
-        onOpenReleaseHistory={onOpenReleaseHistory}
-        resetEpoch={0}
-      />,
+      <AdvancedSettingsPanel active onOpenReleaseHistory={onOpenReleaseHistory} resetEpoch={0} />,
     );
 
     const repairButton = page.getByRole("button", { name: "Repair state" });

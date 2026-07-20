@@ -656,7 +656,6 @@ describe("flattenOpenCodeModels", () => {
   });
 });
 
-
 describe("OpenCode discovery helpers", () => {
   it("maps only positive integer model context limits by canonical slug", () => {
     const inventory = {
@@ -689,9 +688,7 @@ describe("OpenCode discovery helpers", () => {
       consoleState: null,
     };
 
-    expect([...buildOpenCodeModelContextLimitMap(inventory)]).toEqual([
-      ["openai/valid", 200_000],
-    ]);
+    expect([...buildOpenCodeModelContextLimitMap(inventory)]).toEqual([["openai/valid", 200_000]]);
   });
 
   it("normalizes visible primary agents and commands without leaking hidden entries", () => {
@@ -728,10 +725,7 @@ describe("OpenCode discovery helpers", () => {
         model: "anthropic/claude-opus",
       },
     ]);
-    expect(commands).toEqual([
-      { name: "build" },
-      { name: "review", description: "Review code" },
-    ]);
+    expect(commands).toEqual([{ name: "build" }, { name: "review", description: "Review code" }]);
   });
 
   it("classifies only command-discovery compatibility failures as unsupported", () => {

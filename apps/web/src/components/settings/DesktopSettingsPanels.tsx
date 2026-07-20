@@ -3,10 +3,7 @@
 // Layer: Settings UI components
 // Exports: NotificationsSettingsPanel, AppSnapSettingsPanel
 
-import {
-  type DesktopAppSnapPermission,
-  type DesktopAppSnapState,
-} from "@synara/contracts";
+import { type DesktopAppSnapPermission, type DesktopAppSnapState } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
@@ -163,7 +160,9 @@ export function NotificationsSettingsPanel({
               <SettingResetButton
                 label="activity toasts"
                 onClick={() =>
-                  updateSettings({ enableTaskCompletionToasts: defaults.enableTaskCompletionToasts })
+                  updateSettings({
+                    enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
+                  })
                 }
               />
             ) : null
@@ -412,16 +411,12 @@ export function AppSnapSettingsPanel({
           <SettingsRow
             title="Input Monitoring"
             description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
-            control={
-              <AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />
-            }
+            control={<AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />}
           />
           <SettingsRow
             title="Screen Recording"
             description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
-            control={
-              <AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />
-            }
+            control={<AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />}
           />
           <SettingsRow
             title="Permission status"

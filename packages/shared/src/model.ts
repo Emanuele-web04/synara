@@ -224,10 +224,7 @@ export function getModelSelectionOptionValue(
   modelSelection: ModelSelection | null | undefined,
   id: string,
 ): string | boolean | undefined {
-  return providerOptionSelectionValue(
-    modelSelection?.options as ProviderOptionSelectionsInput,
-    id,
-  );
+  return providerOptionSelectionValue(modelSelection?.options as ProviderOptionSelectionsInput, id);
 }
 
 export function getModelSelectionStringOptionValue(

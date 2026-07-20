@@ -18,9 +18,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 
-export function canonicalItemTypeFromAcpToolKind(
-  kind: string | undefined,
-): ToolLifecycleItemType {
+export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
   switch (kind) {
     case "execute":
       return "command_execution";

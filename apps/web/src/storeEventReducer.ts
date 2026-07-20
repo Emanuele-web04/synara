@@ -2,10 +2,7 @@
 // Purpose: Reduces ordered orchestration domain events into normalized client state.
 // Exports: Normal and hot-path event batch reducers.
 
-import {
-  type OrchestrationEvent,
-  type OrchestrationPendingInteraction,
-} from "@synara/contracts";
+import { type OrchestrationEvent, type OrchestrationPendingInteraction } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
   addPinnedMessage,
@@ -739,17 +736,21 @@ function applyOrchestrationEvent(
 ): AppState {
   switch (event.type) {
     case "project.created":
-      return upsertProject(state, {
-        id: event.payload.projectId,
-        kind: event.payload.kind,
-        title: event.payload.title,
-        workspaceRoot: event.payload.workspaceRoot,
-        defaultModelSelection: event.payload.defaultModelSelection,
-        scripts: event.payload.scripts,
-        isPinned: event.payload.isPinned ?? false,
-        createdAt: event.payload.createdAt,
-        updatedAt: event.payload.updatedAt,
-      }, "id-only");
+      return upsertProject(
+        state,
+        {
+          id: event.payload.projectId,
+          kind: event.payload.kind,
+          title: event.payload.title,
+          workspaceRoot: event.payload.workspaceRoot,
+          defaultModelSelection: event.payload.defaultModelSelection,
+          scripts: event.payload.scripts,
+          isPinned: event.payload.isPinned ?? false,
+          createdAt: event.payload.createdAt,
+          updatedAt: event.payload.updatedAt,
+        },
+        "id-only",
+      );
 
     case "project.meta-updated": {
       const existingProject = state.projects.find(
@@ -758,20 +759,24 @@ function applyOrchestrationEvent(
       if (!existingProject) {
         return state;
       }
-      return upsertProject(state, {
-        id: existingProject.id,
-        kind: event.payload.kind ?? existingProject.kind,
-        title: event.payload.title ?? existingProject.remoteName,
-        workspaceRoot: event.payload.workspaceRoot ?? existingProject.cwd,
-        defaultModelSelection:
-          event.payload.defaultModelSelection !== undefined
-            ? event.payload.defaultModelSelection
-            : existingProject.defaultModelSelection,
-        scripts: event.payload.scripts ?? existingProject.scripts,
-        isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
-        createdAt: existingProject.createdAt ?? event.payload.updatedAt,
-        updatedAt: event.payload.updatedAt,
-      }, "id-only");
+      return upsertProject(
+        state,
+        {
+          id: existingProject.id,
+          kind: event.payload.kind ?? existingProject.kind,
+          title: event.payload.title ?? existingProject.remoteName,
+          workspaceRoot: event.payload.workspaceRoot ?? existingProject.cwd,
+          defaultModelSelection:
+            event.payload.defaultModelSelection !== undefined
+              ? event.payload.defaultModelSelection
+              : existingProject.defaultModelSelection,
+          scripts: event.payload.scripts ?? existingProject.scripts,
+          isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
+          createdAt: existingProject.createdAt ?? event.payload.updatedAt,
+          updatedAt: event.payload.updatedAt,
+        },
+        "id-only",
+      );
     }
 
     case "project.deleted": {

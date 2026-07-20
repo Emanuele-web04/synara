@@ -159,8 +159,7 @@ export function parseGitStatusPorcelain(stdout: string): ParsedGitStatusPorcelai
     }
 
     hasWorkingTreeChanges = true;
-    const statusCode =
-      record.startsWith("1 ") || record.startsWith("2 ") ? record.slice(2, 4) : "";
+    const statusCode = record.startsWith("1 ") || record.startsWith("2 ") ? record.slice(2, 4) : "";
     if (statusCode.includes("D")) {
       hasTrackedDeletion = true;
     }

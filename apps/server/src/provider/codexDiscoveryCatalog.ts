@@ -20,9 +20,7 @@ function readObject(value: unknown, key?: string): Record<string, unknown> | und
         ? (value as Record<string, unknown>)[key]
         : undefined;
 
-  return target && typeof target === "object"
-    ? (target as Record<string, unknown>)
-    : undefined;
+  return target && typeof target === "object" ? (target as Record<string, unknown>) : undefined;
 }
 
 function readArray(value: unknown, key?: string): unknown[] | undefined {
@@ -165,9 +163,7 @@ function parsePluginInterface(value: unknown): ProviderPluginDescriptor["interfa
     ...(readString(record, "composerIcon")?.trim()
       ? { composerIcon: readString(record, "composerIcon")?.trim() }
       : {}),
-    ...(readString(record, "logo")?.trim()
-      ? { logo: readString(record, "logo")?.trim() }
-      : {}),
+    ...(readString(record, "logo")?.trim() ? { logo: readString(record, "logo")?.trim() } : {}),
     ...(screenshots.length > 0 ? { screenshots } : {}),
   };
 }
@@ -234,9 +230,7 @@ export function parseCodexPluginListResponse(
       {
         name,
         path,
-        ...(marketplaceDisplayName
-          ? { interface: { displayName: marketplaceDisplayName } }
-          : {}),
+        ...(marketplaceDisplayName ? { interface: { displayName: marketplaceDisplayName } } : {}),
         plugins,
       },
     ];
@@ -315,9 +309,7 @@ export function parseCodexPluginReadResponse(response: unknown): ProviderPluginD
   };
 }
 
-export function parseCodexModelListResponse(
-  response: unknown,
-): ProviderListModelsResult["models"] {
+export function parseCodexModelListResponse(response: unknown): ProviderListModelsResult["models"] {
   const responseRecord = readObject(response);
   const resultRecord = readObject(responseRecord, "result") ?? responseRecord;
   const rawModels =
@@ -333,8 +325,7 @@ export function parseCodexModelListResponse(
       return [];
     }
 
-    const slug =
-      readString(model, "id") ?? readString(model, "slug") ?? readString(model, "model");
+    const slug = readString(model, "id") ?? readString(model, "slug") ?? readString(model, "model");
     const trimmedSlug = slug?.trim();
     if (!trimmedSlug) {
       return [];
@@ -377,8 +368,7 @@ export function parseCodexModelListResponse(
               return [];
             }
 
-            const label =
-              readString(descriptor, "description") ?? readString(descriptor, "label");
+            const label = readString(descriptor, "description") ?? readString(descriptor, "label");
             const trimmedLabel = label?.trim();
             return [
               {
@@ -391,13 +381,10 @@ export function parseCodexModelListResponse(
       ).values(),
     );
     const defaultReasoningEffort =
-      readString(model, "defaultReasoningEffort") ??
-      readString(model, "default_reasoning_effort");
+      readString(model, "defaultReasoningEffort") ?? readString(model, "default_reasoning_effort");
     const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
     const additionalSpeedTiers =
-      readArray(model, "additionalSpeedTiers") ??
-      readArray(model, "additional_speed_tiers") ??
-      [];
+      readArray(model, "additionalSpeedTiers") ?? readArray(model, "additional_speed_tiers") ?? [];
     const hasFastSpeedTier = additionalSpeedTiers.some(
       (tier) => typeof tier === "string" && tier.trim().toLowerCase() === "fast",
     );

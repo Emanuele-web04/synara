@@ -891,9 +891,10 @@ export const makeCheckCodexProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Codex CLI (`codex`) is not installed or not on PATH."
-          : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Codex CLI (`codex`) is not installed or not on PATH."
+            : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       };
     }
 
@@ -1051,9 +1052,10 @@ export const makeCheckClaudeProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
-          : `Failed to execute Claude Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
+            : `Failed to execute Claude Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       };
     }
 
@@ -1227,9 +1229,10 @@ export const makeCheckGrokProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Grok CLI (`grok`) is not installed or not on PATH."
-          : `Failed to execute Grok CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Grok CLI (`grok`) is not installed or not on PATH."
+            : `Failed to execute Grok CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1305,9 +1308,10 @@ export const makeCheckDroidProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Droid CLI (`droid`) is not installed or not on PATH."
-          : `Failed to execute Droid CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Droid CLI (`droid`) is not installed or not on PATH."
+            : `Failed to execute Droid CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1380,9 +1384,10 @@ export const makeCheckOpenCodeProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
-          : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
+            : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1450,9 +1455,10 @@ export const makeCheckKiloProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Kilo CLI (`kilo`) is not installed or not on PATH."
-          : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Kilo CLI (`kilo`) is not installed or not on PATH."
+            : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1522,9 +1528,10 @@ export const checkPiProviderStatus = (
         available: true,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
-          : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
+            : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1590,9 +1597,10 @@ export const checkAntigravityProviderStatus = (
         available: false,
         authStatus: "unknown",
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Antigravity CLI (`agy`) is not installed or is not on PATH."
-          : `Antigravity CLI health check failed: ${String(versionProbe.cause)}`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Antigravity CLI (`agy`) is not installed or is not on PATH."
+            : `Antigravity CLI health check failed: ${String(versionProbe.cause)}`,
       } satisfies ServerProviderStatus;
     }
     if (versionProbe.outcome === "timeout") {
@@ -1685,9 +1693,10 @@ export const makeCheckCursorProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: versionProbe.outcome === "missing"
-          ? "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH."
-          : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH."
+            : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 

@@ -1089,8 +1089,9 @@ const make = Effect.gen(function* () {
                     detail,
                   },
                 };
-                return Effect.forEach(projectProviderRuntimeActivities(completionEvent), (activity) =>
-                  dispatchActivityUpdate(completionEvent, threadId, activity),
+                return Effect.forEach(
+                  projectProviderRuntimeActivities(completionEvent),
+                  (activity) => dispatchActivityUpdate(completionEvent, threadId, activity),
                 ).pipe(Effect.asVoid);
               }),
             ),

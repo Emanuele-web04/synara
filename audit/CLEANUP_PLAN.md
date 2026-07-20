@@ -132,31 +132,31 @@ scan returns zero without underscore-renaming unused values.
 
 Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 
-| ID      | Pri | Status | Workstream                                                                                                                                                                                   | Primary validation                                                          |
-| ------- | --- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| CLN-001 | P0  | DONE   | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values.                                                                                   | focused Oxlint unused scan; affected unit tests                             |
-| CLN-002 | P0  | DONE   | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import.                                                                                 | web/server focused tests; repo-wide reference scan                          |
-| CLN-003 | P0  | DONE   | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper.                              | existing owner tests plus affected caller tests                             |
-| CLN-004 | P1  | DONE   | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon.                     | web unit/browser tests and disclosure tests                                 |
-| CLN-005 | P1  | DONE   | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites                                                    |
-| CLN-010 | P0  | DONE   | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade.                                                                            | `apps/web/src/store.test.ts` and selector tests                             |
-| CLN-011 | P0  | DONE   | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility.                                               | composer draft/store tests                                                  |
-| CLN-012 | P0  | DONE   | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners.                            | ChatView logic/browser suites and hook tests                                |
-| CLN-013 | P0  | DONE   | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged.                                                             | Sidebar logic/UI/import plus new row characterization                       |
-| CLN-014 | P1  | DONE   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
-| CLN-015 | P1  | DONE   | Reassess settings by stable workflow ownership; extract only independently changing panels that reduce lifecycle/subscription or duplicated-logic scope, and intentionally retain cohesive route-local UI. | focused workflow/render/disclosure tests                                    |
-| CLN-020 | P1  | DONE   | Decompose Claude and OpenCode adapters only along independently testable pure mapper/catalog seams; retain cohesive live lifecycle orchestration.                                           | adapter and runtime suites                                                  |
-| CLN-021 | P1  | DONE   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
-| CLN-022 | P1  | DONE   | Extract the pure runtime-event activity projector and bounded-payload policy; intentionally retain delivery buffers, replay, caches, and lifecycle orchestration in the Layer.              | focused projection tests; targeted unused scan; source bundles              |
-| CLN-023 | P1  | DONE   | Extract Git status wire parsing and terminal subprocess probing behind the existing facades; retain process, mutation, PTY, output, persistence, and lifecycle orchestration.                | focused parser/probe tests plus one Git wiring filter                       |
-| CLN-024 | P2  | DONE   | Consolidate the duplicated projection message-row codec without changing SQL/query shape; retain the already-shared token-attribution CTE in its current owner.                              | focused codec plus selected repository/snapshot cases                       |
-| CLN-030 | P0  | DONE   | Extract only the packaged static-protocol routing policy from Electron `main.ts`; retain logging, updater, backend, window, IPC, and bootstrap lifecycles as cohesive owners.                 | focused resolver tests and targeted desktop bundle                          |
-| CLN-031 | P0  | DONE   | Extract only BrowserManager's long-lived Electron session/security policy; retain popup, tab-runtime, CDP, mutable state, timers, and event lifecycle behind the facade.                     | focused session-policy characterization and manager bundle                  |
-| CLN-032 | P1  | DONE   | Extract only the pure resumable-update HTTP/retry/checksum/header policy behind its existing facade; retain AppSnap persistence, stream engine/adapter, and artifact build phases.           | selected existing resumable-download policy tests and bundle                |
-| CLN-033 | P1  | DONE   | Consolidate the 19 duplicate browser commands plus identical state subscription inside `ipc.ts`; retain runtime orchestration schema families and distinct event surfaces.                 | selected bridge adapter tests and targeted bundles                          |
-| CLN-034 | P2  | DONE   | Consolidate repeated alias scans inside the existing canonical subagent-state decoder; retain the cohesive decoder/index module and context-specific alias sets.                           | one filtered shared decoder characterization and bundle                     |
-| CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                    | gate audit only; no safe implementation verification exists                 |
-| CLN-040 | P2  | DONE   | Final reference/duplicate/unused rescan, retained-monolith review, `timelineHeight.ts` reassessment, and before/after metrics; no broad tests without authorization.                        | static scans and targeted source/reference checks                           |
+| ID      | Pri | Status   | Workstream                                                                                                                                                                                                 | Primary validation                                             |
+| ------- | --- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| CLN-001 | P0  | DONE     | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values.                                                                                                 | focused Oxlint unused scan; affected unit tests                |
+| CLN-002 | P0  | DONE     | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import.                                                                                               | web/server focused tests; repo-wide reference scan             |
+| CLN-003 | P0  | DONE     | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper.                                            | existing owner tests plus affected caller tests                |
+| CLN-004 | P1  | DONE     | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon.                                   | web unit/browser tests and disclosure tests                    |
+| CLN-005 | P1  | DONE     | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output.               | focused subsystem suites                                       |
+| CLN-010 | P0  | DONE     | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade.                                                                                          | `apps/web/src/store.test.ts` and selector tests                |
+| CLN-011 | P0  | DONE     | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility.                                                             | composer draft/store tests                                     |
+| CLN-012 | P0  | DONE     | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners.                                          | ChatView logic/browser suites and hook tests                   |
+| CLN-013 | P0  | DONE     | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged.                                                                           | Sidebar logic/UI/import plus new row characterization          |
+| CLN-014 | P1  | DONE     | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                                      | timeline unit/browser suites; session logic tests              |
+| CLN-015 | P1  | DONE     | Reassess settings by stable workflow ownership; extract only independently changing panels that reduce lifecycle/subscription or duplicated-logic scope, and intentionally retain cohesive route-local UI. | focused workflow/render/disclosure tests                       |
+| CLN-020 | P1  | DONE     | Decompose Claude and OpenCode adapters only along independently testable pure mapper/catalog seams; retain cohesive live lifecycle orchestration.                                                          | adapter and runtime suites                                     |
+| CLN-021 | P1  | DONE     | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                                       | manager and transport suites                                   |
+| CLN-022 | P1  | DONE     | Extract the pure runtime-event activity projector and bounded-payload policy; intentionally retain delivery buffers, replay, caches, and lifecycle orchestration in the Layer.                             | focused projection tests; targeted unused scan; source bundles |
+| CLN-023 | P1  | DONE     | Extract Git status wire parsing and terminal subprocess probing behind the existing facades; retain process, mutation, PTY, output, persistence, and lifecycle orchestration.                              | focused parser/probe tests plus one Git wiring filter          |
+| CLN-024 | P2  | DONE     | Consolidate the duplicated projection message-row codec without changing SQL/query shape; retain the already-shared token-attribution CTE in its current owner.                                            | focused codec plus selected repository/snapshot cases          |
+| CLN-030 | P0  | DONE     | Extract only the packaged static-protocol routing policy from Electron `main.ts`; retain logging, updater, backend, window, IPC, and bootstrap lifecycles as cohesive owners.                              | focused resolver tests and targeted desktop bundle             |
+| CLN-031 | P0  | DONE     | Extract only BrowserManager's long-lived Electron session/security policy; retain popup, tab-runtime, CDP, mutable state, timers, and event lifecycle behind the facade.                                   | focused session-policy characterization and manager bundle     |
+| CLN-032 | P1  | DONE     | Extract only the pure resumable-update HTTP/retry/checksum/header policy behind its existing facade; retain AppSnap persistence, stream engine/adapter, and artifact build phases.                         | selected existing resumable-download policy tests and bundle   |
+| CLN-033 | P1  | DONE     | Consolidate the 19 duplicate browser commands plus identical state subscription inside `ipc.ts`; retain runtime orchestration schema families and distinct event surfaces.                                 | selected bridge adapter tests and targeted bundles             |
+| CLN-034 | P2  | DONE     | Consolidate repeated alias scans inside the existing canonical subagent-state decoder; retain the cohesive decoder/index module and context-specific alias sets.                                           | one filtered shared decoder characterization and bundle        |
+| CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                                    | gate audit only; no safe implementation verification exists    |
+| CLN-040 | P2  | DONE     | Final reference/duplicate/unused rescan, retained-monolith review, `timelineHeight.ts` reassessment, and before/after metrics; no broad tests without authorization.                                       | static scans and targeted source/reference checks              |
 
 ## Ordered execution and safety gates
 
@@ -625,24 +625,24 @@ For every tracker item:
 
 These measurements describe the result; they were never extraction targets.
 
-| Existing owner | Baseline LOC | Closeout LOC | Decision |
-| --- | ---: | ---: | --- |
-| `ChatView.tsx` | 11,971 | 10,902 | Stable workflows extracted; render/scroll owner retained |
-| `Sidebar.tsx` | 7,940 | 6,555 | Row/action seams extracted; navigation owner retained |
-| `composerDraftStore.ts` | 5,185 | 158 | Persistence, migration, attachment, and selection owners extracted |
-| `store.ts` | 4,714 | 341 | Reducer/projection/persistence owners extracted behind facade |
-| Desktop `main.ts` | 3,722 | 3,666 | Static protocol extracted; bootstrap lifecycle retained |
-| `browserManager.ts` | 2,149 | 2,017 | Session policy extracted; mutable runtime retained |
-| `ClaudeAdapter.ts` | 5,590 | 5,336 | Pure mapping extracted; session lifecycle retained |
-| `OpenCodeAdapter.ts` | 4,733 | 4,084 | Pure mapping/catalog seams extracted; lifecycle retained |
-| `codexAppServerManager.ts` | 3,684 | 3,229 | Discovery/transport seams extracted behind manager facade |
-| `ProviderRuntimeIngestion.ts` | 3,728 | 2,730 | Pure activity projection extracted; replay/delivery retained |
-| `MessagesTimeline.tsx` | 3,847 | 2,622 | Row/derivation seams extracted; list-follow owner retained |
-| Settings route | 3,801 | 1,114 | Independently changing panels extracted |
-| Contracts orchestration | 2,291 | 2,291 | Intentionally retained schema family |
-| `GitCore.ts` | 2,911 | 2,757 | Pure parsing extracted; mutation/locking retained |
-| Terminal `Manager.ts` | 2,569 | 2,322 | Pure probes/parsers extracted; PTY lifecycle retained |
-| **Selected-owner total** | **68,835** | **50,124** | **18,711 fewer lines through owned seams/deletion** |
+| Existing owner                | Baseline LOC | Closeout LOC | Decision                                                           |
+| ----------------------------- | -----------: | -----------: | ------------------------------------------------------------------ |
+| `ChatView.tsx`                |       11,971 |       10,902 | Stable workflows extracted; render/scroll owner retained           |
+| `Sidebar.tsx`                 |        7,940 |        6,555 | Row/action seams extracted; navigation owner retained              |
+| `composerDraftStore.ts`       |        5,185 |          158 | Persistence, migration, attachment, and selection owners extracted |
+| `store.ts`                    |        4,714 |          341 | Reducer/projection/persistence owners extracted behind facade      |
+| Desktop `main.ts`             |        3,722 |        3,666 | Static protocol extracted; bootstrap lifecycle retained            |
+| `browserManager.ts`           |        2,149 |        2,017 | Session policy extracted; mutable runtime retained                 |
+| `ClaudeAdapter.ts`            |        5,590 |        5,336 | Pure mapping extracted; session lifecycle retained                 |
+| `OpenCodeAdapter.ts`          |        4,733 |        4,084 | Pure mapping/catalog seams extracted; lifecycle retained           |
+| `codexAppServerManager.ts`    |        3,684 |        3,229 | Discovery/transport seams extracted behind manager facade          |
+| `ProviderRuntimeIngestion.ts` |        3,728 |        2,730 | Pure activity projection extracted; replay/delivery retained       |
+| `MessagesTimeline.tsx`        |        3,847 |        2,622 | Row/derivation seams extracted; list-follow owner retained         |
+| Settings route                |        3,801 |        1,114 | Independently changing panels extracted                            |
+| Contracts orchestration       |        2,291 |        2,291 | Intentionally retained schema family                               |
+| `GitCore.ts`                  |        2,911 |        2,757 | Pure parsing extracted; mutation/locking retained                  |
+| Terminal `Manager.ts`         |        2,569 |        2,322 | Pure probes/parsers extracted; PTY lifecycle retained              |
+| **Selected-owner total**      |   **68,835** |   **50,124** | **18,711 fewer lines through owned seams/deletion**                |
 
 Final verification intentionally excludes broad suites and the heavyweight `bun fmt`, `bun lint`,
 and `bun typecheck` workspace pass. Project instructions prohibit running those commands without an

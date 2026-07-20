@@ -45,10 +45,7 @@ describe("git status parsing", () => {
       untrackedPath,
       "new-directory/",
     ]);
-    expect([...parsed.untrackedFilesWithoutNumstat]).toEqual([
-      untrackedPath,
-      "new-directory/",
-    ]);
+    expect([...parsed.untrackedFilesWithoutNumstat]).toEqual([untrackedPath, "new-directory/"]);
     expect(parsed.changedFilesWithoutNumstat.has(originalPath)).toBe(false);
   });
 
@@ -64,9 +61,7 @@ describe("git status parsing", () => {
     const renamedPath = "new\tname\n.txt";
     const summary = summarizeGitNumstatOutputs([
       ["2\t1\tduplicate.txt", "-\t-\tbinary.dat", ""].join("\0"),
-      ["3\t4\tduplicate.txt", "5\t6\t", "old\tname\n.txt", renamedPath, ""].join(
-        "\0",
-      ),
+      ["3\t4\tduplicate.txt", "5\t6\t", "old\tname\n.txt", renamedPath, ""].join("\0"),
     ]);
 
     expect(summary).toMatchObject({ insertions: 10, deletions: 11 });

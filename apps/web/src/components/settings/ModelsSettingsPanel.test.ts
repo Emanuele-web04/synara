@@ -7,9 +7,9 @@ import { validateCustomModelInput } from "./ModelsSettingsPanel";
 
 describe("validateCustomModelInput", () => {
   it("returns the same validation messages as the custom-model editor", () => {
-    expect(
-      validateCustomModelInput({ provider: "codex", value: "   ", savedModels: [] }),
-    ).toEqual({ error: "Enter a model slug." });
+    expect(validateCustomModelInput({ provider: "codex", value: "   ", savedModels: [] })).toEqual({
+      error: "Enter a model slug.",
+    });
 
     const builtIn = getModelOptions("codex")[0]!.slug;
     expect(

@@ -9,10 +9,7 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  approvalRequestKindFromRequestType,
-  deriveThreadSummaryMetadata,
-} from "./threadSummary";
+import { approvalRequestKindFromRequestType, deriveThreadSummaryMetadata } from "./threadSummary";
 
 describe("approvalRequestKindFromRequestType", () => {
   it.each([

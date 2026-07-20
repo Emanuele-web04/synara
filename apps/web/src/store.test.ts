@@ -1,12 +1,7 @@
 // FILE: store.test.ts
 // Purpose: Exercises the public store facade, persistence, and simple UI actions.
 
-import {
-  ProjectId,
-  ThreadId,
-  TurnId,
-  type OrchestrationReadModel,
-} from "@synara/contracts";
+import { ProjectId, ThreadId, TurnId, type OrchestrationReadModel } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
