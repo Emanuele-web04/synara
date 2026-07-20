@@ -154,7 +154,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-031 | P0  | DONE   | Extract only BrowserManager's long-lived Electron session/security policy; retain popup, tab-runtime, CDP, mutable state, timers, and event lifecycle behind the facade.                     | focused session-policy characterization and manager bundle                  |
 | CLN-032 | P1  | DONE   | Extract only the pure resumable-update HTTP/retry/checksum/header policy behind its existing facade; retain AppSnap persistence, stream engine/adapter, and artifact build phases.           | selected existing resumable-download policy tests and bundle                |
 | CLN-033 | P1  | DONE   | Consolidate the 19 duplicate browser commands plus identical state subscription inside `ipc.ts`; retain runtime orchestration schema families and distinct event surfaces.                 | selected bridge adapter tests and targeted bundles                          |
-| CLN-034 | P2  | TODO   | Split shared subagent decoding from identity indexing and centralize alias-key readers.                                                                                                      | shared subagent tests                                                       |
+| CLN-034 | P2  | DONE   | Consolidate repeated alias scans inside the existing canonical subagent-state decoder; retain the cohesive decoder/index module and context-specific alias sets.                           | one filtered shared decoder characterization and bundle                     |
 | CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                    | gate audit only; no safe implementation verification exists                 |
 | CLN-040 | P2  | TODO   | Final reference/duplicate/unused rescan; reassess `timelineHeight.ts`; update before/after metrics.                                                                                          | focused suites, then optional heavyweight pass only with user authorization |
 
@@ -558,3 +558,23 @@ For every tracker item:
   declaration-level compatibility beyond those adapters because the heavyweight workspace typecheck
   was intentionally not run; runtime schemas, channel names, implementations, and exports are
   unchanged.
+- 2026-07-20 — CLN-034 started after rejecting a decoder/index file split and universal alias helper.
+  `buildSubagentAgentState` is already the correct owner, but it scans seven alias groups twice and
+  repeats role trimming/suppression. The accepted change reads each canonical field once, sanitizes
+  role once, and constructs the same output. This removes doubled hot-path work without a new module,
+  export, generic utility, intermediate decoded snapshot, extra traversal, or allocation pass. Alias
+  precedence and object-map/array fallback semantics must remain unchanged. Receiver, identity-hint,
+  provider-thread collection, and web action reads retain their distinct key sets and requested-model
+  semantics. Benefit: visible precedence and fewer scans during server ingestion/web work-log
+  derivation; tradeoff: several well-named locals in the existing **708**-line cohesive owner.
+- 2026-07-20 — CLN-034 complete: `buildSubagentAgentState` now reads seven alias groups into canonical
+  locals once and sanitizes role once before constructing the same optional output. Superseded
+  duplicate reads were deleted: static scan sites fell **14 → 7**, fully populated runtime rows fall
+  **14 → 7** alias scans, and role sanitization falls **2 → 1**. No module, export, traversal,
+  intermediate snapshot, or public API was added. The benefit is lower ingestion/work-log work and
+  visible field precedence; the tradeoff is seven local names in the existing cohesive owner. The
+  filtered table-driven object-map/array alias characterization passed **2/2** with 22 unrelated
+  cases skipped, the production subagent entrypoint bundled, both touched TypeScript files have
+  **0 unused diagnostics**, and `git diff --check` passed. Remaining risk is uncommon alias
+  combinations beyond the matrix, mitigated by unchanged alias arrays and ordering; the broader
+  shared suite and workspace typecheck were intentionally not run.

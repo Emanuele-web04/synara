@@ -3,12 +3,94 @@ import { describe, expect, it } from "vitest";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
+  decodeSubagentAgentStates,
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
   extractSubagentIdentityHints,
   isWorkerTierSubagentRole,
   resolveSubagentIdentityHint,
 } from "./subagents";
+
+describe("decodeSubagentAgentStates alias normalization", () => {
+  it.each([
+    {
+      label: "object-map camel aliases and direct-value precedence",
+      item: {
+        agentsStates: {
+          " child-map ": {
+            threadId: "ignored-thread-id",
+            agentId: " direct-agent ",
+            agent_id: "fallback-agent",
+            agentNickname: " Camel Nick ",
+            agent_nickname: "Snake Nick",
+            agentRole: " worker-high ",
+            model: " direct-model ",
+            modelName: "model-name",
+            requestedModel: "requested-model",
+            prompt: " direct prompt ",
+            task: "task fallback",
+            status: " running ",
+            state: "completed",
+            summary: " summary wins ",
+            message: "message fallback",
+            latestUpdate: "latest fallback",
+          },
+          "   ": {
+            threadId: " fallback-thread ",
+            status: " queued ",
+          },
+        },
+      },
+      expected: {
+        "child-map": {
+          threadId: "child-map",
+          agentId: "direct-agent",
+          nickname: "Camel Nick",
+          model: "direct-model",
+          prompt: "direct prompt",
+          status: "running",
+          message: "summary wins",
+        },
+        "fallback-thread": {
+          threadId: "fallback-thread",
+          status: "queued",
+        },
+      },
+    },
+    {
+      label: "array snake aliases and requested-value fallbacks",
+      item: {
+        agent_statuses: [
+          {
+            thread_id: " child-array ",
+            agent_id: " snake-agent ",
+            receiver_agent_nickname: " Snake Nick ",
+            receiver_agent_role: " reviewer ",
+            requested_model: " requested-model ",
+            task: " task prompt ",
+            state: " completed ",
+            message: " message chosen ",
+            latest_update: "latest fallback",
+          },
+        ],
+      },
+      expected: {
+        "child-array": {
+          threadId: "child-array",
+          agentId: "snake-agent",
+          nickname: "Snake Nick",
+          role: "reviewer",
+          model: "requested-model",
+          prompt: "task prompt",
+          status: "completed",
+          message: "message chosen",
+        },
+      },
+    },
+  ])("decodes $label", ({ item, expected }) => {
+    expect(decodeSubagentAgentStates(item)).toEqual(expected);
+  });
+});
 
 describe("decodeSubagentReceiverThreadIds", () => {
   it.each([
