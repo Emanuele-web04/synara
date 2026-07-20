@@ -22,6 +22,7 @@ import {
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  isGitTextGenerationSettingsDirty,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
@@ -182,6 +183,20 @@ describe("getGitTextGenerationModelOptions", () => {
       provider: "opencode",
       isCustom: true,
     });
+  });
+});
+
+describe("isGitTextGenerationSettingsDirty", () => {
+  it("compares the normalized provider and model defaults", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+
+    expect(isGitTextGenerationSettingsDirty(defaults, defaults)).toBe(false);
+    expect(
+      isGitTextGenerationSettingsDirty(
+        { ...defaults, textGenerationProvider: "opencode", textGenerationModel: "custom/model" },
+        defaults,
+      ),
+    ).toBe(true);
   });
 });
 

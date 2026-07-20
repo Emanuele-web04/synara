@@ -131,6 +131,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show highlighted and underlined transcript text in the Environment panel.",
   },
   {
+    id: "general:environment-instructions",
+    section: "general",
+    title: "Project instructions",
+    keywords: "Show project-level instructions in the Environment panel.",
+  },
+  {
     id: "general:environment-notepad",
     section: "general",
     title: "Notepad",
@@ -143,6 +149,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "appearance",
     title: "Theme",
     keywords: "Choose how Synara looks across the app. dark light system color",
+  },
+  {
+    id: "appearance:system-ui-font",
+    section: "appearance",
+    title: "Use system UI font",
+    keywords: "Use the operating system interface font throughout Synara.",
   },
   {
     id: "appearance:ui-density",

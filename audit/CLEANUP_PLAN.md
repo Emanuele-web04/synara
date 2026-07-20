@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-014 complete; CLN-015 next
+> Status: in progress — CLN-020 next
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -10,13 +10,18 @@
 Refactor the existing code incrementally so the largest multi-responsibility modules have tested,
 cohesive boundaries; repeated knowledge has one domain owner; duplicate views/styles/functions are
 consolidated; and dead files/imports are deleted. Preserve public behavior and existing service/store
-facades while callers migrate.
+facades while callers migrate. File count and line reduction are diagnostics, never success metrics:
+an extraction is accepted only when it creates a stable responsibility owner, reduces coupling or
+subscription/lifecycle scope, or makes behavior independently testable without prop-drilling or a
+relocated controller parameter list.
 
 Explicitly out of scope:
 
 - product features, visual redesigns, performance work, protocol changes, schema migrations, and bug
   fixes unrelated to a refactor
 - splitting files only to meet a line-count target
+- moving cohesive JSX/logic without reducing coupling, cognitive load, or runtime work
+- changing render/subscription/event/streaming/scroll/IPC/persistence semantics as cleanup collateral
 - generic `utils`, universal provider bases, one-implementation interfaces, or wrapper-only moves
 - generated output, dependencies, build output, vendored assets, and immutable migration DDL
 - the optional AGENTS/README/500-LOC-policy hygiene pass unless the user approves it later
@@ -139,7 +144,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-012 | P0  | DONE   | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners.                            | ChatView logic/browser suites and hook tests                                |
 | CLN-013 | P0  | DONE   | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged.                                                             | Sidebar logic/UI/import plus new row characterization                       |
 | CLN-014 | P1  | DONE   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
-| CLN-015 | P1  | TODO   | Split settings route into panel-owned components with local subscriptions.                                                                                                                   | focused settings render/disclosure tests                                    |
+| CLN-015 | P1  | DONE   | Reassess settings by stable workflow ownership; extract only independently changing panels that reduce lifecycle/subscription or duplicated-logic scope, and intentionally retain cohesive route-local UI. | focused workflow/render/disclosure tests                                    |
 | CLN-020 | P1  | TODO   | Decompose Claude and OpenCode adapters along pure mapper/catalog seams; split their tests in lockstep.                                                                                       | adapter and runtime suites                                                  |
 | CLN-021 | P1  | TODO   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
 | CLN-022 | P1  | TODO   | Decompose ProviderRuntimeIngestion into pure activity mapping, bounded payload helpers, state/buffer coordinator, and Layer/replay owner.                                                    | ingestion/buffer/projection suites                                          |
@@ -171,11 +176,14 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 For every tracker item:
 
 1. Re-read this file and mark exactly one item `IN_PROGRESS`.
-2. Add/confirm the smallest characterization gate before moving behavior-bearing code.
-3. Make one cohesive, reversible extraction or consolidation at a time.
-4. Run the smallest focused tests after each meaningful move.
-5. Update this tracker and record results before starting the next item.
-6. Do not commit unrelated work. If commits are created, keep each tracker item independently
+2. Name the proposed owner, intended benefit, tradeoff, and any hot-path/subscription impact; reject
+   wrapper-only movement before editing.
+3. Add/confirm the smallest characterization gate before moving behavior-bearing code.
+4. Make one cohesive, reversible extraction or consolidation at a time, deleting its superseded
+   duplicate in the same change.
+5. Run the smallest focused tests after each meaningful move.
+6. Update this tracker and record results before starting the next item.
+7. Do not commit unrelated work. If commits are created, keep each tracker item independently
    reviewable and revertible.
 
 ## Validation policy
@@ -308,3 +316,30 @@ For every tracker item:
   auto-follow characterization passed three additional consecutive focused runs after isolating
   mount-time tail retries. Independent implementation, route, and coverage reviews are clean; repo
   unused diagnostics remain **0 across 1,860 files**, and `git diff --check` passed.
+- 2026-07-20 — CLN-015 started from the 3,797-line settings route. Panel ownership, local selector
+  granularity, shared disclosure motion, and provider install/reset semantics are compatibility
+  constraints; generic form abstractions and one-file-per-control splits are rejected.
+- 2026-07-20 — CLN-015 acceptance criteria tightened: line count and file count are explicitly not
+  goals. Desktop integration, storage, provider-install, and other candidates must prove an
+  independently changing lifecycle/workflow or duplicated-knowledge owner with focused coverage;
+  presentational panel moves are rejected when they only relocate JSX or add settings subscriptions.
+- 2026-07-20 — CLN-015 complete after the preference-panel extraction was explicitly rejected.
+  General, Appearance, and Behavior remain one cohesive route-owned settings surface. Desktop
+  notifications/AppSnap, model discovery/editing, provider picker/update/install workflows,
+  conversation storage, and advanced auth/recovery now have five domain-owned modules; the route
+  retains the single `useAppSettings` subscription and keeps stateful owners mounted while inactive
+  so drafts, disclosures, native request ordering, pending mutations, and IPC guards preserve their
+  original route lifetime. Inactive owners render no DOM and model discovery remains active-section
+  gated. One provider field schema now owns install rendering, dirty/open/reset/read/write behavior;
+  provider update action UI **2 → 1**, worktree association rules **2 → 1**, archived recency
+  comparators **2 → 1**, target-scroll effects **2 → 1**, and Git-writing dirty normalization
+  **2 → 1**. The dead provider-installs target was deleted, two missing settings-search entries were
+  restored, and custom-model overflow now uses shared disclosure motion. The former **3,797 LOC**
+  route is **1,114 LOC**, while its cohesive production owner family is **3,742 LOC**; these are
+  descriptive measurements, not acceptance criteria. Final changed-only verification passed across
+  **3 unit files / 69 tests** and **3 browser files / 5 tests**, plus the earlier focused model and
+  workflow gates, a targeted route bundle, **0 unused diagnostics across 17 touched files**, two
+  independent runtime/maintainability reviews, and `git diff --check`. Tradeoff: domain modules stay
+  mounted for route-lifetime safety, so this change intentionally does not claim fewer settings
+  queries/effects. Remaining risk: destructive worktree UI sequencing still relies partly on its
+  focused lower-level archive tests rather than one end-to-end delete-click browser case.
