@@ -55,7 +55,7 @@ export function FeedbackDialog({ open, context, onOpenChange }: FeedbackDialogPr
         if (!isSending) onOpenChange(nextOpen);
       }}
     >
-      <DialogPopup surface="solid" className="max-w-xl" showCloseButton={!isSending}>
+      <DialogPopup className="max-w-xl" showCloseButton={!isSending}>
         <DialogHeader className="gap-0 px-5 pt-5 pb-3">
           <DialogTitle className="text-xl tracking-[-0.01em]">Share feedback</DialogTitle>
         </DialogHeader>

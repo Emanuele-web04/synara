@@ -54,9 +54,10 @@ function LocalServersRefreshButton({
 
 /**
  * A single running server: status dot, name, and its `localhost:<port>` address,
- * plus a compact stop control. Only the stop button is interactive (and the only
- * red accent), so the row itself stays clean — no row-wide highlight. The right
- * padding keeps the stop button clear of the popup's overlay scrollbar.
+ * plus a plain stop icon. Only the stop button is interactive (and the only red
+ * accent), so the row itself stays clean — no row-wide highlight, no boxed
+ * button chrome. The right padding keeps the stop button clear of the popup's
+ * overlay scrollbar.
  */
 function LocalServerRow({
   server,
@@ -74,7 +75,7 @@ function LocalServerRow({
     : (server.stopDisabledReason ?? server.args ?? server.displayName);
 
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[0.5rem] py-1 pl-2 pr-3">
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-[0.5rem] py-0.5 pl-2 pr-2.5">
       {/* Running indicator: a soft-haloed dot so an active server reads at a glance. */}
       <span className="relative flex size-2 shrink-0 items-center justify-center" aria-hidden>
         <span className="absolute size-2 rounded-full bg-success/25" />
@@ -89,7 +90,7 @@ function LocalServerRow({
         onClick={() => onStop(server)}
         aria-label={stopHint}
         title={stopHint}
-        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-[var(--color-background-elevated-secondary)] p-0 text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] hover:text-destructive data-highlighted:border-destructive/40 data-highlighted:bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] data-highlighted:text-destructive data-disabled:border-border/40 data-disabled:bg-transparent data-disabled:text-muted-foreground/30 data-disabled:hover:bg-transparent data-disabled:hover:text-muted-foreground/30"
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground/70 transition-colors hover:bg-[color-mix(in_srgb,var(--destructive)_12%,transparent)] hover:text-destructive data-highlighted:bg-[color-mix(in_srgb,var(--destructive)_12%,transparent)] data-highlighted:text-destructive data-disabled:text-muted-foreground/30 data-disabled:hover:bg-transparent data-disabled:hover:text-muted-foreground/30"
       >
         {stopping ? (
           <RefreshCwIcon className="size-3.5 animate-spin" />

@@ -47,7 +47,7 @@ export function RenameDialog({
 }: RenameDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" className="max-w-md">
+      <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}

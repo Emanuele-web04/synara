@@ -35,6 +35,9 @@ export interface ToolCallGroupSummary {
   entryCount: number;
   // A group with in-flight work must never present itself as settled.
   hasRunningEntry: boolean;
+  // First summarized entry: the collapsed row borrows its icon so the summary
+  // keeps the same leading glyph as the first tool row it folds away.
+  iconEntry: WorkLogEntry;
 }
 
 // Rich rows (subagent strips, automation cards, thread-creation recaps) and
@@ -202,5 +205,6 @@ export function summarizeToolCallGroup(
     parts,
     entryCount: summarizable.length,
     hasRunningEntry,
+    iconEntry: summarizable[0]!,
   };
 }

@@ -97,7 +97,6 @@ export function AppSnapWelcomeDialog() {
     <Dialog open={dialogOpen} onOpenChange={handleOpenChange}>
       {/* "Not now" is the close affordance, so the popup's own X would be a duplicate. */}
       <DialogPopup
-        surface="solid"
         showCloseButton={false}
         initialFocus={sheetRef}
         className="max-w-[420px] rounded-[20px]"
