@@ -75,6 +75,7 @@ import {
   detailFromResult,
   extractAuthBoolean,
   extractAuthMethod,
+  isCommandMissingCause,
   nonEmptyTrimmed,
   PROVIDER_COMMAND_TIMEOUT_DETAIL,
   toTitleCaseWords,

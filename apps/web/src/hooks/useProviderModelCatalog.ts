@@ -187,6 +187,14 @@ export function useProviderModelCatalog(input: {
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
+  const devinModelDiscoveryEnabled = selectedProvider === "devin";
+  const hasResolvedDevinModelDiscovery =
+    devinDynamicModelsQuery.data?.source === "devin.acp" &&
+    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const devinModelDiscoveryPending =
+    devinModelDiscoveryEnabled &&
+    !hasResolvedDevinModelDiscovery &&
+    isInitialModelDiscoveryPending(devinDynamicModelsQuery);
   const droidModelDiscoveryEnabled = selectedProvider === "droid";
   const hasResolvedDroidModelDiscovery =
     droidDynamicModelsQuery.data?.source === "droid-acp" &&
@@ -317,7 +325,7 @@ export function useProviderModelCatalog(input: {
     () => ({
       antigravity: antigravityModelDiscoveryPending,
       cursor: cursorModelDiscoveryPending,
-      devin: devinDynamicModelsQuery.isLoading,
+      devin: devinModelDiscoveryPending,
       droid: droidModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
@@ -326,7 +334,7 @@ export function useProviderModelCatalog(input: {
     [
       antigravityModelDiscoveryPending,
       cursorModelDiscoveryPending,
-      devinDynamicModelsQuery.isLoading,
+      devinModelDiscoveryPending,
       droidModelDiscoveryPending,
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
