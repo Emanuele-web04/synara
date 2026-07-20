@@ -31,6 +31,7 @@ export interface DevinAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly devinSettings: DevinAcpRuntimeSettings | null | undefined;
+  readonly resolveAuthMethodId?: AcpSessionRuntimeOptions["resolveAuthMethodId"];
 }
 
 export const DEVIN_WINDSURF_API_KEY_AUTH_METHOD_ID = "windsurf-api-key";
@@ -111,6 +112,30 @@ export const resolveDevinAcpAuthMethodId = (
     });
   });
 
+export const resolveDevinAcpAuthMethodIdForDiscovery = (
+  initializeResult: EffectAcpSchema.InitializeResponse,
+  env: NodeJS.ProcessEnv = process.env,
+): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+  Effect.gen(function* () {
+    const authMethodIds = availableAuthMethodIds(initializeResult);
+    const hasApiKey = hasDevinApiKeyEnv(env);
+
+    if (hasApiKey && authMethodIds.has(DEVIN_WINDSURF_API_KEY_AUTH_METHOD_ID)) {
+      return DEVIN_WINDSURF_API_KEY_AUTH_METHOD_ID;
+    }
+
+    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+      code: -32602,
+      errorMessage: "Devin ACP model discovery requires non-interactive authentication.",
+      data: {
+        authMethods: [...authMethodIds],
+        detail: hasApiKey
+          ? "Devin did not advertise Windsurf API key authentication."
+          : "Set WINDSURF_API_KEY to enable model discovery, or run `devin auth login` from a terminal.",
+      },
+    });
+  });
+
 export const makeDevinAcpRuntime = (
   input: DevinAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
@@ -119,7 +144,7 @@ export const makeDevinAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDevinAcpSpawnInput(input.devinSettings, input.cwd),
-        resolveAuthMethodId: resolveDevinAcpAuthMethodId,
+        resolveAuthMethodId: input.resolveAuthMethodId ?? resolveDevinAcpAuthMethodId,
         authenticateMeta: { headless: true },
         authPolicy: "on-demand",
         clientCapabilities: {
