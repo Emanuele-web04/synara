@@ -6,7 +6,10 @@ import { Effect, Option } from "effect";
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import type { AgentGatewayOperationRepositoryShape } from "./Services/AgentGatewayOperationRepository.ts";
+import type {
+  AgentGatewayOperationRecord,
+  AgentGatewayOperationRepositoryShape,
+} from "./Services/AgentGatewayOperationRepository.ts";
 import { gatewayIsoNow } from "./creationUtils.ts";
 import { parseRecoverableCreationPlan } from "./operationPlan.ts";
 import { errorText } from "./toolInput.ts";
@@ -17,7 +20,16 @@ import { errorText } from "./toolInput.ts";
  * when its post-creation ownership proof still matches the live Git state.
  */
 export function recoverInterruptedAgentGatewayOperations(input: {
-  readonly operationRepository: AgentGatewayOperationRepositoryShape;
+  readonly operationRepository: Pick<
+    AgentGatewayOperationRepositoryShape,
+    "markCompensating" | "recordCompensationFailure" | "fail"
+  > & {
+    readonly listNonTerminal: () => Effect.Effect<
+      ReadonlyArray<Pick<AgentGatewayOperationRecord, "operationId" | "status" | "planJson">>,
+      Error
+    >;
+  };
+  readonly creationSource?: "synara_mcp" | "external_mcp";
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly git: GitCoreShape;
@@ -61,7 +73,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                 );
                 if (Option.isSome(projected)) {
                   if (
-                    projected.value.creationSource !== "synara_mcp" ||
+                    projected.value.creationSource !== (input.creationSource ?? "synara_mcp") ||
                     projected.value.gatewayOperationId !== operation.operationId
                   ) {
                     return yield* Effect.fail(

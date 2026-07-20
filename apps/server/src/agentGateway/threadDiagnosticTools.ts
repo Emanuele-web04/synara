@@ -421,7 +421,6 @@ export function makeThreadDiagnosticTools(input: {
         return mcpToolResultJson({
           thread: summarizeThreadDetail({
             thread: detail,
-            callerThreadId: context.callerThreadId,
             messageLimit: 20,
             maxMessageChars: 2_000,
           }),

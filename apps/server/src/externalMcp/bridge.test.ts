@@ -1,0 +1,338 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Readable, Writable } from "node:stream";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  discoverExternalMcpRuntime,
+  externalMcpClientStorePath,
+  fetchExternalMcpWithTimeout,
+  pairExternalMcpClient,
+  readExternalMcpResponseText,
+  readExternalMcpClientCredential,
+  serveExternalMcpStdio,
+  writeExternalMcpClientCredential,
+} from "./bridge.ts";
+import { computeExternalMcpRuntimeProof } from "./runtimeProof.ts";
+
+const temporaryDirectories: string[] = [];
+const RUNTIME_SECRET = "bridge-test-runtime-secret-000000001";
+
+function makeBaseDir() {
+  const value = fs.mkdtempSync(path.join(os.tmpdir(), "synara-mcp-bridge-test-"));
+  temporaryDirectories.push(value);
+  return value;
+}
+
+function writeRuntime(baseDir: string, kind: "userdata" | "dev", port: number) {
+  const directory = path.join(baseDir, kind);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "server-runtime.json"),
+    JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      host: "127.0.0.1",
+      port,
+      origin: `http://127.0.0.1:${port}`,
+      startedAt: new Date().toISOString(),
+      externalMcpRuntimeSecret: RUNTIME_SECRET,
+    }),
+  );
+}
+
+function runtimeChallenge(url: string | URL | Request, init?: RequestInit): Response | null {
+  if (!String(url).endsWith("/api/mcp/external/runtime-challenge")) return null;
+  const input = JSON.parse(String(init?.body)) as { nonce: string };
+  return Response.json({ proof: computeExternalMcpRuntimeProof(RUNTIME_SECRET, input.nonce) });
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+describe("external MCP stdio bridge", () => {
+  it("fails clearly for missing and multiple running instances", () => {
+    const baseDir = makeBaseDir();
+    expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/No running Synara instance/);
+    writeRuntime(baseDir, "userdata", 3773);
+    writeRuntime(baseDir, "dev", 4773);
+    expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/Multiple running Synara instances/);
+  });
+
+  it("stores credentials with private POSIX permissions and rejects widened permissions", () => {
+    const baseDir = makeBaseDir();
+    const filePath = writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-1",
+      name: "Codex",
+      credential: "syn_mcp_v1_secret",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    expect(filePath).toBe(externalMcpClientStorePath(baseDir, "integration-1"));
+    expect(readExternalMcpClientCredential(baseDir).credential).toBe("syn_mcp_v1_secret");
+    if (process.platform !== "win32") {
+      expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+      fs.chmodSync(filePath, 0o644);
+      expect(() => readExternalMcpClientCredential(baseDir)).toThrow(/accessible by other users/);
+    }
+  });
+
+  it("selects one stored integration explicitly and rejects an ambiguous default", () => {
+    const baseDir = makeBaseDir();
+    for (const integrationId of ["integration-a", "integration-b"]) {
+      writeExternalMcpClientCredential(baseDir, {
+        integrationId,
+        name: integrationId,
+        credential: `syn_mcp_v1_${integrationId}`,
+        expiresAt: "2026-08-20T00:00:00.000Z" as never,
+      });
+    }
+    expect(() => readExternalMcpClientCredential(baseDir)).toThrow(/Multiple paired/);
+    expect(readExternalMcpClientCredential(baseDir, "integration-b").credential).toBe(
+      "syn_mcp_v1_integration-b",
+    );
+  });
+
+  it("forwards a complete stdio MCP request and returns the JSON-RPC response", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-stdio",
+      name: "Codex",
+      credential: "syn_mcp_v1_stdio",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const output: string[] = [];
+    const errors: string[] = [];
+    await serveExternalMcpStdio({
+      baseDir,
+      stdin: Readable.from([
+        `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })}\n`,
+      ]),
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({
+        write: (chunk, _encoding, done) => (errors.push(String(chunk)), done()),
+      }),
+      fetchImpl: async (url, init) => {
+        const challenge = runtimeChallenge(url, init);
+        if (challenge) return challenge;
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer syn_mcp_v1_stdio");
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+    expect(errors).toEqual([]);
+    expect(output.join("")).toContain('"tools":[]');
+  });
+
+  it("rediscovers the runtime after a restart and retries the same MCP request", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-restart",
+      name: "Codex",
+      credential: "syn_mcp_v1_restart",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const urls: string[] = [];
+    const output: string[] = [];
+    await serveExternalMcpStdio({
+      baseDir,
+      stdin: Readable.from([
+        `${JSON.stringify({ jsonrpc: "2.0", id: "restart", method: "ping", params: {} })}\n`,
+      ]),
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({ write: (_chunk, _encoding, done) => done() }),
+      fetchImpl: async (url, init) => {
+        const challenge = runtimeChallenge(url, init);
+        if (challenge) return challenge;
+        urls.push(String(url));
+        if (urls.length === 1) {
+          fs.rmSync(path.join(baseDir, "userdata", "server-runtime.json"));
+          writeRuntime(baseDir, "userdata", 4773);
+          throw new TypeError("old Synara instance stopped");
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: "restart", result: {} }), {
+          status: 200,
+        });
+      },
+    });
+    expect(urls).toEqual([
+      "http://127.0.0.1:3773/mcp/external",
+      "http://127.0.0.1:4773/mcp/external",
+    ]);
+    expect(output.join("")).toContain('"id":"restart"');
+  });
+
+  it("reports a revoked credential without leaking it", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-revoked",
+      name: "Claude",
+      credential: "syn_mcp_v1_do-not-leak",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const output: string[] = [];
+    await serveExternalMcpStdio({
+      baseDir,
+      stdin: Readable.from([
+        `${JSON.stringify({ jsonrpc: "2.0", id: "revoked", method: "ping", params: {} })}\n`,
+      ]),
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({ write: (_chunk, _encoding, done) => done() }),
+      fetchImpl: async (url, init) =>
+        runtimeChallenge(url, init) ?? new Response("unauthorized", { status: 401 }),
+    });
+    expect(output.join("")).toContain("revoked, expired, or replaced");
+    expect(output.join("")).not.toContain("do-not-leak");
+  });
+
+  it("does not answer failed notifications and preserves every request id in a failed batch", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-protocol-errors",
+      name: "Protocol",
+      credential: "syn_mcp_v1_protocol-errors",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const output: string[] = [];
+    await serveExternalMcpStdio({
+      baseDir,
+      stdin: Readable.from([
+        `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+        `${JSON.stringify([
+          { jsonrpc: "2.0", id: 7, method: "ping" },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: "eight", method: "ping" },
+        ])}\n`,
+      ]),
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({ write: (_chunk, _encoding, done) => done() }),
+      fetchImpl: async (url, init) =>
+        runtimeChallenge(url, init) ?? new Response("unauthorized", { status: 401 }),
+    });
+    const responses = output
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(responses).toHaveLength(1);
+    expect(responses[0].map((entry: { id: unknown }) => entry.id)).toEqual([7, "eight"]);
+  });
+
+  it("allows a fast request to complete while a wait request is still pending", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-concurrent",
+      name: "Concurrent",
+      credential: "syn_mcp_v1_concurrent",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const output: string[] = [];
+    await serveExternalMcpStdio({
+      baseDir,
+      stdin: Readable.from([
+        `${JSON.stringify({ jsonrpc: "2.0", id: "slow", method: "tools/call", params: { name: "synara_wait_for_task", arguments: { timeoutMs: 100 } } })}\n`,
+        `${JSON.stringify({ jsonrpc: "2.0", id: "fast", method: "ping" })}\n`,
+      ]),
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({ write: (_chunk, _encoding, done) => done() }),
+      fetchImpl: async (url, init) => {
+        const challenge = runtimeChallenge(url, init);
+        if (challenge) return challenge;
+        const request = JSON.parse(String(init?.body)) as { id: string };
+        if (request.id === "slow") await new Promise((resolve) => setTimeout(resolve, 50));
+        return Response.json({ jsonrpc: "2.0", id: request.id, result: {} });
+      },
+    });
+    expect(
+      output
+        .join("")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).id),
+    ).toEqual(["fast", "slow"]);
+  });
+
+  it("aborts and rejects a hung fetch at its deadline", async () => {
+    let aborted = false;
+    await expect(
+      fetchExternalMcpWithTimeout(
+        async (_url, init) => {
+          init?.signal?.addEventListener("abort", () => {
+            aborted = true;
+          });
+          return await new Promise<Response>(() => {});
+        },
+        new URL("http://127.0.0.1:3773/hung"),
+        {},
+        10,
+      ),
+    ).rejects.toThrow(/did not respond/);
+    expect(aborted).toBe(true);
+  });
+
+  it("cancels a response body that stalls after HTTP headers", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          cancelled = true;
+        },
+      }),
+    );
+    await expect(readExternalMcpResponseText(response, 10)).rejects.toThrow(/body stalled/);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cancelled).toBe(true);
+  });
+
+  it("reuses the locally persisted client secret after a lost pairing response", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    let credential = "";
+    let pairingAttempts = 0;
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      const challenge = runtimeChallenge(url, init);
+      if (challenge) return challenge;
+      const request = JSON.parse(String(init?.body)) as { credential: string };
+      credential ||= request.credential;
+      expect(request.credential).toBe(credential);
+      pairingAttempts += 1;
+      if (pairingAttempts === 1) throw new TypeError("response lost after server commit");
+      return Response.json({
+        integrationId: "integration-pair-retry",
+        name: "Pair retry",
+        credential,
+        expiresAt: "2026-08-20T00:00:00.000Z",
+      });
+    };
+    const paired = await pairExternalMcpClient({
+      baseDir,
+      pairingCode: "syn_pair_v1_retry",
+      fetchImpl,
+    });
+    expect(paired.paired.credential).toBe(credential);
+    expect(pairingAttempts).toBe(2);
+    expect(readExternalMcpClientCredential(baseDir).credential).toBe(credential);
+    expect(fs.readFileSync(paired.storePath, "utf8")).not.toContain("syn_pair_v1_retry");
+  });
+});

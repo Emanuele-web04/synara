@@ -44,7 +44,7 @@ export const ProjectionThread = Schema.Struct({
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   creationSource: Schema.optional(
-    Schema.NullOr(Schema.Literals(["synara_mcp", "provider_native"])),
+    Schema.NullOr(Schema.Literals(["synara_mcp", "external_mcp", "provider_native"])),
   ).pipe(Schema.withDecodingDefault(() => null)),
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),

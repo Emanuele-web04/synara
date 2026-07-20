@@ -2466,6 +2466,7 @@ const make = Effect.gen(function* () {
         decision: event.payload.decision,
       })
       .pipe(
+        Effect.asVoid,
         Effect.catchCause((cause) => {
           const unknownPendingRequest = isUnknownPendingApprovalRequestError(cause);
           return appendInteractionResponseFailure(event, {
@@ -2499,6 +2500,7 @@ const make = Effect.gen(function* () {
         answers: event.payload.answers,
       })
       .pipe(
+        Effect.asVoid,
         Effect.catchCause((cause) => {
           const unknownPendingRequest = isUnknownPendingUserInputRequestError(cause);
           return appendInteractionResponseFailure(event, {
@@ -3369,7 +3371,7 @@ const make = Effect.gen(function* () {
             };
           }),
         ),
-      );
+      ) as ReturnType<ProviderCommandReactorShape["reconcileDelivery"]>;
 
     const retryableDeliveries = yield* deliveryRepository.listRetryableDeliveries(
       PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -3396,7 +3398,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const start: ProviderCommandReactorShape["start"] = seedThreadModelSelections.pipe(
+  const start = seedThreadModelSelections.pipe(
     Effect.andThen(
       Effect.all([
         startProviderIntentSource.pipe(Effect.andThen(recoverQueuedTurnPromotions)),
@@ -3409,7 +3411,7 @@ const make = Effect.gen(function* () {
       ]).pipe(Effect.asVoid),
     ),
     Effect.orDie,
-  );
+  ) as ProviderCommandReactorShape["start"];
 
   const drain: ProviderCommandReactorShape["drain"] = Effect.gen(function* () {
     const targetSequence = yield* orchestrationEngine.getEventHighWaterSequence;

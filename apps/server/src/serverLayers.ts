@@ -36,6 +36,9 @@ import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
+import { ExternalMcpRepositoryLive } from "./externalMcp/Layers/ExternalMcpRepository";
+import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService";
+import { ExternalMcpGatewayLive } from "./externalMcp/Layers/ExternalMcpGateway";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
 import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
@@ -143,6 +146,20 @@ export function makeServerRuntimeServicesLayer(
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
+  const externalMcpServiceLayer = ExternalMcpServiceLive.pipe(
+    Layer.provideMerge(ExternalMcpRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const externalMcpGatewayLayer = ExternalMcpGatewayLive.pipe(
+    Layer.provideMerge(externalMcpServiceLayer),
+    Layer.provideMerge(ExternalMcpRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(AgentGatewayOperationRepositoryLive),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(providerHealthLayer),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
@@ -171,6 +188,9 @@ export function makeServerRuntimeServicesLayer(
     managedAttachmentCleanupLayer,
     AutomationRepositoryLive,
     AgentGatewayOperationRepositoryLive,
+    ExternalMcpRepositoryLive,
+    externalMcpServiceLayer,
+    externalMcpGatewayLayer,
     providerHealthLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,

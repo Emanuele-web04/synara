@@ -24,7 +24,24 @@ export const WRITE_TOOL_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
+export interface ProviderSessionPrincipal {
+  readonly kind: "provider-session";
+  readonly sessionKey: string;
+  readonly threadId: string;
+  readonly provider: ProviderKind;
+  readonly turnId: string | null;
+}
+
+export interface ExternalClientPrincipal {
+  readonly kind: "external-client";
+  readonly integrationId: string;
+  readonly name: string;
+}
+
+export type AgentGatewayPrincipal = ProviderSessionPrincipal | ExternalClientPrincipal;
+
 export interface ToolContext {
+  readonly principal: ProviderSessionPrincipal;
   readonly callerThreadId: string;
   readonly callerSessionKey: string;
   readonly callerProvider: ProviderKind;
@@ -44,6 +61,15 @@ export interface ToolEntry {
   readonly handler: ToolHandler;
   readonly requiredCapability: AgentGatewayCapability;
   readonly requiresActiveTurn?: boolean;
+}
+
+export interface McpToolEntry<Context, Capability extends string> {
+  readonly definition: McpToolDefinition;
+  readonly handler: (
+    args: Record<string, unknown>,
+    context: Context,
+  ) => Effect.Effect<McpToolCallResult>;
+  readonly requiredCapability: Capability;
 }
 
 export class GatewayToolError extends Error {

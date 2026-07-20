@@ -16,6 +16,11 @@ import {
   type AuthRevokePairingLinkInput,
   type AuthSessionState,
   type AuthWebSocketTokenResult,
+  type ExternalMcpCreateIntegrationInput,
+  type ExternalMcpCreateIntegrationResult,
+  type ExternalMcpIntegration,
+  type ExternalMcpRefreshPairingInput,
+  type ExternalMcpRevokeIntegrationInput,
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
@@ -592,6 +597,23 @@ export function createWsNativeApi(): NativeApi {
         await transport.dispose();
         return result;
       },
+      listExternalMcpIntegrations: () =>
+        requestAuthJson<ReadonlyArray<ExternalMcpIntegration>>("/api/mcp/external/integrations"),
+      createExternalMcpIntegration: (input: ExternalMcpCreateIntegrationInput) =>
+        requestAuthJson<ExternalMcpCreateIntegrationResult>("/api/mcp/external/integrations", {
+          method: "POST",
+          body: input,
+        }),
+      revokeExternalMcpIntegration: (input: ExternalMcpRevokeIntegrationInput) =>
+        requestAuthJson<{ revoked: boolean }>("/api/mcp/external/integrations/revoke", {
+          method: "POST",
+          body: input,
+        }),
+      refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
+        requestAuthJson<ExternalMcpCreateIntegrationResult>(
+          "/api/mcp/external/integrations/pairing",
+          { method: "POST", body: input },
+        ),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.

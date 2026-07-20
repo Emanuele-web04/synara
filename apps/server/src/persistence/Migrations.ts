@@ -89,6 +89,9 @@ import Migration0070 from "./Migrations/070_AgentGatewayOperations.ts";
 import Migration0071 from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import Migration0072 from "./Migrations/072_AgentGatewayOperationRetention.ts";
 import Migration0073 from "./Migrations/073_OperationalDiagnostics.ts";
+import Migration0074 from "./Migrations/074_ExternalMcpIntegrations.ts";
+import Migration0075 from "./Migrations/075_ExternalMcpActiveCapacity.ts";
+import Migration0076 from "./Migrations/076_ExternalMcpHardening.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -177,6 +180,9 @@ export const migrationEntries = [
   [71, "ProjectionThreadsGatewayProvenance", Migration0071],
   [72, "AgentGatewayOperationRetention", Migration0072],
   [73, "OperationalDiagnostics", Migration0073],
+  [74, "ExternalMcpIntegrations", Migration0074],
+  [75, "ExternalMcpActiveCapacity", Migration0075],
+  [76, "ExternalMcpHardening", Migration0076],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
