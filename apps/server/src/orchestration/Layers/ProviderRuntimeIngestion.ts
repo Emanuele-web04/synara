@@ -813,12 +813,16 @@ function buildConfiguredContextWindowPayload(
     return undefined;
   }
   const config = asObject(event.payload.config);
-  const configuredContextWindow = asString(config?.contextWindow)?.trim().toLowerCase();
+  // The Claude adapter emits the selected window under `autoCompactWindow`;
+  // older events (and other providers) may still use `contextWindow`. Accept
+  // either so a 1M selection keeps locking the meter to its full budget.
+  const configuredWindowValue = config?.autoCompactWindow ?? config?.contextWindow;
+  const configuredWindow = asString(configuredWindowValue)?.trim().toLowerCase();
   const maxTokens =
-    asPositiveFiniteNumber(config?.contextWindow) ??
-    (configuredContextWindow === "1m"
+    asPositiveFiniteNumber(configuredWindowValue) ??
+    (configuredWindow === "1m"
       ? 1_000_000
-      : configuredContextWindow === "200k"
+      : configuredWindow === "200k"
         ? 200_000
         : undefined);
   if (maxTokens === undefined) {
@@ -826,7 +830,7 @@ function buildConfiguredContextWindowPayload(
   }
   return toActivityPayload({
     maxTokens,
-    ...(configuredContextWindow ? { contextWindow: configuredContextWindow } : {}),
+    ...(configuredWindow ? { contextWindow: configuredWindow } : {}),
   });
 }
 
