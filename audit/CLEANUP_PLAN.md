@@ -150,7 +150,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-022 | P1  | DONE   | Extract the pure runtime-event activity projector and bounded-payload policy; intentionally retain delivery buffers, replay, caches, and lifecycle orchestration in the Layer.              | focused projection tests; targeted unused scan; source bundles              |
 | CLN-023 | P1  | DONE   | Extract Git status wire parsing and terminal subprocess probing behind the existing facades; retain process, mutation, PTY, output, persistence, and lifecycle orchestration.                | focused parser/probe tests plus one Git wiring filter                       |
 | CLN-024 | P2  | DONE   | Consolidate the duplicated projection message-row codec without changing SQL/query shape; retain the already-shared token-attribution CTE in its current owner.                              | focused codec plus selected repository/snapshot cases                       |
-| CLN-030 | P0  | TODO   | Decompose Electron `main.ts` into logging, updater, backend supervision, static protocol, and window controllers; keep lifecycle/bootstrap.                                                  | add characterization, then desktop focused suites/smoke                     |
+| CLN-030 | P0  | DONE   | Extract only the packaged static-protocol routing policy from Electron `main.ts`; retain logging, updater, backend, window, IPC, and bootstrap lifecycles as cohesive owners.                 | focused resolver tests and targeted desktop bundle                          |
 | CLN-031 | P0  | TODO   | Split BrowserManager into popup, tab-runtime, and state operations behind its facade.                                                                                                        | new manager characterization + browser session tests                        |
 | CLN-032 | P1  | TODO   | Split AppSnap persistence, resumable download policy/engine/adapter, and desktop artifact build phases.                                                                                      | existing AppSnap/download/build tests                                       |
 | CLN-033 | P1  | TODO   | Split contracts orchestration schema families and consolidate shared thread/browser API fields while preserving exports.                                                                     | contracts orchestration/rpc/ws tests; desktop preload/web API tests         |
@@ -463,3 +463,26 @@ For every tracker item:
   risk is limited to persisted row variants beyond the characterized schema; broad persistence and
   snapshot suites were intentionally not run. Token attribution remains intentionally retained as
   one already-shared CTE; live/archive surrounding SQL is semantically different, not duplicate.
+- 2026-07-20 — CLN-030 started after rejecting a broad Electron decomposition. The accepted owner is
+  `desktopStaticProtocol.ts`: synchronous URL/path containment, asset-vs-SPA fallback, existence,
+  and file-not-found response policy. It is independently testable and changes with packaged static
+  routing/security rather than Electron lifecycle. `main.ts` retains privileged scheme registration,
+  static-root/bundle validation, the protocol callback and its exact `whenReady` call position. The
+  benefit is direct security-policy characterization and a thinner callback; the tradeoff is one
+  synchronous resolver call per packaged asset/navigation request. Root/fallback paths will be
+  precomputed once, with no async I/O, additional URL parse, IPC, logging, or startup-order change.
+  Logging/updater/backend/window/IPC/bootstrap splits were rejected because they share teardown,
+  recovery, callback state, or strict Electron ordering and would only create controllers.
+- 2026-07-20 — CLN-030 complete: `desktopStaticProtocol.ts` now owns the full synchronous packaged
+  request policy: URL/percent decoding, normalized containment, asset detection, nested indexes, SPA
+  fallback, existence checks, and Electron file-not-found responses. `main.ts` retains root/bundle
+  preparation and the registration callback at the same startup position; the superseded helpers and
+  callback branches were deleted. The resolver precomputes its root/prefix/fallback once and performs
+  the same URL parse and synchronous existence checks per request, so the import hop adds no async I/O
+  or startup/lifecycle work. The benefit is direct security-policy coverage; the tradeoff is a **51**-
+  line domain module and one resolver call in the packaged renderer request path. Focused resolver
+  verification passed **5/5** once, the `main.ts` production entrypoint bundled, the three touched
+  TypeScript files have **0 unused diagnostics**, and `git diff --check` passed. Remaining risk: the
+  real Electron protocol callback and Windows path behavior were not runtime-smoked; broad desktop
+  tests were intentionally not run. The cohesive **3,666**-line lifecycle entrypoint is otherwise
+  intentionally retained rather than split for line count.
