@@ -236,6 +236,27 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  devin: defineProviderOptionConfig<"devin">({
+    primaryOptionKey: "variant",
+    options: {
+      variant: providerOptionRule("string", [], "model-discovery", {
+        validation: { kind: "non-empty-string" },
+        allowsCustomValue: true,
+      }),
+      fastMode: providerOptionRule("boolean", [], "model-discovery", {
+        advertised: false,
+        validation: { kind: "boolean-capability", capability: "supportsFastMode" },
+      }),
+      thinking: providerOptionRule("boolean", [], "model-discovery", {
+        advertised: false,
+        validation: { kind: "boolean-capability", capability: "supportsThinkingToggle" },
+      }),
+      contextWindow: providerOptionRule("string", [], "model-discovery", {
+        advertised: false,
+        validation: { kind: "context-window" },
+      }),
+    },
+  }),
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerDefaultModel(provider: ProviderKind): string | null {

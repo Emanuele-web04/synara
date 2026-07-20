@@ -1336,6 +1336,14 @@ function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
           : {}),
       };
+    case "devin":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
+          : {}),
+      };
     case "grok":
       return {
         provider,

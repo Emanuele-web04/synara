@@ -134,6 +134,20 @@ export const CursorModelOptions = Schema.Struct({
 });
 export type CursorModelOptions = typeof CursorModelOptions.Type;
 
+/**
+ * Devin model options — variant selections resolved to full slugs by the adapter.
+ * The adapter calls ACP session/set_model and session/set_config_option live, so
+ * these are best-effort hints rather than a frozen model matrix.
+ */
+export const DevinModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(Schema.String),
+  variant: Schema.optional(TrimmedNonEmptyString),
+});
+export type DevinModelOptions = typeof DevinModelOptions.Type;
+
 export const GrokModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(Schema.Literals(GROK_REASONING_EFFORT_OPTIONS)),
 });
@@ -148,6 +162,7 @@ export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
+  devin: Schema.optional(DevinModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
@@ -814,6 +829,43 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  // Devin ACP exposes a live model list via session/get_config_options; this is a
+  // small static fallback for when the CLI is unreachable.
+  devin: [
+    {
+      slug: "adaptive",
+      name: "Adaptive",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-6",
+      name: "SWE 1.6",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-7",
+      name: "SWE 1.7",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -826,6 +878,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
+  devin: "adaptive",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-build",
   droid: "claude-opus-4-8",
@@ -885,6 +938,15 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gpt-5.3": "gpt-5.3-codex",
     "codex-5.3": "gpt-5.3-codex",
     "gemini-3": "gemini-3-pro",
+  },
+  devin: {
+    adaptive: "adaptive",
+    swe: "swe-1-6",
+    "swe-1-6": "swe-1-6",
+    "swe-1-7": "swe-1-7",
+    opus: "claude-opus-4-8",
+    sonnet: "claude-sonnet-5",
+    fable: "claude-5-fable",
   },
   antigravity: {},
   droid: {
@@ -972,6 +1034,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
+  devin: "Devin",
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",

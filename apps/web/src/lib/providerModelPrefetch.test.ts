@@ -27,6 +27,7 @@ function makeSettings(
     defaultProvider: "codex",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
+    devinBinaryPath: "",
     antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
