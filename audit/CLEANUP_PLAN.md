@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-020 complete; CLN-021 next
+> Status: in progress — CLN-021 complete; CLN-022 next
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -146,7 +146,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-014 | P1  | DONE   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
 | CLN-015 | P1  | DONE   | Reassess settings by stable workflow ownership; extract only independently changing panels that reduce lifecycle/subscription or duplicated-logic scope, and intentionally retain cohesive route-local UI. | focused workflow/render/disclosure tests                                    |
 | CLN-020 | P1  | DONE   | Decompose Claude and OpenCode adapters only along independently testable pure mapper/catalog seams; retain cohesive live lifecycle orchestration.                                           | adapter and runtime suites                                                  |
-| CLN-021 | P1  | TODO   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
+| CLN-021 | P1  | DONE   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
 | CLN-022 | P1  | TODO   | Decompose ProviderRuntimeIngestion into pure activity mapping, bounded payload helpers, state/buffer coordinator, and Layer/replay owner.                                                    | ingestion/buffer/projection suites                                          |
 | CLN-023 | P1  | TODO   | Split GitCore and Terminal Manager behind existing service facades.                                                                                                                          | GitCore and terminal manager/parser/history suites                          |
 | CLN-024 | P2  | TODO   | Share projection message row decoding and profile token-attribution SQL without changing query shape.                                                                                        | snapshot/repository/profile suites                                          |
@@ -366,3 +366,30 @@ For every tracker item:
   `git diff --check` passed. Remaining risk: the large adapter lifecycle suites were intentionally
   not rerun, so integration confidence relies on unchanged orchestration wrappers plus the focused
   pure behavior gates.
+- 2026-07-20 — CLN-021 started as a boundary audit, not a mandate to split the manager. Candidate
+  owners must be independently testable discovery/catalog policy, pure request shaping, or a
+  transport collaborator with an already explicit lifecycle. Process startup, JSON-RPC routing,
+  recovery, and session/turn coordination stay together unless the existing tests expose a stable
+  seam; wrapper-only moves and callback-heavy controller extraction are rejected.
+- 2026-07-20 — CLN-021 complete with two pure boundaries and no lifecycle split.
+  `provider/codexDiscoveryCatalog.ts` (**430 LOC**) now owns deterministic normalization of untrusted
+  skills, model, plugin-list, and plugin-detail responses; its detailed fixtures moved out of the
+  manager suite while lean request-wiring coverage remains. `codexTurnInput.ts` (**44 LOC**) owns
+  the exact text → image → skill → mention wire projection shared by send and active steer, while
+  validation and routing-map timing remain in the manager. The manager fell from **3,683 → 3,229
+  LOC**; its production owner family is **3,703 LOC**, illustrating that responsibility ownership,
+  not line reduction, is the benefit. At the adapter boundary, native attachment/file-prompt/model
+  preparation moved from **2 implementations → 1**, Codex model option projection from **3 → 1**,
+  and the existing prompt-image owner gained one optional error factory so Codex preserves its prior
+  method label and native error cause. The tradeoff is two explicit module hops plus that narrow
+  optional policy hook. Discovery is not a hot path; turn dispatch remains one attachment pass with
+  concurrency four, the same input ordering, and dispatch only after preparation. The existing
+  `codexAppServerTransport.ts` remains the transport owner. Process startup, request routing,
+  caches, discovery-session reuse, approvals, streaming notifications, recovery, and teardown were
+  intentionally retained because separating them would introduce callback-heavy lifecycle
+  indirection. Focused verification ran once per changed behavior: discovery catalog **5/5**, turn
+  input **3/3**, manager wiring **5/5** with 85 unrelated cases skipped, adapter preparation **2/2**,
+  and prompt attachments **1/1**. Both production entrypoints bundled, all nine touched TypeScript
+  files have **0 unused diagnostics**, and `git diff --check` passed. Remaining risk: the broad
+  manager/adapter suites and workspace typecheck were intentionally not run under the user's
+  small-test constraint.
