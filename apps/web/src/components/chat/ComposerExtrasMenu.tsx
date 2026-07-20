@@ -56,7 +56,6 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
         data-testid="composer-photo-input"
         aria-label="Add attachment"
         type="file"
-        accept={props.supportsFileAttachments ? undefined : "image/*"}
         multiple
         className="sr-only"
         onChange={handleFileInputChange}
@@ -81,7 +80,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             }}
           >
             <PaperclipIcon className="size-4 shrink-0" />
-            {props.supportsFileAttachments ? "Add attachment" : "Add image"}
+            Add attachment
           </MenuItem>
 
           <MenuSeparator />
