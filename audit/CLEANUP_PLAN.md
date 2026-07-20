@@ -153,7 +153,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-030 | P0  | DONE   | Extract only the packaged static-protocol routing policy from Electron `main.ts`; retain logging, updater, backend, window, IPC, and bootstrap lifecycles as cohesive owners.                 | focused resolver tests and targeted desktop bundle                          |
 | CLN-031 | P0  | DONE   | Extract only BrowserManager's long-lived Electron session/security policy; retain popup, tab-runtime, CDP, mutable state, timers, and event lifecycle behind the facade.                     | focused session-policy characterization and manager bundle                  |
 | CLN-032 | P1  | DONE   | Extract only the pure resumable-update HTTP/retry/checksum/header policy behind its existing facade; retain AppSnap persistence, stream engine/adapter, and artifact build phases.           | selected existing resumable-download policy tests and bundle                |
-| CLN-033 | P1  | TODO   | Split contracts orchestration schema families and consolidate shared thread/browser API fields while preserving exports.                                                                     | contracts orchestration/rpc/ws tests; desktop preload/web API tests         |
+| CLN-033 | P1  | DONE   | Consolidate the 19 duplicate browser commands plus identical state subscription inside `ipc.ts`; retain runtime orchestration schema families and distinct event surfaces.                 | selected bridge adapter tests and targeted bundles                          |
 | CLN-034 | P2  | TODO   | Split shared subagent decoding from identity indexing and centralize alias-key readers.                                                                                                      | shared subagent tests                                                       |
 | CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                    | gate audit only; no safe implementation verification exists                 |
 | CLN-040 | P2  | TODO   | Final reference/duplicate/unused rescan; reassess `timelineHeight.ts`; update before/after metrics.                                                                                          | focused suites, then optional heavyweight pass only with user authorization |
@@ -539,3 +539,22 @@ For every tracker item:
   Reconsider only after pure fixture-based selection/sizing/limit tests and a compiled-helper capture
   smoke mode exist. Benefit of retention: no focus/attachment-limit regression; tradeoff: the large
   native file remains intentionally cohesive.
+- 2026-07-20 — CLN-033 started with one type-only duplicate boundary. A private in-file
+  `BrowserControlMethods` interface will become the single owner of the 19 identical methods shared
+  by `DesktopBridge.browser` and `NativeApi.browser`; each surface keeps its differently named/event
+  methods. This is erased TypeScript structure, so it adds no schema, import, bundle, startup,
+  allocation, or runtime behavior. The benefit is preventing preload/web adapter signature drift;
+  the tradeoff is slightly less self-contained interface hovers. Broad orchestration family splits
+  are rejected because shell/detail omission/defaults and client/server turn-start differences are
+  performance or trust-boundary semantics, not accidental duplication. No new contracts file or
+  barrel export will be created.
+- 2026-07-20 — CLN-033 complete: private `BrowserControlMethods` is now the single owner of the 19
+  shared commands plus the type-identical `onState`; `DesktopBridge` and `NativeApi` intersect only
+  their distinct event names. The duplicate declarations were deleted and the value-unused
+  `EditorId` import became type-only. The benefit is drift prevention between preload and web
+  adapters; the tradeoff is one local type lookup in editor hovers, with zero runtime cost. The two
+  selected adapter cases passed **1/1** each, contracts IPC/desktop preload/web adapter entrypoints
+  all bundled, `ipc.ts` has **0 unused diagnostics**, and `git diff --check` passed. Remaining risk is
+  declaration-level compatibility beyond those adapters because the heavyweight workspace typecheck
+  was intentionally not run; runtime schemas, channel names, implementations, and exports are
+  unchanged.
