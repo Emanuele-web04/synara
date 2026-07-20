@@ -176,10 +176,7 @@ export interface AcpSessionRuntimeOptions {
    */
   readonly authSetupHeuristic?: (
     initializeResult: Acp.InitializeResponse,
-    setupResult:
-      | Acp.NewSessionResponse
-      | Acp.LoadSessionResponse
-      | Acp.ResumeSessionResponse,
+    setupResult: Acp.NewSessionResponse | Acp.LoadSessionResponse | Acp.ResumeSessionResponse,
   ) => boolean;
   /**
    * MCP servers to attach to the session. Invoked after `initialize` so the
@@ -245,23 +242,15 @@ export interface AcpSessionRuntimeShape {
     AcpHandler<Acp.TerminalOutputRequest, Acp.TerminalOutputResponse>
   >;
   readonly handleTerminalWaitForExit: AcpHandlerRegistration<
-    AcpHandler<
-      Acp.WaitForTerminalExitRequest,
-      Acp.WaitForTerminalExitResponse
-    >
+    AcpHandler<Acp.WaitForTerminalExitRequest, Acp.WaitForTerminalExitResponse>
   >;
   readonly handleTerminalKill: AcpHandlerRegistration<
     AcpHandler<Acp.KillTerminalRequest, Acp.KillTerminalResponse | void>
   >;
   readonly handleTerminalRelease: AcpHandlerRegistration<
-    AcpHandler<
-      Acp.ReleaseTerminalRequest,
-      Acp.ReleaseTerminalResponse | void
-    >
+    AcpHandler<Acp.ReleaseTerminalRequest, Acp.ReleaseTerminalResponse | void>
   >;
-  readonly handleSessionUpdate: AcpHandlerRegistration<
-    AcpHandler<Acp.SessionNotification, void>
-  >;
+  readonly handleSessionUpdate: AcpHandlerRegistration<AcpHandler<Acp.SessionNotification, void>>;
   readonly handleElicitationComplete: AcpHandlerRegistration<
     AcpHandler<Acp.CompleteElicitationNotification, void>
   >;
@@ -312,10 +301,7 @@ export interface AcpSessionRuntimeShape {
     method: string,
     payload: unknown,
   ) => Effect.Effect<unknown, AcpErrors.AcpError>;
-  readonly notify: (
-    method: string,
-    payload: unknown,
-  ) => Effect.Effect<void, AcpErrors.AcpError>;
+  readonly notify: (method: string, payload: unknown) => Effect.Effect<void, AcpErrors.AcpError>;
 }
 
 interface AcpStartedState extends AcpSessionRuntimeStartResult {}
@@ -551,8 +537,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
       ),
     );
   let connection: Acp.ClientConnection | undefined;
-  const getConnection = () =>
-    (connection ??= clientApp.connect(Acp.ndJsonStream(output, input)));
+  const getConnection = () => (connection ??= clientApp.connect(Acp.ndJsonStream(output, input)));
   const fromPromise = <A>(
     thunk: (signal: AbortSignal) => Promise<A>,
   ): Effect.Effect<A, AcpErrors.AcpError> =>
@@ -603,8 +588,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         request(Acp.methods.agent.initialize, payload),
       authenticate: (payload: Acp.AuthenticateRequest) =>
         request(Acp.methods.agent.authenticate, payload),
-      logout: (payload: Acp.LogoutRequest) =>
-        request(Acp.methods.agent.logout, payload),
+      logout: (payload: Acp.LogoutRequest) => request(Acp.methods.agent.logout, payload),
       createSession: (payload: Acp.NewSessionRequest) =>
         request(Acp.methods.agent.session.new, payload).pipe(
           Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
@@ -691,11 +675,7 @@ export class AcpSessionRuntime extends ServiceMap.Service<
 >()("synara/provider/acp/AcpSessionRuntime") {
   static layer(
     options: AcpSessionRuntimeOptions,
-  ): Layer.Layer<
-    AcpSessionRuntime,
-    AcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner
-  > {
+  ): Layer.Layer<AcpSessionRuntime, AcpErrors.AcpError, ChildProcessSpawner.ChildProcessSpawner> {
     return Layer.effect(AcpSessionRuntime, makeAcpSessionRuntime(options));
   }
 }
@@ -896,9 +876,7 @@ const makeAcpSessionRuntime = (
       activeSessionId: Option.Option<string>;
     }>({ generation: 0, activeSessionId: Option.none() });
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
-    const availableCommandsRef = yield* Ref.make<ReadonlyArray<Acp.AvailableCommand>>(
-      [],
-    );
+    const availableCommandsRef = yield* Ref.make<ReadonlyArray<Acp.AvailableCommand>>([]);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
     // Unique per runtime instance so assistant message ids never collide across
@@ -932,7 +910,7 @@ const makeAcpSessionRuntime = (
     const elicitationStartup = yield* makeStartupInteractionRegistry<
       Acp.CreateElicitationRequest,
       Acp.CreateElicitationResponse
-    >({ action: { action: "decline" } });
+    >({ action: "decline" });
 
     // Counts every parsed event offered into eventQueue (see
     // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
@@ -1362,10 +1340,7 @@ const makeAcpSessionRuntime = (
     const waitForConfigOptionUpdate = (
       configId: string,
       value: string | boolean,
-    ): Effect.Effect<
-      ReadonlyArray<Acp.SessionConfigOption>,
-      AcpErrors.AcpError
-    > =>
+    ): Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>, AcpErrors.AcpError> =>
       Effect.gen(function* () {
         const deferred = yield* Deferred.make<ReadonlyArray<Acp.SessionConfigOption>>();
         const waiter: ConfigOptionUpdateWaiter = { configId, value, deferred };
@@ -1681,10 +1656,7 @@ const makeAcpSessionRuntime = (
     });
 
     const start = Effect.gen(function* () {
-      const deferred = yield* Deferred.make<
-        AcpSessionRuntimeStartResult,
-        AcpErrors.AcpError
-      >();
+      const deferred = yield* Deferred.make<AcpSessionRuntimeStartResult, AcpErrors.AcpError>();
       const effect = yield* Ref.modify(startStateRef, (state) => {
         switch (state._tag) {
           case "Started":
@@ -1931,10 +1903,7 @@ function configOptionCurrentValueMatches(
 
 export function decodeSetSessionConfigOptionResponse(
   response: unknown,
-  configUpdate: Effect.Effect<
-    ReadonlyArray<Acp.SessionConfigOption>,
-    AcpErrors.AcpError
-  >,
+  configUpdate: Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>, AcpErrors.AcpError>,
 ): Effect.Effect<Acp.SetSessionConfigOptionResponse, AcpErrors.AcpError> {
   if (isEmptyRecord(response)) {
     return configUpdate.pipe(

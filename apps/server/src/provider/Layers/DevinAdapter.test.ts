@@ -117,11 +117,7 @@ function modelOption(
   };
 }
 
-function booleanOption(
-  id: string,
-  name: string,
-  currentValue: boolean,
-): Acp.SessionConfigOption {
+function booleanOption(id: string, name: string, currentValue: boolean): Acp.SessionConfigOption {
   return {
     id,
     name,

@@ -76,9 +76,7 @@ export function buildDevinAcpSpawnInput(
   };
 }
 
-function availableAuthMethodIds(
-  initializeResult: Acp.InitializeResponse,
-): ReadonlySet<string> {
+function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): ReadonlySet<string> {
   return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
 }
 
@@ -138,10 +136,7 @@ export const resolveDevinAcpAuthMethodIdForDiscovery = (
 
 function devinAuthSetupHeuristic(
   initializeResult: Acp.InitializeResponse,
-  setupResult:
-    | Acp.NewSessionResponse
-    | Acp.LoadSessionResponse
-    | Acp.ResumeSessionResponse,
+  setupResult: Acp.NewSessionResponse | Acp.LoadSessionResponse | Acp.ResumeSessionResponse,
 ): boolean {
   const modelOption = findSessionConfigOption(setupResult.configOptions ?? [], "model");
   const availableModels =

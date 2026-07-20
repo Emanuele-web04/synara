@@ -418,14 +418,10 @@ export function applyDevinSessionConfiguration(input: {
     | undefined;
 }): Effect.Effect<{ readonly model: string | undefined }, ProviderAdapterError> {
   return Effect.gen(function* () {
-    const readConfigOptions = (): Effect.Effect<
-      ReadonlyArray<Acp.SessionConfigOption>
-    > =>
+    const readConfigOptions = (): Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>> =>
       input.runtime.getConfigOptions.pipe(
         Effect.timeoutOption(5_000),
-        Effect.map(
-          Option.getOrElse(() => [] as ReadonlyArray<Acp.SessionConfigOption>),
-        ),
+        Effect.map(Option.getOrElse(() => [] as ReadonlyArray<Acp.SessionConfigOption>)),
         Effect.orElseSucceed(() => [] as ReadonlyArray<Acp.SessionConfigOption>),
       );
 
@@ -670,10 +666,7 @@ function completeDevinAssistantItemTurnId(
   return turnId;
 }
 
-function recordDevinSessionCost(
-  ctx: DevinSessionContext,
-  cost: Acp.Cost | null | undefined,
-): void {
+function recordDevinSessionCost(ctx: DevinSessionContext, cost: Acp.Cost | null | undefined): void {
   const sessionCostUsd = readAcpUsdCost(cost);
   if (sessionCostUsd === undefined) {
     return;
