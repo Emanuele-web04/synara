@@ -9702,6 +9702,7 @@ export default function ChatView({
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddPhotos={addComposerImages}
+        onAddFiles={addComposerFiles}
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />
