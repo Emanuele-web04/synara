@@ -10,10 +10,7 @@ import {
 } from "@synara/shared/terminalThreads";
 
 import { runProcess } from "../processRunner";
-import {
-  parseProcessChildrenMap,
-  type ProcessChildrenMap,
-} from "./processTreeKiller";
+import { parseProcessChildrenMap, type ProcessChildrenMap } from "./processTreeKiller";
 
 const POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED = 256;
 

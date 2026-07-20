@@ -77,9 +77,7 @@ export class BrowserSessionPolicy {
     webContents.setUserAgent(this.resolveUserAgent());
   }
 
-  buildOAuthPopupWindowOptions(
-    parent: BrowserWindow | null,
-  ): BrowserWindowConstructorOptions {
+  buildOAuthPopupWindowOptions(parent: BrowserWindow | null): BrowserWindowConstructorOptions {
     return {
       width: 480,
       height: 640,

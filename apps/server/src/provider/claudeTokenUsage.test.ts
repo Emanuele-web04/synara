@@ -1,7 +1,4 @@
-import type {
-  ModelUsage,
-  SDKControlGetContextUsageResponse,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { ModelUsage, SDKControlGetContextUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -238,11 +235,7 @@ describe("Claude context warning decisions", () => {
       keys: [],
     },
   ])("$name", ({ rawUsage, contextBudget, emitted, keys }) => {
-    const decisions = decideClaudeContextUsageWarnings(
-      rawUsage,
-      contextBudget,
-      new Set(emitted),
-    );
+    const decisions = decideClaudeContextUsageWarnings(rawUsage, contextBudget, new Set(emitted));
     const actualKeys = decisions
       ? [decisions.first.key, ...(decisions.second ? [decisions.second.key] : [])]
       : [];

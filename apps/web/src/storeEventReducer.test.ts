@@ -15,10 +15,7 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  applyOrchestrationEvents,
-  applyOrchestrationEventsHotPath,
-} from "./storeEventReducer";
+import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
   syncServerShellSnapshot,
   syncServerReadModel,
@@ -36,10 +33,7 @@ import {
   makeShellSnapshot,
   threadsOf,
 } from "./storeTestFixtures";
-import {
-  DEFAULT_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
-} from "./types";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 describe("store event reducer", () => {
   it("preserves plugin mention references from live thread.message-sent events", () => {

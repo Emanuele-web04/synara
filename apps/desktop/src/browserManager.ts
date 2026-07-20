@@ -38,10 +38,7 @@ import {
   normalizeBrowserUrlInput as normalizeUrlInput,
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
-import {
-  BROWSER_SESSION_PARTITION,
-  BrowserSessionPolicy,
-} from "./browserSessionPolicy";
+import { BROWSER_SESSION_PARTITION, BrowserSessionPolicy } from "./browserSessionPolicy";
 
 export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
@@ -1844,11 +1841,7 @@ export class DesktopBrowserManager {
     return fallback;
   }
 
-  private activateTab(
-    threadId: ThreadId,
-    state: ThreadBrowserState,
-    tab: BrowserTabState,
-  ): void {
+  private activateTab(threadId: ThreadId, state: ThreadBrowserState, tab: BrowserTabState): void {
     if (state.activeTabId === tab.id) {
       return;
     }

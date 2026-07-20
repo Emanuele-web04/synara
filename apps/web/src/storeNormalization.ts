@@ -177,7 +177,10 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
   );
 }
 
-export function threadTurnStatesEqual(left: ThreadTurnState | undefined, right: ThreadTurnState): boolean {
+export function threadTurnStatesEqual(
+  left: ThreadTurnState | undefined,
+  right: ThreadTurnState,
+): boolean {
   return (
     left !== undefined &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
@@ -1522,8 +1525,7 @@ export function mapProjects(
       const orderIndex =
         previousIndex ??
         persistedIndex ??
-        (usePersistedOrder ? rememberedUiState.projectOrderCount : previous.length) +
-        incomingIndex;
+        (usePersistedOrder ? rememberedUiState.projectOrderCount : previous.length) + incomingIndex;
       return { project, incomingIndex, orderIndex };
     })
     .toSorted((a, b) => {

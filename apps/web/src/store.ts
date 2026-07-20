@@ -26,10 +26,7 @@ import {
   syncServerThreadDetail,
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
-import {
-  applyOrchestrationEvents,
-  applyOrchestrationEventsHotPath,
-} from "./storeEventReducer";
+import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
   persistState,
   readPersistedState,
@@ -53,10 +50,7 @@ export {
   syncServerThreadDetail,
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
-export {
-  applyOrchestrationEvents,
-  applyOrchestrationEventsHotPath,
-} from "./storeEventReducer";
+export { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 
 const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
 

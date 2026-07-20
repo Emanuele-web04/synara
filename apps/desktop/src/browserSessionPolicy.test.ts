@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const electronMocks = vi.hoisted(() => ({
   headerListener: {
-    current: null as null | ((
-      details: { requestHeaders: Record<string, string> },
-      callback: (result: { requestHeaders: Record<string, string> }) => void,
-    ) => void),
+    current: null as
+      | null
+      | ((
+          details: { requestHeaders: Record<string, string> },
+          callback: (result: { requestHeaders: Record<string, string> }) => void,
+        ) => void),
   },
   fromPartition: vi.fn(),
   partitionSetUserAgent: vi.fn(),
@@ -25,10 +27,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import {
-  BROWSER_SESSION_PARTITION,
-  BrowserSessionPolicy,
-} from "./browserSessionPolicy";
+import { BROWSER_SESSION_PARTITION, BrowserSessionPolicy } from "./browserSessionPolicy";
 
 describe("BrowserSessionPolicy", () => {
   beforeEach(() => {

@@ -3,10 +3,7 @@
 // Layer: Route screen
 // Exports: Settings route component for `/settings`
 
-import {
-  PROVIDER_DISPLAY_NAMES,
-  type ProviderKind,
-} from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -83,12 +80,7 @@ import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavi
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
-import {
-  DeviceLaptopIcon,
-  MoonIcon,
-  RotateCcwIcon,
-  SunIcon,
-} from "../lib/icons";
+import { DeviceLaptopIcon, MoonIcon, RotateCcwIcon, SunIcon } from "../lib/icons";
 import { cn, isMacPlatform } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { sameProviderOrder } from "../providerOrdering";

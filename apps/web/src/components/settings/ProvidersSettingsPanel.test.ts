@@ -40,10 +40,7 @@ describe("isProviderInstallSettingsDirty", () => {
       isProviderInstallSettingsDirty({ ...defaults, kiloServerPassword: "secret" }, defaults),
     ).toBe(false);
     expect(
-      isProviderInstallSettingsDirty(
-        { ...defaults, kiloServerPasswordConfigured: true },
-        defaults,
-      ),
+      isProviderInstallSettingsDirty({ ...defaults, kiloServerPasswordConfigured: true }, defaults),
     ).toBe(true);
     expect(
       isProviderInstallSettingsDirty(

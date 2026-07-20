@@ -30,8 +30,8 @@ describe("probeProviderCliVersion", () => {
   });
 
   it("classifies timeouts", async () => {
-    await expect(
-      Effect.runPromise(probeProviderCliVersion(Effect.never, 1)),
-    ).resolves.toEqual({ outcome: "timeout" });
+    await expect(Effect.runPromise(probeProviderCliVersion(Effect.never, 1))).resolves.toEqual({
+      outcome: "timeout",
+    });
   });
 });

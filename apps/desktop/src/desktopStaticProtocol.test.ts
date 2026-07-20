@@ -53,8 +53,7 @@ describe("createDesktopStaticProtocolResolver", () => {
     expect(resolveRequest("synara://app/%E0%A4%A")).toEqual({ path: rootIndex });
     expect(
       observedPaths.every(
-        (candidate) =>
-          candidate === staticRoot || candidate.startsWith(`${staticRoot}${Path.sep}`),
+        (candidate) => candidate === staticRoot || candidate.startsWith(`${staticRoot}${Path.sep}`),
       ),
     ).toBe(true);
   });

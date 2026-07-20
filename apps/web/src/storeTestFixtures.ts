@@ -15,11 +15,7 @@ import {
 
 import { getThreadsFromState } from "./threadDerivation";
 import type { AppState } from "./storeState";
-import {
-  DEFAULT_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
-  type Thread,
-} from "./types";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 export function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -190,7 +186,9 @@ export function makeReadModelThread(overrides: Partial<OrchestrationReadModel["t
   } satisfies OrchestrationReadModel["threads"][number];
 }
 
-export function makeReadModel(thread: OrchestrationReadModel["threads"][number]): OrchestrationReadModel {
+export function makeReadModel(
+  thread: OrchestrationReadModel["threads"][number],
+): OrchestrationReadModel {
   return {
     snapshotSequence: 1,
     updatedAt: "2026-02-27T00:00:00.000Z",

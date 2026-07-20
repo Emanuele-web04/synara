@@ -36,11 +36,7 @@ import {
   makeReadModelProject,
   threadsOf,
 } from "./storeTestFixtures";
-import {
-  DEFAULT_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
-  type Thread,
-} from "./types";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 describe("store projection", () => {
   it("preserves a semantic branch when a temp worktree branch arrives from the read model", () => {

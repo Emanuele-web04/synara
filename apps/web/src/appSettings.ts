@@ -281,8 +281,7 @@ export function isGitTextGenerationSettingsDirty(
   defaults: AppSettings,
 ): boolean {
   return (
-    (settings.textGenerationProvider ?? "codex") !==
-      (defaults.textGenerationProvider ?? "codex") ||
+    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
     (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
       (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
   );

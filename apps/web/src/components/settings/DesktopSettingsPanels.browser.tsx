@@ -137,7 +137,9 @@ describe("AppSnapSettingsPanel", () => {
     });
 
     const mounted = await render(<AppSnapActivityHarness />);
-    await expect.element(mounted.getByText("Listening — press both Option keys to snap")).toBeVisible();
+    await expect
+      .element(mounted.getByText("Listening — press both Option keys to snap"))
+      .toBeVisible();
     expect(onState).toHaveBeenCalledOnce();
 
     await mounted.getByRole("button", { name: "Leave AppSnap" }).click();

@@ -8,9 +8,7 @@ import {
 } from "./Errors.ts";
 
 function captureSchemaError(): Schema.SchemaError {
-  const result = Effect.runSync(
-    Schema.decodeUnknownEffect(Schema.String)(42).pipe(Effect.result),
-  );
+  const result = Effect.runSync(Schema.decodeUnknownEffect(Schema.String)(42).pipe(Effect.result));
   if (Result.isFailure(result) && Schema.isSchemaError(result.failure)) {
     return result.failure;
   }

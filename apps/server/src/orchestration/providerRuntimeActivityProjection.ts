@@ -333,7 +333,9 @@ function buildConfiguredContextWindowPayload(
   });
 }
 
-export function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
+export function runtimePayloadRecord(
+  event: ProviderRuntimeEvent,
+): Record<string, unknown> | undefined {
   const payload = (event as { payload?: unknown }).payload;
   return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
 }

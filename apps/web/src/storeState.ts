@@ -29,10 +29,7 @@ export interface AppState {
   proposedPlanIdsByThreadId?: Record<ThreadId, string[]>;
   proposedPlanByThreadId?: Record<ThreadId, Record<string, Thread["proposedPlans"][number]>>;
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
-  turnDiffSummaryByThreadId?: Record<
-    ThreadId,
-    Record<TurnId, Thread["turnDiffSummaries"][number]>
-  >;
+  turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
   deletedProjectIdsById?: Record<Project["id"], true>;
   deletedThreadIdsById?: Record<ThreadId, true>;
 }

@@ -26,8 +26,6 @@ export const probeProviderCliVersion = <ErrorType, Requirements>(
         return { outcome: "timeout" };
       }
       const result = probe.success.value;
-      return result.code === 0
-        ? { outcome: "success", result }
-        : { outcome: "nonzero", result };
+      return result.code === 0 ? { outcome: "success", result } : { outcome: "nonzero", result };
     }),
   );
