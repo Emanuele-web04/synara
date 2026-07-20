@@ -10,7 +10,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
+import { extractWebFetchUrl } from "../../lib/toolCallLabel";
+import { LinkChipIcon } from "../LinkChipIcon";
 import type { ToolCallGroupSummary } from "./toolCallGroup.logic";
+import { renderWorkEntryIcon, workEntryLeftIcon } from "./TimelineWorkEntryRow";
 
 export function ToolCallGroupSummaryRow(props: {
   summary: ToolCallGroupSummary;
@@ -37,15 +40,26 @@ export function ToolCallGroupSummaryRow(props: {
 
   const shouldRenderChildren = open || keepChildrenMounted;
 
+  // The collapsed row wears its first entry's icon (favicon for web fetches),
+  // so folding a run of tool calls keeps the leading glyph of the row it hides.
+  const iconWebFetchUrl = extractWebFetchUrl(summary.iconEntry);
+
   return (
     <div>
       <button
         type="button"
         aria-expanded={open}
-        className="inline-flex items-center gap-1 py-0.5 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
+        className="inline-flex items-center gap-1.5 py-0.5 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
         style={{ fontSize: `${fontSizePx}px` }}
         onClick={() => onToggle(!open)}
       >
+        <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+          {iconWebFetchUrl ? (
+            <LinkChipIcon url={iconWebFetchUrl} className="size-3.5" />
+          ) : (
+            renderWorkEntryIcon(workEntryLeftIcon(summary.iconEntry), "size-3.5")
+          )}
+        </span>
         <span>{summary.label}</span>
         <DisclosureChevron open={open} className="text-muted-foreground/55" />
       </button>

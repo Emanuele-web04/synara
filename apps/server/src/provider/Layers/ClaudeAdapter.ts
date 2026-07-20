@@ -1422,10 +1422,7 @@ function parentToolUseId(message: SDKMessage): string | undefined {
     : undefined;
 }
 
-function isRecognizedSubagentToolUseId(
-  context: ClaudeSessionContext,
-  toolUseId: string,
-): boolean {
+function isRecognizedSubagentToolUseId(context: ClaudeSessionContext, toolUseId: string): boolean {
   if (context.subagentRuns.has(toolUseId) || context.settledSubagentToolUseIds.has(toolUseId)) {
     return true;
   }

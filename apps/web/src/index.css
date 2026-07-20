@@ -2567,23 +2567,19 @@ diffs-container {
 
 /* A stacked panel marked attachedToPrevious merges into the panel above it:
    drop its top radius so the seam reads as one continuous, inline surface
-   instead of a separate rounded card. The top border goes transparent too —
-   fused sections separate through their own padding, not a hairline, so the
-   stack reads as one card rather than a grid of boxes. */
+   instead of a separate rounded card. The panel above has border-b-0, so this
+   panel's own top border becomes the full-width 1px divider between the fused
+   sections — the same hairline the queued follow-up rows use. */
 .chat-composer-stacked-top[data-composer-stacked-attached="true"] {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
-  border-top-color: transparent;
 }
 
-/* Stacked rail above the composer input: same hue as the input shell, gently
-   darkened. Light mode stays nearly white (a light wash); dark mode recesses more. */
+/* Stacked rail above the composer input: the composer's own surface color at
+   half opacity, so the rail reads as a lighter continuation of the input shell
+   rather than a differently-colored block. */
 .chat-composer-stacked-top {
-  background: color-mix(in oklab, var(--composer-surface) 98%, black 2%);
-}
-
-.dark .chat-composer-stacked-top {
-  background: color-mix(in oklab, var(--composer-surface) 84%, black 16%);
+  background: color-mix(in srgb, var(--composer-surface) 50%, transparent);
 }
 
 .chat-composer-surface {

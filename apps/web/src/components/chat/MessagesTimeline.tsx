@@ -1012,9 +1012,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                       onClick={() => handleToggleWorkGroup(groupId)}
                     >
-                      {isExpanded
-                        ? "Show less"
-                        : `Show ${cappedRenderPlan.hiddenEntryCount} more`}
+                      {isExpanded ? "Show less" : `Show ${cappedRenderPlan.hiddenEntryCount} more`}
                     </button>
                   </div>
                 )}
