@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-020 next
+> Status: in progress — CLN-020 complete; CLN-021 next
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -145,7 +145,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-013 | P0  | DONE   | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged.                                                             | Sidebar logic/UI/import plus new row characterization                       |
 | CLN-014 | P1  | DONE   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
 | CLN-015 | P1  | DONE   | Reassess settings by stable workflow ownership; extract only independently changing panels that reduce lifecycle/subscription or duplicated-logic scope, and intentionally retain cohesive route-local UI. | focused workflow/render/disclosure tests                                    |
-| CLN-020 | P1  | TODO   | Decompose Claude and OpenCode adapters along pure mapper/catalog seams; split their tests in lockstep.                                                                                       | adapter and runtime suites                                                  |
+| CLN-020 | P1  | DONE   | Decompose Claude and OpenCode adapters only along independently testable pure mapper/catalog seams; retain cohesive live lifecycle orchestration.                                           | adapter and runtime suites                                                  |
 | CLN-021 | P1  | TODO   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
 | CLN-022 | P1  | TODO   | Decompose ProviderRuntimeIngestion into pure activity mapping, bounded payload helpers, state/buffer coordinator, and Layer/replay owner.                                                    | ingestion/buffer/projection suites                                          |
 | CLN-023 | P1  | TODO   | Split GitCore and Terminal Manager behind existing service facades.                                                                                                                          | GitCore and terminal manager/parser/history suites                          |
@@ -343,3 +343,26 @@ For every tracker item:
   mounted for route-lifetime safety, so this change intentionally does not claim fewer settings
   queries/effects. Remaining risk: destructive worktree UI sequencing still relies partly on its
   focused lower-level archive tests rather than one end-to-end delete-click browser case.
+- 2026-07-20 — CLN-020 started with pure mapping/catalog seams as the only extraction candidates.
+  Live session/process/reconnect/event orchestration remains in each adapter unless characterization
+  proves a smaller independently owned workflow. File size alone is not a reason to split.
+- 2026-07-20 — CLN-020 complete with exactly two pure domain owners. `claudeTokenUsage.ts` now owns
+  context-window selection, token/cache arithmetic, usage snapshots, accumulated-usage merging, and
+  warning decisions; the adapter retains warning de-duplication, event emission/order, SDK control,
+  session state, process management, and all live lifecycle. `OpenCodeDiscovery.ts` now owns model,
+  provider, agent, and command catalog normalization; the adapter retains discovery connection
+  orchestration plus every streaming, event, recovery, startup, resume, and send-turn path. This
+  moved Claude from **5,590 → 5,336 LOC** and OpenCode from **4,733 → 4,084 LOC**, but the accepted
+  benefit is direct ownership and focused characterization rather than line reduction. Repeated
+  Claude prompt/cache arithmetic now has one implementation, and OpenCode's three local numeric
+  guards now use the existing token-usage owner. The tradeoff is two substantive module boundaries
+  (**309 / 639 LOC**) and a small pure warning decision object only on warning paths. OpenCode
+  discovery is outside runtime hot paths; Claude warning cadence, cardinality, and order are
+  explicitly characterized, including the original deferred large-prompt warning. The proposed
+  OpenCode event projector and all lifecycle splits were rejected as hot-path/tightly coupled moves;
+  the broad Claude SDK mapper was retained because moving it now would mostly relocate code.
+  Focused verification passed once in each new owner: Claude **24/24** and OpenCode **14/14**. Both
+  production adapters bundled, the changed seven TypeScript files have **0 unused diagnostics**, and
+  `git diff --check` passed. Remaining risk: the large adapter lifecycle suites were intentionally
+  not rerun, so integration confidence relies on unchanged orchestration wrappers plus the focused
+  pure behavior gates.
