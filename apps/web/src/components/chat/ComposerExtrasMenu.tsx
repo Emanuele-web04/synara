@@ -7,6 +7,7 @@ import { type ProviderInteractionMode } from "@synara/contracts";
 import { useId, useRef, type ChangeEvent } from "react";
 import { GoTasklist } from "react-icons/go";
 
+import { splitComposerDropzoneFiles } from "~/hooks/useComposerDropzone";
 import { PaperclipIcon, PlusIcon } from "~/lib/icons";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { Button } from "../ui/button";
@@ -28,17 +29,21 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   supportsFileAttachments: boolean;
   fastModeEnabled: boolean;
   onAddPhotos: (files: File[]) => void;
+  onAddFiles: (files: File[]) => void;
   onToggleFastMode: () => void;
   onSetPlanMode: (enabled: boolean) => void;
 }) {
   const inputId = useId();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Reset the hidden input so selecting the same image twice still emits a change event.
+  // Reset the hidden input so selecting the same file twice still emits a change event.
   const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    if (files.length > 0) {
-      props.onAddPhotos(files);
+    const { imageFiles, genericFiles } = splitComposerDropzoneFiles(event.target.files ?? []);
+    if (imageFiles.length > 0) {
+      props.onAddPhotos(imageFiles);
+    }
+    if (genericFiles.length > 0) {
+      props.onAddFiles(genericFiles);
     }
     event.target.value = "";
   };
@@ -49,6 +54,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
         id={inputId}
         ref={fileInputRef}
         data-testid="composer-photo-input"
+        aria-label="Add attachment"
         type="file"
         accept={props.supportsFileAttachments ? undefined : "image/*"}
         multiple

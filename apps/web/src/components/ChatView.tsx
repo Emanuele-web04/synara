@@ -9717,7 +9717,8 @@ export default function ChatView({
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         supportsFileAttachments={composerAcceptsGenericFiles}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
-        onAddPhotos={composerAcceptsGenericFiles ? addComposerAttachments : addComposerImages}
+        onAddPhotos={addComposerImages}
+        onAddFiles={addComposerFiles}
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />
