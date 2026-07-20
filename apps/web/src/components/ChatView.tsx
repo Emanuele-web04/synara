@@ -37,7 +37,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
 } from "@synara/contracts";
-import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
+import { getDefaultModel, getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
@@ -1250,6 +1250,16 @@ export default function ChatView({
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
   );
+  const draftFallbackModelSelection = useMemo<ModelSelection>(() => {
+    const projectDefault = fallbackDraftProject?.defaultModelSelection;
+    const preferredProvider = settings.defaultProvider === "pi" ? null : settings.defaultProvider;
+    const provider = preferredProvider ?? projectDefault?.provider ?? "codex";
+    const model =
+      (provider === projectDefault?.provider ? projectDefault.model : null) ??
+      getDefaultModel(provider) ??
+      DEFAULT_MODEL_BY_PROVIDER.codex;
+    return buildModelSelection(provider, model);
+  }, [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider]);
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -1644,17 +1654,9 @@ export default function ChatView({
   const localDraftThread = useMemo(
     () =>
       draftThread
-        ? buildLocalDraftThread(
-            threadId,
-            draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? {
-              provider: "codex",
-              model: DEFAULT_MODEL_BY_PROVIDER.codex,
-            },
-            localDraftError,
-          )
+        ? buildLocalDraftThread(threadId, draftThread, draftFallbackModelSelection, localDraftError)
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
+    [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
   useEffect(() => {
@@ -6958,10 +6960,19 @@ export default function ChatView({
     }
     // Keep the optimistic label short while the server asks Codex for a better summary.
     const title = buildPromptThreadTitleFallback(titleSeed);
+    const firstSendDefaultModelSelection = buildModelSelection(
+      selectedModelSelectionForSend.provider,
+      selectedModelSelectionForSend.model ||
+        selectedModelForSend ||
+        getDefaultModel(selectedModelSelectionForSend.provider) ||
+        DEFAULT_MODEL_BY_PROVIDER.codex,
+      selectedModelSelectionForSend.options,
+    );
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
       chatWorkspaceRoot,
       createdAt: firstSendCreatedAt,
+      defaultModelSelection: firstSendDefaultModelSelection,
       isFirstMessage,
       isHomeChatContainer,
       isStudioContainer,
@@ -7273,6 +7284,7 @@ export default function ChatView({
         selectedModelSelectionForSend.model ||
           selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
+          getDefaultModel(selectedModelSelectionForSend.provider) ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
