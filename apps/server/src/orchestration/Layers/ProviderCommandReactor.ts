@@ -71,6 +71,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -331,6 +332,7 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const checkpointStore = yield* CheckpointStore;
   const studioOutputReactor = yield* StudioOutputReactor;
@@ -500,10 +502,15 @@ const make = Effect.gen(function* () {
 
     // Non-generating chat providers still get AI titles via the configured git-writing model.
     const settings = yield* serverSettings.getSettings;
-    return resolveTextGenerationInputForSelection(
-      settings.textGenerationModelSelection,
-      providerOptions,
+    const fallbackSelection = settings.textGenerationModelSelection;
+    const statuses = yield* providerHealth.getStatuses;
+    const fallbackStatus = statuses.find(
+      (status) => status.provider === fallbackSelection.provider,
     );
+    if (fallbackStatus && !fallbackStatus.available) {
+      return null;
+    }
+    return resolveTextGenerationInputForSelection(fallbackSelection, providerOptions);
   });
 
   const appendProviderFailureActivity = (input: {

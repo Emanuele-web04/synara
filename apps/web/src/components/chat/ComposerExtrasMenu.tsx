@@ -25,6 +25,7 @@ import {
 export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   interactionMode: ProviderInteractionMode;
   supportsFastMode: boolean;
+  supportsFileAttachments: boolean;
   fastModeEnabled: boolean;
   onAddPhotos: (files: File[]) => void;
   onToggleFastMode: () => void;
@@ -49,7 +50,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
         ref={fileInputRef}
         data-testid="composer-photo-input"
         type="file"
-        accept="image/*"
+        accept={props.supportsFileAttachments ? undefined : "image/*"}
         multiple
         className="sr-only"
         onChange={handleFileInputChange}
@@ -74,7 +75,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             }}
           >
             <PaperclipIcon className="size-4 shrink-0" />
-            Add image
+            {props.supportsFileAttachments ? "Add attachment" : "Add image"}
           </MenuItem>
 
           <MenuSeparator />
