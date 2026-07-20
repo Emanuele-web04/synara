@@ -140,7 +140,7 @@ function pushUniqueThreadId(
   target.push(threadId);
 }
 
-export function normalizeSubagentIdentifier(value: unknown): string | undefined {
+function normalizeSubagentIdentifier(value: unknown): string | undefined {
   return asTrimmedString(value);
 }
 
@@ -564,7 +564,7 @@ function selectMergedModel(input: {
   };
 }
 
-export function mergeSubagentIdentityHints(
+function mergeSubagentIdentityHints(
   existing: ParsedSubagentIdentityHint | undefined,
   incoming: ParsedSubagentIdentityHint,
 ): ParsedSubagentIdentityHint {

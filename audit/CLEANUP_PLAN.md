@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-022 active
+> Status: implementation complete — focused verification passed; heavyweight workspace checks not authorized
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -156,7 +156,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-033 | P1  | DONE   | Consolidate the 19 duplicate browser commands plus identical state subscription inside `ipc.ts`; retain runtime orchestration schema families and distinct event surfaces.                 | selected bridge adapter tests and targeted bundles                          |
 | CLN-034 | P2  | DONE   | Consolidate repeated alias scans inside the existing canonical subagent-state decoder; retain the cohesive decoder/index module and context-specific alias sets.                           | one filtered shared decoder characterization and bundle                     |
 | CLN-035 | P2  | REJECTED | Retain the cohesive native AppSnap capture until deterministic Swift selection/sizing/PNG-limit characterization and a helper capture smoke mode exist.                                    | gate audit only; no safe implementation verification exists                 |
-| CLN-040 | P2  | IN_PROGRESS | Final reference/duplicate/unused rescan, retained-monolith review, `timelineHeight.ts` reassessment, and before/after metrics; no broad tests without authorization.                        | static scans and targeted source/reference checks                           |
+| CLN-040 | P2  | DONE   | Final reference/duplicate/unused rescan, retained-monolith review, `timelineHeight.ts` reassessment, and before/after metrics; no broad tests without authorization.                        | static scans and targeted source/reference checks                           |
 
 ## Ordered execution and safety gates
 
@@ -596,3 +596,56 @@ For every tracker item:
   **0 unused diagnostics**, and `git diff --check` passed. Remaining risk: live ACP configuration,
   broad work-log/model suites, bundle-size impact, and workspace typecheck were intentionally not run;
   call-site ordering and pure mapping bodies remain unchanged.
+- 2026-07-20 — CLN-040 complete: the final dead-surface pass deleted **20** unused exports, helpers,
+  types, aliases, and compatibility declarations from their existing domain owners, with **8 lines
+  added / 212 deleted** across 16 source files. No replacement abstraction or production file was
+  introduced. The benefit is a smaller public/internal surface and less misleading compatibility
+  code; the tradeoff is that downstream consumers outside this monorepo would no longer see the
+  removed exports, which were proven unreferenced by every repo-owned caller. A repo-wide narrow
+  unused scan passed with **0 warnings / 0 errors across 1,891 files**; exact deleted-symbol searches,
+  affected entrypoint bundles, and `git diff --check` also passed. No tests were run for this deletion-
+  only batch, per the user's small-verification constraint.
+- 2026-07-20 — The final duplicate scan covered **1,282 production files** with exact function-body,
+  token-window, long-literal, JSX/view, and CSS-selector inventories. After the four pure mappings
+  above, it found no remaining P0/P1 duplicate with one stable owner and a focused safety gate.
+  Repeated SQL column lists, migration-local DDL, CSS cascade/variant selectors, semver parsing,
+  provider text-generation wrappers, and inline checkmark SVG geometry remain intentionally local
+  because their query shapes, compatibility rules, control flow, or visual DOM differ. Consolidating
+  them would erase meaningful ownership or change behavior.
+- 2026-07-20 — Large lifecycle/render owners intentionally retained: the remaining `ChatView`,
+  `Sidebar`, provider adapters, Electron bootstrap, browser runtime, replay/delivery, Git, PTY, and
+  native AppSnap sections share local state and ordering heavily. Further extraction currently fails
+  the independent-owner test and risks prop-drilling, controller parameter bags, extra subscriptions,
+  circular dependencies, or teardown/streaming regressions. `timelineHeight.ts` is also retained as
+  an independent geometry oracle used by unit and browser comparisons; deleting it would weaken the
+  transcript safety gate. Transcript subscription granularity, LegendList behavior, and the rule that
+  only real assistant text drives live-output follow were not changed.
+
+## Closeout metrics (descriptive only)
+
+These measurements describe the result; they were never extraction targets.
+
+| Existing owner | Baseline LOC | Closeout LOC | Decision |
+| --- | ---: | ---: | --- |
+| `ChatView.tsx` | 11,971 | 10,902 | Stable workflows extracted; render/scroll owner retained |
+| `Sidebar.tsx` | 7,940 | 6,555 | Row/action seams extracted; navigation owner retained |
+| `composerDraftStore.ts` | 5,185 | 158 | Persistence, migration, attachment, and selection owners extracted |
+| `store.ts` | 4,714 | 341 | Reducer/projection/persistence owners extracted behind facade |
+| Desktop `main.ts` | 3,722 | 3,666 | Static protocol extracted; bootstrap lifecycle retained |
+| `browserManager.ts` | 2,149 | 2,017 | Session policy extracted; mutable runtime retained |
+| `ClaudeAdapter.ts` | 5,590 | 5,336 | Pure mapping extracted; session lifecycle retained |
+| `OpenCodeAdapter.ts` | 4,733 | 4,084 | Pure mapping/catalog seams extracted; lifecycle retained |
+| `codexAppServerManager.ts` | 3,684 | 3,229 | Discovery/transport seams extracted behind manager facade |
+| `ProviderRuntimeIngestion.ts` | 3,728 | 2,730 | Pure activity projection extracted; replay/delivery retained |
+| `MessagesTimeline.tsx` | 3,847 | 2,622 | Row/derivation seams extracted; list-follow owner retained |
+| Settings route | 3,801 | 1,114 | Independently changing panels extracted |
+| Contracts orchestration | 2,291 | 2,291 | Intentionally retained schema family |
+| `GitCore.ts` | 2,911 | 2,757 | Pure parsing extracted; mutation/locking retained |
+| Terminal `Manager.ts` | 2,569 | 2,322 | Pure probes/parsers extracted; PTY lifecycle retained |
+| **Selected-owner total** | **68,835** | **50,124** | **18,711 fewer lines through owned seams/deletion** |
+
+Final verification intentionally excludes broad suites and the heavyweight `bun fmt`, `bun lint`,
+and `bun typecheck` workspace pass. Project instructions prohibit running those commands without an
+explicit request, and the user asked to avoid repeated long-running checks. Their status is therefore
+**not run**, not passed. Remaining risk is integration/type compatibility outside the focused gates;
+the cleanup itself preserves current facades wherever they are repo-owned and covered.

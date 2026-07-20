@@ -27,13 +27,6 @@ export interface ResolvedTerminalVisualIdentity extends TerminalCommandIdentity 
   state: TerminalVisualState;
 }
 
-interface ReconcileTerminalCommandIdentityInput {
-  currentCliKind?: TerminalCliKind | null | undefined;
-  currentTitle?: string | null | undefined;
-  nextCliKind?: TerminalCliKind | null | undefined;
-  nextTitle: string;
-}
-
 export function isGenericTerminalThreadTitle(title: string | null | undefined): boolean {
   return (title ?? "").trim() === GENERIC_TERMINAL_THREAD_TITLE;
 }
@@ -358,17 +351,6 @@ function inferCliKindFromTitle(title: string | null | undefined): TerminalCliKin
   );
 }
 
-function normalizePersistedTerminalTitle(
-  title: string | null | undefined,
-  cliKind: TerminalCliKind | null,
-): string {
-  const normalizedTitle = title?.trim();
-  if (normalizedTitle && normalizedTitle.length > 0) {
-    return normalizedTitle;
-  }
-  return cliKind ? defaultTerminalTitleForCliKind(cliKind) : GENERIC_TERMINAL_THREAD_TITLE;
-}
-
 // Convert a submitted shell command into a stable terminal identity for labels and icons.
 export function deriveTerminalCommandIdentity(command: string): TerminalCommandIdentity | null {
   const strippedCommand = command.trim();
@@ -415,31 +397,6 @@ export function deriveTerminalCommandIdentity(command: string): TerminalCommandI
   return genericTitle.length > 0
     ? createTerminalCommandIdentity(truncateTerminalTitle(genericTitle), null)
     : null;
-}
-
-// Keep provider tabs sticky once a terminal is clearly a supported agent CLI session.
-// Free-form prompts inside the CLI should not downgrade the icon/title back to a generic shell command.
-export function reconcileTerminalCommandIdentity(
-  input: ReconcileTerminalCommandIdentityInput,
-): TerminalCommandIdentity {
-  const nextIdentity = createTerminalCommandIdentity(
-    input.nextTitle.trim(),
-    input.nextCliKind ?? null,
-  );
-  const currentCliKind =
-    input.currentCliKind === undefined
-      ? inferCliKindFromTitle(input.currentTitle)
-      : input.currentCliKind;
-  if (!currentCliKind) {
-    return nextIdentity;
-  }
-  if (nextIdentity.cliKind) {
-    return nextIdentity;
-  }
-  return createTerminalCommandIdentity(
-    normalizePersistedTerminalTitle(input.currentTitle, currentCliKind),
-    currentCliKind,
-  );
 }
 
 // Keep the legacy string-only helper for thread-title renames and narrow call sites.

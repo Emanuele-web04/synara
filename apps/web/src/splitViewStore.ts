@@ -330,13 +330,6 @@ export function resolveSplitViewFocusedPaneThreadId(splitView: SplitView): Threa
   return findLeafPaneById(splitView.root, splitView.focusedPaneId)?.threadId ?? null;
 }
 
-export function resolveSplitViewPaneThreadId(
-  splitView: SplitView,
-  paneId: PaneId,
-): ThreadId | null {
-  return findLeafPaneById(splitView.root, paneId)?.threadId ?? null;
-}
-
 export function resolveSplitViewThreadIds(splitView: SplitView): ThreadId[] {
   const ids = collectLeaves(splitView.root)
     .map((leaf) => leaf.threadId)
@@ -355,18 +348,9 @@ export function resolveSplitViewPaneIdForThread(
   return null;
 }
 
-export function resolveSplitViewLeaves(splitView: SplitView): LeafPane[] {
-  return collectLeaves(splitView.root);
-}
-
 export function selectSplitView(splitViewId: SplitViewId | null) {
   return (store: SplitViewStore) =>
     splitViewId ? (store.splitViewsById[splitViewId] ?? null) : null;
-}
-
-export function selectSplitViewIdForSourceThread(threadId: ThreadId | null) {
-  return (store: SplitViewStore) =>
-    threadId ? (store.splitViewIdBySourceThreadId[threadId] ?? null) : null;
 }
 
 // Deterministic membership lookup: restore only if a thread has one clear split,

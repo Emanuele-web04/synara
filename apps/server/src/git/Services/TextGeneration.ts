@@ -177,23 +177,6 @@ export type TextGenerationOperation =
   | "generateAutomationIntent"
   | "evaluateAutomationCompletion";
 
-export interface TextGenerationService {
-  generateCommitMessage(
-    input: CommitMessageGenerationInput,
-  ): Promise<CommitMessageGenerationResult>;
-  generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
-  generateDiffSummary(input: DiffSummaryGenerationInput): Promise<DiffSummaryGenerationResult>;
-  generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
-  generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
-  generateThreadRecap(input: ThreadRecapGenerationInput): Promise<ThreadRecapGenerationResult>;
-  generateAutomationIntent(
-    input: AutomationIntentGenerationInput,
-  ): Promise<AutomationIntentGenerationResult>;
-  evaluateAutomationCompletion(
-    input: AutomationCompletionEvaluationInput,
-  ): Promise<AutomationCompletionEvaluationResult>;
-}
-
 /**
  * TextGenerationShape - Service API for AI-generated Git and thread text.
  */

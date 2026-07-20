@@ -23,10 +23,6 @@ function lookupMeta(provider: string | null | undefined) {
   return descriptor?.usage ? descriptor : undefined;
 }
 
-export function isProviderUsageSupported(provider: string | null | undefined): boolean {
-  return lookupMeta(provider) !== undefined;
-}
-
 /** Panel title like "Codex usage"; falls back to a generic label for unknown providers. */
 export function providerUsageLabel(provider: string | null | undefined): string {
   const meta = lookupMeta(provider);

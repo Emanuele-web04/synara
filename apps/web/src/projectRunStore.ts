@@ -5,8 +5,6 @@
 
 import type { ProjectDevServer, ProjectId } from "@synara/contracts";
 
-export type ProjectRunStatus = ProjectDevServer["status"];
-
 /**
  * A tracked dev server as projected from the server. This mirrors the
  * `ProjectDevServer` contract exactly — the client no longer owns thread or

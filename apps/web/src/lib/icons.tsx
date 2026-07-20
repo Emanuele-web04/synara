@@ -207,7 +207,6 @@ export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
-export const SidebarHiddenLeftWideIcon = centralIconWrapper("sidebar-hidden-left-wide");
 export const SidebarHiddenRightWideIcon = centralIconWrapper("sidebar-hidden-right-wide");
 export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
 export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;

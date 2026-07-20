@@ -386,27 +386,6 @@ export function formatRateLimitResetCountdown(resetsAt: string): string {
   return "Resets soon";
 }
 
-export function formatRateLimitResetTime(resetsAt: string): string {
-  const resetMs = Date.parse(resetsAt);
-  if (Number.isNaN(resetMs)) return "";
-  const diffMs = resetMs - Date.now();
-
-  if (diffMs > 0 && diffMs < 24 * 60 * 60 * 1000) {
-    return RESET_TIME_FORMATTER.format(resetMs);
-  }
-
-  return RESET_DATE_FORMATTER.format(resetMs);
-}
-
-const RESET_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-});
-const RESET_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  day: "numeric",
-  month: "short",
-});
-
 export function deriveRateLimitLearnMoreHref(
   rateLimits: ReadonlyArray<ProviderRateLimit>,
 ): string | null {
