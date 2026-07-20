@@ -149,7 +149,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-021 | P1  | DONE   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
 | CLN-022 | P1  | DONE   | Extract the pure runtime-event activity projector and bounded-payload policy; intentionally retain delivery buffers, replay, caches, and lifecycle orchestration in the Layer.              | focused projection tests; targeted unused scan; source bundles              |
 | CLN-023 | P1  | DONE   | Extract Git status wire parsing and terminal subprocess probing behind the existing facades; retain process, mutation, PTY, output, persistence, and lifecycle orchestration.                | focused parser/probe tests plus one Git wiring filter                       |
-| CLN-024 | P2  | TODO   | Share projection message row decoding and profile token-attribution SQL without changing query shape.                                                                                        | snapshot/repository/profile suites                                          |
+| CLN-024 | P2  | DONE   | Consolidate the duplicated projection message-row codec without changing SQL/query shape; retain the already-shared token-attribution CTE in its current owner.                              | focused codec plus selected repository/snapshot cases                       |
 | CLN-030 | P0  | TODO   | Decompose Electron `main.ts` into logging, updater, backend supervision, static protocol, and window controllers; keep lifecycle/bootstrap.                                                  | add characterization, then desktop focused suites/smoke                     |
 | CLN-031 | P0  | TODO   | Split BrowserManager into popup, tab-runtime, and state operations behind its facade.                                                                                                        | new manager characterization + browser session tests                        |
 | CLN-032 | P1  | TODO   | Split AppSnap persistence, resumable download policy/engine/adapter, and desktop artifact build phases.                                                                                      | existing AppSnap/download/build tests                                       |
@@ -438,3 +438,28 @@ For every tracker item:
   **206**-line parser; TerminalManager is **2,322** lines with a **254**-line probe. Remaining risk:
   uncommon malformed Git wire variants and live Windows process probing were not exercised; broad
   GitCore/TerminalManager suites were intentionally not run under the small-test constraint.
+- 2026-07-20 — CLN-024 started with one accepted duplication boundary: a persistence-owned message
+  row codec will replace the identical schemas and parallel JSON/optional-field decoders in
+  `ProjectionThreadMessages` and `ProjectionSnapshotQuery`. It will expose two explicit direct
+  mappings rather than a callback/generic adapter, preserving each consumer's output shape and
+  allocation count. Every SQL statement, error label, ordering rule, global 2,000-message window,
+  export cap behavior, and repository query remains textually local and unchanged. The profile
+  token-attribution CTE is already a single shared implementation used by live and archive paths;
+  moving it to a tiny file would only relocate code, so it is intentionally retained. The similar
+  surrounding joins/delta calculations have different lifetime and fallback semantics and will not
+  be unified.
+- 2026-07-20 — CLN-024 complete: `projectionThreadMessageRow.ts` is now the single owner of the
+  persisted message schema, JSON metadata decoding, nullable dispatch/sequence fields, and the two
+  direct repository/orchestration mappings. Both superseded schemas and converters were deleted.
+  SQL remains in the original callers with unchanged query text, ordering, global message window,
+  per-thread export behavior, decode sites, and error labels; snapshot hydration still performs one
+  bounded query rather than routing through the repository. The benefit is one authoritative storage
+  format and less drift-prone conversion logic; the tradeoff is two explicit output functions in a
+  **74**-line persistence module, avoiding a generic mapper and any additional hot-path allocation.
+  Focused verification ran once: codec **3/3**, repository attachment preservation **1/1** with seven
+  unrelated cases skipped, and snapshot hydration/causal ordering/2,000-cap plus uncapped export
+  **3/3** with seven unrelated cases skipped. All three production entrypoints bundled, the four
+  touched TypeScript files have **0 unused diagnostics**, and `git diff --check` passed. Remaining
+  risk is limited to persisted row variants beyond the characterized schema; broad persistence and
+  snapshot suites were intentionally not run. Token attribution remains intentionally retained as
+  one already-shared CTE; live/archive surrounding SQL is semantically different, not duplicate.
