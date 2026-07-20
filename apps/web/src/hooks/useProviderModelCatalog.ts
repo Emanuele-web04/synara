@@ -73,6 +73,14 @@ export function useProviderModelCatalog(input: {
       enabled: selectedProvider === "cursor" || discoveryEnabled,
     }),
   );
+  const devinDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "devin",
+      binaryPath: settings.devinBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: selectedProvider === "devin" || discoveryEnabled,
+    }),
+  );
   const antigravityModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "antigravity",
@@ -216,6 +224,7 @@ export function useProviderModelCatalog(input: {
       customModelsByProvider.cursor,
       modelHintByProvider?.cursor,
     ),
+    devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
     antigravity: getAppModelOptions(
       "antigravity",
       customModelsByProvider.antigravity,
@@ -243,6 +252,7 @@ export function useProviderModelCatalog(input: {
       cursorDynamicModelsQuery.data === undefined
         ? undefined
         : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
+    devin: devinDynamicModelsQuery.data,
     antigravity: antigravityModelsQuery.data,
     grok: grokDynamicModelsQuery.data,
     droid: droidDynamicModelsQuery.data,
@@ -255,6 +265,7 @@ export function useProviderModelCatalog(input: {
     "claudeAgent",
     "codex",
     "cursor",
+    "devin",
     "antigravity",
     "grok",
     "droid",
@@ -275,6 +286,7 @@ export function useProviderModelCatalog(input: {
   const loadingModelProviders: Partial<Record<ProviderKind, boolean>> = {
     antigravity: antigravityModelDiscoveryPending,
     cursor: cursorModelDiscoveryPending,
+    devin: devinDynamicModelsQuery.isLoading,
     droid: droidModelDiscoveryPending,
     kilo: kiloModelDiscoveryPending,
     opencode: openCodeModelDiscoveryPending,
@@ -285,6 +297,7 @@ export function useProviderModelCatalog(input: {
     claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
     codex: codexDynamicModelsQuery.data?.models ?? [],
     cursor: cursorRuntimeModels,
+    devin: devinDynamicModelsQuery.data?.models ?? [],
     antigravity: antigravityModelsQuery.data?.models ?? [],
     grok: grokDynamicModelsQuery.data?.models ?? [],
     droid: droidDynamicModelsQuery.data?.models ?? [],

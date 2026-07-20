@@ -2129,6 +2129,7 @@ export default function ChatView({
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
+      devin: resolveHint("devin"),
       antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
@@ -2162,6 +2163,14 @@ export default function ChatView({
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
+    }),
+  );
+  const devinDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "devin",
+      binaryPath: settings.devinBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen,
     }),
   );
   const antigravityModelsQuery = useQuery(
@@ -2248,6 +2257,15 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
+  const devinModelDiscoveryEnabled =
+    selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen;
+  const hasResolvedDevinModelDiscovery =
+    devinDynamicModelsQuery.data?.source?.startsWith("devin.acp") === true &&
+    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const devinModelDiscoveryPending =
+    devinModelDiscoveryEnabled &&
+    !hasResolvedDevinModelDiscovery &&
+    isInitialModelDiscoveryPending(devinDynamicModelsQuery);
   const hasResolvedDroidModelDiscovery =
     droidDynamicModelsQuery.data?.source === "droid-acp" &&
     (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -2300,6 +2318,11 @@ export default function ChatView({
         customModelsByProvider.cursor,
         composerModelHintByProvider.cursor,
       ),
+      devin: getAppModelOptions(
+        "devin",
+        customModelsByProvider.devin,
+        composerModelHintByProvider.devin,
+      ),
       antigravity: getAppModelOptions(
         "antigravity",
         customModelsByProvider.antigravity,
@@ -2339,6 +2362,7 @@ export default function ChatView({
         cursorDynamicModelsQuery.data === undefined
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
+      devin: devinDynamicModelsQuery.data,
       antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
@@ -2351,6 +2375,7 @@ export default function ChatView({
       "claudeAgent",
       "codex",
       "cursor",
+      "devin",
       "antigravity",
       "grok",
       "droid",
@@ -2396,6 +2421,7 @@ export default function ChatView({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
+      devin: devinDynamicModelsQuery.data?.models ?? [],
       antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
@@ -2407,6 +2433,7 @@ export default function ChatView({
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
+      devinDynamicModelsQuery.data?.models,
       droidDynamicModelsQuery.data?.models,
       antigravityModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
@@ -2419,6 +2446,7 @@ export default function ChatView({
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
+    devin: devinDynamicModelsQuery,
     antigravity: antigravityModelsQuery,
     grok: grokDynamicModelsQuery,
     droid: droidDynamicModelsQuery,
@@ -2494,14 +2522,17 @@ export default function ChatView({
             ? kiloModelDiscoveryPending
             : selectedProvider === "opencode"
               ? openCodeModelDiscoveryPending
-              : selectedProvider === "pi"
-                ? piModelDiscoveryPending
-                : selectedProviderModelsQuery !== undefined &&
-                  (selectedProviderModelsQuery.isLoading ||
-                    (selectedProviderModelsQuery.isFetching &&
-                      selectedProviderModelsQuery.data === undefined));
+              : selectedProvider === "devin"
+                ? devinModelDiscoveryPending
+                : selectedProvider === "pi"
+                  ? piModelDiscoveryPending
+                  : selectedProviderModelsQuery !== undefined &&
+                    (selectedProviderModelsQuery.isLoading ||
+                      (selectedProviderModelsQuery.isFetching &&
+                        selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "devin" ||
     selectedProvider === "antigravity" ||
     selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
@@ -2518,9 +2549,11 @@ export default function ChatView({
             ? kiloModelDiscoveryPending
             : selectedProvider === "opencode"
               ? openCodeModelDiscoveryPending
-              : selectedProvider === "pi"
-                ? piModelDiscoveryPending
-                : false;
+              : selectedProvider === "devin"
+                ? devinModelDiscoveryPending
+                : selectedProvider === "pi"
+                  ? piModelDiscoveryPending
+                  : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -9419,6 +9452,7 @@ export default function ChatView({
         loadingModelProviders={{
           antigravity: antigravityModelDiscoveryPending,
           cursor: cursorModelDiscoveryPending,
+          devin: devinModelDiscoveryPending,
           droid: droidModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
           opencode: openCodeModelDiscoveryPending,
@@ -9462,6 +9496,7 @@ export default function ChatView({
       loadingModelProviders={{
         antigravity: antigravityModelDiscoveryPending,
         cursor: cursorModelDiscoveryPending,
+        devin: devinModelDiscoveryPending,
         droid: droidModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,
         opencode: openCodeModelDiscoveryPending,
