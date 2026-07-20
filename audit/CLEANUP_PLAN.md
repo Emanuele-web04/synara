@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-021 complete; CLN-022 next
+> Status: in progress — CLN-022 active
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -147,7 +147,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-015 | P1  | DONE   | Reassess settings by stable workflow ownership; extract only independently changing panels that reduce lifecycle/subscription or duplicated-logic scope, and intentionally retain cohesive route-local UI. | focused workflow/render/disclosure tests                                    |
 | CLN-020 | P1  | DONE   | Decompose Claude and OpenCode adapters only along independently testable pure mapper/catalog seams; retain cohesive live lifecycle orchestration.                                           | adapter and runtime suites                                                  |
 | CLN-021 | P1  | DONE   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
-| CLN-022 | P1  | TODO   | Decompose ProviderRuntimeIngestion into pure activity mapping, bounded payload helpers, state/buffer coordinator, and Layer/replay owner.                                                    | ingestion/buffer/projection suites                                          |
+| CLN-022 | P1  | DONE   | Extract the pure runtime-event activity projector and bounded-payload policy; intentionally retain delivery buffers, replay, caches, and lifecycle orchestration in the Layer.              | focused projection tests; targeted unused scan; source bundles              |
 | CLN-023 | P1  | TODO   | Split GitCore and Terminal Manager behind existing service facades.                                                                                                                          | GitCore and terminal manager/parser/history suites                          |
 | CLN-024 | P2  | TODO   | Share projection message row decoding and profile token-attribution SQL without changing query shape.                                                                                        | snapshot/repository/profile suites                                          |
 | CLN-030 | P0  | TODO   | Decompose Electron `main.ts` into logging, updater, backend supervision, static protocol, and window controllers; keep lifecycle/bootstrap.                                                  | add characterization, then desktop focused suites/smoke                     |
@@ -393,3 +393,23 @@ For every tracker item:
   files have **0 unused diagnostics**, and `git diff --check` passed. Remaining risk: the broad
   manager/adapter suites and workspace typecheck were intentionally not run under the user's
   small-test constraint.
+- 2026-07-20 — CLN-022 started with transcript semantics as a hard boundary: only real assistant
+  text activity may drive live-output follow, and tool/work/pending activity must not be reclassified
+  by cleanup. Pure event/activity derivation and payload bounding are candidates; delivery buffers,
+  worker recovery, replay ordering, and Layer state remain together unless an existing collaborator
+  and focused timing coverage prove an independent owner.
+- 2026-07-20 — CLN-022 complete: `providerRuntimeActivityProjection.ts` now owns the deterministic
+  provider-event to bounded-activity policy, context/model-usage normalization, reasoning-row policy,
+  and activity-update identity. This is a stable owner because it depends only on provider/activity
+  contracts and is directly testable; the ingestion Layer remains the owner of dispatch, buffering,
+  replay, caches, generated-image settlement, subagent materialization, and terminal lifecycle. The
+  benefit is isolated policy coverage and a smaller stateful workflow; the tradeoff is one import hop
+  on the event-ingestion hot path. The implementation preserves the same synchronous allocation and
+  serialization work, introduces no callbacks or additional passes, and explicitly proves that
+  assistant text/lifecycle events do not become work activity. The focused projection suite passed
+  **6/6** once; both source entrypoints bundled, the three touched TypeScript files have **0 unused
+  diagnostics**, and `git diff --check` passed. `ProviderRuntimeIngestion.ts` moved from **3,728** to
+  **2,730** lines while the cohesive projector is **1,032** lines; these are descriptive, not targets.
+  Remaining risk: the broad ingestion suite was intentionally not rerun under the user's small-test
+  constraint. Replay/lifecycle extraction was rejected as callback-heavy and timing-sensitive; the
+  assistant delivery-mode correlation state machine remains a separately reviewable future seam.
