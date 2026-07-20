@@ -1934,9 +1934,7 @@ const make = Effect.gen(function* () {
         // otherwise honor the turn's explicit requested selection.
         const establishedProviderName =
           thread.session?.providerName != null &&
-          (thread.session.status === "running" ||
-            thread.session.status === "ready" ||
-            thread.latestTurn !== null)
+          (thread.session.status === "ready" || thread.latestTurn !== null)
             ? thread.session.providerName
             : undefined;
         yield* setThreadSession({
