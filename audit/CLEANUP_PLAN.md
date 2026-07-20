@@ -148,7 +148,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-020 | P1  | DONE   | Decompose Claude and OpenCode adapters only along independently testable pure mapper/catalog seams; retain cohesive live lifecycle orchestration.                                           | adapter and runtime suites                                                  |
 | CLN-021 | P1  | DONE   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
 | CLN-022 | P1  | DONE   | Extract the pure runtime-event activity projector and bounded-payload policy; intentionally retain delivery buffers, replay, caches, and lifecycle orchestration in the Layer.              | focused projection tests; targeted unused scan; source bundles              |
-| CLN-023 | P1  | TODO   | Split GitCore and Terminal Manager behind existing service facades.                                                                                                                          | GitCore and terminal manager/parser/history suites                          |
+| CLN-023 | P1  | DONE   | Extract Git status wire parsing and terminal subprocess probing behind the existing facades; retain process, mutation, PTY, output, persistence, and lifecycle orchestration.                | focused parser/probe tests plus one Git wiring filter                       |
 | CLN-024 | P2  | TODO   | Share projection message row decoding and profile token-attribution SQL without changing query shape.                                                                                        | snapshot/repository/profile suites                                          |
 | CLN-030 | P0  | TODO   | Decompose Electron `main.ts` into logging, updater, backend supervision, static protocol, and window controllers; keep lifecycle/bootstrap.                                                  | add characterization, then desktop focused suites/smoke                     |
 | CLN-031 | P0  | TODO   | Split BrowserManager into popup, tab-runtime, and state operations behind its facade.                                                                                                        | new manager characterization + browser session tests                        |
@@ -413,3 +413,28 @@ For every tracker item:
   Remaining risk: the broad ingestion suite was intentionally not rerun under the user's small-test
   constraint. Replay/lifecycle extraction was rejected as callback-heavy and timing-sensitive; the
   assistant delivery-mode correlation state machine remains a separately reviewable future seam.
+- 2026-07-20 — CLN-023 started with two independently owned seams. `gitStatusParsing.ts` will own
+  pure porcelain/numstat/byte-line interpretation and consolidate repeated numstat summarization;
+  it must not change Git command count, concurrency, caches, mutation locking, or fallbacks.
+  `terminal/subprocessActivity.ts` will own OS process-tree capture/classification and consolidate
+  duplicate descendant classification while preserving the single shared `ps` snapshot per poll,
+  `pgrep` fast path, timeouts, caps, and conservative fallback. The intended benefit is direct
+  protocol-policy coverage without loading either lifecycle manager; the tradeoff is a small internal
+  dependency hop on two polling/status hot paths. Git execution/mutation workflows and terminal PTY,
+  output, ACK, persistence, exit, and polling lifecycle remain intentionally cohesive.
+- 2026-07-20 — CLN-023 complete: `gitStatusParsing.ts` owns the pure porcelain-v2, numstat,
+  configured-merge-ref, and byte-line codecs. GitCore keeps command execution, concurrency,
+  refresh/cache behavior, mutation locking, fallback policy, and its public facade. The repeated
+  numstat parsing/summarization path and identical `quoteGitCommand` implementation were removed.
+  `terminal/subprocessActivity.ts` now owns OS process-tree probing and child classification; the
+  duplicated snapshot/fallback classifier was consolidated, while Manager still captures exactly
+  one shared process snapshot before the per-session `Promise.all` and owns every PTY/output/event/
+  persistence/polling decision. The benefit is direct protocol coverage and less lifecycle-file
+  coupling; the tradeoff is one internal import hop in each status/poll path, with no additional
+  process invocations or data passes. Focused verification ran once per seam: Git parser **4/4**,
+  adversarial real-repository Git wiring **1/1** with 85 unrelated cases skipped, and subprocess
+  classification **6/6**. Both production entrypoints bundled, all six touched TypeScript files have
+  **0 unused diagnostics**, and `git diff --check` passed. GitCore is **2,757** lines with a cohesive
+  **206**-line parser; TerminalManager is **2,322** lines with a **254**-line probe. Remaining risk:
+  uncommon malformed Git wire variants and live Windows process probing were not exercised; broad
+  GitCore/TerminalManager suites were intentionally not run under the small-test constraint.

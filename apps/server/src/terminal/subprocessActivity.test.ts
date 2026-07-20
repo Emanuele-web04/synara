@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { inspectSubprocessActivity } from "./Manager";
-import type { ProcessChildrenMap } from "../processTreeKiller";
+import { inspectSubprocessActivity } from "./subprocessActivity";
+import type { ProcessChildrenMap } from "./processTreeKiller";
 
 function buildChildrenMap(
   entries: Array<{ ppid: number; pid: number; command: string }>,
@@ -57,6 +57,21 @@ describe("inspectSubprocessActivity", () => {
     expect(inspectSubprocessActivity(100, map)).toEqual({
       cliKind: "codex",
       hasNonProviderSubprocess: false,
+      hasProviderDescendant: true,
+      hasRunningSubprocess: true,
+    });
+  });
+
+  it("combines provider and non-provider activity across sibling branches", () => {
+    const map = buildChildrenMap([
+      { ppid: 100, pid: 200, command: "zsh" },
+      { ppid: 200, pid: 300, command: "codex" },
+      { ppid: 100, pid: 400, command: "node build.js" },
+    ]);
+
+    expect(inspectSubprocessActivity(100, map)).toEqual({
+      cliKind: "codex",
+      hasNonProviderSubprocess: true,
       hasProviderDescendant: true,
       hasRunningSubprocess: true,
     });
