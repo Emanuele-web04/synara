@@ -268,9 +268,13 @@ export function useSidebarThreadActions(input: {
     ): Promise<void> => {
       await deleteActiveThreadFromClient({
         threadId,
-        deletedThreadIds: opts.deletedThreadIds,
-        reconcileDeletedThread: opts.reconcileDeletedThread,
-        worktreeCleanupMode: opts.worktreeCleanupMode,
+        ...(opts.deletedThreadIds !== undefined ? { deletedThreadIds: opts.deletedThreadIds } : {}),
+        ...(opts.reconcileDeletedThread !== undefined
+          ? { reconcileDeletedThread: opts.reconcileDeletedThread }
+          : {}),
+        ...(opts.worktreeCleanupMode !== undefined
+          ? { worktreeCleanupMode: opts.worktreeCleanupMode }
+          : {}),
         prepareForDelete: () => ({
           shouldNavigateToFallback: routeThreadId === threadId,
           fallbackThreadId: getFallbackThreadIdAfterDelete({

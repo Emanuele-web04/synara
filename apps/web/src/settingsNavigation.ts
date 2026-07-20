@@ -169,8 +169,8 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
 /**
  * Stable DOM id for a settings row, derived from its (string) title. Shared by the row that
  * renders the anchor and by the search index that deep-links to it via `?target=…`, so the
- * two can't drift. Panels mount one section at a time, so the slug only needs to be unique
- * within a section.
+ * two can't drift. Panels stay mounted and render null while inactive, so the slug only needs
+ * to be unique within a section.
  */
 export function settingRowAnchorId(title: string): string {
   const slug = title

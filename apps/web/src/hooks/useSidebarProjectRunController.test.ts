@@ -9,7 +9,7 @@ const reactHarness = vi.hoisted(() => {
   interface HookSlot {
     value?: unknown;
     deps?: readonly unknown[];
-    cleanup?: () => void;
+    cleanup?: (() => void) | undefined;
   }
   let slots: HookSlot[] = [];
   let cursor = 0;

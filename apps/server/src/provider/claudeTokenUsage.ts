@@ -13,7 +13,7 @@ import {
 
 import { positiveFiniteNumber } from "./tokenUsage.ts";
 
-const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
+export const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
   "200k": 200_000,
   "1m": 1_000_000,
 } as const;
@@ -24,10 +24,7 @@ const CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS = 50_000;
 const CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS = 20_000;
 const CLAUDE_LOW_CACHE_READ_RATIO = 0.2;
 
-export type ClaudeContextUsageWarningKey =
-  | "uncached-ingestion"
-  | "near-window"
-  | "large-prompt";
+export type ClaudeContextUsageWarningKey = "uncached-ingestion" | "near-window" | "large-prompt";
 
 export interface ClaudeContextUsageWarning {
   readonly key: ClaudeContextUsageWarningKey;
@@ -84,7 +81,7 @@ export function resolveClaudeEffectiveContextBudget(
   return autoCompactBudget ?? lastKnownContextWindow;
 }
 
-function stripClaudeContextWindowSuffix(apiModelId: string): string {
+export function stripClaudeContextWindowSuffix(apiModelId: string): string {
   return apiModelId.replace(/\[[^\]]+\]$/u, "");
 }
 
@@ -259,9 +256,7 @@ export function decideClaudeContextUsageWarnings(
     return undefined;
   }
 
-  const cachedReadTokens = finiteClaudeTokenCountOrZero(
-    rawUsage.cache_read_input_tokens,
-  );
+  const cachedReadTokens = finiteClaudeTokenCountOrZero(rawUsage.cache_read_input_tokens);
   const uncachedTokens = Math.max(0, promptTokens - cachedReadTokens);
   const composition =
     cachedReadTokens > 0
@@ -294,10 +289,7 @@ export function decideClaudeContextUsageWarnings(
     return first ? { first, second: warning } : { first: warning };
   }
 
-  if (
-    promptTokens > CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS &&
-    !emittedWarnings.has("large-prompt")
-  ) {
+  if (promptTokens > CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS && !emittedWarnings.has("large-prompt")) {
     const warning: ClaudeContextUsageWarning = {
       key: "large-prompt",
       message: `Claude is processing ${formatApproxTokens(promptTokens)} logical prompt tokens per request${composition}. Large active contexts can consume usage faster; cached reads cost less than fresh input.`,

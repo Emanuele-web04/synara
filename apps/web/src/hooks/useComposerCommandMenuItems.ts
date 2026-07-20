@@ -1,5 +1,6 @@
 import type {
   ProjectEntry,
+  ProviderAgentDescriptor,
   ProviderNativeCommandDescriptor,
   ProviderKind,
   ProviderMentionReference,
@@ -97,7 +98,7 @@ export function useComposerCommandMenuItems(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
-  dynamicAgents: readonly { name: string; displayName: string; description?: string }[];
+  dynamicAgents: readonly ProviderAgentDescriptor[];
 }): ComposerCommandItem[] {
   const {
     composerTrigger,

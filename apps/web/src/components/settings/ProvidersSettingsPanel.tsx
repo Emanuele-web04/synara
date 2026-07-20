@@ -27,13 +27,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  type MouseEvent,
-  type ReactNode,
-  useCallback,
-  useMemo,
-  useState,
-} from "react";
+import { type MouseEvent, type ReactNode, useCallback, useMemo, useState } from "react";
 
 import type { AppSettings, AppSettingsBinding } from "~/appSettings";
 import { CentralIcon } from "~/lib/central-icons";
@@ -326,8 +320,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         settingsKey: "openCodeServerUrl",
         label: "OpenCode server URL",
         placeholder: "http://127.0.0.1:4096",
-        description:
-          "Optional existing OpenCode server URL. Leave blank to spawn a local server.",
+        description: "Optional existing OpenCode server URL. Leave blank to spawn a local server.",
       },
       {
         kind: "password",
@@ -604,8 +597,9 @@ function ProviderInstallFieldControl(props: {
     );
   }
 
+  const configured =
+    props.field.kind === "password" ? props.settings[props.field.configuredKey] : false;
   const isPassword = props.field.kind === "password";
-  const configured = isPassword ? props.settings[props.field.configuredKey] : false;
   return (
     <label htmlFor={id} className="block">
       <span className="block text-xs font-medium text-foreground">{props.field.label}</span>

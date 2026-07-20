@@ -1,6 +1,7 @@
 import { OrchestrationProposedPlanId, ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
+import { normalizeCurrentPersistedComposerDraftStoreState } from "./composerDraftPersistence";
 import {
   makeImage,
   makeQueuedChatTurn,
@@ -14,6 +15,78 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
 } from "./lib/terminalContext";
+
+describe("composerDraftStore persisted-state hydration", () => {
+  it("normalizes null and empty persisted states", () => {
+    const emptyState = {
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {},
+      stickyActiveProvider: null,
+    };
+
+    expect(normalizeCurrentPersistedComposerDraftStoreState(null)).toEqual(emptyState);
+    expect(normalizeCurrentPersistedComposerDraftStoreState({})).toEqual(emptyState);
+  });
+
+  it("hydrates project mappings, defaults, and persisted selections", () => {
+    const projectId = ProjectId.makeUnsafe("project-hydration");
+    const threadId = ThreadId.makeUnsafe("thread-hydration");
+    const mappingKey = `${projectId}::terminal`;
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Review these selections",
+          attachments: [],
+          assistantSelections: [
+            {
+              id: "assistant-selection-1",
+              assistantMessageId: " assistant-message-1 ",
+              text: " selected assistant text ",
+            },
+          ],
+          fileComments: [
+            {
+              id: "file-comment-1",
+              path: " src/example.ts ",
+              startLine: 8,
+              endLine: 4,
+              text: " selected file text ",
+            },
+          ],
+        },
+      },
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: { [mappingKey]: threadId },
+    });
+
+    expect(hydrated.projectDraftThreadIdByProjectId).toEqual({ [mappingKey]: threadId });
+    expect(hydrated.draftThreadsByThreadId[threadId]).toMatchObject({
+      projectId,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      entryPoint: "terminal",
+    });
+    expect(hydrated.draftsByThreadId[threadId]?.assistantSelections).toEqual([
+      {
+        id: "assistant-selection-1",
+        assistantMessageId: "assistant-message-1",
+        text: "selected assistant text",
+      },
+    ]);
+    expect(hydrated.draftsByThreadId[threadId]?.fileComments).toEqual([
+      {
+        id: "file-comment-1",
+        path: "src/example.ts",
+        startLine: 8,
+        endLine: 8,
+        text: "selected file text",
+      },
+    ]);
+  });
+});
 
 describe("composerDraftStore restored source proposed plan", () => {
   const threadId = ThreadId.makeUnsafe("thread-restored-source");

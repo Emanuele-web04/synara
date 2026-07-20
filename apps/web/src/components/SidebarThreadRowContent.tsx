@@ -109,7 +109,7 @@ function ProviderAvatarWithTerminal({
 
 function renderSubagentLabel(input: {
   thread: SidebarThreadSummary;
-  threads?: ReadonlyArray<SidebarThreadSummary> | undefined;
+  threads?: Parameters<typeof resolveSubagentPresentationForThread>[0]["threads"];
   roleClassName?: string | undefined;
 }) {
   const presentation = resolveSubagentPresentationForThread({
@@ -125,9 +125,7 @@ function renderSubagentLabel(input: {
   });
   const supportingLabel =
     presentation.role ??
-    (presentation.nickname &&
-    presentation.title &&
-    presentation.title !== presentation.nickname
+    (presentation.nickname && presentation.title && presentation.title !== presentation.nickname
       ? presentation.title
       : null);
 
@@ -245,9 +243,7 @@ export function SidebarThreadRowContent({
           {isSubagentThread ? (
             <SidebarSubagentLabel
               thread={thread}
-              roleClassName={
-                variant === "standard" ? "text-muted-foreground/42" : undefined
-              }
+              roleClassName={variant === "standard" ? "text-muted-foreground/42" : undefined}
             />
           ) : (
             thread.title

@@ -31,14 +31,14 @@ import { toastManager } from "../ui/toast";
 import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 type WorktreeAssociation = {
-  worktreePath?: string | null;
-  associatedWorktreePath?: string | null;
+  worktreePath?: string | null | undefined;
+  associatedWorktreePath?: string | null | undefined;
 };
 
 type ArchivedSortableThread = {
   id: string;
-  archivedAt?: string | null;
-  updatedAt?: string | null;
+  archivedAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
   createdAt: string;
 };
 

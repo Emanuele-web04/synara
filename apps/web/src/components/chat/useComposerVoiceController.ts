@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Project } from "../../types";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../../lib/voiceRecorder";
 import { readNativeApi } from "../../nativeApi";
+import type { RefreshProviderStatusesNow } from "../../hooks/useProviderStatusRefresh";
 import { toastManager } from "../ui/toast";
 import {
   deriveComposerVoiceState,
@@ -37,7 +38,7 @@ export interface UseComposerVoiceControllerOptions {
   activeProviderStatus: ServerProviderStatus | null;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
-  refreshVoiceStatus: () => void | Promise<void>;
+  refreshVoiceStatus: RefreshProviderStatusesNow;
   actionArmDelayMs?: number;
   failureCopy?: Partial<ComposerVoiceFailureCopy>;
   onGuardWarning?: (message: string, details: ComposerVoiceGuardDetails) => void;

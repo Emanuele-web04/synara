@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 
+import { ThreadId } from "@synara/contracts";
 import type { BrowserWindow, WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -55,7 +56,7 @@ class FakePopupWindow extends EventEmitter {
 interface BrowserManagerCharacterizationAccess {
   configureRuntimeWebContents(runtime: {
     key: string;
-    threadId: string;
+    threadId: ThreadId;
     tabId: string;
     webContents: WebContents;
     view: null;
@@ -63,12 +64,14 @@ interface BrowserManagerCharacterizationAccess {
     listenerDisposers: Array<() => void>;
   }): void;
   configureOAuthPopupRuntime(runtime: {
-    threadId: string;
+    threadId: ThreadId;
     tabId: string;
     window: BrowserWindow;
     listenerDisposers: Array<() => void>;
   }): void;
 }
+
+const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 
 function asCharacterizationAccess(
   manager: DesktopBrowserManager,
@@ -83,10 +86,10 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
 
   it("emits one state change when a different tab becomes active", () => {
     const manager = new DesktopBrowserManager();
-    const initial = manager.open({ threadId: "thread-1" });
+    const initial = manager.open({ threadId: THREAD_ID });
     const firstTabId = initial.activeTabId;
     const withSecondTab = manager.newTab({
-      threadId: "thread-1",
+      threadId: THREAD_ID,
       url: "https://second.example",
       activate: false,
     });
@@ -99,17 +102,17 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
     if (!secondTabId) return;
     expect(withSecondTab.activeTabId).toBe(firstTabId);
 
-    const selected = manager.selectTab({ threadId: "thread-1", tabId: secondTabId });
+    const selected = manager.selectTab({ threadId: THREAD_ID, tabId: secondTabId });
     expect(selected.activeTabId).toBe(secondTabId);
     expect(states).toHaveBeenCalledTimes(1);
 
-    manager.selectTab({ threadId: "thread-1", tabId: secondTabId });
+    manager.selectTab({ threadId: THREAD_ID, tabId: secondTabId });
     expect(states).toHaveBeenCalledTimes(1);
   });
 
   it("applies the same popup, tab-open, and scheme-denial policy to tabs and popups", () => {
     const manager = new DesktopBrowserManager();
-    const initial = manager.open({ threadId: "thread-1" });
+    const initial = manager.open({ threadId: THREAD_ID });
     const tabId = initial.activeTabId;
     expect(tabId).not.toBeNull();
     if (!tabId) return;
@@ -119,7 +122,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
     const access = asCharacterizationAccess(manager);
     access.configureRuntimeWebContents({
       key: `thread-1:${tabId}`,
-      threadId: "thread-1",
+      threadId: THREAD_ID,
       tabId,
       webContents: tabContents as unknown as WebContents,
       view: null,
@@ -127,7 +130,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       listenerDisposers: [],
     });
     access.configureOAuthPopupRuntime({
-      threadId: "thread-1",
+      threadId: THREAD_ID,
       tabId,
       window: popup as unknown as BrowserWindow,
       listenerDisposers: [],
@@ -146,7 +149,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
         }),
       ).toMatchObject({ action: "allow", overrideBrowserWindowOptions: expect.any(Object) });
 
-      const beforeTabOpen = manager.getState({ threadId: "thread-1" }).tabs.length;
+      const beforeTabOpen = manager.getState({ threadId: THREAD_ID }).tabs.length;
       expect(
         handler({
           url: "https://docs.example",
@@ -155,7 +158,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
           disposition: "foreground-tab",
         }),
       ).toEqual({ action: "deny" });
-      const afterTabOpen = manager.getState({ threadId: "thread-1" });
+      const afterTabOpen = manager.getState({ threadId: THREAD_ID });
       expect(afterTabOpen.tabs).toHaveLength(beforeTabOpen + 1);
       expect(afterTabOpen.tabs.find((tab) => tab.id === afterTabOpen.activeTabId)?.url).toBe(
         "https://docs.example/",
@@ -170,7 +173,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
           disposition: "foreground-tab",
         }),
       ).toEqual({ action: "deny" });
-      expect(manager.getState({ threadId: "thread-1" }).tabs).toHaveLength(beforeSchemeDenial);
+      expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(beforeSchemeDenial);
     }
   });
 });

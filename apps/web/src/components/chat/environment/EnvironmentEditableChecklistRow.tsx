@@ -19,7 +19,7 @@ import { cn } from "~/lib/utils";
 const JUMP_CLICK_DELAY_MS = 180;
 
 interface EnvironmentEditableChecklistRowProps {
-  checked: boolean;
+  checked: boolean | undefined;
   available: boolean;
   displayLabel: string;
   initialEditLabel: string;

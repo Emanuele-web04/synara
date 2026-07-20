@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const reactHarness = vi.hoisted(() => {
   interface EffectSlot {
     deps?: readonly unknown[];
-    cleanup?: () => void;
+    cleanup?: (() => void) | undefined;
     current?: (...args: never[]) => unknown;
     value?: (...args: never[]) => unknown;
   }

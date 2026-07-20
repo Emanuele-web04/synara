@@ -2807,8 +2807,9 @@ function stopBackend(): void {
 }
 
 async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS): Promise<void> {
-  const backendChild = takeBackendProcessForShutdown();
-  if (!backendChild) return;
+  const child = takeBackendProcessForShutdown();
+  if (!child) return;
+  const backendChild = child;
   if (backendChild.exitCode !== null || backendChild.signalCode !== null) return;
 
   await new Promise<void>((resolve) => {

@@ -3,7 +3,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { NonNegativeInt } from "@synara/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 
-import { toPersistenceSqlOrDecodeError } from "../Errors.ts";
+import { toPersistenceSqlError, toPersistenceSqlOrDecodeError } from "../Errors.ts";
 
 import {
   DeleteProjectionThreadActivitiesInput,

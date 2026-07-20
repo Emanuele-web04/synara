@@ -16,11 +16,7 @@ import type {
 import { Deferred, Effect, Option, Semaphore, SynchronizedRef } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import type {
-  AcpSessionMode,
-  AcpSessionModeState,
-  AcpToolCallState,
-} from "./AcpRuntimeModel.ts";
+import type { AcpSessionMode, AcpSessionModeState, AcpToolCallState } from "./AcpRuntimeModel.ts";
 
 export interface AcpSessionModeAliases {
   readonly plan: ReadonlyArray<string>;
@@ -84,9 +80,7 @@ export function resolveRequestedAcpSessionModeId(input: {
     return (
       findAcpModeByAliases(modeState.availableModes, input.aliases.approval)?.id ??
       findAcpModeByAliases(modeState.availableModes, input.aliases.implement)?.id ??
-      modeState.availableModes.find(
-        (mode) => !isAcpPlanMode(mode, input.aliases.plan),
-      )?.id ??
+      modeState.availableModes.find((mode) => !isAcpPlanMode(mode, input.aliases.plan))?.id ??
       modeState.currentModeId
     );
   }
@@ -176,9 +170,9 @@ export function recordAcpSessionCost(
   }
 }
 
-export function finalizeAcpActiveTurnCost(context: {
-  latestSessionCostUsd: number | undefined;
-}): { readonly cumulativeCostUsd?: number } {
+export function finalizeAcpActiveTurnCost(context: { latestSessionCostUsd: number | undefined }): {
+  readonly cumulativeCostUsd?: number;
+} {
   return context.latestSessionCostUsd !== undefined
     ? { cumulativeCostUsd: context.latestSessionCostUsd }
     : {};
@@ -194,16 +188,14 @@ export function withAcpPlanModePrompt(input: {
   }
 
   const text = input.text.trim();
-  return text.length > 0
-    ? `${input.promptPrefix}\n\nUser request:\n${text}`
-    : input.promptPrefix;
+  return text.length > 0 ? `${input.promptPrefix}\n\nUser request:\n${text}` : input.promptPrefix;
 }
 
 export function resolveAcpSessionCwd(input: {
   readonly inputCwd: string | undefined;
   readonly serverCwd: string;
   readonly homeDir: string;
-  readonly sessionCwd?: string;
+  readonly sessionCwd?: string | undefined;
 }): string | undefined {
   const requestedCwd = input.inputCwd?.trim() || input.sessionCwd?.trim();
   if (requestedCwd) {

@@ -101,6 +101,7 @@ import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
 import {
+  CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
   decideClaudeContextUsageWarnings,
   maxClaudeContextWindowFromModelUsage,
   mergeClaudeTokenUsageSnapshot,
@@ -110,6 +111,7 @@ import {
   resolveEffectiveClaudeContextWindow,
   resolveSelectedClaudeAutoCompactWindow,
   snapshotFromClaudeContextUsage,
+  stripClaudeContextWindowSuffix,
 } from "../claudeTokenUsage.ts";
 import {
   applyClaudeTaskToolResult,

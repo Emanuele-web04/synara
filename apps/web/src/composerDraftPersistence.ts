@@ -31,6 +31,8 @@ import {
   normalizeDraftThreadEntryPoint,
   normalizeFileComments,
   normalizeTerminalContextsForThread,
+  projectDraftThreadEntryPointFromKey,
+  projectIdFromDraftThreadMappingKey,
   PersistedComposerImageAttachment,
   type ComposerDraftStoreState,
   type ComposerPromptHistorySavedDraft,
@@ -39,6 +41,7 @@ import {
   type QueuedComposerTurn,
 } from "./composerDraftDomain";
 import {
+  LegacyCodexFields,
   legacyMergeModelSelectionIntoProviderModelOptions,
   legacySyncModelSelectionOptions,
   legacyToModelSelectionByProvider,
@@ -47,11 +50,14 @@ import {
   normalizeProviderModelOptions,
   sanitizeStickyModelSelectionMap,
 } from "./composerDraftModels";
+import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { normalizePastedTextContent } from "./lib/composerPastedText";
+import { normalizeFileCommentSelection } from "./lib/fileComments";
 import {
   ensureInlineTerminalContextPlaceholders,
   normalizeTerminalContextText,
 } from "./lib/terminalContext";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
@@ -217,14 +223,6 @@ const PersistedComposerThreadDraftState = Schema.Struct({
 
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
-const LegacyCodexFields = Schema.Struct({
-  effort: Schema.optionalKey(Schema.String),
-  codexFastMode: Schema.optionalKey(Schema.Boolean),
-  serviceTier: Schema.optionalKey(Schema.String),
-});
-
-type LegacyCodexFields = typeof LegacyCodexFields.Type;
-
 const LegacyThreadModelFields = Schema.Struct({
   provider: Schema.optionalKey(ProviderKind),
   model: Schema.optionalKey(Schema.String),
@@ -287,6 +285,14 @@ const PersistedComposerDraftStoreState = Schema.Struct({
 });
 
 export type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
+
+const EMPTY_PERSISTED_DRAFT_STORE_STATE = Object.freeze<PersistedComposerDraftStoreState>({
+  draftsByThreadId: {},
+  draftThreadsByThreadId: {},
+  projectDraftThreadIdByProjectId: {},
+  stickyModelSelectionByProvider: {},
+  stickyActiveProvider: null,
+});
 
 function normalizePersistedPromptHistorySavedDraft(
   value: unknown,

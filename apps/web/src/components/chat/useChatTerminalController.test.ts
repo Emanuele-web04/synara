@@ -9,7 +9,7 @@ const reactHarness = vi.hoisted(() => {
   interface HookSlot {
     value?: unknown;
     deps?: readonly unknown[];
-    cleanup?: () => void;
+    cleanup?: (() => void) | undefined;
   }
 
   let slots: HookSlot[] = [];
@@ -101,7 +101,7 @@ const terminalHarness = vi.hoisted(() => {
     terminalTitleOverridesById: {},
     terminalCliKindsById: {},
     terminalAttentionStatesById: {},
-    runningTerminalIds: [],
+    runningTerminalIds: terminalIds.slice(0, 0),
     activeTerminalId: terminalIds[0] ?? "terminal-1",
     terminalGroups: [
       {

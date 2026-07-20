@@ -27,7 +27,7 @@ import {
 import { projectScriptRuntimeEnv } from "../projectScripts";
 import type { Project } from "../types";
 
-function firstLocalServerUrl(server: ServerLocalServerProcess): string | null {
+export function firstLocalServerUrl(server: ServerLocalServerProcess): string | null {
   return server.addresses.find((address) => address.url)?.url ?? null;
 }
 

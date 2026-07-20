@@ -4,10 +4,13 @@ import {
   type OrchestrationThreadActivity,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
+import {
+  approvalRequestKindFromRequestType,
+  pendingRequestInstanceKey,
+} from "@synara/shared/threadSummary";
 
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
-import { orderedActivities, requestKindFromRequestType } from "./workLog";
+import { orderedActivities } from "./workLog";
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
@@ -215,7 +218,7 @@ export function derivePendingApprovals(
         payload?.requestKind === "file-read" ||
         payload?.requestKind === "file-change"
           ? payload.requestKind
-          : requestKindFromRequestType(payload?.requestType);
+          : approvalRequestKindFromRequestType(payload?.requestType);
       if (!requestKind) {
         return null;
       }

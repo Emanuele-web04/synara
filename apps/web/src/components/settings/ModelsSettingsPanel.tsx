@@ -67,7 +67,7 @@ export function validateCustomModelInput(input: {
   return { model: normalized };
 }
 
-function isCustomModelEditorProvider(value: string): value is ProviderKind {
+function isCustomModelEditorProvider(value: string | null): value is ProviderKind {
   return CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.some((config) => config.provider === value);
 }
 
@@ -183,7 +183,7 @@ export function ModelsSettingsPanel({
         value: customModelInputByProvider[provider] ?? "",
         savedModels: customModels,
       });
-      if (result.error) {
+      if ("error" in result) {
         setCustomModelErrorByProvider((existing) => ({
           ...existing,
           [provider]: result.error,

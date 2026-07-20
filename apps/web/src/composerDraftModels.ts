@@ -43,6 +43,14 @@ const isProviderKind = Schema.is(ProviderKind);
 
 const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
 
+export const LegacyCodexFields = Schema.Struct({
+  effort: Schema.optionalKey(Schema.String),
+  codexFastMode: Schema.optionalKey(Schema.Boolean),
+  serviceTier: Schema.optionalKey(Schema.String),
+});
+
+export type LegacyCodexFields = typeof LegacyCodexFields.Type;
+
 const ANTIGRAVITY_REASONING_EFFORT_SET = new Set(["low", "medium", "high", "thinking"]);
 
 export interface EffectiveComposerModelState {

@@ -106,7 +106,8 @@ function composeCodexInputWithFileAttachments(input: {
 
 function codexModelSelectionOverrides(
   modelSelection: ModelSelection | undefined,
-): Pick<CodexAppServerSendTurnInput, "model" | "effort" | "serviceTier"> {
+): Pick<CodexAppServerSendTurnInput, "model" | "effort"> &
+  Pick<CodexAppServerStartSessionInput, "serviceTier"> {
   if (modelSelection?.provider !== PROVIDER) {
     return {};
   }

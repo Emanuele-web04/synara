@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   ThreadId,
   type OrchestrationPendingInteraction,
+  type OrchestrationThreadActivity,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

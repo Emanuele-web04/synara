@@ -23,6 +23,8 @@ import {
 } from "./composerDraftAttachments";
 import {
   type ComposerDraftStoreState,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
   type ComposerThreadDraftState,
   type DraftThreadState,
   type PersistedComposerImageAttachment,

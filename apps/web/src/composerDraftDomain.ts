@@ -365,6 +365,10 @@ export function projectDraftThreadMappingKey(
     : projectId;
 }
 
+export function projectDraftThreadEntryPointFromKey(key: string): ThreadPrimarySurface {
+  return key.endsWith(TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX) ? "terminal" : "chat";
+}
+
 export function projectIdFromDraftThreadMappingKey(key: string): ProjectId {
   return (
     key.endsWith(TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX)
@@ -617,6 +621,8 @@ export function normalizePastedTexts(
   }
   return normalizedPastedTexts;
 }
+
+type PersistedPastedTextDraft = Pick<PastedTextDraft, "id" | "createdAt" | "text">;
 
 export function hydratePastedTextsFromPersisted(
   persisted: ReadonlyArray<PersistedPastedTextDraft> | undefined,

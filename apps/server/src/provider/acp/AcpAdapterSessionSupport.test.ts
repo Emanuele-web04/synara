@@ -114,6 +114,7 @@ describe("ACP adapter session support", () => {
       session: {
         provider: "grok",
         status: "running",
+        runtimeMode: "full-access",
         threadId: ThreadId.makeUnsafe("thread-1"),
         activeTurnId: turnId,
         createdAt: "2026-07-19T00:00:00.000Z",

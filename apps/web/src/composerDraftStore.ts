@@ -51,7 +51,6 @@ export type {
   ComposerThreadDraftState,
   DraftThreadEnvMode,
   DraftThreadState,
-  PersistedComposerImageAttachment,
   QueuedComposerChatTurn,
   QueuedComposerPlanFollowUp,
   QueuedComposerTurn,

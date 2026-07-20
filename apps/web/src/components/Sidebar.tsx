@@ -335,7 +335,10 @@ import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
-import { useSidebarProjectRunController } from "../hooks/useSidebarProjectRunController";
+import {
+  firstLocalServerUrl,
+  useSidebarProjectRunController,
+} from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
@@ -348,6 +351,7 @@ import type {
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { waitForRecoverableProjectInReadModel } from "../lib/projectCreateRecovery";
 import {
   createOrRecoverProjectFromPath,
