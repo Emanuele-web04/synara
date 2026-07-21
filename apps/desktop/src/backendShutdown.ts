@@ -31,9 +31,7 @@ export type WindowsBackendShutdownResult =
 export class WindowsBackendShutdownTimeoutError extends Error {
   readonly forced: boolean;
 
-  constructor(
-    result: Extract<WindowsBackendShutdownResult, { readonly type: "timed-out" }>,
-  ) {
+  constructor(result: Extract<WindowsBackendShutdownResult, { readonly type: "timed-out" }>) {
     super("Timed out waiting for the Windows desktop backend to exit.");
     this.name = "WindowsBackendShutdownTimeoutError";
     this.forced = result.forced;
@@ -59,9 +57,7 @@ export function shouldDeferDesktopWindowClose(input: {
   readonly shutdownComplete: boolean;
   readonly updaterHandoffActive: boolean;
 }): boolean {
-  return (
-    input.platform === "win32" && !input.shutdownComplete && !input.updaterHandoffActive
-  );
+  return input.platform === "win32" && !input.shutdownComplete && !input.updaterHandoffActive;
 }
 
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();
@@ -298,10 +294,7 @@ export function stopWindowsBackendAndWait(input: {
   });
   shutdownsByProcess.set(input.child, operation);
   void operation.then((result) => {
-    if (
-      result.type === "timed-out" &&
-      shutdownsByProcess.get(input.child) === operation
-    ) {
+    if (result.type === "timed-out" && shutdownsByProcess.get(input.child) === operation) {
       shutdownsByProcess.delete(input.child);
     }
   });

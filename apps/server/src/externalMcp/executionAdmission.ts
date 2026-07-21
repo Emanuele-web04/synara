@@ -43,6 +43,4 @@ export function makeExternalMcpExecutionAdmission(slotCount: number) {
   };
 }
 
-export type ExternalMcpExecutionAdmission = ReturnType<
-  typeof makeExternalMcpExecutionAdmission
->;
+export type ExternalMcpExecutionAdmission = ReturnType<typeof makeExternalMcpExecutionAdmission>;

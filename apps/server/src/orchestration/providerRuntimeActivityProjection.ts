@@ -322,11 +322,7 @@ function buildConfiguredContextWindowPayload(
   const configuredWindow = asString(configuredWindowValue)?.trim().toLowerCase();
   const maxTokens =
     asPositiveFiniteNumber(configuredWindowValue) ??
-    (configuredWindow === "1m"
-      ? 1_000_000
-      : configuredWindow === "200k"
-        ? 200_000
-        : undefined);
+    (configuredWindow === "1m" ? 1_000_000 : configuredWindow === "200k" ? 200_000 : undefined);
   if (maxTokens === undefined) {
     const explicitlyCleared =
       (autoCompactWindow === null &&

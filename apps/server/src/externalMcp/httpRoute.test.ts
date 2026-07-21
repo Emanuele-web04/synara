@@ -42,38 +42,39 @@ async function withExternalMcpServer(
   const handledBodies: unknown[] = [];
   let nodeServer: http.Server | null = null;
   try {
-    const verified = (integrationId: string) => ({
-      integration: {
-        integrationId,
-        name: "Route test",
-        audience: "synara.external-mcp",
-        credentialHash: "hash-only",
-        capabilities: ["projects:read"],
-        projectIds: ["project-route-test"],
-        createdAt: "2026-07-20T00:00:00.000Z",
-        expiresAt: "2026-08-20T00:00:00.000Z",
-        lastUsedAt: null,
-        pairedAt: "2026-07-20T00:00:00.000Z",
-        revokedAt: null,
-        rateLimitPerMinute: 60,
-        concurrencyLimit: 2,
-      },
-      capabilities: new Set(["projects:read"]),
-      allowedProjectIds: new Set(["project-route-test"]),
-    }) as never;
+    const verified = (integrationId: string) =>
+      ({
+        integration: {
+          integrationId,
+          name: "Route test",
+          audience: "synara.external-mcp",
+          credentialHash: "hash-only",
+          capabilities: ["projects:read"],
+          projectIds: ["project-route-test"],
+          createdAt: "2026-07-20T00:00:00.000Z",
+          expiresAt: "2026-08-20T00:00:00.000Z",
+          lastUsedAt: null,
+          pairedAt: "2026-07-20T00:00:00.000Z",
+          revokedAt: null,
+          rateLimitPerMinute: 60,
+          concurrencyLimit: 2,
+        },
+        capabilities: new Set(["projects:read"]),
+        allowedProjectIds: new Set(["project-route-test"]),
+      }) as never;
     const service = {
       verifyCredential: (credential: string) =>
         input.verifyCredentialFailure
           ? Effect.fail(input.verifyCredentialFailure)
           : credential === EXTERNAL_TOKEN || credential === OTHER_EXTERNAL_TOKEN
-          ? Effect.succeed(
-              verified(
-                credential === EXTERNAL_TOKEN
-                  ? "integration-route-test"
-                  : "integration-route-test-other",
-              ),
-            )
-          : Effect.fail({ code: "external_credential_invalid", message: "invalid", status: 401 }),
+            ? Effect.succeed(
+                verified(
+                  credential === EXTERNAL_TOKEN
+                    ? "integration-route-test"
+                    : "integration-route-test-other",
+                ),
+              )
+            : Effect.fail({ code: "external_credential_invalid", message: "invalid", status: 401 }),
       listIntegrations: () => Effect.succeed([]),
       createIntegration: () => Effect.die("not used"),
       revokeIntegration: () => Effect.succeed(false),
@@ -311,10 +312,12 @@ describe("externalMcpRouteLayer", () => {
       headers: {},
       stream: Stream.make(new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"ping"}')),
     } as never;
-    await expect(Effect.runPromise(readExternalMcpBody(validExternalRequest, 50))).resolves.toEqual({
-      kind: "ok",
-      body: { jsonrpc: "2.0", id: 1, method: "ping" },
-    });
+    await expect(Effect.runPromise(readExternalMcpBody(validExternalRequest, 50))).resolves.toEqual(
+      {
+        kind: "ok",
+        body: { jsonrpc: "2.0", id: 1, method: "ping" },
+      },
+    );
     await Promise.all(stalledManagementReads);
   });
 

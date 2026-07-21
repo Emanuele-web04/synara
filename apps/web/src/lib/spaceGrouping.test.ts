@@ -24,8 +24,6 @@ describe("resolveActiveSpaceId", () => {
   it("keeps a receipt-fenced optimistic selection until shell hydration catches up", () => {
     const pendingSpaceId = SpaceId.makeUnsafe("space-pending");
 
-    expect(resolveActiveSpaceId(pendingSpaceId, [workSpace], pendingSpaceId)).toBe(
-      pendingSpaceId,
-    );
+    expect(resolveActiveSpaceId(pendingSpaceId, [workSpace], pendingSpaceId)).toBe(pendingSpaceId);
   });
 });

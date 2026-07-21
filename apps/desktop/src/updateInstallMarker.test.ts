@@ -191,16 +191,8 @@ describe("updateInstallMarker", () => {
     const expected = { attemptId: "attempt-1", artifact };
     writeInstallMarker(filePath, marker({ phase: "handoff" }));
 
-    const first = recordInstallMarkerFailureSync(
-      filePath,
-      expected,
-      "2026-07-02T00:00:00.000Z",
-    );
-    const repeated = recordInstallMarkerFailureSync(
-      filePath,
-      expected,
-      "2026-07-02T00:00:01.000Z",
-    );
+    const first = recordInstallMarkerFailureSync(filePath, expected, "2026-07-02T00:00:00.000Z");
+    const repeated = recordInstallMarkerFailureSync(filePath, expected, "2026-07-02T00:00:01.000Z");
 
     expect(first).toMatchObject({ status: "recorded", marker: { consecutiveFailures: 1 } });
     expect(repeated).toEqual({
@@ -228,16 +220,8 @@ describe("updateInstallMarker", () => {
     writeInstallMarker(filePath, original);
     fsFailure.failRename = true;
 
-    const first = recordInstallMarkerFailureSync(
-      filePath,
-      expected,
-      "2026-07-02T00:00:00.000Z",
-    );
-    const repeated = recordInstallMarkerFailureSync(
-      filePath,
-      expected,
-      "2026-07-02T00:00:01.000Z",
-    );
+    const first = recordInstallMarkerFailureSync(filePath, expected, "2026-07-02T00:00:00.000Z");
+    const repeated = recordInstallMarkerFailureSync(filePath, expected, "2026-07-02T00:00:01.000Z");
 
     expect(first).toMatchObject({
       status: "write-failed",

@@ -8,9 +8,10 @@ export class UpdateInstallPreparationCancelledError extends Error {
 }
 
 export function makeUpdateInstallPreparationCoordinator() {
-  let activeAttempt:
-    | { readonly token: UpdateInstallPreparationAttempt; cancelled: boolean }
-    | null = null;
+  let activeAttempt: {
+    readonly token: UpdateInstallPreparationAttempt;
+    cancelled: boolean;
+  } | null = null;
 
   return {
     begin(): UpdateInstallPreparationAttempt | null {

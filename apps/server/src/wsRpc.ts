@@ -26,19 +26,8 @@ import {
   type ServerLifecycleStreamEvent,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
-import {
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Queue,
-  Schema,
-  Scope,
-  ServiceMap,
-  Stream,
-} from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
+import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
@@ -115,6 +104,14 @@ import {
 } from "./wsStreamAdmission";
 import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
+import {
+  CurrentWsSessionRole,
+  provideWsConnectionSession,
+  WS_CONNECTION_SESSION_HEADER,
+  WsConnectionSessions,
+  WsConnectionSessionsLive,
+  type WsConnectionSession,
+} from "./wsConnectionSessions";
 import { negotiateWsCompatibility, validateWsFeatureCompatibility } from "./wsCompatibility";
 import {
   requiresWebSocketAuthentication,
@@ -124,11 +121,6 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
-
-const CurrentWsSessionRole = ServiceMap.Reference<"owner" | "client">(
-  "synara/ws/CurrentSessionRole",
-  { defaultValue: () => "client" },
-);
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -146,19 +138,22 @@ const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.middleware(WsRequestAdmissio
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
-  makeWsRequestAdmission.pipe(
-    Effect.map(
-      (admission) =>
-        ((effect, options) =>
-          RpcSchema.isStreamSchema(options.rpc.successSchema)
-            ? effect
-            : admission.guard(
-                options.clientId,
-                options.rpc._tag,
-                effect,
-              )) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>,
-    ),
-  ),
+  Effect.gen(function* () {
+    const admission = yield* makeWsRequestAdmission;
+    const connectionSessions = yield* WsConnectionSessions;
+    return ((effect, options) => {
+      // Handler fibers descend from the RPC server fiber (forked at layer build),
+      // not from the connection's HTTP upgrade fiber, so connection-scoped
+      // services must be re-provided here from the connection-session registry.
+      const scoped = provideWsConnectionSession(
+        effect,
+        connectionSessions.lookup(Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER)),
+      );
+      return RpcSchema.isStreamSchema(options.rpc.successSchema)
+        ? scoped
+        : admission.guard(options.clientId, options.rpc._tag, scoped);
+    }) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>;
+  }),
 );
 
 // Relative subdirectories scaffolded under a freshly created chat container workspace root.
@@ -1723,7 +1718,29 @@ export function makeWebsocketRpcRouteLayer<R>(
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const rpcWebSocketHttpEffect = yield* rpcWebSocketHttpEffectSource;
+      const connectionSessions = yield* WsConnectionSessions;
       const router = yield* HttpRouter.HttpRouter;
+      // RPC handlers run on fibers forked from the layer-build scope, not from
+      // this per-connection fiber, so the authenticated session cannot be
+      // provided as a plain service around rpcWebSocketHttpEffect. Instead the
+      // session is registered for the connection's lifetime and its key is
+      // injected as a synthetic upgrade header; the admission middleware
+      // resolves it back into handler-scoped services on every request.
+      const runWithConnectionSession = (
+        request: HttpServerRequest.HttpServerRequest,
+        session: WsConnectionSession,
+      ) =>
+        Effect.gen(function* () {
+          const sessionKey = yield* connectionSessions.register(session);
+          return yield* rpcWebSocketHttpEffect.pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              request.modify({
+                headers: Headers.set(request.headers, WS_CONNECTION_SESSION_HEADER, sessionKey),
+              }),
+            ),
+          );
+        });
       yield* router.add(
         "GET",
         WS_FEATURE_PATH,
@@ -1752,24 +1769,18 @@ export function makeWebsocketRpcRouteLayer<R>(
           });
 
           if (!authenticatedSession) {
-            return yield* rpcWebSocketHttpEffect.pipe(
-              Effect.provideService(CurrentWsSessionRole, "owner"),
-              Effect.provideService(
-                CurrentManagedAttachmentPrincipal,
-                LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
-              ),
-            );
+            return yield* runWithConnectionSession(request, {
+              role: "owner",
+              attachmentPrincipal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+            });
           }
 
           return yield* sessions.runAuthenticatedConnection(
             authenticatedSession.sessionId,
-            rpcWebSocketHttpEffect.pipe(
-              Effect.provideService(CurrentWsSessionRole, authenticatedSession.role),
-              Effect.provideService(
-                CurrentManagedAttachmentPrincipal,
-                attachmentPrincipalForSession(authenticatedSession.sessionId),
-              ),
-            ),
+            runWithConnectionSession(request, {
+              role: authenticatedSession.role,
+              attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+            }),
           );
         }).pipe(
           Effect.catchTags({
@@ -1827,5 +1838,9 @@ function makeWebsocketBootstrapRouteLayer<R>(
 
 export const websocketRpcRouteLayer = Layer.merge(
   makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
-  makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect),
+  // The registry must be provided here so the upgrade route and the RPC
+  // middleware (built from the same source effect) share one instance.
+  makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect).pipe(
+    Layer.provide(WsConnectionSessionsLive),
+  ),
 );

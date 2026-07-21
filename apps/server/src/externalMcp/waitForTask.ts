@@ -15,11 +15,10 @@ export type ExternalMcpWaitState =
 const isTerminalWaitState = (state: ExternalMcpWaitState) =>
   state === "completed" || state === "error" || state === "interrupted";
 
-const isLiveWaitState = (state: ExternalMcpWaitState) =>
-  state === "pending" || state === "running";
+const isLiveWaitState = (state: ExternalMcpWaitState) => state === "pending" || state === "running";
 
 export const requestedExternalMcpRunId = (
-  input: { readonly runId?: string | null },
+  input: { readonly runId?: string | null | undefined },
   latestTurnId: string | null,
 ): string | null => (Object.hasOwn(input, "runId") ? (input.runId ?? null) : latestTurnId);
 
@@ -55,10 +54,7 @@ export const terminalExternalMcpSessionStateForRun = (
   // Session state has no durable run id. Once a run is pinned, its projected
   // turn is authoritative; a session failure can belong to a later startup.
   // A visible live turn is also more specific than uncorrelated session state.
-  if (
-    runId !== null ||
-    (thread.latestTurn !== null && isLiveWaitState(thread.latestTurn.state))
-  ) {
+  if (runId !== null || (thread.latestTurn !== null && isLiveWaitState(thread.latestTurn.state))) {
     return null;
   }
   if (thread.session?.status === "error") return "error";

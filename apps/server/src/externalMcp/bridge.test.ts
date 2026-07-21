@@ -84,9 +84,9 @@ describe("external MCP stdio bridge", () => {
     ).toBe(false);
     expect(isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, isReparsePoint: true })).toBe(false);
     expect(isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, hasDacl: false })).toBe(false);
-    expect(
-      isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, ownerSid: "S-1-5-21-other" }),
-    ).toBe(false);
+    expect(isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, ownerSid: "S-1-5-21-other" })).toBe(
+      false,
+    );
   });
 
   it("passes hostile Windows runtime paths outside the encoded PowerShell program", () => {
@@ -215,23 +215,20 @@ describe("external MCP stdio bridge", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "rejects a symlinked MCP secret directory",
-    () => {
-      const baseDir = makeBaseDir();
-      const redirected = makeBaseDir();
-      fs.symlinkSync(redirected, path.join(baseDir, "mcp"), "dir");
-      expect(() =>
-        writeExternalMcpClientCredential(baseDir, {
-          integrationId: "integration-symlink",
-          name: "Symlink",
-          credential: "syn_mcp_v1_must-not-escape",
-          expiresAt: "2026-08-20T00:00:00.000Z" as never,
-        }),
-      ).toThrow(/private path|symlink/i);
-      expect(fs.readdirSync(redirected)).toEqual([]);
-    },
-  );
+  it.skipIf(process.platform === "win32")("rejects a symlinked MCP secret directory", () => {
+    const baseDir = makeBaseDir();
+    const redirected = makeBaseDir();
+    fs.symlinkSync(redirected, path.join(baseDir, "mcp"), "dir");
+    expect(() =>
+      writeExternalMcpClientCredential(baseDir, {
+        integrationId: "integration-symlink",
+        name: "Symlink",
+        credential: "syn_mcp_v1_must-not-escape",
+        expiresAt: "2026-08-20T00:00:00.000Z" as never,
+      }),
+    ).toThrow(/private path|symlink/i);
+    expect(fs.readdirSync(redirected)).toEqual([]);
+  });
 
   it("selects one stored integration explicitly and rejects an ambiguous default", () => {
     const baseDir = makeBaseDir();
@@ -508,7 +505,12 @@ describe("external MCP stdio bridge", () => {
     });
     stdin.write(
       `${JSON.stringify([
-        { jsonrpc: "2.0", id: "slow", method: "tools/call", params: { name: "synara_wait_for_task", arguments: { threadId: "thread-1" } } },
+        {
+          jsonrpc: "2.0",
+          id: "slow",
+          method: "tools/call",
+          params: { name: "synara_wait_for_task", arguments: { threadId: "thread-1" } },
+        },
         { jsonrpc: "2.0", id: "fast", method: "ping" },
       ])}\n`,
     );

@@ -123,7 +123,7 @@ export function SpaceProjectPickerDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogPopup surface="solid" className="max-w-md">
+      <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>Move projects to {props.targetSpace?.name ?? "space"}</DialogTitle>
           <DialogDescription>

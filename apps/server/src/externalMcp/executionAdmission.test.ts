@@ -11,8 +11,18 @@ describe("external MCP execution admission", () => {
       release = resolve;
     });
     const running = [
-      Effect.runPromise(admission.run("integration-a", Effect.promise(() => blocked))),
-      Effect.runPromise(admission.run("integration-a", Effect.promise(() => blocked))),
+      Effect.runPromise(
+        admission.run(
+          "integration-a",
+          Effect.promise(() => blocked),
+        ),
+      ),
+      Effect.runPromise(
+        admission.run(
+          "integration-a",
+          Effect.promise(() => blocked),
+        ),
+      ),
     ];
     const deadline = Date.now() + 1_000;
     while (admission.activeIntegrationCount() !== 1 && Date.now() < deadline) {

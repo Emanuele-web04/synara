@@ -1,5 +1,6 @@
 import "../../index.css";
 
+import { useState } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
@@ -7,12 +8,23 @@ import { render } from "vitest-browser-react";
 import { Menu, MenuItem, MenuPopupBase, MenuSub, MenuSubPopup, MenuSubTrigger } from "./menu";
 
 function HoverSubmenuFixture() {
+  const [open, setOpen] = useState(true);
+  const [closedReason, setClosedReason] = useState<string | null>(null);
   const anchor = {
     getBoundingClientRect: () => new DOMRect(24, 24, 0, 0),
   };
 
+  if (!open) return <p>Menu closed: {closedReason}</p>;
+
   return (
-    <Menu open>
+    <Menu
+      keepOpenOnSubmenuInteraction
+      open
+      onOpenChange={(nextOpen, eventDetails) => {
+        setClosedReason(eventDetails.reason);
+        setOpen(nextOpen);
+      }}
+    >
       <MenuPopupBase anchor={anchor} align="start" side="bottom">
         <MenuItem>Primary action</MenuItem>
         <MenuSub keepOpenOnFocusOut>
@@ -42,6 +54,15 @@ describe("Menu submenu hover", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 220));
 
     await expect.element(page.getByText("Void", { exact: true })).toBeVisible();
+    await screen.unmount();
+  });
+
+  it("still closes for an actual menu item selection", async () => {
+    const screen = await render(<HoverSubmenuFixture />);
+
+    await page.getByText("Primary action", { exact: true }).click();
+
+    await expect.element(page.getByText("Menu closed: item-press", { exact: true })).toBeVisible();
     await screen.unmount();
   });
 });

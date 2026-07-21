@@ -135,7 +135,7 @@ export function SpaceEditorDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogPopup surface="solid" className="max-w-sm">
+      <DialogPopup className="max-w-sm">
         <DialogHeader>
           <DialogTitle>{props.mode === "create" ? "New space" : "Edit space"}</DialogTitle>
           <DialogDescription>

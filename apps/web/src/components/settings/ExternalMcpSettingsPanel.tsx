@@ -429,9 +429,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     size="xs"
                     variant="outline"
                     disabled={refreshPairingMutation.isPending}
-                    onClick={() =>
-                      refreshPairingMutation.mutate(setupIntegration.integrationId)
-                    }
+                    onClick={() => refreshPairingMutation.mutate(setupIntegration.integrationId)}
                   >
                     {refreshPairingMutation.isPending ? "Resuming..." : "Resume pairing"}
                   </Button>

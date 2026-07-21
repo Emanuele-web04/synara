@@ -622,8 +622,8 @@ describe("wsNativeApi", () => {
     const api = createWsNativeApi();
     const createInput = {
       name: "Desktop MCP",
-      capabilities: ["tasks.create", "tasks.read"] as const,
-      projectIds: ["project-1"],
+      capabilities: ["projects:read", "tasks:create", "tasks:read"] as const,
+      projectIds: [ProjectId.makeUnsafe("project-1")],
     };
 
     await api.server.listExternalMcpIntegrations();
@@ -631,25 +631,18 @@ describe("wsNativeApi", () => {
     await api.server.revokeExternalMcpIntegration({ integrationId: "integration-1" });
     await api.server.refreshExternalMcpPairing({ integrationId: "integration-1" });
 
-    expect(requestMock).toHaveBeenNthCalledWith(
-      1,
-      WS_METHODS.serverListExternalMcpIntegrations,
-    );
+    expect(requestMock).toHaveBeenNthCalledWith(1, WS_METHODS.serverListExternalMcpIntegrations);
     expect(requestMock).toHaveBeenNthCalledWith(
       2,
       WS_METHODS.serverCreateExternalMcpIntegration,
       createInput,
     );
-    expect(requestMock).toHaveBeenNthCalledWith(
-      3,
-      WS_METHODS.serverRevokeExternalMcpIntegration,
-      { integrationId: "integration-1" },
-    );
-    expect(requestMock).toHaveBeenNthCalledWith(
-      4,
-      WS_METHODS.serverRefreshExternalMcpPairing,
-      { integrationId: "integration-1" },
-    );
+    expect(requestMock).toHaveBeenNthCalledWith(3, WS_METHODS.serverRevokeExternalMcpIntegration, {
+      integrationId: "integration-1",
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(4, WS_METHODS.serverRefreshExternalMcpPairing, {
+      integrationId: "integration-1",
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

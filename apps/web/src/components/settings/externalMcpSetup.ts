@@ -86,23 +86,13 @@ export function buildExternalMcpClientConfiguration(
     return {
       format: "command",
       value: shellCommand(
-        [
-          "codex",
-          "mcp",
-          "add",
-          "synara",
-          ...environment,
-          "--",
-          stdio.command,
-          ...stdio.args,
-        ],
+        ["codex", "mcp", "add", "synara", ...environment, "--", stdio.command, ...stdio.args],
         platform,
       ),
       copyLabel: "Copy Codex command",
-      instruction:
-        /win/i.test(platform)
-          ? "Run this command in PowerShell. Codex will save Synara as a local MCP server; then open a new Codex task."
-          : "Run this command in Terminal. Codex will save Synara as a local MCP server; then open a new Codex task.",
+      instruction: /win/i.test(platform)
+        ? "Run this command in PowerShell. Codex will save Synara as a local MCP server; then open a new Codex task."
+        : "Run this command in Terminal. Codex will save Synara as a local MCP server; then open a new Codex task.",
     };
   }
 

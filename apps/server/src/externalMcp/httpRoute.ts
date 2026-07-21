@@ -7,10 +7,7 @@ import {
 import { Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import {
-  readMcpJsonBody,
-  type McpBodyReadResult,
-} from "../agentGateway/httpRoute.ts";
+import { readMcpJsonBody, type McpBodyReadResult } from "../agentGateway/httpRoute.ts";
 import { extractBearerToken } from "../agentGateway/bearerToken.ts";
 import { makeEffectAuthRequest } from "../auth/effectHttp.ts";
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
@@ -30,9 +27,7 @@ export const EXTERNAL_MCP_PATH = "/mcp/external";
 export const EXTERNAL_MCP_MAX_BODY_BYTES = 1024 * 1024;
 export const EXTERNAL_MCP_BODY_READ_TIMEOUT_MS = 10_000;
 const EXTERNAL_MCP_BODY_BUFFER_SLOTS = 4;
-const externalMcpBodyBufferSlots = Effect.runSync(
-  Semaphore.make(EXTERNAL_MCP_BODY_BUFFER_SLOTS),
-);
+const externalMcpBodyBufferSlots = Effect.runSync(Semaphore.make(EXTERNAL_MCP_BODY_BUFFER_SLOTS));
 const MANAGEMENT_MAX_BODY_BYTES = 32 * 1024;
 const MANAGEMENT_BODY_BUFFER_SLOTS = 2;
 const managementBodyBufferSlots = Effect.runSync(Semaphore.make(MANAGEMENT_BODY_BUFFER_SLOTS));
@@ -49,17 +44,15 @@ const readBoundedExternalMcpBody = (
   timeoutMs: number,
   slots: Semaphore.Semaphore,
 ): Effect.Effect<ExternalMcpBodyReadResult> =>
-  slots
-    .withPermit(readMcpJsonBody(request, maxBytes))
-    .pipe(
-      Effect.timeoutOption(timeoutMs),
-      Effect.map(
-        Option.match({
-          onNone: () => ({ kind: "timeout" as const }),
-          onSome: (result) => result,
-        }),
-      ),
-    );
+  slots.withPermit(readMcpJsonBody(request, maxBytes)).pipe(
+    Effect.timeoutOption(timeoutMs),
+    Effect.map(
+      Option.match({
+        onNone: () => ({ kind: "timeout" as const }),
+        onSome: (result) => result,
+      }),
+    ),
+  );
 
 export const readExternalMcpBody = (
   request: HttpServerRequest.HttpServerRequest,
@@ -186,7 +179,8 @@ const postExternalMcp = HttpRouter.add(
           id: null,
           error: {
             code: -32000,
-            message: "external_concurrency_limit: Too many requests are already running for this integration.",
+            message:
+              "external_concurrency_limit: Too many requests are already running for this integration.",
           },
         },
         { status: 429 },

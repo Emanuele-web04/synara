@@ -32,6 +32,7 @@ function makeReadModel(input: {
   return {
     snapshotSequence: 1,
     updatedAt: NOW,
+    spaces: [],
     projects: [],
     threads: [
       {

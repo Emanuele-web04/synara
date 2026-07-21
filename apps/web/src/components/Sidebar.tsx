@@ -6336,6 +6336,7 @@ export default function Sidebar() {
 
       {projectContextMenuState && projectContextMenuProject && projectContextMenuAnchor ? (
         <Menu
+          keepOpenOnSubmenuInteraction
           open
           onOpenChange={(open) => {
             if (!open) {

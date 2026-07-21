@@ -301,6 +301,7 @@ describe("store projection", () => {
   it("drops descendant thread state when a shell project removal arrives", () => {
     const initialState = syncServerReadModel(
       {
+        spaces: [],
         projects: [
           makeProject({
             id: ProjectId.makeUnsafe("project-shell"),
@@ -317,6 +318,7 @@ describe("store projection", () => {
       {
         snapshotSequence: 1,
         updatedAt: "2026-02-27T00:00:00.000Z",
+        spaces: [],
         projects: [
           makeReadModelProject({
             id: ProjectId.makeUnsafe("project-shell"),
@@ -1571,6 +1573,7 @@ describe("store projection", () => {
     const readModel = {
       snapshotSequence: 1,
       updatedAt: "2026-02-28T00:00:00.000Z",
+      spaces: [],
       projects: [
         makeReadModelProject({
           defaultModelSelection: {

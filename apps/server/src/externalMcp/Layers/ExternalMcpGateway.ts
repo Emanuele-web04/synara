@@ -483,9 +483,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           assertActive: context.assertActive,
           projectionTurns,
           resolveLatestTurn: () =>
-            requireThreadShell(input.threadId).pipe(
-              Effect.map(latestExternalMcpWaitState),
-            ),
+            requireThreadShell(input.threadId).pipe(Effect.map(latestExternalMcpWaitState)),
         });
         let summary: string | null = null;
         let summaryTruncated = false;

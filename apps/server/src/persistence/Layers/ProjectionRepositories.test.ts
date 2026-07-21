@@ -41,9 +41,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         updatedAt,
         deletedAt,
       });
-      yield* projects.upsert(
-        makeProject("project-space-active", "2026-07-20T00:00:01.000Z", null),
-      );
+      yield* projects.upsert(makeProject("project-space-active", "2026-07-20T00:00:01.000Z", null));
       yield* projects.upsert(
         makeProject(
           "project-space-deleted",
@@ -65,16 +63,16 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           updatedAt,
         })),
         [
-        {
-          projectId: ProjectId.makeUnsafe("project-space-active"),
-          assignedSpaceId: null,
-          updatedAt: "2026-07-20T00:00:02.000Z",
-        },
-        {
-          projectId: ProjectId.makeUnsafe("project-space-deleted"),
-          assignedSpaceId: null,
-          updatedAt: "2026-07-20T00:00:03.000Z",
-        },
+          {
+            projectId: ProjectId.makeUnsafe("project-space-active"),
+            assignedSpaceId: null,
+            updatedAt: "2026-07-20T00:00:02.000Z",
+          },
+          {
+            projectId: ProjectId.makeUnsafe("project-space-deleted"),
+            assignedSpaceId: null,
+            updatedAt: "2026-07-20T00:00:03.000Z",
+          },
         ],
       );
     }),

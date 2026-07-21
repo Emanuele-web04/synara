@@ -1,7 +1,13 @@
 // FILE: store.test.ts
 // Purpose: Exercises the public store facade, persistence, and simple UI actions.
 
-import { ProjectId, SpaceId, ThreadId, TurnId, type OrchestrationReadModel } from "@synara/contracts";
+import {
+  ProjectId,
+  SpaceId,
+  ThreadId,
+  TurnId,
+  type OrchestrationReadModel,
+} from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -375,6 +381,7 @@ describe("store facade", () => {
     const snapshotWithoutProject2: OrchestrationReadModel = {
       snapshotSequence: 2,
       updatedAt: "2026-02-27T00:00:00.000Z",
+      spaces: [],
       projects: [
         makeReadModelProject({
           id: project1,
@@ -387,6 +394,7 @@ describe("store facade", () => {
     const snapshotWithProject2Restored: OrchestrationReadModel = {
       snapshotSequence: 3,
       updatedAt: "2026-02-27T00:01:00.000Z",
+      spaces: [],
       projects: [
         makeReadModelProject({
           id: project1,

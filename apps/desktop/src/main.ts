@@ -728,11 +728,7 @@ function recordInstallMarkerFailure(
     );
     return Math.max(1, updateState.installFailureCount + 1);
   }
-  const result = recordInstallMarkerFailureSync(
-    getUpdateInstallMarkerPath(),
-    expected,
-    nowIso,
-  );
+  const result = recordInstallMarkerFailureSync(getUpdateInstallMarkerPath(), expected, nowIso);
   if (result.status === "missing" || result.status === "invalid") {
     console.error(
       `[desktop-updater] Could not record durable install failure: marker is ${result.status}${result.status === "invalid" ? ` (${result.error})` : ""}.`,
@@ -2976,12 +2972,13 @@ function requestGracefulAppQuit(reason: string): void {
     return;
   }
 
-  void runAfterDesktopShutdown(shutdownDesktopRuntime(reason), () => app.quit())
-    .catch((error: unknown) => {
+  void runAfterDesktopShutdown(shutdownDesktopRuntime(reason), () => app.quit()).catch(
+    (error: unknown) => {
       const message = formatErrorMessage(error);
       writeDesktopLogHeader(`${reason} shutdown failed message=${message}`);
       console.warn(`[desktop] Shutdown failed during ${reason}: ${message}`);
-    });
+    },
+  );
 }
 
 function registerIpcHandlers(): void {

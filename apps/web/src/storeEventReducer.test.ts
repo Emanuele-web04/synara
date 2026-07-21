@@ -212,6 +212,7 @@ describe("store event reducer", () => {
   it("adds projects immediately from live project.created events", () => {
     const next = applyOrchestrationEvents(
       {
+        spaces: [],
         projects: [],
         sidebarThreadSummaryById: {},
         threadsHydrated: false,
@@ -314,6 +315,7 @@ describe("store event reducer", () => {
   it("removes projects immediately from live project.deleted events", () => {
     const next = applyOrchestrationEvents(
       {
+        spaces: [],
         projects: [makeProject({ id: ProjectId.makeUnsafe("project-live") })],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,

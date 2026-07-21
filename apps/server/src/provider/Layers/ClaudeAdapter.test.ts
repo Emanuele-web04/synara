@@ -6768,10 +6768,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       const configuredEvent = yield* Fiber.join(configuredEventFiber);
       assert.equal(configuredEvent._tag, "Some");
-      if (
-        configuredEvent._tag === "Some" &&
-        configuredEvent.value.type === "session.configured"
-      ) {
+      if (configuredEvent._tag === "Some" && configuredEvent.value.type === "session.configured") {
         assert.equal(configuredEvent.value.payload.config.autoCompactWindow, 200_000);
       }
     }).pipe(

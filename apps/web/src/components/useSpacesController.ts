@@ -70,9 +70,7 @@ export function useSpacesController(input: {
   const shellSnapshotSequence = useStore((store) => store.shellSnapshotSequence ?? 0);
   const activeSpaceId = useSpacesUiStore((store) => store.activeSpaceId);
   const setActiveSpaceId = useSpacesUiStore((store) => store.setActiveSpaceId);
-  const setOptimisticActiveSpaceId = useSpacesUiStore(
-    (store) => store.setOptimisticActiveSpaceId,
-  );
+  const setOptimisticActiveSpaceId = useSpacesUiStore((store) => store.setOptimisticActiveSpaceId);
   const rememberSpaceThread = useSpacesUiStore((store) => store.rememberThread);
   const rememberSpaceProject = useSpacesUiStore((store) => store.rememberProject);
   const getLastSpaceThreadId = useSpacesUiStore((store) => store.getLastThreadId);

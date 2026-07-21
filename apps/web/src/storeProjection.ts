@@ -879,10 +879,7 @@ export function syncServerShellSnapshot(
 
   return {
     ...normalizedState,
-    shellSnapshotSequence: Math.max(
-      state.shellSnapshotSequence ?? 0,
-      snapshot.snapshotSequence,
-    ),
+    shellSnapshotSequence: Math.max(state.shellSnapshotSequence ?? 0, snapshot.snapshotSequence),
     spaces,
     projects,
     sidebarThreadSummaryById,
@@ -1051,10 +1048,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   }
   return {
     ...normalizedState,
-    shellSnapshotSequence: Math.max(
-      state.shellSnapshotSequence ?? 0,
-      readModel.snapshotSequence,
-    ),
+    shellSnapshotSequence: Math.max(state.shellSnapshotSequence ?? 0, readModel.snapshotSequence),
     spaces,
     projects,
     sidebarThreadSummaryById,

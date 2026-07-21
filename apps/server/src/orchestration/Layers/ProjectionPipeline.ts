@@ -490,7 +490,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         );
       case "space.deleted":
         return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
-          Effect.zipRight(
+          Effect.andThen(
             projectionProjectRepository.clearSpaceAssignments({
               spaceId: event.payload.spaceId,
               updatedAt: event.payload.deletedAt,
@@ -1966,7 +1966,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         return applySpaceMetadataProjection({ event, projectionSpaceRepository });
       case "space.deleted":
         return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
-          Effect.zipRight(
+          Effect.andThen(
             projectionProjectRepository.clearSpaceAssignments({
               spaceId: event.payload.spaceId,
               updatedAt: event.payload.deletedAt,

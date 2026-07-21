@@ -163,13 +163,14 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.deleteById:query")),
     );
 
-  const clearSpaceAssignments: ProjectionProjectRepositoryShape["clearSpaceAssignments"] =
-    (input) =>
-      clearProjectionProjectSpaceAssignments(input).pipe(
-        Effect.mapError(
-          toPersistenceSqlError("ProjectionProjectRepository.clearSpaceAssignments:query"),
-        ),
-      );
+  const clearSpaceAssignments: ProjectionProjectRepositoryShape["clearSpaceAssignments"] = (
+    input,
+  ) =>
+    clearProjectionProjectSpaceAssignments(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionProjectRepository.clearSpaceAssignments:query"),
+      ),
+    );
 
   return {
     upsert,

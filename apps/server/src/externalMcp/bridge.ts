@@ -52,12 +52,7 @@ const WINDOWS_RUNTIME_ACL_ENCODED_COMMAND = Buffer.from(
 
 export function makeWindowsRuntimeAclPowerShellInvocation(targetPath: string) {
   return {
-    args: [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      WINDOWS_RUNTIME_ACL_ENCODED_COMMAND,
-    ],
+    args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", WINDOWS_RUNTIME_ACL_ENCODED_COMMAND],
     options: {
       encoding: "utf8" as const,
       windowsHide: true,

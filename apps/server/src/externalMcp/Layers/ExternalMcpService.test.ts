@@ -28,9 +28,7 @@ const layer = ExternalMcpServiceLive.pipe(
   Layer.provide(Layer.succeed(ServerConfig, { baseDir: "/tmp/synara-test" } as never)),
 );
 
-const run = <A, E>(
-  effect: Effect.Effect<A, E, ExternalMcpService | SqlClient.SqlClient>,
-) =>
+const run = <A, E>(effect: Effect.Effect<A, E, ExternalMcpService | SqlClient.SqlClient>) =>
   Effect.runPromise(effect.pipe(Effect.provide(layer)));
 
 describe("ExternalMcpService", () => {
@@ -112,10 +110,7 @@ describe("ExternalMcpService", () => {
           projectIds: [ProjectId.makeUnsafe("project-allowed")],
           capabilities: ["projects:read"],
         });
-        const paired = yield* service.pair(
-          created.pairingCode,
-          "syn_mcp_v1_audit-failure-secret",
-        );
+        const paired = yield* service.pair(created.pairingCode, "syn_mcp_v1_audit-failure-secret");
         const client = yield* service.verifyCredential(paired.credential);
         const auditId = yield* service.beginAudit(client, {
           tool: "synara_list_allowed_projects",
@@ -128,9 +123,7 @@ describe("ExternalMcpService", () => {
           END
         `;
 
-        const exit = yield* service
-          .finishAudit({ auditId, outcome: "success" })
-          .pipe(Effect.exit);
+        const exit = yield* service.finishAudit({ auditId, outcome: "success" }).pipe(Effect.exit);
         expect(exit._tag).toBe("Failure");
         yield* sql`DROP TRIGGER reject_external_mcp_audit_finish`;
       }),
