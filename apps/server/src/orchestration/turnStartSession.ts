@@ -25,10 +25,7 @@ export function deriveTurnStartSession(input: {
   readonly requestedRuntimeMode: RuntimeMode;
   readonly requestedAt: string;
 }): OrchestrationSession | null {
-  if (
-    input.currentSession?.status === "starting" ||
-    input.currentSession?.status === "running"
-  ) {
+  if (input.currentSession?.status === "starting" || input.currentSession?.status === "running") {
     return null;
   }
 

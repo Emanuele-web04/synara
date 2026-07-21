@@ -49,10 +49,7 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
-import {
-  deriveTurnStartModelSelection,
-  deriveTurnStartSession,
-} from "./turnStartSession.ts";
+import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -738,8 +735,8 @@ export function projectEvent(
           });
           const modelSelectionPatch =
             projectedModelSelection !== thread.modelSelection
-            ? { modelSelection: projectedModelSelection }
-            : {};
+              ? { modelSelection: projectedModelSelection }
+              : {};
           const turnStartSession = deriveTurnStartSession({
             threadId: thread.id,
             currentSession: thread.session,

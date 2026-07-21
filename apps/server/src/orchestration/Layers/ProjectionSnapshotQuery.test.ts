@@ -1890,9 +1890,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       const startedModel = yield* snapshotQuery.getCommandReadModel();
-      assert.deepEqual(startedModel.threads[0]?.activities.map((activity) => activity.kind), [
-        "checkpoint.revert.started",
-      ]);
+      assert.deepEqual(
+        startedModel.threads[0]?.activities.map((activity) => activity.kind),
+        ["checkpoint.revert.started"],
+      );
 
       yield* sql`
         INSERT INTO projection_thread_activities (
@@ -1906,9 +1907,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       const completedModel = yield* snapshotQuery.getCommandReadModel();
-      assert.deepEqual(completedModel.threads[0]?.activities.map((activity) => activity.kind), [
-        "checkpoint.revert.succeeded",
-      ]);
+      assert.deepEqual(
+        completedModel.threads[0]?.activities.map((activity) => activity.kind),
+        ["checkpoint.revert.succeeded"],
+      );
     }),
   );
 });

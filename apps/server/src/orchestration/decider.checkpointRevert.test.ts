@@ -158,7 +158,10 @@ describe("checkpoint revert decider", () => {
       latestTurn: makeLatestTurn("completed"),
     });
     const decidedRevert = await Effect.runPromise(
-      decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel: initialReadModel }),
+      decideOrchestrationCommand({
+        command: checkpointRevertCommand(),
+        readModel: initialReadModel,
+      }),
     );
     const revertEvents = Array.isArray(decidedRevert) ? decidedRevert : [decidedRevert];
     const startedEvent = revertEvents.find((event) => event.type === "thread.activity-appended");
@@ -218,7 +221,10 @@ describe("checkpoint revert decider", () => {
       })),
     };
     const decidedRevert = await Effect.runPromise(
-      decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel: initialReadModel }),
+      decideOrchestrationCommand({
+        command: checkpointRevertCommand(),
+        readModel: initialReadModel,
+      }),
     );
     const startedEvent = (Array.isArray(decidedRevert) ? decidedRevert : [decidedRevert]).find(
       (event) => event.type === "thread.activity-appended",
@@ -260,7 +266,10 @@ describe("checkpoint revert decider", () => {
       latestTurn: makeLatestTurn("completed"),
     });
     const decidedRevert = await Effect.runPromise(
-      decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel: initialReadModel }),
+      decideOrchestrationCommand({
+        command: checkpointRevertCommand(),
+        readModel: initialReadModel,
+      }),
     );
     const startedEvent = (Array.isArray(decidedRevert) ? decidedRevert : [decidedRevert]).find(
       (event) => event.type === "thread.activity-appended",
@@ -299,7 +308,10 @@ describe("checkpoint revert decider", () => {
       latestTurn: makeLatestTurn("completed"),
     });
     const decidedRevert = await Effect.runPromise(
-      decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel: initialReadModel }),
+      decideOrchestrationCommand({
+        command: checkpointRevertCommand(),
+        readModel: initialReadModel,
+      }),
     );
     const startedEvent = (Array.isArray(decidedRevert) ? decidedRevert : [decidedRevert]).find(
       (event) => event.type === "thread.activity-appended",
@@ -398,9 +410,7 @@ describe("checkpoint revert decider", () => {
     }
 
     const error = await Effect.runPromise(
-      Effect.flip(
-        decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel }),
-      ),
+      Effect.flip(decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel })),
     );
     expect(error).toMatchObject({
       _tag: "OrchestrationCommandInvariantError",
@@ -415,7 +425,10 @@ describe("checkpoint revert decider", () => {
       latestTurn: makeLatestTurn("completed"),
     });
     const decidedRevert = await Effect.runPromise(
-      decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel: initialReadModel }),
+      decideOrchestrationCommand({
+        command: checkpointRevertCommand(),
+        readModel: initialReadModel,
+      }),
     );
     const revertEvents = Array.isArray(decidedRevert) ? decidedRevert : [decidedRevert];
     const readModel = await Effect.runPromise(

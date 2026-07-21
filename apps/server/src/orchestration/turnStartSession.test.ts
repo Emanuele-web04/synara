@@ -1,10 +1,7 @@
 import { ThreadId, type OrchestrationSession } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  deriveTurnStartModelSelection,
-  deriveTurnStartSession,
-} from "./turnStartSession.ts";
+import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-turn-start-session");
 const REQUESTED_AT = "2026-07-21T00:00:00.000Z";

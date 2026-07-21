@@ -64,10 +64,7 @@ import {
   PROJECT_METADATA_SNAPSHOT_PROJECTORS,
 } from "../projectMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
-import {
-  deriveTurnStartModelSelection,
-  deriveTurnStartSession,
-} from "../turnStartSession.ts";
+import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,

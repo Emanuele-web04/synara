@@ -13,9 +13,7 @@ export function resolveProviderSessionThread(
   threadId: ThreadId,
 ) {
   return Effect.gen(function* (): Effect.fn.Return<OrchestrationThread | null> {
-    const thread = Option.getOrNull(
-      yield* projectionSnapshotQuery.getThreadDetailById(threadId),
-    );
+    const thread = Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
     if (thread === null) {
       return null;
     }

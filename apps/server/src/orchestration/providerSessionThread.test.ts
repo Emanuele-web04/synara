@@ -33,39 +33,41 @@ describe("resolveProviderSessionThread", () => {
 
     let childMutationStarted = false;
     await Effect.runPromise(
-      Effect.scoped(Effect.gen(function* () {
-        const coordinator = yield* TurnCheckpointCoordinator;
-        const parentLeaseAcquired = yield* Deferred.make<void>();
-        const releaseParentLease = yield* Deferred.make<void>();
-        const holder = yield* Effect.forkScoped(
-          coordinator.withThreadLease(
-            parentId,
-            Deferred.succeed(parentLeaseAcquired, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseParentLease)),
-            ),
-          ),
-        );
-        yield* Deferred.await(parentLeaseAcquired);
-
-        const contender = yield* Effect.forkScoped(
-          resolveProviderSessionThread(projectionSnapshotQuery, childId).pipe(
-            Effect.flatMap((providerThread) =>
-              coordinator.withThreadLease(
-                providerThread?.id ?? childId,
-                Effect.sync(() => {
-                  childMutationStarted = true;
-                }),
+      Effect.scoped(
+        Effect.gen(function* () {
+          const coordinator = yield* TurnCheckpointCoordinator;
+          const parentLeaseAcquired = yield* Deferred.make<void>();
+          const releaseParentLease = yield* Deferred.make<void>();
+          const holder = yield* Effect.forkScoped(
+            coordinator.withThreadLease(
+              parentId,
+              Deferred.succeed(parentLeaseAcquired, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseParentLease)),
               ),
             ),
-          ),
-        );
-        yield* Effect.sleep("10 millis");
-        expect(childMutationStarted).toBe(false);
+          );
+          yield* Deferred.await(parentLeaseAcquired);
 
-        yield* Deferred.succeed(releaseParentLease, undefined);
-        yield* Fiber.join(contender);
-        yield* Fiber.join(holder);
-      })).pipe(Effect.provide(TurnCheckpointCoordinatorLive)),
+          const contender = yield* Effect.forkScoped(
+            resolveProviderSessionThread(projectionSnapshotQuery, childId).pipe(
+              Effect.flatMap((providerThread) =>
+                coordinator.withThreadLease(
+                  providerThread?.id ?? childId,
+                  Effect.sync(() => {
+                    childMutationStarted = true;
+                  }),
+                ),
+              ),
+            ),
+          );
+          yield* Effect.sleep("10 millis");
+          expect(childMutationStarted).toBe(false);
+
+          yield* Deferred.succeed(releaseParentLease, undefined);
+          yield* Fiber.join(contender);
+          yield* Fiber.join(holder);
+        }),
+      ).pipe(Effect.provide(TurnCheckpointCoordinatorLive)),
     );
 
     expect(childMutationStarted).toBe(true);

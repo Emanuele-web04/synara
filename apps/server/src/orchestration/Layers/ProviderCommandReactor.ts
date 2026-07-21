@@ -2044,10 +2044,7 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) =>
-    withProviderSessionLease(
-      event.payload.threadId,
-      processTurnStartRequestedWithoutLease(event),
-    );
+    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event));
 
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
