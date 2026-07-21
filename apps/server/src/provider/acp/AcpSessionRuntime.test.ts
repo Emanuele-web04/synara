@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { Deferred, Effect, Exit, Scope } from "effect";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
   assistantItemId,
+  awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   makeAcpIncomingFrameGuard,
   sessionConfigOptionsFromSetup,
@@ -73,6 +74,37 @@ describe("teardownAcpChildProcess", () => {
   });
 });
 
+describe("awaitAcpChildExit", () => {
+  it("completes for both successful and failed child exit signals", async () => {
+    const successfulExit = Deferred.makeUnsafe<number>();
+    const failedExit = Deferred.makeUnsafe<number, Error>();
+    let successfulCompleted = false;
+    let failedCompleted = false;
+
+    const successfulWait = Effect.runPromise(
+      awaitAcpChildExit({ pid: 1, exitCode: Deferred.await(successfulExit) }),
+    ).then(() => {
+      successfulCompleted = true;
+    });
+    const failedWait = Effect.runPromise(
+      awaitAcpChildExit({ pid: 2, exitCode: Deferred.await(failedExit) }),
+    ).then(() => {
+      failedCompleted = true;
+    });
+
+    await Promise.resolve();
+    expect(successfulCompleted).toBe(false);
+    expect(failedCompleted).toBe(false);
+
+    Deferred.doneUnsafe(successfulExit, Effect.succeed(0));
+    Deferred.doneUnsafe(failedExit, Effect.fail(new Error("child exit signal failed")));
+    await Promise.all([successfulWait, failedWait]);
+
+    expect(successfulCompleted).toBe(true);
+    expect(failedCompleted).toBe(true);
+  });
+});
+
 describe("assistantItemId", () => {
   // Format contract only — distinct runtimeInstanceId wiring is covered by
   // AcpJsonRpcConnection.test.ts ("assigns distinct fallback assistant item ids...").
@@ -95,7 +127,7 @@ describe("decodeSetSessionConfigOptionResponse", () => {
       currentValue: "gpt-5.6-luna",
       options: [{ value: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
     },
-  ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  ] satisfies ReadonlyArray<Acp.SessionConfigOption>;
 
   it("uses the matching config update for an empty response", () => {
     const decoded = Effect.runSync(
@@ -142,7 +174,7 @@ describe("sessionConfigOptionsFromSetup", () => {
       currentValue: "gpt-5.6-luna",
       options: [{ value: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
     },
-  ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  ] satisfies ReadonlyArray<Acp.SessionConfigOption>;
 
   it("preserves config retained from replay when setup omits configOptions", () => {
     expect(sessionConfigOptionsFromSetup({}, replayedConfigOptions)).toBe(replayedConfigOptions);

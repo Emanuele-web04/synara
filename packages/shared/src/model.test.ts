@@ -28,6 +28,7 @@ import {
   normalizeCodexModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
+  parseCursorCliReasoningEffort,
   resolveApiModelId,
   resolveSelectableModel,
   resolveModelSlug,
@@ -38,6 +39,21 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
 } from "./model";
+
+describe("parseCursorCliReasoningEffort", () => {
+  it.each([
+    ["gpt-5.5-xhigh", "xhigh"],
+    ["gpt-5.5-extra-high", "xhigh"],
+    ["claude-fable-5-max", "max"],
+    ["gpt-5.5-none", "none"],
+    ["gpt-5.5-low", "low"],
+    ["gpt-5.5-medium", "medium"],
+    ["gpt-5.5-high", "high"],
+    ["gpt-5.5-fast", undefined],
+  ] as const)("parses %s as %s", (model, expected) => {
+    expect(parseCursorCliReasoningEffort(model)).toBe(expected);
+  });
+});
 
 describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {

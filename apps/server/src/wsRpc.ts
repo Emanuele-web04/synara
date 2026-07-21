@@ -65,6 +65,7 @@ import {
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
+import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -85,6 +86,7 @@ import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
+import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -94,7 +96,12 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
-import { makeWsStreamAdmission } from "./wsStreamAdmission";
+import {
+  MAX_STREAMS_PER_RPC_CLIENT,
+  MAX_THREAD_STREAMS_PER_RPC_CLIENT,
+  makeWsStreamAdmission,
+} from "./wsStreamAdmission";
+import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { negotiateWsCompatibility, validateWsFeatureCompatibility } from "./wsCompatibility";
 import {
@@ -146,14 +153,8 @@ interface ProcessTableRow {
   readonly args: string;
 }
 
-function redactProcessArgs(args: string): string {
-  const redacted = args
-    .replace(
-      /(--?(?:api[-_]?key|auth|authorization|key|password|secret|token)(?:=|\s+))(\S+)/gi,
-      "$1[redacted]",
-    )
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]");
+function redactAndTruncateProcessArgs(args: string): string {
+  const redacted = redactSensitiveProcessArgs(args);
   return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
     ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
     : redacted;
@@ -172,7 +173,7 @@ function parseProcessTable(output: string): ProcessTableRow[] {
       rssBytes: Number(match[3]) * 1024,
       virtualSizeBytes: Number(match[4]) * 1024,
       command: match[5] ?? "",
-      args: redactProcessArgs(match[6] ?? ""),
+      args: redactAndTruncateProcessArgs(match[6] ?? ""),
     });
   }
   return rows;
@@ -301,7 +302,88 @@ const makeWsRpcHandlersLayer = () =>
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
-      const streamAdmission = yield* makeWsStreamAdmission;
+      const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const streamAdmission = yield* makeWsStreamAdmission({
+        recordRejection: (incident) =>
+          threadDiagnostics
+            .recordOperationalDiagnostic({
+              ...(incident.threadId ? { threadId: incident.threadId } : {}),
+              source: "server",
+              kind: "ws.stream-admission-rejected",
+              severity: "warning",
+              code: incident.errorCode,
+              detail: {
+                reason: incident.reason,
+                active: incident.active,
+                activeThreads: incident.activeThreads,
+                streamLimit: MAX_STREAMS_PER_RPC_CLIENT,
+                threadLimit: MAX_THREAD_STREAMS_PER_RPC_CLIENT,
+              },
+              occurredAt: new Date().toISOString(),
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to persist streaming RPC rejection diagnostic.", {
+                  error: String(error),
+                }),
+              ),
+            ),
+      });
+      const recordThreadStreamDrop = (threadId: string, report: LiveUiStreamDropReport) =>
+        threadDiagnostics
+          .recordOperationalDiagnostic({
+            threadId,
+            source: "server",
+            kind: "ws.thread-stream-events-dropped",
+            severity: "error",
+            code: "THREAD_STREAM_EVENTS_DROPPED",
+            detail: {
+              label: report.label,
+              capacity: report.capacity,
+              droppedAtLeast: report.droppedAtLeast,
+            },
+            occurredAt: new Date().toISOString(),
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to persist thread stream drop diagnostic.", {
+                error: String(error),
+              }),
+            ),
+            (diagnostic) => Effect.sync(() => Effect.runFork(diagnostic)),
+            Effect.andThen(failLiveUiStreamForSnapshotResync(report)),
+          );
+      const recordThreadResnapshotRequired = (
+        threadId: string,
+        report: {
+          readonly snapshotSequence: number;
+          readonly highWaterSequence: number;
+          readonly replayCount: number;
+          readonly replayLimit: number;
+        },
+      ) =>
+        threadDiagnostics
+          .recordOperationalDiagnostic({
+            threadId,
+            source: "server",
+            kind: "ws.thread-stream-resnapshot-required",
+            severity: "warning",
+            code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
+            detail: {
+              snapshotSequence: report.snapshotSequence,
+              highWaterSequence: report.highWaterSequence,
+              replayCount: report.replayCount,
+              replayLimit: report.replayLimit,
+            },
+            occurredAt: new Date().toISOString(),
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to persist thread resnapshot diagnostic.", {
+                error: String(error),
+              }),
+            ),
+          );
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
         error instanceof GitHubCliError &&
@@ -521,6 +603,31 @@ const makeWsRpcHandlersLayer = () =>
             gitStatusBroadcaster.refreshStatus(cwd).pipe(Effect.catchCause(() => Effect.void)),
           ),
         );
+
+      const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
+        homeDir: config.homeDir,
+        worktreesDir: config.worktreesDir,
+        snapshotQuery: projectionReadModelQuery,
+        git,
+      }).pipe(
+        // A retention failure must not present as an empty inventory: fall back
+        // to a plain scan so listing callers still see the real worktrees.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("managed worktree retention failed", {
+            cause: String(cause),
+          }).pipe(
+            Effect.andThen(
+              listManagedWorktrees({ worktreesDir: config.worktreesDir, git }).pipe(
+                Effect.catchCause((listCause) =>
+                  Effect.logWarning("managed worktree inventory scan failed", {
+                    cause: String(listCause),
+                  }).pipe(Effect.as([])),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
       const getOrchestrationHighWaterSequence = orchestrationEngine.getEventHighWaterSequence.pipe(
         Effect.mapError((cause) =>
           toWsRpcError(cause, "Failed to capture orchestration high-water sequence"),
@@ -591,6 +698,9 @@ const makeWsRpcHandlersLayer = () =>
               // cross-kind workspace-root ownership conflict) must never mutate the filesystem.
               if (prepareWorkspaceRoot) {
                 yield* prepareWorkspaceRoot;
+              }
+              if (normalizedCommand.type === "thread.archive") {
+                yield* Effect.forkDetach(pruneManagedWorktrees);
               }
               return result;
             }),
@@ -715,6 +825,8 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
+              onResnapshotRequired: (report) =>
+                recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
                   bufferLiveUiStream(
@@ -723,7 +835,7 @@ const makeWsRpcHandlersLayer = () =>
                     ),
                     {
                       label: "orchestration.thread-detail",
-                      onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                      onDroppedEvents: (report) => recordThreadStreamDrop(input.threadId, report),
                     },
                   ),
                 ),
@@ -1137,7 +1249,11 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to refresh providers",
           ),
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
-        [WS_METHODS.serverListWorktrees]: () => Effect.succeed({ worktrees: [] }),
+        [WS_METHODS.serverListWorktrees]: () =>
+          rpcEffect(
+            pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
+            "Failed to list managed worktrees",
+          ),
         [WS_METHODS.serverListLocalServers]: () =>
           rpcEffect(
             Effect.promise(() => listLocalServers()),

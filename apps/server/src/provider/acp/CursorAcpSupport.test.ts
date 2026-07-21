@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,7 +13,7 @@ import {
   type CursorAcpAvailableModel,
 } from "./CursorAcpSupport.ts";
 
-const parameterizedGpt54ConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
+const parameterizedGpt54ConfigOptions: ReadonlyArray<Acp.SessionConfigOption> = [
   {
     id: "model",
     name: "Model",
@@ -59,58 +59,57 @@ const parameterizedGpt54ConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConf
   },
 ];
 
-const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> =
-  [
-    {
-      id: "model",
-      name: "Model",
-      category: "model",
-      type: "select",
-      currentValue: "gpt-5.3-codex[reasoning=medium,fast=false]",
-      options: [
-        { value: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "GPT-5.3 Codex" },
-        {
-          value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]",
-          name: "Claude Opus 4.6",
-        },
-      ],
-    },
-    {
-      id: "reasoning",
-      name: "Reasoning",
-      category: "thought_level",
-      type: "select",
-      currentValue: "medium",
-      options: [
-        { value: "low", name: "Low" },
-        { value: "medium", name: "Medium" },
-        { value: "high", name: "High" },
-        { value: "extra-high", name: "Extra High" },
-      ],
-    },
-    {
-      id: "context",
-      name: "Context",
-      category: "model_config",
-      type: "select",
-      currentValue: "200k",
-      options: [
-        { value: "200k", name: "200K" },
-        { value: "1m", name: "1M" },
-      ],
-    },
-    {
-      id: "fast",
-      name: "Fast",
-      category: "model_config",
-      type: "select",
-      currentValue: "false",
-      options: [
-        { value: "false", name: "Off" },
-        { value: "true", name: "Fast" },
-      ],
-    },
-  ];
+const parameterizedCursorVariantConfigOptions: ReadonlyArray<Acp.SessionConfigOption> = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "gpt-5.3-codex[reasoning=medium,fast=false]",
+    options: [
+      { value: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "GPT-5.3 Codex" },
+      {
+        value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]",
+        name: "Claude Opus 4.6",
+      },
+    ],
+  },
+  {
+    id: "reasoning",
+    name: "Reasoning",
+    category: "thought_level",
+    type: "select",
+    currentValue: "medium",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium" },
+      { value: "high", name: "High" },
+      { value: "extra-high", name: "Extra High" },
+    ],
+  },
+  {
+    id: "context",
+    name: "Context",
+    category: "model_config",
+    type: "select",
+    currentValue: "200k",
+    options: [
+      { value: "200k", name: "200K" },
+      { value: "1m", name: "1M" },
+    ],
+  },
+  {
+    id: "fast",
+    name: "Fast",
+    category: "model_config",
+    type: "select",
+    currentValue: "false",
+    options: [
+      { value: "false", name: "Off" },
+      { value: "true", name: "Fast" },
+    ],
+  },
+];
 
 const noCursorAgentCommandOptions = {
   env: { PATH: "" },
@@ -453,7 +452,7 @@ describe("applyCursorAcpModelSelection", () => {
             { value: "composer-2[fast=true]", name: "Composer 2" },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -495,7 +494,7 @@ describe("applyCursorAcpModelSelection", () => {
             { value: "composer-2[fast=true]", name: "Composer 2" },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -537,7 +536,7 @@ describe("applyCursorAcpModelSelection", () => {
             { value: "composer-2[fast=true]", name: "Composer 2" },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -579,7 +578,7 @@ describe("applyCursorAcpModelSelection", () => {
             { value: "grok-4-20[thinking=true]", name: "Grok 4.20" },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -749,7 +748,7 @@ describe("applyCursorAcpModelSelection", () => {
           type: "boolean",
           currentValue: false,
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -812,7 +811,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -861,7 +860,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -918,7 +917,7 @@ describe("applyCursorAcpModelSelection", () => {
             { value: "true", name: "Fast" },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -1012,7 +1011,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -1069,7 +1068,7 @@ describe("applyCursorAcpModelSelection", () => {
             },
           ],
         },
-      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });

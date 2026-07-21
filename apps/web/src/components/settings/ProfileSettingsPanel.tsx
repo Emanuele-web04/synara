@@ -5,7 +5,7 @@
 // with an explicit edit mode for the local name + handle.
 // Layer: web profile feature (settings panel body).
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@synara/contracts";
 import {
@@ -75,10 +75,7 @@ function ProfileContent({
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
-  const defaultName = useMemo(
-    () => toDisplayName(stats.identity.homeDirBasename),
-    [stats.identity.homeDirBasename],
-  );
+  const defaultName = toDisplayName(stats.identity.homeDirBasename);
   const { name, setName } = useProfileName(defaultName);
   const { handle, setHandle } = useProfileHandle(stats.identity.defaultHandle);
   const { color: avatarColor, setColor: setAvatarColor } = useProfileAvatarColor();

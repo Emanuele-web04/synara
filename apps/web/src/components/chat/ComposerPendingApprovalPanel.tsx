@@ -8,7 +8,7 @@
 // Exports: ComposerPendingApprovalPanel
 
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@synara/contracts";
-import { type KeyboardEvent, memo, useMemo } from "react";
+import { type KeyboardEvent } from "react";
 import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
@@ -74,13 +74,13 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   "file-change": "Approve this file change?",
 };
 
-export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel({
+export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
   isResponding,
   onRespond,
 }: ComposerPendingApprovalPanelProps) {
-  const parsed = useMemo(() => parseApprovalDetail(approval.detail), [approval.detail]);
+  const parsed = parseApprovalDetail(approval.detail);
   const requestId = approval.requestId;
 
   // Digit shortcuts bubble from focused controls inside this card only; a bare
@@ -141,7 +141,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
       </div>
     </div>
   );
-});
+};
 
 function ApprovalDetail({ parsed }: { parsed: ParsedApproval }) {
   if (parsed.fileName) {

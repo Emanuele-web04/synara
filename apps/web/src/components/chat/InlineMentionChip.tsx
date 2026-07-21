@@ -9,7 +9,7 @@
 // Layer: UI shared component
 // Exports: InlineMentionChip
 
-import { memo, type MouseEvent, type ReactNode } from "react";
+import { type MouseEvent, type ReactNode } from "react";
 import type { ProviderMentionReference } from "@synara/contracts";
 import { basenameOfPath, pathLooksLikeKnownFile } from "~/file-icons";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "~/lib/workspaceFileOpener";
@@ -34,7 +34,7 @@ interface InlineMentionChipProps {
   onHoverPrefetch?: (() => void) | undefined;
 }
 
-export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMentionChipProps) {
+export function InlineMentionChip(props: InlineMentionChipProps) {
   const opener = useWorkspaceFileOpener();
   const label = props.label ?? basenameOfPath(props.path);
   const inner = (
@@ -97,4 +97,4 @@ export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMe
       {inner}
     </span>
   );
-});
+}

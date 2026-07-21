@@ -59,6 +59,9 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+// Pre-transform the compiler-heavy component outside the first case's timeout.
+// The router's auto-split route otherwise requests this module on first mount.
+import "./ChatView";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
@@ -432,16 +435,6 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
       bootstrapThreadId: THREAD_ID,
     },
   };
-}
-
-function getThreadDetailFromFixtureSnapshot(
-  threadId: ThreadId,
-): OrchestrationReadModel["threads"][number] {
-  const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
-  if (!thread) {
-    throw new Error(`Missing thread fixture for ${threadId}`);
-  }
-  return thread;
 }
 
 function findThreadDetailFromFixtureSnapshot(
@@ -1115,6 +1108,15 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       },
     };
   }
+  if (tag === WS_METHODS.gitCreateDetachedWorktree) {
+    return {
+      worktree: {
+        path: "/repo/.codex/worktrees/generated/synara",
+        ref: "0123456789abcdef0123456789abcdef01234567",
+        branch: null,
+      },
+    };
+  }
   if (tag === WS_METHODS.projectsSearchEntries) {
     return {
       entries: [],
@@ -1153,14 +1155,16 @@ function installDeterministicSendNativeApi(): () => void {
       ...wsNativeApi,
       git: {
         ...wsNativeApi.git,
-        createWorktree: async (input: Parameters<typeof wsNativeApi.git.createWorktree>[0]) => {
+        createDetachedWorktree: async (
+          input: Parameters<typeof wsNativeApi.git.createDetachedWorktree>[0],
+        ) => {
           const request: WsRequestEnvelope["body"] = {
-            _tag: WS_METHODS.gitCreateWorktree,
+            _tag: WS_METHODS.gitCreateDetachedWorktree,
             ...input,
           };
           wsRequests.push(request);
           return resolveWsRpc(request) as Awaited<
-            ReturnType<typeof wsNativeApi.git.createWorktree>
+            ReturnType<typeof wsNativeApi.git.createDetachedWorktree>
           >;
         },
       },
@@ -1704,9 +1708,9 @@ async function waitForMountedChatReady(options: {
       if (!expectedThread) return;
       const state = useStore.getState();
       expect(state.threadIds?.includes(expectedThread.id)).toBe(true);
-      const hydratedMessageIds = state.messageIdsByThreadId?.[expectedThread.id] ?? [];
+      const hydratedMessageIdSet = new Set(state.messageIdsByThreadId?.[expectedThread.id] ?? []);
       expect(
-        expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+        expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },
@@ -2201,6 +2205,193 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
+      targetText: "auto-follow wiring target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+    let patchedScrollContainer: HTMLElement | null = null;
+    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const scrollToCalls: ScrollToOptions[] = [];
+      patchedScrollContainer = scrollContainer;
+      originalScrollTo = scrollContainer.scrollTo;
+      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+        const normalized: ScrollToOptions =
+          typeof options === "object" && options !== null
+            ? options
+            : {
+                ...(typeof options === "number" ? { left: options } : {}),
+                ...(typeof y === "number" ? { top: y } : {}),
+              };
+        scrollToCalls.push(normalized);
+        if (typeof normalized.left === "number") scrollContainer.scrollLeft = normalized.left;
+        if (typeof normalized.top === "number") scrollContainer.scrollTop = normalized.top;
+        scrollContainer.dispatchEvent(new Event("scroll"));
+      }) as typeof scrollContainer.scrollTo;
+      // Let mount-time tail/image expansion retries (max 260ms) settle before
+      // isolating scrolls caused by the state transitions below.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await waitForLayout();
+      scrollToCalls.length = 0;
+
+      // Buffering/connecting state changes generic turn chrome, but does not add a
+      // transcript message and therefore must not re-stick the transcript.
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "starting",
+              updatedAt: isoAt(1_201),
+            }
+          : null,
+        updatedAt: isoAt(1_201),
+      }));
+      await waitForLayout();
+      expect(scrollToCalls).toHaveLength(0);
+
+      const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: {
+          turnId: activeTurnId,
+          state: "running",
+          requestedAt: isoAt(1_202),
+          startedAt: isoAt(1_203),
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "running",
+              activeTurnId,
+              updatedAt: isoAt(1_204),
+            }
+          : null,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-approval"),
+            createdAt: isoAt(1_204),
+            kind: "approval.requested",
+            summary: "Command approval requested",
+            tone: "approval",
+            turnId: activeTurnId,
+            payload: {
+              requestId: "request-auto-follow",
+              requestKind: "command",
+              detail: "inspect the unchanged transcript tail",
+            },
+          },
+        ],
+        updatedAt: isoAt(1_204),
+      }));
+      await waitForLayout();
+      expect(scrollToCalls).toHaveLength(0);
+
+      syncActiveThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe("activity-auto-follow-tool"),
+            createdAt: isoAt(1_205),
+            kind: "tool.completed",
+            summary: "scroll-only tool activity",
+            tone: "tool",
+            turnId: activeTurnId,
+            payload: {
+              itemType: "dynamic_tool_call",
+              toolName: "inspect-scroll-tail",
+            },
+          },
+        ],
+        updatedAt: isoAt(1_205),
+      }));
+      await waitForLayout();
+      expect(scrollToCalls).toHaveLength(0);
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      scrollToCalls.length = 0;
+      const liveAssistantMessage = {
+        ...createAssistantMessage({
+          id: MessageId.makeUnsafe("msg-assistant-auto-follow-live"),
+          text: "A real live assistant tail",
+          offsetSeconds: 1_206,
+        }),
+        turnId: activeTurnId,
+        streaming: true,
+      };
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: [...thread.messages, liveAssistantMessage],
+        updatedAt: isoAt(1_206),
+      }));
+      await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
+        timeout: 4_000,
+        interval: 16,
+      });
+
+      scrollToCalls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === liveAssistantMessage.id
+            ? {
+                ...message,
+                streaming: false,
+                completedAt: isoAt(1_207),
+                updatedAt: isoAt(1_207),
+              }
+            : message,
+        ),
+        updatedAt: isoAt(1_207),
+      }));
+      await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
+        timeout: 4_000,
+        interval: 16,
+      });
+    } finally {
+      if (patchedScrollContainer && originalScrollTo) {
+        patchedScrollContainer.scrollTo = originalScrollTo;
+      }
+      await mounted.cleanup();
     }
   });
 
@@ -4294,7 +4485,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("creates a temporary branch-backed worktree on first send in New worktree mode", async () => {
+  it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -4359,18 +4550,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const createWorktreeRequest = wsRequests.find(
             (request) =>
-              request._tag === WS_METHODS.gitCreateWorktree &&
+              request._tag === WS_METHODS.gitCreateDetachedWorktree &&
               request.cwd === "/repo/project" &&
-              request.branch === "main" &&
-              typeof request.newBranch === "string",
+              request.ref === "main" &&
+              request.copyChangesFrom === "/repo/project",
           );
           expect(createWorktreeRequest).toBeTruthy();
-          expect(createWorktreeRequest?.newBranch).toMatch(/^synara\/[0-9a-f]{8}$/);
-
-          const detachedRequest = wsRequests.find(
-            (request) => request._tag === WS_METHODS.gitCreateDetachedWorktree,
-          );
-          expect(detachedRequest).toBeUndefined();
 
           const createThreadRequest = wsRequests.find(
             (request) =>
@@ -4385,8 +4570,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(createThreadRequest).toBeTruthy();
           expect(createThreadRequest?.command).toMatchObject({
             envMode: "worktree",
-            branch: createWorktreeRequest?.newBranch,
-            worktreePath: `/repo/.codex/worktrees/project/${String(createWorktreeRequest?.newBranch).replaceAll("/", "-")}`,
+            branch: null,
+            worktreePath: "/repo/.codex/worktrees/generated/synara",
+            associatedWorktreePath: "/repo/.codex/worktrees/generated/synara",
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: "0123456789abcdef0123456789abcdef01234567",
           });
         },
         { timeout: 8_000, interval: 16 },
@@ -4481,10 +4669,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const request = wsRequests.find(
             (candidate) =>
-              candidate._tag === WS_METHODS.gitCreateWorktree &&
+              candidate._tag === WS_METHODS.gitCreateDetachedWorktree &&
               candidate.cwd === "/repo/project" &&
-              candidate.branch === "main" &&
-              typeof candidate.newBranch === "string",
+              candidate.ref === "main",
           );
           expect(
             request,
@@ -4500,7 +4687,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
               .slice(-40)
               .join(", ")}`,
           ).toBeTruthy();
-          if (!request || request._tag !== WS_METHODS.gitCreateWorktree) {
+          if (!request || request._tag !== WS_METHODS.gitCreateDetachedWorktree) {
             throw new Error("Expected create worktree request.");
           }
           return request;
@@ -4508,9 +4695,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 10_000, interval: 16 },
       );
       const createWorktreeIndex = wsRequests.indexOf(createWorktreeRequest);
-      const worktreePath = `/repo/.codex/worktrees/project/${String(
-        createWorktreeRequest.newBranch,
-      ).replaceAll("/", "-")}`;
+      const worktreePath = "/repo/.codex/worktrees/generated/synara";
 
       const terminalOpenRequest = await vi.waitFor(
         () => {
@@ -5462,16 +5647,22 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps the live inline-tool layout through the first settled paint, then relaxes after the grace delay", async () => {
+  it("collapses a settled leading tool run mid-turn, then folds into Worked for after the grace delay", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithInlineToolOverflow({ active: true }),
     });
 
     try {
+      // The tools already gave way to the assistant's narration block, so even
+      // while the turn is live the run compacts behind its summary row.
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Tool 6");
+          const summaryTrigger = Array.from(
+            document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+          ).find((element) => element.textContent?.includes("Used 6 tools"));
+          expect(summaryTrigger).not.toBeUndefined();
+          expect(summaryTrigger!.getAttribute("aria-expanded")).toBe("false");
           expect(document.body.textContent).not.toContain("Tool 1");
         },
         { timeout: 8_000, interval: 16 },
@@ -5481,8 +5672,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .getState()
         .syncServerReadModel(createSnapshotWithInlineToolOverflow({ active: false }));
 
-      expect(document.body.textContent).toContain("Tool 6");
-      expect(document.body.textContent).not.toContain("Tool 1");
+      // The first settled paint keeps the live layout: no "Worked for" fold yet.
+      expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+      expect(document.body.textContent).toContain("Used 6 tools");
 
       await new Promise<void>((resolve) => {
         window.setTimeout(() => resolve(), 260);
@@ -5500,7 +5692,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(transitionClone).not.toBeNull();
           expect(transitionClone?.hasAttribute("inert")).toBe(true);
           expect(transitionClone?.querySelector("[aria-hidden='true'][inert]")).not.toBeNull();
-          expect(document.body.textContent).toContain("Tool 6");
+          expect(transitionClone?.textContent).toContain("Used 6 tools");
         },
         { timeout: 8_000, interval: 16 },
       );

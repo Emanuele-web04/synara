@@ -140,7 +140,7 @@ function pushUniqueThreadId(
   target.push(threadId);
 }
 
-export function normalizeSubagentIdentifier(value: unknown): string | undefined {
+function normalizeSubagentIdentifier(value: unknown): string | undefined {
   return asTrimmedString(value);
 }
 
@@ -316,84 +316,43 @@ function buildSubagentAgentState(
   threadId: string,
   object: Record<string, unknown> | null,
 ): ParsedSubagentAgentState {
+  const agentId = firstStringValue(object, ["agentId", "agent_id"]);
+  const nickname = firstStringValue(object, [
+    "agentNickname",
+    "agent_nickname",
+    "receiverAgentNickname",
+    "receiver_agent_nickname",
+  ]);
+  const role = sanitizeSubagentRole(
+    firstStringValue(object, [
+      "agentRole",
+      "agent_role",
+      "receiverAgentRole",
+      "receiver_agent_role",
+      "agentType",
+      "agent_type",
+    ]),
+  );
+  const model = firstStringValue(object, [
+    "model",
+    "modelName",
+    "model_name",
+    "requestedModel",
+    "requested_model",
+  ]);
+  const prompt = firstStringValue(object, ["prompt", "task", "message"]);
+  const status = firstStringValue(object, ["status", "state"]);
+  const message = firstStringValue(object, ["summary", "message", "latestUpdate", "latest_update"]);
+
   return {
     threadId,
-    ...(firstStringValue(object, ["agentId", "agent_id"])
-      ? {
-          agentId: firstStringValue(object, ["agentId", "agent_id"]),
-        }
-      : {}),
-    ...(firstStringValue(object, [
-      "agentNickname",
-      "agent_nickname",
-      "receiverAgentNickname",
-      "receiver_agent_nickname",
-    ])
-      ? {
-          nickname: firstStringValue(object, [
-            "agentNickname",
-            "agent_nickname",
-            "receiverAgentNickname",
-            "receiver_agent_nickname",
-          ]),
-        }
-      : {}),
-    ...(sanitizeSubagentRole(
-      firstStringValue(object, [
-        "agentRole",
-        "agent_role",
-        "receiverAgentRole",
-        "receiver_agent_role",
-        "agentType",
-        "agent_type",
-      ]),
-    )
-      ? {
-          role: sanitizeSubagentRole(
-            firstStringValue(object, [
-              "agentRole",
-              "agent_role",
-              "receiverAgentRole",
-              "receiver_agent_role",
-              "agentType",
-              "agent_type",
-            ]),
-          ),
-        }
-      : {}),
-    ...(firstStringValue(object, [
-      "model",
-      "modelName",
-      "model_name",
-      "requestedModel",
-      "requested_model",
-    ])
-      ? {
-          model: firstStringValue(object, [
-            "model",
-            "modelName",
-            "model_name",
-            "requestedModel",
-            "requested_model",
-          ]),
-        }
-      : {}),
-    ...(firstStringValue(object, ["prompt", "task", "message"])
-      ? { prompt: firstStringValue(object, ["prompt", "task", "message"]) }
-      : {}),
-    ...(firstStringValue(object, ["status", "state"])
-      ? { status: firstStringValue(object, ["status", "state"]) }
-      : {}),
-    ...(firstStringValue(object, ["summary", "message", "latestUpdate", "latest_update"])
-      ? {
-          message: firstStringValue(object, [
-            "summary",
-            "message",
-            "latestUpdate",
-            "latest_update",
-          ]),
-        }
-      : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(nickname ? { nickname } : {}),
+    ...(role ? { role } : {}),
+    ...(model ? { model } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(status ? { status } : {}),
+    ...(message ? { message } : {}),
   };
 }
 
@@ -600,7 +559,7 @@ function selectMergedModel(input: {
   };
 }
 
-export function mergeSubagentIdentityHints(
+function mergeSubagentIdentityHints(
   existing: ParsedSubagentIdentityHint | undefined,
   incoming: ParsedSubagentIdentityHint,
 ): ParsedSubagentIdentityHint {

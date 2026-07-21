@@ -3,7 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
 import {
@@ -23,7 +23,6 @@ import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
 import { SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
-import { SettingResetButton } from "./settings/SettingControls";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
@@ -69,6 +68,7 @@ export function ThemePackEditor({
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const codeThemes = useMemo(() => {
     const options = getAvailableCodeThemes(variant);
     return options.map((option) => ({
@@ -297,7 +297,10 @@ function ColorPill({
   const commitTimerRef = useRef<number | null>(null);
   const pendingCommitRef = useRef<string | null>(null);
   const colorRef = useRef(color);
-  const [draftHex, setDraftHex] = useState<string | null>(null);
+  const [draftHexRaw, setDraftHex] = useState<string | null>(null);
+  // Derived: once the committed color catches up to the draft (commit round-
+  // trip), the draft dissolves in the same render — no state-clearing effect.
+  const draftHex = draftHexRaw === color ? null : draftHexRaw;
   const [isOpen, setIsOpen] = useState(false);
   const normalizedDraftHex = draftHex?.trim().toLowerCase() ?? null;
   const previewColor =
@@ -308,39 +311,35 @@ function ColorPill({
 
   useEffect(() => {
     colorRef.current = color;
-    setDraftHex((current) => (current === color ? null : current));
   }, [color]);
 
-  const clearCommitTimer = useCallback(() => {
+  const clearCommitTimer = () => {
     if (commitTimerRef.current === null) {
       return;
     }
     window.clearTimeout(commitTimerRef.current);
     commitTimerRef.current = null;
-  }, []);
+  };
 
-  const commitColor = useCallback(
-    (next: string | null = pendingCommitRef.current) => {
-      clearCommitTimer();
-      pendingCommitRef.current = null;
-      if (!next || next === colorRef.current) {
-        return;
-      }
-      onChange(next);
-    },
-    [clearCommitTimer, onChange],
-  );
+  // Explicit undefined check instead of a ref-reading default parameter,
+  // which React Compiler does not support yet (it would skip this component).
+  const commitColor = (nextInput?: string | null) => {
+    const next = nextInput === undefined ? pendingCommitRef.current : nextInput;
+    clearCommitTimer();
+    pendingCommitRef.current = null;
+    if (!next || next === colorRef.current) {
+      return;
+    }
+    onChange(next);
+  };
 
-  const scheduleCommit = useCallback(
-    (next: string) => {
-      pendingCommitRef.current = next;
-      clearCommitTimer();
-      commitTimerRef.current = window.setTimeout(() => {
-        commitColor(next);
-      }, COLOR_PICKER_COMMIT_DELAY_MS);
-    },
-    [clearCommitTimer, commitColor],
-  );
+  const scheduleCommit = (next: string) => {
+    pendingCommitRef.current = next;
+    clearCommitTimer();
+    commitTimerRef.current = window.setTimeout(() => {
+      commitColor(next);
+    }, COLOR_PICKER_COMMIT_DELAY_MS);
+  };
 
   useEffect(
     () => () => {

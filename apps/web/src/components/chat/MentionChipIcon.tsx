@@ -5,7 +5,6 @@
 // Layer: UI shared component/helper
 // Exports: MentionChipIcon, createMentionChipIconElement
 
-import { memo } from "react";
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
 import { resolveMentionChipKind, type MentionChipKind } from "~/lib/composerMentions";
 import { CentralIcon, createCentralIconElement } from "~/lib/central-icons";
@@ -30,7 +29,7 @@ function composerMentionChipCentralIconName(path: string, kind: MentionChipKind 
 // selection (Central icons are theme-agnostic `currentColor` glyphs).
 // `className` lets callers size the glyph per surface (composer token vs timeline
 // echo) while keeping the file/folder/plugin selection logic in one place.
-export const MentionChipIcon = memo(function MentionChipIcon(props: {
+export const MentionChipIcon = function MentionChipIcon(props: {
   path: string;
   theme: "light" | "dark";
   kind?: MentionChipKind;
@@ -53,7 +52,7 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
   // chip's text color (it shares the filename's color) instead of a per-filetype
   // tint. `getFileIconName` already falls back to the bracket glyph when unknown.
   return <CentralIcon name={getFileIconName(props.path)} className={className} />;
-});
+};
 
 // Lexical composer only — use a single masked Central icon (same as skill chips)
 // so @ tokens align with / and $ tokens. User-message bubbles keep MentionChipIcon.

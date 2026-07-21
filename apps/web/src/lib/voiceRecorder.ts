@@ -4,7 +4,7 @@
 // Exports: useVoiceRecorder, formatVoiceRecordingDuration
 // Depends on: browser media devices, Web Audio API, and FileReader for base64 encoding.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const TARGET_SAMPLE_RATE = 24_000;
 const BUFFER_SIZE = 4_096;
@@ -45,14 +45,14 @@ export function useVoiceRecorder() {
   const [durationMs, setDurationMs] = useState(0);
   const [waveformLevels, setWaveformLevels] = useState<number[]>([]);
 
-  const clearTimer = useCallback(() => {
+  const clearTimer = () => {
     if (timerRef.current !== null) {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-  }, []);
+  };
 
-  const teardownRuntime = useCallback(async () => {
+  const teardownRuntime = async () => {
     const runtime = runtimeRef.current;
     runtimeRef.current = null;
     clearTimer();
@@ -79,9 +79,9 @@ export function useVoiceRecorder() {
       sampleRateHz,
       durationMs: duration,
     };
-  }, [clearTimer]);
+  };
 
-  const startRecording = useCallback(async () => {
+  const startRecording = async () => {
     if (runtimeRef.current) {
       throw new Error("Voice recording is already running.");
     }
@@ -184,9 +184,9 @@ export function useVoiceRecorder() {
       await audioContext?.close().catch(() => undefined);
       throw error;
     }
-  }, []);
+  };
 
-  const stopRecording = useCallback(async (): Promise<VoiceRecordingPayload | null> => {
+  const stopRecording = async (): Promise<VoiceRecordingPayload | null> => {
     const recorded = await teardownRuntime();
     if (!recorded) {
       return null;
@@ -219,14 +219,14 @@ export function useVoiceRecorder() {
       ),
     };
     return payload;
-  }, [teardownRuntime]);
+  };
 
-  const cancelRecording = useCallback(async () => {
+  const cancelRecording = async () => {
     await teardownRuntime();
     waveformLevelsRef.current = [];
     waveformLastEmitAtRef.current = 0;
     setWaveformLevels([]);
-  }, [teardownRuntime]);
+  };
 
   useEffect(
     () => () => {

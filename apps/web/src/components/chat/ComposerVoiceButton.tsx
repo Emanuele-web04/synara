@@ -3,12 +3,10 @@
 // Layer: Chat composer presentation
 // Depends on: shared button styling and caller-owned voice recording state callbacks.
 
-import { memo } from "react";
-
 import { Loader2Icon, MicIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 
-export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
+export const ComposerVoiceButton = function ComposerVoiceButton(props: {
   disabled?: boolean;
   isRecording: boolean;
   isTranscribing: boolean;
@@ -38,4 +36,4 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
       )}
     </Button>
   );
-});
+};

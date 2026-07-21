@@ -395,11 +395,3 @@ export function matchSidebarSearchThreads(
       messageMatchCount,
     }));
 }
-
-export function hasSidebarSearchResults(input: {
-  actions: readonly SidebarSearchAction[];
-  projects: readonly SidebarSearchProjectMatch[];
-  threads: readonly SidebarSearchThreadMatch[];
-}): boolean {
-  return input.actions.length > 0 || input.projects.length > 0 || input.threads.length > 0;
-}

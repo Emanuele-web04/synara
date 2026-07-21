@@ -9,8 +9,8 @@ import {
   providerUsageDisplayName,
   providerUsageNeedsAuthDetail,
 } from "@synara/shared/providerUsage";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
@@ -75,10 +75,7 @@ function ProviderUsageCard({
     codexHomePath,
     providerSnapshot: snapshot,
   });
-  const meterRows = useMemo(
-    () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
-    [usageSummary.rateLimits],
-  );
+  const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const usageLines = usageSummary.usageLines;
 
   const hasUsage = meterRows.length > 0 || usageLines.length > 0;
@@ -170,7 +167,7 @@ export function ProviderUsageSettingsPanel() {
   const codexHomePath = settings.codexHomePath || null;
   const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   // Account/thread fallback rows are shared by every provider card; derive them once per panel.
-  const threadRateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
+  const threadRateLimits = deriveAccountRateLimits(threads);
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
@@ -184,15 +181,13 @@ export function ProviderUsageSettingsPanel() {
 
   // Always render a card per supported provider, ordered consistently, even if the batch
   // omitted one (e.g. a transient server error) — fall back to an "unavailable" placeholder.
-  const cards = useMemo(() => {
-    const byProvider = new Map<ProviderKind, ServerProviderUsageSnapshot>();
-    for (const snapshot of usageQuery.data ?? []) {
-      byProvider.set(snapshot.provider, snapshot);
-    }
-    return PROVIDER_USAGE_PROVIDERS.map(
-      (provider) => byProvider.get(provider) ?? missingSnapshot(provider),
-    );
-  }, [usageQuery.data]);
+  const byProvider = new Map<ProviderKind, ServerProviderUsageSnapshot>();
+  for (const snapshot of usageQuery.data ?? []) {
+    byProvider.set(snapshot.provider, snapshot);
+  }
+  const cards = PROVIDER_USAGE_PROVIDERS.map(
+    (provider) => byProvider.get(provider) ?? missingSnapshot(provider),
+  );
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 

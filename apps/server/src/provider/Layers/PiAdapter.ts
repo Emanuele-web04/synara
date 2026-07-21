@@ -15,8 +15,9 @@ import type {
   AgentSessionEvent,
   CreateAgentSessionRuntimeFactory,
   ExtensionUIContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import {
   ApprovalRequestId,
@@ -39,8 +40,23 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
+import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  callAgentGatewayMcpTool,
+  listAgentGatewayMcpTools,
+  type AgentGatewayMcpFetch,
+} from "../../agentGateway/mcpInjection.ts";
+import {
+  AgentGatewayCredentials,
+  type AgentGatewayMcpConnection,
+} from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  releaseAgentGatewaySessionLeaseOnInterrupt,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -289,6 +305,9 @@ export function makePiBashProcessSupervisor(
 let piCodingAgentModulePromise: Promise<PiCodingAgentModule> | undefined;
 
 interface PiSessionContext {
+  harnessPolicyDelivered?: boolean;
+  readonly gatewayControlAvailable: boolean;
+  gatewaySessionLease?: AgentGatewaySessionLease;
   readonly lifecycleGeneration?: string;
   runtime: PiAgentRuntime;
   readonly processSupervisor: PiBashProcessSupervisor;
@@ -355,6 +374,87 @@ export interface PiAdapterLiveOptions {
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly spawnProcess?: PiBashProcessSupervisorOptions["spawnProcess"];
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+  readonly agentGatewayFetch?: AgentGatewayMcpFetch;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
+  if (isRecord(result) && result.isError === true) {
+    const message = Array.isArray(result.content)
+      ? result.content
+          .flatMap((item) =>
+            isRecord(item) && item.type === "text" && typeof item.text === "string"
+              ? [item.text]
+              : [],
+          )
+          .join("\n")
+      : "";
+    throw new Error(message || "Synara gateway tool failed.");
+  }
+  const content =
+    isRecord(result) && Array.isArray(result.content)
+      ? result.content.flatMap((item): Array<TextContent | ImageContent> => {
+          if (isRecord(item) && item.type === "text" && typeof item.text === "string") {
+            return [{ type: "text", text: item.text }];
+          }
+          if (
+            isRecord(item) &&
+            item.type === "image" &&
+            typeof item.data === "string" &&
+            typeof item.mimeType === "string"
+          ) {
+            return [{ type: "image", data: item.data, mimeType: item.mimeType }];
+          }
+          return [];
+        })
+      : [];
+  return {
+    content:
+      content.length > 0
+        ? content
+        : [{ type: "text", text: JSON.stringify(result ?? null) } satisfies TextContent],
+    details: result,
+  };
+}
+
+/**
+ * Project the canonical MCP catalog into Pi's native custom-tool API. Tool
+ * schemas and execution both remain owned by the gateway; Pi only adapts the
+ * provider boundary.
+ */
+export async function buildPiAgentGatewayCustomTools(input: {
+  readonly connection: AgentGatewayMcpConnection;
+  readonly defineTool: (tool: ToolDefinition) => ToolDefinition;
+  readonly fetch?: AgentGatewayMcpFetch;
+}): Promise<ReadonlyArray<ToolDefinition>> {
+  const tools = await listAgentGatewayMcpTools({
+    connection: input.connection,
+    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+  });
+  if (tools.length === 0) {
+    throw new Error("Synara MCP returned an empty tool catalog.");
+  }
+  return tools.map((tool) =>
+    input.defineTool({
+      name: tool.name,
+      label: tool.name,
+      description: tool.description,
+      parameters: tool.inputSchema as ToolDefinition["parameters"],
+      execute: async (_toolCallId, params, signal) =>
+        piGatewayToolResult(
+          await callAgentGatewayMcpTool({
+            connection: input.connection,
+            name: tool.name,
+            arguments: params as Record<string, unknown>,
+            ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+            ...(signal === undefined ? {} : { signal }),
+          }),
+        ),
+    }),
+  );
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -1156,6 +1256,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
+    const agentGatewayCredentials = Option.getOrUndefined(
+      yield* Effect.serviceOption(AgentGatewayCredentials),
+    );
     const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
     const sessions = new Map<ThreadId, PiSessionContext>();
     const modelRegistries = new Map<string, ModelRegistry>();
@@ -1537,33 +1640,38 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     });
 
     const disposeSessionContext = async (context: PiSessionContext) => {
-      context.unsubscribe?.();
-      context.unsubscribe = undefined;
-      for (const pending of Array.from(context.pendingUserInputs.values())) {
-        pending.resolve({});
-      }
-      context.pendingUserInputs.clear();
-      context.stopped = true;
-      let runtimeFailure: unknown;
       try {
-        await context.runtime.dispose();
-      } catch (cause) {
-        runtimeFailure = cause;
+        context.unsubscribe?.();
+        context.unsubscribe = undefined;
+        for (const pending of Array.from(context.pendingUserInputs.values())) {
+          pending.resolve({});
+        }
+        context.pendingUserInputs.clear();
+        context.stopped = true;
+        let runtimeFailure: unknown;
+        try {
+          await context.runtime.dispose();
+        } catch (cause) {
+          runtimeFailure = cause;
+        }
+        let processFailure: unknown;
+        try {
+          await context.processSupervisor.teardownAll();
+        } catch (cause) {
+          processFailure = cause;
+        }
+        if (runtimeFailure !== undefined && processFailure !== undefined) {
+          throw new AggregateError(
+            [runtimeFailure, processFailure],
+            "Failed to dispose the Pi runtime and prove its subprocess trees exited.",
+          );
+        }
+        if (processFailure !== undefined) throw processFailure;
+        if (runtimeFailure !== undefined) throw runtimeFailure;
+      } finally {
+        context.gatewaySessionLease?.release();
+        delete context.gatewaySessionLease;
       }
-      let processFailure: unknown;
-      try {
-        await context.processSupervisor.teardownAll();
-      } catch (cause) {
-        processFailure = cause;
-      }
-      if (runtimeFailure !== undefined && processFailure !== undefined) {
-        throw new AggregateError(
-          [runtimeFailure, processFailure],
-          "Failed to dispose the Pi runtime and prove its subprocess trees exited.",
-        );
-      }
-      if (processFailure !== undefined) throw processFailure;
-      if (runtimeFailure !== undefined) throw runtimeFailure;
     };
 
     const handleMessageUpdate = (
@@ -1881,6 +1989,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
+      gatewayTools?: ReadonlyArray<ToolDefinition>;
     }) => {
       const registry = await getModelRegistry(input.agentDir, input.sdk);
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
@@ -1918,6 +2027,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                   ...(shellPath === undefined ? {} : { shellPath }),
                 }),
               ),
+              ...(input.gatewayTools ?? []),
             ],
           })),
           services,
@@ -1970,25 +2080,73 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             sessions.delete(input.threadId);
           }
         }
-        const { runtime, modelRegistry } = yield* Effect.tryPromise({
-          try: () =>
-            createSdkRuntime({
-              sdk: piSdk,
-              cwd,
-              agentDir,
-              sessionManager,
-              ...(modelId ? { modelId } : {}),
-              ...(thinkingLevel ? { thinkingLevel } : {}),
-              processSupervisor,
+        const agentGatewaySessionLease = acquireAgentGatewaySessionLease(
+          agentGatewayCredentials,
+          input.threadId,
+          PROVIDER,
+        );
+        const agentGatewayConnection = agentGatewaySessionLease?.connection;
+        const gatewayTools = agentGatewayConnection
+          ? yield* releaseAgentGatewaySessionLeaseOnInterrupt(
+              agentGatewaySessionLease,
+              Effect.tryPromise({
+                try: () =>
+                  buildPiAgentGatewayCustomTools({
+                    connection: agentGatewayConnection,
+                    defineTool: (tool) => piSdk.defineTool(tool),
+                    ...(options?.agentGatewayFetch === undefined
+                      ? {}
+                      : { fetch: options.agentGatewayFetch }),
+                  }),
+                catch: (cause) => cause,
+              }),
+            ).pipe(
+              Effect.catch((cause) =>
+                Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
+                  Effect.andThen(
+                    Effect.logWarning(
+                      "Pi could not install thread-scoped Synara gateway tools",
+                      cause,
+                    ),
+                  ),
+                  Effect.as([] as ReadonlyArray<ToolDefinition>),
+                ),
+              ),
+            )
+          : [];
+        const gatewayControlAvailable = gatewayTools.length > 0;
+        if (!gatewayControlAvailable) {
+          agentGatewaySessionLease?.release();
+        }
+        const { runtime, modelRegistry } = yield* releaseAgentGatewaySessionLeaseOnInterrupt(
+          agentGatewaySessionLease,
+          Effect.tryPromise({
+            try: () =>
+              createSdkRuntime({
+                sdk: piSdk,
+                cwd,
+                agentDir,
+                sessionManager,
+                ...(modelId ? { modelId } : {}),
+                ...(thinkingLevel ? { thinkingLevel } : {}),
+                processSupervisor,
+                ...(gatewayControlAvailable ? { gatewayTools } : {}),
+              }),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/start",
+                detail: toMessage(cause, "Failed to start Pi session."),
+                cause,
+              }),
+          }),
+        ).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              agentGatewaySessionLease?.release();
             }),
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/start",
-              detail: toMessage(cause, "Failed to start Pi session."),
-              cause,
-            }),
-        });
+          ),
+        );
         const now = new Date().toISOString();
         const model = runtime.session.model
           ? `${runtime.session.model.provider}/${runtime.session.model.id}`
@@ -2010,6 +2168,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
           runtime,
+          gatewayControlAvailable,
+          ...(gatewayControlAvailable && agentGatewaySessionLease
+            ? { gatewaySessionLease: agentGatewaySessionLease }
+            : {}),
           processSupervisor,
           modelRegistry,
           session,
@@ -2255,8 +2417,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             resumeCursor: getSessionFile(context.runtime.session),
           };
         }
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        });
+        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
         void context.runtime.session
-          .prompt(payload.text, payload.images.length > 0 ? { images: payload.images } : undefined)
+          .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
           .catch((cause) => {
             completePromptRejection(context, turnId, cause);
           });
@@ -2271,6 +2438,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
         const payload = yield* buildPromptPayload(input);
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        });
+        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
@@ -2278,7 +2450,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         if (context.runtime.session.isStreaming) {
           yield* Effect.tryPromise({
-            try: () => context.runtime.session.steer(payload.text, payload.images),
+            try: () => context.runtime.session.steer(providerText, payload.images),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -2290,7 +2462,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         } else {
           void context.runtime.session
             .prompt(
-              payload.text,
+              providerText,
               payload.images.length > 0 ? { images: payload.images } : undefined,
             )
             .catch((cause) => {

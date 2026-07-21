@@ -17,11 +17,124 @@ import {
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
   getPiSupportedThinkingOptions,
+  buildPiAgentGatewayCustomTools,
   makePiBashProcessSupervisor,
   makePiRuntimeEventBase,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
 } from "./PiAdapter";
+
+describe("Pi native Synara gateway tools", () => {
+  it("uses canonical MCP schemas and keeps same-cwd thread tokens distinct", async () => {
+    const requests: Array<{ readonly token: string | null; readonly body: any }> = [];
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      requests.push({
+        token: new Headers(init?.headers).get("Authorization"),
+        body,
+      });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result:
+          body.method === "tools/list"
+            ? {
+                tools: [
+                  {
+                    name: "synara_list_threads",
+                    description: "List Synara threads.",
+                    inputSchema: {
+                      type: "object",
+                      properties: { limit: { type: "number" } },
+                    },
+                  },
+                ],
+              }
+            : {
+                content: [{ type: "text", text: body.params.arguments.owner }],
+              },
+      });
+    };
+    const defineTool = (tool: any) => tool;
+    const first = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+      defineTool,
+      fetch,
+    });
+    const second = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-b" },
+      defineTool,
+      fetch,
+    });
+
+    expect(first[0]?.parameters).toEqual({
+      type: "object",
+      properties: { limit: { type: "number" } },
+    });
+    await expect(
+      first[0]?.execute("call-a", { owner: "thread-a" }, undefined, undefined, {} as never),
+    ).resolves.toMatchObject({ content: [{ type: "text", text: "thread-a" }] });
+    await expect(
+      second[0]?.execute("call-b", { owner: "thread-b" }, undefined, undefined, {} as never),
+    ).resolves.toMatchObject({ content: [{ type: "text", text: "thread-b" }] });
+    expect(requests.map((request) => request.token)).toEqual([
+      "Bearer token-a",
+      "Bearer token-b",
+      "Bearer token-a",
+      "Bearer token-b",
+    ]);
+    expect(requests[2]?.body.params.arguments).toEqual({ owner: "thread-a" });
+    expect(requests[3]?.body.params.arguments).toEqual({ owner: "thread-b" });
+  });
+
+  it("forwards Pi tool cancellation to the in-flight MCP request", async () => {
+    let callSignal: AbortSignal | null = null;
+    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/list") {
+        return Response.json({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            tools: [
+              {
+                name: "synara_create_threads",
+                description: "Create Synara threads.",
+                inputSchema: { type: "object", properties: {} },
+              },
+            ],
+          },
+        });
+      }
+
+      callSignal = init?.signal ?? null;
+      return await new Promise<Response>((_resolve, reject) => {
+        const rejectAborted = () =>
+          reject(
+            callSignal?.reason ?? new DOMException("The operation was aborted.", "AbortError"),
+          );
+        if (callSignal?.aborted) {
+          rejectAborted();
+          return;
+        }
+        callSignal?.addEventListener("abort", rejectAborted, { once: true });
+      });
+    };
+    const tools = await buildPiAgentGatewayCustomTools({
+      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+      defineTool: (tool) => tool,
+      fetch,
+    });
+    const controller = new AbortController();
+    const execution = tools[0]?.execute("call-a", {}, controller.signal, undefined, {} as never);
+
+    controller.abort();
+
+    await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+    expect(callSignal).toBe(controller.signal);
+    expect(controller.signal.aborted).toBe(true);
+  });
+});
 
 describe("Pi Bash process supervision", () => {
   it("keeps an aborted command pending until process-tree exit is proven", async () => {

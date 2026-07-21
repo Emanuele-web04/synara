@@ -10,7 +10,7 @@
 
 import { type ThreadId } from "@synara/contracts";
 import { type TerminalCliKind } from "@synara/shared/terminalThreads";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -51,110 +51,74 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
   const setTerminalActivityStore = useTerminalStateStore((s) => s.setTerminalActivity);
 
   const [focusRequestId, setFocusRequestId] = useState(0);
-  const bumpFocusRequest = useCallback(() => setFocusRequestId((value) => value + 1), []);
+  const bumpFocusRequest = () => setFocusRequestId((value) => value + 1);
 
-  const newTerminalGroup = useCallback(() => {
+  const newTerminalGroup = () => {
     newTerminal(threadId, randomTerminalId());
     bumpFocusRequest();
-  }, [bumpFocusRequest, newTerminal, threadId]);
+  };
 
-  const splitRight = useCallback(() => {
+  const splitRight = () => {
     splitTerminalRightStore(threadId, randomTerminalId());
     bumpFocusRequest();
-  }, [bumpFocusRequest, splitTerminalRightStore, threadId]);
+  };
 
-  const splitDown = useCallback(() => {
+  const splitDown = () => {
     splitTerminalDownStore(threadId, randomTerminalId());
     bumpFocusRequest();
-  }, [bumpFocusRequest, splitTerminalDownStore, threadId]);
+  };
 
-  const createTerminalTab = useCallback(
-    (targetTerminalId: string) => {
-      newTerminalTab(threadId, targetTerminalId, randomTerminalId());
-      bumpFocusRequest();
-    },
-    [bumpFocusRequest, newTerminalTab, threadId],
-  );
+  const createTerminalTab = (targetTerminalId: string) => {
+    newTerminalTab(threadId, targetTerminalId, randomTerminalId());
+    bumpFocusRequest();
+  };
 
-  const moveTerminalToNewGroup = useCallback(
-    (terminalId: string) => {
-      newTerminal(threadId, terminalId);
-      bumpFocusRequest();
-    },
-    [bumpFocusRequest, newTerminal, threadId],
-  );
+  const moveTerminalToNewGroup = (terminalId: string) => {
+    newTerminal(threadId, terminalId);
+    bumpFocusRequest();
+  };
 
-  const activateTerminal = useCallback(
-    (terminalId: string) => {
-      setActiveTerminalStore(threadId, terminalId);
-      bumpFocusRequest();
-    },
-    [bumpFocusRequest, setActiveTerminalStore, threadId],
-  );
+  const activateTerminal = (terminalId: string) => {
+    setActiveTerminalStore(threadId, terminalId);
+    bumpFocusRequest();
+  };
 
-  const closeTerminal = useCallback(
-    async (terminalId: string) => {
-      const api = readNativeApi();
-      const confirmed = await confirmTerminalTabClose({
-        api,
-        enabled: shouldPromptForTerminalClose({
-          confirmationEnabled: settings.confirmTerminalTabClose,
-          runningTerminalIds: terminalState.runningTerminalIds,
-          terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
-          terminalId,
-        }),
-        terminalTitle: resolveTerminalCloseTitle({
-          terminalId,
-          terminalLabelsById: terminalState.terminalLabelsById,
-          terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
-        }),
-      });
-      if (!confirmed) {
-        return;
-      }
-      disposeAndCloseTerminalSession({ api, threadId, terminalId });
-      closeTerminalStore(threadId, terminalId);
-      bumpFocusRequest();
-    },
-    [
-      bumpFocusRequest,
-      closeTerminalStore,
-      settings.confirmTerminalTabClose,
-      terminalState.runningTerminalIds,
-      terminalState.terminalAttentionStatesById,
-      terminalState.terminalLabelsById,
-      terminalState.terminalTitleOverridesById,
-      threadId,
-    ],
-  );
+  const closeTerminal = async (terminalId: string) => {
+    const api = readNativeApi();
+    const confirmed = await confirmTerminalTabClose({
+      api,
+      enabled: shouldPromptForTerminalClose({
+        confirmationEnabled: settings.confirmTerminalTabClose,
+        runningTerminalIds: terminalState.runningTerminalIds,
+        terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+        terminalId,
+      }),
+      terminalTitle: resolveTerminalCloseTitle({
+        terminalId,
+        terminalLabelsById: terminalState.terminalLabelsById,
+        terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+      }),
+    });
+    if (!confirmed) {
+      return;
+    }
+    disposeAndCloseTerminalSession({ api, threadId, terminalId });
+    closeTerminalStore(threadId, terminalId);
+    bumpFocusRequest();
+  };
 
-  const closeTerminalGroup = useCallback(
-    (groupId: string) => closeTerminalGroupStore(threadId, groupId),
-    [closeTerminalGroupStore, threadId],
-  );
+  const closeTerminalGroup = (groupId: string) => closeTerminalGroupStore(threadId, groupId);
 
-  const setTerminalHeight = useCallback(
-    (height: number) => setTerminalHeightStore(threadId, height),
-    [setTerminalHeightStore, threadId],
-  );
+  const setTerminalHeight = (height: number) => setTerminalHeightStore(threadId, height);
 
-  const resizeTerminalSplit = useCallback(
-    (groupId: string, splitId: string, weights: number[]) =>
-      resizeTerminalSplitStore(threadId, groupId, splitId, weights),
-    [resizeTerminalSplitStore, threadId],
-  );
+  const resizeTerminalSplit = (groupId: string, splitId: string, weights: number[]) =>
+    resizeTerminalSplitStore(threadId, groupId, splitId, weights);
 
-  const setTerminalMetadata = useCallback(
-    (terminalId: string, metadata: TerminalMetadata) =>
-      setTerminalMetadataStore(threadId, terminalId, metadata),
-    [setTerminalMetadataStore, threadId],
-  );
+  const setTerminalMetadata = (terminalId: string, metadata: TerminalMetadata) =>
+    setTerminalMetadataStore(threadId, terminalId, metadata);
 
-  const setTerminalActivity = useCallback(
-    (terminalId: string, activity: TerminalActivity) =>
-      setTerminalActivityStore(threadId, terminalId, activity),
-    [setTerminalActivityStore, threadId],
-  );
+  const setTerminalActivity = (terminalId: string, activity: TerminalActivity) =>
+    setTerminalActivityStore(threadId, terminalId, activity);
 
   return {
     terminalState,

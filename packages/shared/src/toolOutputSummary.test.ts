@@ -19,4 +19,15 @@ describe("toolOutputSummary", () => {
     expect(summarizeToolRawOutput({ stdout: "done\nextra" })).toBe("done");
     expect(summarizeToolRawOutput({ rawInput: {} })).toBeUndefined();
   });
+
+  it("extracts a concise MCP error from an object output", () => {
+    expect(
+      summarizeToolRawOutput({
+        is_error: true,
+        output: {
+          Error: 'Invalid creation plan: Unexpected key "reasoningEffort"\n  at ["threads"][1]',
+        },
+      }),
+    ).toBe('Invalid creation plan: Unexpected key "reasoningEffort"');
+  });
 });

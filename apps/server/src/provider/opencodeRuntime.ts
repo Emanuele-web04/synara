@@ -38,7 +38,7 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { NetService } from "@synara/shared/Net";
+import { NetService, type NetServiceShape } from "@synara/shared/Net";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
 import {
@@ -99,6 +99,7 @@ interface PooledOpenCodeServer {
   readonly key: string;
   readonly server: OpenCodeServerProcess;
   readonly scope: Scope.Closeable;
+  readonly closeOnRelease: boolean;
   refCount: number;
   idleCloseFiber: Fiber.Fiber<void, never> | null;
   exitWatchFiber: Fiber.Fiber<void, never> | null;
@@ -205,6 +206,12 @@ export interface OpenCodeRuntimeShape {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
+    /**
+     * Makes a managed server private to one owner and closes it immediately
+     * when that owner's scope ends. Required before installing per-thread MCP
+     * credentials into process-scoped configuration.
+     */
+    readonly poolIsolationKey?: string;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
@@ -303,6 +310,7 @@ function pooledOpenCodeServerKey(input: {
   readonly port?: number;
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
+  readonly poolIsolationKey?: string;
 }): string {
   const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return JSON.stringify({
@@ -311,6 +319,7 @@ function pooledOpenCodeServerKey(input: {
     hostname: input.hostname ?? DEFAULT_HOSTNAME,
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
+    poolIsolationKey: input.poolIsolationKey ?? null,
     cliSpec: {
       defaultBinaryPath: cliSpec.defaultBinaryPath,
       displayName: cliSpec.displayName,
@@ -831,6 +840,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 
 export interface OpenCodeRuntimeLiveOptions {
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+  readonly netService?: NetServiceShape;
 }
 
 const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
@@ -1168,6 +1178,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       readonly hostname?: string;
       readonly timeoutMs?: number;
       readonly experimentalWebSockets?: boolean;
+      readonly poolIsolationKey?: string;
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
@@ -1200,6 +1211,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
                 key,
                 server: startedExit.value,
                 scope: serverScope,
+                closeOnRelease: input.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,
                 exitWatchFiber: null,
@@ -1220,7 +1232,11 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           }
           pooledServer.refCount = Math.max(0, pooledServer.refCount - 1);
           if (pooledServer.refCount === 0) {
-            yield* schedulePooledServerIdleClose(pooledServer);
+            if (pooledServer.closeOnRelease) {
+              yield* closePooledServer(pooledServer);
+            } else {
+              yield* schedulePooledServerIdleClose(pooledServer);
+            }
           }
         }),
       );
@@ -1256,6 +1272,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
           ...(input.experimentalWebSockets !== undefined
             ? { experimentalWebSockets: input.experimentalWebSockets }
+            : {}),
+          ...(input.poolIsolationKey !== undefined
+            ? { poolIsolationKey: input.poolIsolationKey }
             : {}),
         });
         yield* Scope.addFinalizer(callerScope, releasePooledServer(pooledServer));
@@ -1454,6 +1473,10 @@ export class OpenCodeRuntime extends ServiceMap.Service<OpenCodeRuntime, OpenCod
 ) {}
 
 export const makeOpenCodeRuntimeLive = (options?: OpenCodeRuntimeLiveOptions) =>
-  Layer.effect(OpenCodeRuntime, makeOpenCodeRuntime(options)).pipe(Layer.provide(NetService.layer));
+  Layer.effect(OpenCodeRuntime, makeOpenCodeRuntime(options)).pipe(
+    Layer.provide(
+      options?.netService ? Layer.succeed(NetService, options.netService) : NetService.layer,
+    ),
+  );
 
 export const OpenCodeRuntimeLive = makeOpenCodeRuntimeLive();

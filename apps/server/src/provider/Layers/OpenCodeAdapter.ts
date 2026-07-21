@@ -5,9 +5,7 @@ import {
   EventId,
   type ProviderKind,
   type ProviderComposerCapabilities,
-  type ProviderListAgentsResult,
   type ProviderListCommandsResult,
-  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeItemId,
@@ -18,9 +16,8 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { Cause, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, Option, Queue, Ref, Scope, Stream } from "effect";
 import type {
-  Agent,
   AssistantMessage,
   OpencodeClient,
   Part,
@@ -39,6 +36,13 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
+import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  type AgentGatewaySessionLease,
+} from "../../agentGateway/sessionLease.ts";
 import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
@@ -64,6 +68,20 @@ import {
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 import { makeRuntimeTaskListItem, nonEmptyRuntimeTaskListPayload } from "../runtimeTaskList.ts";
+import {
+  buildOpenCodeModelContextLimitMap,
+  emptyOpenCodeModelInventory,
+  flattenOpenCodeAgents,
+  flattenOpenCodeCommands,
+  flattenOpenCodeCliModels,
+  flattenOpenCodeModels,
+  isUnsupportedOpenCodeCommandListError,
+  mergeOpenCodeCliModelDescriptors,
+  resolvePreferredOpenCodeModelProviders,
+} from "../OpenCodeDiscovery.ts";
+import { nonNegativeFiniteNumber, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
+
+export { flattenOpenCodeCliModels, flattenOpenCodeModels, resolvePreferredOpenCodeModelProviders };
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
 
@@ -126,6 +144,9 @@ interface OpenCodeTurnSnapshot {
 }
 
 interface OpenCodeSessionContext {
+  harnessPolicyDelivered?: boolean;
+  readonly gatewayControlAvailable: boolean;
+  gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
   readonly client: OpencodeClient;
@@ -163,6 +184,11 @@ interface OpenCodeSessionContext {
   readonly sessionScope: Scope.Closeable;
 }
 
+function releaseOpenCodeGatewayLease(context: OpenCodeSessionContext): void {
+  context.gatewaySessionLease?.release();
+  delete context.gatewaySessionLease;
+}
+
 interface OpenCodeMessageSnapshot {
   readonly info: {
     readonly id: string;
@@ -183,6 +209,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly promptAcceptedActivityTimeoutMs?: number;
   readonly promptAcceptedRecoveryDelaysMs?: ReadonlyArray<number>;
   readonly promptSubmissionInlineWaitMs?: number;
+  readonly beforeSessionInstall?: Effect.Effect<void>;
   readonly resolveServerPassword?: (
     provider: OpenCodeCompatibleProvider,
   ) => Effect.Effect<string | undefined, ProviderAdapterValidationError>;
@@ -724,6 +751,14 @@ function openCodeToolContentText(content: unknown): string | undefined {
   return text.length > 0 ? text : undefined;
 }
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function isOpenCodeTerminalStepFinish(value: unknown): boolean {
   const finish = trimNonEmptyString(value)?.toLowerCase().replace(/_/gu, "-");
   if (!finish) {
@@ -803,61 +838,6 @@ function extractResumeCwd(resumeCursor: unknown): string | undefined {
     return resumeCursor.cwd.trim();
   }
   return undefined;
-}
-
-type OpenCodeModelInventory = {
-  readonly providerList: {
-    readonly connected: ReadonlyArray<string>;
-    readonly all: ReadonlyArray<{
-      readonly id: string;
-      readonly name: string;
-      readonly source?: string;
-      readonly env?: ReadonlyArray<string>;
-      readonly options?: Record<string, unknown>;
-      readonly models: Record<
-        string,
-        {
-          readonly id: string;
-          readonly name: string;
-          readonly options?: Record<string, unknown>;
-          readonly capabilities?: {
-            readonly reasoning?: boolean;
-          };
-          readonly limit?: {
-            readonly context?: number;
-            readonly output?: number;
-          };
-          readonly variants?: Record<string, Record<string, unknown>>;
-          readonly isFree?: boolean;
-        }
-      >;
-    }>;
-  };
-  readonly consoleState?: {
-    readonly consoleManagedProviders: ReadonlyArray<string>;
-  } | null;
-};
-
-type OpenCodeInventoryProvider = OpenCodeModelInventory["providerList"]["all"][number];
-type OpenCodeModelDescriptor = ProviderListModelsResult["models"][number];
-
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === "number" &&
-    Number.isFinite(value) &&
-    Number.isInteger(value) &&
-    value >= 0
-    ? value
-    : undefined;
-}
-
-function asPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0
-    ? value
-    : undefined;
-}
-
-function asFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function openCodeRecord(value: unknown): Record<string, unknown> | undefined {
@@ -971,11 +951,11 @@ function readOpenCodeTokens(tokens: unknown): NormalizedOpenCodeTokens | undefin
     return undefined;
   }
   const tokenRecord = tokens as Partial<OpenCodeAssistantTokens>;
-  const inputTokens = asNonNegativeInteger(tokenRecord.input);
-  const outputTokens = asNonNegativeInteger(tokenRecord.output);
-  const reasoningOutputTokens = asNonNegativeInteger(tokenRecord.reasoning);
-  const cacheReadTokens = asNonNegativeInteger(tokenRecord.cache?.read);
-  const cacheWriteTokens = asNonNegativeInteger(tokenRecord.cache?.write);
+  const inputTokens = nonNegativeInteger(tokenRecord.input);
+  const outputTokens = nonNegativeInteger(tokenRecord.output);
+  const reasoningOutputTokens = nonNegativeInteger(tokenRecord.reasoning);
+  const cacheReadTokens = nonNegativeInteger(tokenRecord.cache?.read);
+  const cacheWriteTokens = nonNegativeInteger(tokenRecord.cache?.write);
   if (
     inputTokens === undefined ||
     outputTokens === undefined ||
@@ -1013,7 +993,7 @@ export function normalizeOpenCodeTokenUsage(
     return undefined;
   }
 
-  const normalizedMaxTokens = asPositiveInteger(maxTokens);
+  const normalizedMaxTokens = positiveInteger(maxTokens);
   const usedTokens =
     normalizedMaxTokens !== undefined
       ? Math.min(totalProcessedTokens, normalizedMaxTokens)
@@ -1054,21 +1034,8 @@ function buildOpenCodeTokenUsageKey(input: {
     cacheWriteTokens,
     outputTokens,
     reasoningOutputTokens,
-    asPositiveInteger(input.maxTokens) ?? "",
+    positiveInteger(input.maxTokens) ?? "",
   ].join(":");
-}
-
-function buildOpenCodeModelContextLimitMap(inventory: OpenCodeModelInventory): Map<string, number> {
-  const limits = new Map<string, number>();
-  for (const provider of inventory.providerList.all) {
-    for (const model of Object.values(provider.models)) {
-      const contextLimit = asPositiveInteger(model.limit?.context);
-      if (contextLimit !== undefined) {
-        limits.set(`${provider.id}/${model.id}`, contextLimit);
-      }
-    }
-  }
-  return limits;
 }
 
 function replaceModelContextLimits(
@@ -1079,610 +1046,6 @@ function replaceModelContextLimits(
   for (const [slug, limit] of limits) {
     context.modelContextLimitBySlug.set(slug, limit);
   }
-}
-
-function isOpenCodeManagedProvider(provider: OpenCodeInventoryProvider) {
-  const normalizedId = provider.id.trim().toLowerCase();
-  const normalizedName = provider.name.trim().toLowerCase();
-  const envVars = new Set((provider.env ?? []).map((value) => value.trim().toUpperCase()));
-
-  return (
-    envVars.has("OPENCODE_API_KEY") ||
-    normalizedId === "opencode" ||
-    normalizedId.startsWith("opencode-") ||
-    normalizedName.startsWith("opencode")
-  );
-}
-
-export function resolvePreferredOpenCodeModelProviders(input: {
-  readonly inventory: OpenCodeModelInventory;
-  readonly credentialProviderIDs?: ReadonlyArray<string>;
-}) {
-  const { inventory } = input;
-  const connected = new Set(inventory.providerList.connected);
-  const connectedProviders = inventory.providerList.all.filter((provider) =>
-    connected.has(provider.id),
-  );
-  if (connectedProviders.length === 0) {
-    return [];
-  }
-
-  const credentialProviders = new Set(input.credentialProviderIDs ?? []);
-  const authenticatedConnectedProviders = connectedProviders.filter((provider) =>
-    credentialProviders.has(provider.id),
-  );
-
-  const consoleManagedProviders = new Set(inventory.consoleState?.consoleManagedProviders ?? []);
-  const consoleManagedConnectedProviders = connectedProviders.filter((provider) =>
-    consoleManagedProviders.has(provider.id),
-  );
-
-  const openCodeManagedConnectedProviders = connectedProviders.filter(isOpenCodeManagedProvider);
-
-  const preferredProviderIDs = new Set(
-    [
-      ...authenticatedConnectedProviders,
-      ...consoleManagedConnectedProviders,
-      ...openCodeManagedConnectedProviders,
-    ].map((provider) => provider.id),
-  );
-  if (preferredProviderIDs.size > 0) {
-    return connectedProviders.filter((provider) => preferredProviderIDs.has(provider.id));
-  }
-
-  const nonEnvironmentConnectedProviders = connectedProviders.filter(
-    (provider) => provider.source !== "env",
-  );
-  if (nonEnvironmentConnectedProviders.length > 0) {
-    return nonEnvironmentConnectedProviders;
-  }
-
-  return connectedProviders;
-}
-
-function compareOpenCodeModelDescriptors(
-  left: OpenCodeModelDescriptor,
-  right: OpenCodeModelDescriptor,
-) {
-  const leftProvider =
-    left.upstreamProviderName?.trim() || left.upstreamProviderId?.trim() || "\uffff";
-  const rightProvider =
-    right.upstreamProviderName?.trim() || right.upstreamProviderId?.trim() || "\uffff";
-  return (
-    leftProvider.localeCompare(rightProvider) ||
-    left.name.localeCompare(right.name) ||
-    left.slug.localeCompare(right.slug)
-  );
-}
-
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readOpenCodeInventoryVariantValue(
-  variantKey: string,
-  variant: Record<string, unknown>,
-): string | undefined {
-  const directValue =
-    trimNonEmptyString(variant.reasoningEffort) ??
-    trimNonEmptyString(variant.reasoning_effort) ??
-    trimNonEmptyString(variant.effort);
-  if (directValue) {
-    return directValue;
-  }
-
-  const thinkingConfig =
-    variant.thinkingConfig &&
-    typeof variant.thinkingConfig === "object" &&
-    !Array.isArray(variant.thinkingConfig)
-      ? (variant.thinkingConfig as Record<string, unknown>)
-      : variant.thinking_config &&
-          typeof variant.thinking_config === "object" &&
-          !Array.isArray(variant.thinking_config)
-        ? (variant.thinking_config as Record<string, unknown>)
-        : null;
-  const thinkingLevel =
-    trimNonEmptyString(thinkingConfig?.thinkingLevel) ??
-    trimNonEmptyString(thinkingConfig?.thinking_level);
-  if (thinkingLevel) {
-    return thinkingLevel;
-  }
-
-  const reasoning =
-    variant.reasoning && typeof variant.reasoning === "object" && !Array.isArray(variant.reasoning)
-      ? (variant.reasoning as Record<string, unknown>)
-      : null;
-  const reasoningConfig =
-    variant.reasoningConfig &&
-    typeof variant.reasoningConfig === "object" &&
-    !Array.isArray(variant.reasoningConfig)
-      ? (variant.reasoningConfig as Record<string, unknown>)
-      : variant.reasoning_config &&
-          typeof variant.reasoning_config === "object" &&
-          !Array.isArray(variant.reasoning_config)
-        ? (variant.reasoning_config as Record<string, unknown>)
-        : null;
-  const nestedReasoningEffort =
-    trimNonEmptyString(reasoning?.effort) ??
-    trimNonEmptyString(reasoningConfig?.maxReasoningEffort) ??
-    trimNonEmptyString(reasoningConfig?.max_reasoning_effort);
-  if (nestedReasoningEffort) {
-    return nestedReasoningEffort;
-  }
-
-  if (
-    "thinking" in variant ||
-    "thinkingConfig" in variant ||
-    "thinking_config" in variant ||
-    "reasoning" in variant ||
-    "reasoningConfig" in variant ||
-    "reasoning_config" in variant ||
-    Object.keys(variant).length === 0
-  ) {
-    return trimNonEmptyString(variantKey);
-  }
-  return undefined;
-}
-
-function normalizeOpenCodeReasoningDescriptors(input: {
-  readonly descriptors: ReadonlyArray<{
-    readonly value: string;
-    readonly label?: string;
-    readonly description?: string;
-  }>;
-  readonly defaultReasoningEffort?: string | undefined;
-}) {
-  const descriptors = Array.from(
-    new Map(
-      input.descriptors
-        .map((descriptor) => {
-          const value = descriptor.value.trim();
-          if (value.length === 0) {
-            return null;
-          }
-
-          const label = trimNonEmptyString(descriptor.label);
-          const description = trimNonEmptyString(descriptor.description);
-          return [
-            value,
-            {
-              value,
-              ...(label ? { label } : {}),
-              ...(description ? { description } : {}),
-            },
-          ] as const;
-        })
-        .filter((descriptor) => descriptor !== null),
-    ).values(),
-  );
-  const defaultReasoningEffort = trimNonEmptyString(input.defaultReasoningEffort);
-
-  return {
-    descriptors,
-    defaultReasoningEffort:
-      defaultReasoningEffort &&
-      descriptors.some((descriptor) => descriptor.value === defaultReasoningEffort)
-        ? defaultReasoningEffort
-        : undefined,
-  };
-}
-
-function inferOpenCodeDefaultReasoningEffort(
-  providerId: string,
-  descriptors: ReadonlyArray<{ readonly value: string }>,
-): string | undefined {
-  const values = descriptors.map((descriptor) => descriptor.value);
-  if (values.length === 1) {
-    return values[0];
-  }
-
-  const normalizedProviderId = providerId.trim().toLowerCase();
-  if (normalizedProviderId === "anthropic" || normalizedProviderId.startsWith("google")) {
-    return values.includes("high") ? "high" : undefined;
-  }
-  if (normalizedProviderId === "openai" || normalizedProviderId === "opencode") {
-    return values.includes("medium") ? "medium" : values.includes("high") ? "high" : undefined;
-  }
-  return undefined;
-}
-
-function resolveOpenCodeModelReasoningSupport(
-  model: OpenCodeInventoryProvider["models"][string] | undefined,
-) {
-  if (!model) {
-    return {
-      descriptors: [] as Array<{
-        readonly value: string;
-        readonly label?: string;
-        readonly description?: string;
-      }>,
-      defaultReasoningEffort: undefined as string | undefined,
-    };
-  }
-
-  const descriptors = Object.entries(model.variants ?? {}).flatMap(([variantKey, variant]) => {
-    const value = readOpenCodeInventoryVariantValue(variantKey, variant);
-    if (!value) {
-      return [];
-    }
-
-    const label = trimNonEmptyString(variant.label);
-    const description = trimNonEmptyString(variant.description);
-    return [
-      {
-        value,
-        ...(label ? { label } : {}),
-        ...(description ? { description } : {}),
-      },
-    ];
-  });
-  if (descriptors.length > 0) {
-    return normalizeOpenCodeReasoningDescriptors({
-      descriptors,
-      defaultReasoningEffort:
-        trimNonEmptyString(model.options?.reasoningEffort) ??
-        trimNonEmptyString(model.options?.reasoning_effort) ??
-        trimNonEmptyString(model.options?.effort),
-    });
-  }
-
-  if (model.capabilities?.reasoning !== true) {
-    return {
-      descriptors: [] as Array<{
-        readonly value: string;
-        readonly label?: string;
-        readonly description?: string;
-      }>,
-      defaultReasoningEffort: undefined as string | undefined,
-    };
-  }
-
-  return {
-    descriptors: [] as Array<{
-      readonly value: string;
-      readonly label?: string;
-      readonly description?: string;
-    }>,
-    defaultReasoningEffort: undefined as string | undefined,
-  };
-}
-
-function numberToContextWindowValue(value: unknown): string | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}m`;
-  if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}k`;
-  return String(value);
-}
-
-function resolveOpenCodeContextWindowSupport(
-  model: OpenCodeInventoryProvider["models"][string] | undefined,
-): {
-  readonly contextWindowOptions: ReadonlyArray<{
-    readonly value: string;
-    readonly label: string;
-    readonly isDefault?: true;
-  }>;
-  readonly defaultContextWindow: string | undefined;
-} {
-  const context = numberToContextWindowValue(model?.limit?.context);
-  if (!context) {
-    return { contextWindowOptions: [], defaultContextWindow: undefined };
-  }
-  return {
-    contextWindowOptions: [{ value: context, label: context.toUpperCase(), isDefault: true }],
-    defaultContextWindow: context,
-  };
-}
-
-function toOpenCodeModelDescriptor(input: {
-  readonly slug: string;
-  readonly name: string;
-  readonly provider: Pick<OpenCodeInventoryProvider, "id" | "name">;
-  readonly model?: OpenCodeInventoryProvider["models"][string];
-  readonly cliModel?: Pick<
-    OpenCodeCliModelDescriptor,
-    | "supportedReasoningEfforts"
-    | "defaultReasoningEffort"
-    | "contextWindowOptions"
-    | "defaultContextWindow"
-  >;
-}): OpenCodeModelDescriptor | null {
-  const name = input.name.trim();
-  if (name.length === 0) {
-    return null;
-  }
-
-  const upstreamProviderName = input.provider.name.trim();
-  const contextSupport =
-    input.cliModel?.contextWindowOptions && input.cliModel.contextWindowOptions.length > 0
-      ? {
-          contextWindowOptions: input.cliModel.contextWindowOptions,
-          defaultContextWindow: input.cliModel.defaultContextWindow,
-        }
-      : resolveOpenCodeContextWindowSupport(input.model);
-  const reasoningSupport =
-    input.cliModel && input.cliModel.supportedReasoningEfforts.length > 0
-      ? {
-          descriptors: input.cliModel.supportedReasoningEfforts,
-          defaultReasoningEffort:
-            input.cliModel.defaultReasoningEffort ??
-            inferOpenCodeDefaultReasoningEffort(
-              input.provider.id,
-              input.cliModel.supportedReasoningEfforts,
-            ),
-        }
-      : (() => {
-          const resolved = resolveOpenCodeModelReasoningSupport(input.model);
-          return {
-            descriptors: resolved.descriptors,
-            defaultReasoningEffort:
-              resolved.defaultReasoningEffort ??
-              inferOpenCodeDefaultReasoningEffort(input.provider.id, resolved.descriptors),
-          };
-        })();
-  return {
-    slug: input.slug,
-    name,
-    upstreamProviderId: input.provider.id,
-    ...(upstreamProviderName.length > 0 ? { upstreamProviderName } : {}),
-    ...(reasoningSupport.descriptors.length > 0
-      ? { supportedReasoningEfforts: reasoningSupport.descriptors }
-      : {}),
-    ...(reasoningSupport.defaultReasoningEffort
-      ? { defaultReasoningEffort: reasoningSupport.defaultReasoningEffort }
-      : {}),
-    ...(contextSupport.contextWindowOptions.length > 0
-      ? {
-          contextWindowOptions: contextSupport.contextWindowOptions,
-          ...(contextSupport.defaultContextWindow
-            ? { defaultContextWindow: contextSupport.defaultContextWindow }
-            : {}),
-        }
-      : {}),
-  };
-}
-
-function formatOpenCodeCliProviderName(providerId: string): string {
-  const normalizedProviderId = providerId.trim();
-  const knownNames: Record<string, string> = {
-    "302-ai": "302.AI",
-    "amazon-bedrock": "Amazon Bedrock",
-    anthropic: "Anthropic",
-    "atomic-chat": "Atomic Chat",
-    "azure-openai": "Azure OpenAI",
-    "azure-cognitive-services": "Azure Cognitive Services",
-    baseten: "Baseten",
-    cerebras: "Cerebras",
-    "cloudflare-ai-gateway": "Cloudflare AI Gateway",
-    "cloudflare-workers-ai": "Cloudflare Workers AI",
-    cortecs: "Cortecs",
-    deepinfra: "Deep Infra",
-    deepseek: "DeepSeek",
-    fireworks: "Fireworks AI",
-    "fireworks-ai": "Fireworks AI",
-    frogbot: "FrogBot",
-    "github-copilot": "GitHub Copilot",
-    "gitlab-duo": "GitLab Duo",
-    "google-vertex": "Google Vertex AI",
-    "google-vertex-ai": "Google Vertex AI",
-    groq: "Groq",
-    "hugging-face": "Hugging Face",
-    huggingface: "Hugging Face",
-    "io-net": "IO.NET",
-    "kimi-for-coding": "Kimi For Coding",
-    "llama.cpp": "llama.cpp",
-    lmstudio: "LM Studio",
-    minimax: "MiniMax",
-    "moonshot-ai": "Moonshot AI",
-    "nebius-token-factory": "Nebius Token Factory",
-    nvidia: "NVIDIA",
-    ollama: "Ollama",
-    "ollama-cloud": "Ollama Cloud",
-    openai: "OpenAI",
-    opencode: "OpenCode",
-    "opencode-go": "OpenCode Go",
-    "opencode-zen": "OpenCode Zen",
-    openrouter: "OpenRouter",
-    "ovhcloud-ai-endpoints": "OVHcloud AI Endpoints",
-    "sap-ai-core": "SAP AI Core",
-    scaleway: "Scaleway",
-    stackit: "STACKIT",
-    "together-ai": "Together AI",
-    "venice-ai": "Venice AI",
-    "vercel-ai-gateway": "Vercel AI Gateway",
-    xai: "xAI",
-    "z-ai": "Z.AI",
-    zenmux: "ZenMux",
-  };
-  const knownName = knownNames[normalizedProviderId.toLowerCase()];
-  if (knownName) {
-    return knownName;
-  }
-
-  return normalizedProviderId
-    .split(/[-_/]+/u)
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-export function flattenOpenCodeCliModels(input: {
-  readonly models: ReadonlyArray<OpenCodeCliModelDescriptor>;
-}): ProviderListModelsResult["models"] {
-  return input.models
-    .flatMap((model) => {
-      const descriptor = toOpenCodeModelDescriptor({
-        slug: model.slug,
-        name: model.name,
-        provider: {
-          id: model.providerID,
-          name: formatOpenCodeCliProviderName(model.providerID),
-        },
-        cliModel: model,
-      });
-      return descriptor ? [descriptor] : [];
-    })
-    .toSorted(compareOpenCodeModelDescriptors);
-}
-
-export function flattenOpenCodeModels(input: {
-  readonly inventory: OpenCodeModelInventory;
-  readonly credentialProviderIDs?: ReadonlyArray<string>;
-  readonly freeOnlyProviderID?: string;
-}): ProviderListModelsResult["models"] {
-  return resolvePreferredOpenCodeModelProviders(input)
-    .flatMap((provider) =>
-      Object.values(provider.models).flatMap((model) => {
-        if (
-          input.freeOnlyProviderID &&
-          provider.id === input.freeOnlyProviderID &&
-          model.isFree !== true
-        ) {
-          return [];
-        }
-        const descriptor = toOpenCodeModelDescriptor({
-          slug: `${provider.id}/${model.id}`,
-          name: model.name,
-          provider,
-          model,
-        });
-        return descriptor ? [descriptor] : [];
-      }),
-    )
-    .toSorted(compareOpenCodeModelDescriptors);
-}
-
-function fallbackOpenCodeProviderName(providerId: string): string {
-  return providerId
-    .split(/[-_/]+/u)
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function mergeOpenCodeCliModelDescriptors(input: {
-  readonly inventory: OpenCodeModelInventory;
-  readonly models: ReadonlyArray<OpenCodeModelDescriptor>;
-  readonly cliModels: ReadonlyArray<OpenCodeCliModelDescriptor>;
-  readonly freeOnlyProviderID?: string;
-}): ProviderListModelsResult["models"] {
-  const providerById = new Map(
-    input.inventory.providerList.all.map((provider) => [provider.id, provider] as const),
-  );
-  const mergedBySlug = new Map(input.models.map((model) => [model.slug, model] as const));
-
-  for (const cliModel of input.cliModels) {
-    if (
-      input.freeOnlyProviderID &&
-      cliModel.providerID === input.freeOnlyProviderID &&
-      cliModel.isFree !== true
-    ) {
-      continue;
-    }
-    if (mergedBySlug.has(cliModel.slug)) {
-      continue;
-    }
-    const provider =
-      providerById.get(cliModel.providerID) ??
-      ({
-        id: cliModel.providerID,
-        name: fallbackOpenCodeProviderName(cliModel.providerID) || cliModel.providerID,
-      } satisfies Pick<OpenCodeInventoryProvider, "id" | "name">);
-    const descriptor = toOpenCodeModelDescriptor({
-      slug: cliModel.slug,
-      name: cliModel.name,
-      provider,
-      ...(providerById.get(cliModel.providerID)?.models[cliModel.modelID]
-        ? { model: providerById.get(cliModel.providerID)!.models[cliModel.modelID] }
-        : {}),
-      cliModel,
-    });
-    if (descriptor) {
-      mergedBySlug.set(descriptor.slug, descriptor);
-    }
-  }
-
-  return [...mergedBySlug.values()].toSorted(compareOpenCodeModelDescriptors);
-}
-
-function emptyOpenCodeModelInventory(): OpenCodeModelInventory {
-  return {
-    providerList: {
-      connected: [],
-      all: [],
-    },
-    consoleState: null,
-  };
-}
-
-function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgentsResult["agents"] {
-  return agents
-    .filter((agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"))
-    .map((agent) => {
-      const displayName =
-        "displayName" in agent &&
-        typeof agent.displayName === "string" &&
-        agent.displayName.trim().length > 0
-          ? agent.displayName.trim()
-          : agent.name
-              .split(/[-_/]+/)
-              .filter((segment) => segment.length > 0)
-              .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-              .join(" ");
-      return {
-        name: agent.name,
-        displayName,
-        ...(agent.description ? { description: agent.description } : {}),
-        ...(agent.model ? { model: `${agent.model.providerID}/${agent.model.modelID}` } : {}),
-      };
-    })
-    .toSorted((left, right) => left.displayName.localeCompare(right.displayName));
-}
-
-type OpenCodeCommand = Awaited<ReturnType<OpencodeClient["command"]["list"]>>["data"] extends
-  | ReadonlyArray<infer TCommand>
-  | undefined
-  ? TCommand
-  : never;
-
-function flattenOpenCodeCommands(
-  commands: ReadonlyArray<OpenCodeCommand>,
-): ProviderListCommandsResult["commands"] {
-  return commands
-    .filter((command) => command.name.trim().length > 0)
-    .map((command) => ({
-      name: command.name.trim(),
-      ...(command.description?.trim() ? { description: command.description.trim() } : {}),
-    }))
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-function redactOpenCodeRequestDetail(detail: string): string {
-  return detail
-    .replace(/authorization["':=\s]+(?:basic\s+)?[^"',}\s]+/gi, "authorization=[redacted]")
-    .replace(/basic\s+[a-z0-9+/=]+/gi, "Basic [redacted]");
-}
-
-function isUnsupportedOpenCodeCommandListError(cause: OpenCodeRuntimeError): boolean {
-  const detail = cause.detail.toLowerCase();
-  return (
-    detail.includes("status=404") ||
-    detail.includes("404") ||
-    detail.includes("not found") ||
-    detail.includes("method not found") ||
-    detail.includes("unknown method")
-  );
 }
 
 function buildOpenCodeThreadSnapshot(input: {
@@ -1711,7 +1074,9 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
   ).pipe(Effect.ignore({ log: true }));
 
-  yield* Scope.close(context.sessionScope, Exit.void);
+  yield* Scope.close(context.sessionScope, Exit.void).pipe(
+    Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
+  );
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -1721,6 +1086,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig;
       const openCodeRuntime = yield* OpenCodeRuntime;
+      const agentGatewayCredentials = Option.getOrUndefined(
+        yield* Effect.serviceOption(AgentGatewayCredentials),
+      );
       const provider = adapterConfig.provider;
       const buildEventBase = (
         input: Omit<
@@ -1880,7 +1248,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             sessionID: context.openCodeSessionId,
           }),
         ).pipe(Effect.ignore({ log: true }));
-        yield* Scope.close(context.sessionScope, Exit.void);
+        yield* Scope.close(context.sessionScope, Exit.void).pipe(
+          Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
+        );
       });
 
       const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
@@ -2197,7 +1567,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             },
           });
         }
-        const cost = asFiniteNonNegativeNumber(
+        const cost = nonNegativeFiniteNumber(
           (input.assistantEntry.info as Partial<AssistantMessage>).cost,
         );
         context.latestTurnCostUsd = cost;
@@ -2560,7 +1930,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       maxTokens,
                     })
                   : undefined;
-              const cost = asFiniteNonNegativeNumber(assistantMessage.cost);
+              const cost = nonNegativeFiniteNumber(assistantMessage.cost);
               if (cost !== undefined) {
                 context.latestTurnCostUsd = cost;
               }
@@ -3228,7 +2598,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 },
               });
             }
-            context.latestTurnCostUsd = asFiniteNonNegativeNumber(event.properties.cost);
+            context.latestTurnCostUsd = nonNegativeFiniteNumber(event.properties.cost);
             if (isOpenCodeToolCallFinish(event.properties.finish)) {
               context.activeTurnSawToolCallFinish = true;
             }
@@ -3646,159 +3016,250 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           const resumedSessionId = extractResumeSessionId(input.resumeCursor);
+          // OpenCode's MCP registry is process/directory scoped, not session
+          // scoped. A gateway token is therefore issued only for a managed
+          // server that this runtime isolates to the exact Synara thread.
+          const agentGatewaySessionLease = serverUrl
+            ? undefined
+            : acquireAgentGatewaySessionLease(agentGatewayCredentials, input.threadId, provider);
+          const agentGatewayConnection = agentGatewaySessionLease?.connection;
+          const poolIsolationKey = agentGatewayConnection ? randomUUID() : undefined;
 
-          const started = yield* Effect.gen(function* () {
-            const sessionScope = yield* Scope.make();
-            const startedExit = yield* Effect.exit(
+          let sessionScopeTransferred = false;
+          const installed = yield* Effect.acquireUseRelease(
+            Scope.make(),
+            (sessionScope) =>
               Effect.gen(function* () {
-                const server = yield* openCodeRuntime.connectToOpenCodeServer({
-                  binaryPath,
-                  cliSpec: adapterConfig.cliSpec,
-                  cwd: directory,
-                  ...(serverUrl ? { serverUrl } : {}),
-                  ...(provider === "opencode" && experimentalWebSockets
-                    ? { experimentalWebSockets: true }
-                    : {}),
-                });
-                const client = openCodeRuntime.createOpenCodeSdkClient({
-                  baseUrl: server.url,
-                  directory,
-                  cliSpec: adapterConfig.cliSpec,
-                  ...(server.external && serverPassword ? { serverPassword } : {}),
-                });
-                const createSessionId = resumedSessionId
-                  ? // Resumed sessions skip session.create, so re-apply the runtime-mode
-                    // permission ruleset explicitly. Non-fatal: older servers may reject the
-                    // field, and full-access asks are still auto-approved in the event pump.
-                    runOpenCodeSdk("session.update", () =>
-                      client.session.update({
-                        sessionID: resumedSessionId,
-                        permission: buildOpenCodePermissionRules(input.runtimeMode),
-                      }),
-                    ).pipe(
-                      Effect.catchCause((cause) =>
-                        Effect.logWarning(
-                          `${adapterConfig.displayName} failed to apply permission ruleset on resume`,
-                          Cause.squash(cause),
-                        ),
-                      ),
-                      Effect.as(resumedSessionId),
-                    )
-                  : runOpenCodeSdk("session.create", () => {
-                      const sessionCreateInput = {
-                        ...(initialParsedModel
-                          ? {
-                              model: {
-                                providerID: initialParsedModel.providerID,
-                                id: initialParsedModel.modelID,
-                                ...(initialVariant ? { variant: initialVariant } : {}),
-                              },
-                            }
-                          : {}),
-                        ...(initialAgent ? { agent: initialAgent } : {}),
-                        permission: buildOpenCodePermissionRules(input.runtimeMode),
-                        title: `Synara ${input.threadId}`,
-                      };
-                      return client.session.create(
-                        sessionCreateInput as unknown as Parameters<
-                          typeof client.session.create
-                        >[0],
-                      );
-                    }).pipe(
-                      Effect.flatMap((sessionResult) =>
-                        sessionResult.data?.id
-                          ? Effect.succeed(sessionResult.data.id)
-                          : Effect.fail(
-                              new OpenCodeRuntimeError({
-                                operation: "session.create",
-                                detail: `${adapterConfig.displayName} session.create returned no session payload.`,
-                              }),
+                const startedExit = yield* Effect.exit(
+                  Effect.gen(function* () {
+                    const server = yield* openCodeRuntime.connectToOpenCodeServer({
+                      binaryPath,
+                      cliSpec: adapterConfig.cliSpec,
+                      cwd: directory,
+                      ...(serverUrl ? { serverUrl } : {}),
+                      ...(provider === "opencode" && experimentalWebSockets
+                        ? { experimentalWebSockets: true }
+                        : {}),
+                      ...(poolIsolationKey ? { poolIsolationKey } : {}),
+                    });
+                    const client = openCodeRuntime.createOpenCodeSdkClient({
+                      baseUrl: server.url,
+                      directory,
+                      cliSpec: adapterConfig.cliSpec,
+                      ...(server.external && serverPassword ? { serverPassword } : {}),
+                    });
+                    const gatewayControlAvailable = agentGatewayConnection
+                      ? yield* runOpenCodeSdk("mcp.add", () =>
+                          client.mcp.add({
+                            directory,
+                            name: SYNARA_MCP_SERVER_NAME,
+                            config: buildOpenCodeMcpServer(agentGatewayConnection),
+                          }),
+                        ).pipe(
+                          Effect.flatMap((result) => {
+                            const status = result.data?.[SYNARA_MCP_SERVER_NAME];
+                            return status?.status === "connected"
+                              ? Effect.void
+                              : Effect.fail(
+                                  new OpenCodeRuntimeError({
+                                    operation: "mcp.add",
+                                    detail:
+                                      status?.status === "failed"
+                                        ? `${adapterConfig.displayName} Synara MCP connection failed: ${status.error}`
+                                        : `${adapterConfig.displayName} Synara MCP connection did not become ready.`,
+                                  }),
+                                );
+                          }),
+                          Effect.as(true),
+                          Effect.catchCause((cause) =>
+                            Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
+                              Effect.andThen(
+                                Effect.logWarning(
+                                  `${adapterConfig.displayName} could not install thread-scoped Synara MCP control`,
+                                  Cause.squash(cause),
+                                ),
+                              ),
+                              Effect.as(false),
                             ),
-                      ),
+                          ),
+                        )
+                      : false;
+                    const createSessionId = resumedSessionId
+                      ? // Resumed sessions skip session.create, so re-apply the runtime-mode
+                        // permission ruleset explicitly. Non-fatal: older servers may reject the
+                        // field, and full-access asks are still auto-approved in the event pump.
+                        runOpenCodeSdk("session.update", () =>
+                          client.session.update({
+                            sessionID: resumedSessionId,
+                            permission: buildOpenCodePermissionRules(input.runtimeMode),
+                          }),
+                        ).pipe(
+                          Effect.catchCause((cause) =>
+                            Effect.logWarning(
+                              `${adapterConfig.displayName} failed to apply permission ruleset on resume`,
+                              Cause.squash(cause),
+                            ),
+                          ),
+                          Effect.as(resumedSessionId),
+                        )
+                      : runOpenCodeSdk("session.create", () => {
+                          const sessionCreateInput = {
+                            ...(initialParsedModel
+                              ? {
+                                  model: {
+                                    providerID: initialParsedModel.providerID,
+                                    id: initialParsedModel.modelID,
+                                    ...(initialVariant ? { variant: initialVariant } : {}),
+                                  },
+                                }
+                              : {}),
+                            ...(initialAgent ? { agent: initialAgent } : {}),
+                            permission: buildOpenCodePermissionRules(input.runtimeMode),
+                            title: `Synara ${input.threadId}`,
+                          };
+                          return client.session.create(
+                            sessionCreateInput as unknown as Parameters<
+                              typeof client.session.create
+                            >[0],
+                          );
+                        }).pipe(
+                          Effect.flatMap((sessionResult) =>
+                            sessionResult.data?.id
+                              ? Effect.succeed(sessionResult.data.id)
+                              : Effect.fail(
+                                  new OpenCodeRuntimeError({
+                                    operation: "session.create",
+                                    detail: `${adapterConfig.displayName} session.create returned no session payload.`,
+                                  }),
+                                ),
+                          ),
+                        );
+                    const loadModelContextLimits = openCodeRuntime
+                      .loadOpenCodeInventory(client)
+                      .pipe(
+                        Effect.map(buildOpenCodeModelContextLimitMap),
+                        Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
+                      );
+                    // Session creation and metadata discovery are independent once the server is up.
+                    const [openCodeSessionId, modelContextLimitBySlug] = yield* Effect.all(
+                      [createSessionId, loadModelContextLimits],
+                      { concurrency: "unbounded" },
                     );
-                const loadModelContextLimits = openCodeRuntime.loadOpenCodeInventory(client).pipe(
-                  Effect.map(buildOpenCodeModelContextLimitMap),
-                  Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
-                );
-                // Session creation and metadata discovery are independent once the server is up.
-                const [openCodeSessionId, modelContextLimitBySlug] = yield* Effect.all(
-                  [createSessionId, loadModelContextLimits],
-                  { concurrency: "unbounded" },
-                );
 
-                return { sessionScope, server, client, openCodeSessionId, modelContextLimitBySlug };
-              }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
-            );
-            if (Exit.isFailure(startedExit)) {
-              yield* Scope.close(sessionScope, Exit.void).pipe(Effect.ignore);
-              return yield* toAdapterProcessError(input.threadId, Cause.squash(startedExit.cause));
-            }
-            return startedExit.value;
-          });
+                    return {
+                      sessionScope,
+                      server,
+                      client,
+                      openCodeSessionId,
+                      modelContextLimitBySlug,
+                      gatewayControlAvailable,
+                    };
+                  }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
+                );
+                if (Exit.isFailure(startedExit)) {
+                  return yield* toAdapterProcessError(
+                    input.threadId,
+                    Cause.squash(startedExit.cause),
+                  );
+                }
 
-          const raceWinner = sessions.get(input.threadId);
-          if (raceWinner) {
-            yield* runOpenCodeSdk("session.abort", () =>
-              started.client.session.abort({
-                sessionID: started.openCodeSessionId,
+                const started = startedExit.value;
+                if (options?.beforeSessionInstall) {
+                  yield* options.beforeSessionInstall;
+                }
+
+                const raceWinner = sessions.get(input.threadId);
+                if (raceWinner) {
+                  yield* runOpenCodeSdk("session.abort", () =>
+                    started.client.session.abort({
+                      sessionID: started.openCodeSessionId,
+                    }),
+                  ).pipe(Effect.ignore);
+                  return {
+                    kind: "race-winner" as const,
+                    session: raceWinner.session,
+                  };
+                }
+
+                const createdAt = nowIso();
+                const session: ProviderSession = {
+                  provider,
+                  status: "ready",
+                  runtimeMode: input.runtimeMode,
+                  cwd: directory,
+                  ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
+                  threadId: input.threadId,
+                  resumeCursor: { openCodeSessionId: started.openCodeSessionId, cwd: directory },
+                  createdAt,
+                  updatedAt: createdAt,
+                };
+
+                const context: OpenCodeSessionContext = {
+                  session,
+                  gatewayControlAvailable: started.gatewayControlAvailable,
+                  ...(started.gatewayControlAvailable && agentGatewaySessionLease
+                    ? {
+                        gatewaySessionLease: agentGatewaySessionLease,
+                      }
+                    : {}),
+                  ...(input.lifecycleGeneration !== undefined
+                    ? { lifecycleGeneration: input.lifecycleGeneration }
+                    : {}),
+                  client: started.client,
+                  server: started.server,
+                  directory,
+                  openCodeSessionId: started.openCodeSessionId,
+                  pendingPermissions: new Map(),
+                  autoApprovedPermissionIds: new Set(),
+                  pendingQuestions: new Map(),
+                  pendingTextDeltasByPartId: new Map(),
+                  partById: new Map(),
+                  partSnapshotKeyById: new Map(),
+                  emittedTextByPartId: new Map(),
+                  messageRoleById: new Map(),
+                  messageSnapshotKeyById: new Map(),
+                  completedAssistantPartIds: new Set(),
+                  relatedSessionIds: new Set(),
+                  turns: [],
+                  modelContextLimitBySlug: started.modelContextLimitBySlug,
+                  lastKnownTokenUsage: undefined,
+                  lastEmittedTokenUsageKey: undefined,
+                  latestTurnCostUsd: undefined,
+                  activeTurnId: undefined,
+                  activeTurnEventSerial: 0,
+                  activeTurnProviderActivitySerial: 0,
+                  activeTurnCompletionActivitySerial: 0,
+                  activeTurnSawToolCallFinish: false,
+                  activeTurnSawFinalAssistant: false,
+                  activeTurnToolCallIdleWatchdogStarted: false,
+                  activeInteractionMode: undefined,
+                  activeAgent: undefined,
+                  activeVariant: undefined,
+                  stopped: yield* Ref.make(false),
+                  sessionScope: started.sessionScope,
+                };
+                sessions.set(input.threadId, context);
+                sessionScopeTransferred = true;
+                return {
+                  kind: "installed" as const,
+                  session,
+                  context,
+                };
               }),
-            ).pipe(Effect.ignore);
-            yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
-            return raceWinner.session;
+            (sessionScope) =>
+              sessionScopeTransferred
+                ? Effect.void
+                : Scope.close(sessionScope, Exit.void).pipe(
+                    Effect.ignore,
+                    Effect.ensuring(Effect.sync(() => agentGatewaySessionLease?.release())),
+                  ),
+          );
+
+          if (installed.kind === "race-winner") {
+            return installed.session;
           }
 
-          const createdAt = nowIso();
-          const session: ProviderSession = {
-            provider,
-            status: "ready",
-            runtimeMode: input.runtimeMode,
-            cwd: directory,
-            ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
-            threadId: input.threadId,
-            resumeCursor: { openCodeSessionId: started.openCodeSessionId, cwd: directory },
-            createdAt,
-            updatedAt: createdAt,
-          };
-
-          const context: OpenCodeSessionContext = {
-            session,
-            ...(input.lifecycleGeneration !== undefined
-              ? { lifecycleGeneration: input.lifecycleGeneration }
-              : {}),
-            client: started.client,
-            server: started.server,
-            directory,
-            openCodeSessionId: started.openCodeSessionId,
-            pendingPermissions: new Map(),
-            autoApprovedPermissionIds: new Set(),
-            pendingQuestions: new Map(),
-            pendingTextDeltasByPartId: new Map(),
-            partById: new Map(),
-            partSnapshotKeyById: new Map(),
-            emittedTextByPartId: new Map(),
-            messageRoleById: new Map(),
-            messageSnapshotKeyById: new Map(),
-            completedAssistantPartIds: new Set(),
-            relatedSessionIds: new Set(),
-            turns: [],
-            modelContextLimitBySlug: started.modelContextLimitBySlug,
-            lastKnownTokenUsage: undefined,
-            lastEmittedTokenUsageKey: undefined,
-            latestTurnCostUsd: undefined,
-            activeTurnId: undefined,
-            activeTurnEventSerial: 0,
-            activeTurnProviderActivitySerial: 0,
-            activeTurnCompletionActivitySerial: 0,
-            activeTurnSawToolCallFinish: false,
-            activeTurnSawFinalAssistant: false,
-            activeTurnToolCallIdleWatchdogStarted: false,
-            activeInteractionMode: undefined,
-            activeAgent: undefined,
-            activeVariant: undefined,
-            stopped: yield* Ref.make(false),
-            sessionScope: started.sessionScope,
-          };
-          sessions.set(input.threadId, context);
+          const { context, session } = installed;
           yield* startEventPump(context);
 
           yield* emit(context, {
@@ -3808,14 +3269,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               message: resumedSessionId
                 ? `${adapterConfig.displayName} session resumed`
                 : `${adapterConfig.displayName} session started`,
-              resume: { openCodeSessionId: started.openCodeSessionId },
+              resume: { openCodeSessionId: context.openCodeSessionId },
             },
           });
           yield* emit(context, {
             ...buildEventBase({ threadId: input.threadId }),
             type: "thread.started",
             payload: {
-              providerThreadId: started.openCodeSessionId,
+              providerThreadId: context.openCodeSessionId,
             },
           });
 
@@ -3864,6 +3325,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             issue: `${adapterConfig.displayName} turns require text input or at least one attachment.`,
           });
         }
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
+          provider,
+          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+        });
+        const providerText = [harnessPolicy, text].filter(Boolean).join("\n\n");
 
         const agent =
           input.modelSelection?.provider === provider
@@ -3925,7 +3391,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(context.activeAgent ? { agent: context.activeAgent } : {}),
               ...(context.activeVariant ? { variant: context.activeVariant } : {}),
               noReply: false,
-              parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+              parts: [
+                ...(providerText ? [{ type: "text" as const, text: providerText }] : []),
+                ...fileParts,
+              ],
             },
           });
           if (snapshotWatchdogBaseline.canStartWatchdog) {
@@ -3944,7 +3413,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               model: parsedModel,
               ...(context.activeAgent ? { agent: context.activeAgent } : {}),
               ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-              parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+              parts: [
+                ...(providerText ? [{ type: "text" as const, text: providerText }] : []),
+                ...fileParts,
+              ],
             },
           });
           // OpenCode lacks Kilo's prompt-accepted hard-fail watchdog, but it still

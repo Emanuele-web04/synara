@@ -165,7 +165,7 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
-import { EditorId } from "./editor";
+import type { EditorId } from "./editor";
 import type { ThreadId } from "./baseSchemas";
 import type {
   ProviderComposerCapabilities,
@@ -381,6 +381,29 @@ export interface BrowserCopyLinkEvent {
   url: string;
 }
 
+interface BrowserControlMethods {
+  open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
+  close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+  hide: (input: BrowserThreadInput) => Promise<void>;
+  getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+  setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+  attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
+  detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
+  copyLink: (input: BrowserTabInput) => Promise<void>;
+  copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
+  captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
+  executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
+  navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
+  reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+  goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+  goForward: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+  newTab: (input: BrowserNewTabInput) => Promise<ThreadBrowserState>;
+  closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+  selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+  openDevTools: (input: BrowserTabInput) => Promise<void>;
+  onState: (listener: (state: ThreadBrowserState) => void) => () => void;
+}
+
 export interface DesktopNotificationInput {
   title: string;
   body?: string;
@@ -465,27 +488,7 @@ export interface DesktopBridge {
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
   };
-  browser: {
-    open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
-    close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
-    hide: (input: BrowserThreadInput) => Promise<void>;
-    getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
-    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
-    attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
-    detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
-    copyLink: (input: BrowserTabInput) => Promise<void>;
-    copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
-    captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
-    executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
-    navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
-    reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    goForward: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    newTab: (input: BrowserNewTabInput) => Promise<ThreadBrowserState>;
-    closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    openDevTools: (input: BrowserTabInput) => Promise<void>;
-    onState: (listener: (state: ThreadBrowserState) => void) => () => void;
+  browser: BrowserControlMethods & {
     onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
     onBrowserCopyLink: (listener: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
@@ -692,27 +695,7 @@ export interface NativeApi {
     archiveRun: (input: AutomationArchiveRunInput) => Promise<AutomationRunActionResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
-  browser: {
-    open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
-    close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
-    hide: (input: BrowserThreadInput) => Promise<void>;
-    getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
-    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
-    attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
-    detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
-    copyLink: (input: BrowserTabInput) => Promise<void>;
-    copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
-    captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
-    executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
-    navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
-    reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    goForward: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    newTab: (input: BrowserNewTabInput) => Promise<ThreadBrowserState>;
-    closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
-    openDevTools: (input: BrowserTabInput) => Promise<void>;
-    onState: (callback: (state: ThreadBrowserState) => void) => () => void;
+  browser: BrowserControlMethods & {
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

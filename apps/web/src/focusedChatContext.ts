@@ -4,8 +4,8 @@
 // Exports: pure resolver and hook used by shortcut, discovery, and thread creation flows
 
 import { ThreadId, type ThreadId as ThreadIdType } from "@synara/contracts";
-import { useParams } from "@tanstack/react-router";
 import { useMemo } from "react";
+import { useParams } from "@tanstack/react-router";
 import { type DraftThreadState, useComposerDraftStore } from "./composerDraftStore";
 import { useDiffRouteSearch } from "./hooks/useDiffRouteSearch";
 import {
@@ -72,11 +72,12 @@ export function useFocusedChatContext(): FocusedChatContext {
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
   const routeSearch = useDiffRouteSearch();
-  const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
-  const focusedThreadId = useMemo(
-    () => (activeSplitView ? resolveSplitViewFocusedPaneThreadId(activeSplitView) : routeThreadId),
-    [activeSplitView, routeThreadId],
+  const activeSplitView = useSplitViewStore(
+    useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
+  const focusedThreadId = activeSplitView
+    ? resolveSplitViewFocusedPaneThreadId(activeSplitView)
+    : routeThreadId;
   const activeThread = useStore(
     useMemo(() => createThreadSelector(focusedThreadId), [focusedThreadId]),
   );
@@ -91,24 +92,13 @@ export function useFocusedChatContext(): FocusedChatContext {
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
 
-  return useMemo(
-    () => ({
-      routeThreadId,
-      splitView: activeSplitView,
-      focusedThreadId,
-      activeThread: activeThread ?? null,
-      activeDraftThread,
-      activeProject: activeProject ?? null,
-      activeProjectId,
-    }),
-    [
-      activeDraftThread,
-      activeProject,
-      activeProjectId,
-      activeSplitView,
-      activeThread,
-      focusedThreadId,
-      routeThreadId,
-    ],
-  );
+  return {
+    routeThreadId,
+    splitView: activeSplitView,
+    focusedThreadId,
+    activeThread: activeThread ?? null,
+    activeDraftThread,
+    activeProject: activeProject ?? null,
+    activeProjectId,
+  };
 }

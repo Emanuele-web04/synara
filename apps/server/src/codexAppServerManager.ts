@@ -1,7 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import path from "node:path";
 
 import {
   ApprovalRequestId,
@@ -11,9 +10,6 @@ import {
   type ProviderListModelsResult,
   type ProviderListPluginsResult,
   type ProviderMentionReference,
-  type ProviderPluginAppSummary,
-  type ProviderPluginDescriptor,
-  type ProviderPluginDetail,
   type ProviderForkThreadInput,
   type ProviderReadPluginResult,
   type ProviderForkThreadResult,
@@ -21,7 +17,6 @@ import {
   type ProviderListPluginsInput,
   type ProviderReadPluginInput,
   type ProviderStartReviewInput,
-  type ProviderSkillDescriptor,
   type ProviderSkillReference,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
@@ -47,6 +42,12 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import {
+  buildCodexMcpConfigToml,
+  SYNARA_AGENT_GATEWAY_TOKEN_ENV,
+} from "./agentGateway/mcpInjection.ts";
+import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
+import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import {
@@ -61,6 +62,13 @@ import {
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport.ts";
+import { buildCodexTurnInput, type CodexTurnInputItem } from "./codexTurnInput.ts";
+import {
+  parseCodexModelListResponse,
+  parseCodexPluginListResponse,
+  parseCodexPluginReadResponse,
+  parseCodexSkillsListResponse,
+} from "./provider/codexDiscoveryCatalog.ts";
 
 const log = createLogger("codex");
 
@@ -124,6 +132,7 @@ type CodexSessionApprovalOverride = {
 };
 
 interface CodexSessionContext {
+  readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   lifecycleGeneration?: string;
   account: CodexAccountSnapshot;
@@ -492,7 +501,7 @@ plan content should be human and agent digestible. The final plan must be plan-o
 Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a \`<proposed_plan>\` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
-</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}\n\n${SYNARA_GATEWAY_HARNESS_POLICY}`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
@@ -505,7 +514,7 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}\n\n${SYNARA_GATEWAY_HARNESS_POLICY}`;
 
 // Maps Synara's simple runtime toggle to Codex thread-level permission overrides.
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
@@ -761,18 +770,48 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly synaraSkillsDir: string | undefined;
+  private readonly agentGatewayMcp:
+    | {
+        readonly endpointUrl: () => string;
+        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
+      }
+    | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
       readonly synaraSkillsDir?: string;
+      readonly agentGatewayMcp?: {
+        readonly endpointUrl: () => string;
+        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
+      };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
     },
   ) {
     super();
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
     this.synaraSkillsDir = options?.synaraSkillsDir;
+    this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
+  }
+
+  // The Synara MCP server rides on the shared overlay config (no secrets),
+  // while the per-thread bearer token travels through the app-server process
+  // env referenced by `bearer_token_env_var`.
+  private async buildSessionProcessEnv(
+    homePath: string | undefined,
+    gatewayBearerToken: string | undefined,
+  ) {
+    const env = await buildCodexProcessEnv({
+      ...(homePath ? { homePath } : {}),
+      ...(this.agentGatewayMcp
+        ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
+        : {}),
+    });
+    if (gatewayBearerToken) {
+      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
+    }
+    return env;
   }
 
   // Registers `~/.synara/skills` as a codex skill root so portable skills are
@@ -798,6 +837,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
+    let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
       const existing = this.sessions.get(threadId);
@@ -826,15 +866,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: await this.buildSessionProcessEnv(
+          codexHomePath,
+          gatewaySessionLease?.connection.bearerToken,
+        ),
       });
 
       context = {
+        ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         ...(input.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -999,6 +1042,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.emitErrorEvent(context, "session/startFailed", message);
         await this.stopSession(threadId);
       } else {
+        gatewaySessionLease?.release();
         this.emitEvent({
           id: EventId.makeUnsafe(randomUUID()),
           kind: "error",
@@ -1019,44 +1063,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
     context.collabReceiverTurns.clear();
+    context.collabReceiverParents.clear();
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
-    const turnInput: Array<
-      | { type: "text"; text: string; text_elements: [] }
-      | { type: "image"; url: string }
-      | { type: "skill"; name: string; path: string }
-      | { type: "mention"; name: string; path: string }
-    > = [];
-    if (input.input) {
-      turnInput.push({
-        type: "text",
-        text: input.input,
-        text_elements: [],
-      });
-    }
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type === "image") {
-        turnInput.push({
-          type: "image",
-          url: attachment.url,
-        });
-      }
-    }
-    for (const skill of input.skills ?? []) {
-      turnInput.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-    for (const mention of input.mentions ?? []) {
-      turnInput.push({
-        type: "mention",
-        name: mention.name,
-        path: mention.path,
-      });
-    }
+    const turnInput = buildCodexTurnInput(input);
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -1071,12 +1082,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnStartParams: {
       threadId: string;
-      input: Array<
-        | { type: "text"; text: string; text_elements: [] }
-        | { type: "image"; url: string }
-        | { type: "skill"; name: string; path: string }
-        | { type: "mention"; name: string; path: string }
-      >;
+      input: CodexTurnInputItem[];
       model?: string;
       serviceTier?: string | null;
       effort?: string;
@@ -1157,41 +1163,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return this.sendTurn(input);
     }
 
-    const turnInput: Array<
-      | { type: "text"; text: string; text_elements: [] }
-      | { type: "image"; url: string }
-      | { type: "skill"; name: string; path: string }
-      | { type: "mention"; name: string; path: string }
-    > = [];
-    if (input.input) {
-      turnInput.push({
-        type: "text",
-        text: input.input,
-        text_elements: [],
-      });
-    }
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type === "image") {
-        turnInput.push({
-          type: "image",
-          url: attachment.url,
-        });
-      }
-    }
-    for (const skill of input.skills ?? []) {
-      turnInput.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-    for (const mention of input.mentions ?? []) {
-      turnInput.push({
-        type: "mention",
-        name: mention.name,
-        path: mention.path,
-      });
-    }
+    const turnInput = buildCodexTurnInput(input);
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -1414,6 +1386,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
+    let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
       const existing = this.sessions.get(threadId);
@@ -1454,15 +1427,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: await this.buildSessionProcessEnv(
+          codexHomePath,
+          gatewaySessionLease?.connection.bearerToken,
+        ),
       });
 
       context = {
+        ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         account: {
           type: "unknown",
@@ -1548,6 +1524,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         });
         this.emitErrorEvent(context, "session/threadForkFailed", message);
         await this.stopSession(threadId);
+      } else {
+        gatewaySessionLease?.release();
       }
       throw new Error(message, { cause: error });
     }
@@ -1779,6 +1757,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.stopping = true;
+    context.gatewaySessionLease?.release();
 
     this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
     context.pendingApprovals.clear();
@@ -1858,7 +1837,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(input.forceReload ? { forceReload: true } : {}),
       });
     }
-    const skills = this.parseSkillsListResponse(response, cwd);
+    const skills = parseCodexSkillsListResponse(response, cwd);
     const result: ProviderListSkillsResult = {
       skills,
       source: "codex-app-server",
@@ -1891,7 +1870,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
     });
     const result: ProviderListPluginsResult = {
-      ...this.parsePluginListResponse(response),
+      ...parseCodexPluginListResponse(response),
       source: "codex-app-server",
       cached: false,
     };
@@ -1920,7 +1899,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pluginName,
     });
     const result: ProviderReadPluginResult = {
-      plugin: this.parsePluginReadResponse(response),
+      plugin: parseCodexPluginReadResponse(response),
       source: "codex-app-server",
       cached: false,
     };
@@ -1944,7 +1923,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       limit: 50,
       includeHidden: false,
     });
-    const models = this.parseModelListResponse(response);
+    const models = parseCodexModelListResponse(response);
     const result: ProviderListModelsResult = {
       models,
       source: "codex-app-server",
@@ -2262,6 +2241,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       context.detachStdout?.();
+      context.gatewaySessionLease?.release();
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);
@@ -2440,6 +2420,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -2463,6 +2444,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -3146,390 +3128,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private isExitedReviewTurn(snapshot: CodexThreadSnapshot, turnId: TurnId): boolean {
     const turn = snapshot.turns.find((entry) => entry.id === turnId);
     return turn ? this.turnHasReviewItem(turn, "exited") : false;
-  }
-
-  private parseSkillDescriptor(skill: unknown): ProviderSkillDescriptor | undefined {
-    const record = this.readObject(skill);
-    if (!record) return undefined;
-    const name = this.readString(record, "name")?.trim();
-    const path = this.readString(record, "path")?.trim();
-    if (!name || !path) {
-      return undefined;
-    }
-    const description = this.readString(record, "description")?.trim();
-    const scope = this.readString(record, "scope")?.trim();
-    const display = this.readObject(record, "interface");
-    return {
-      name,
-      path,
-      enabled: record.enabled !== false,
-      ...(description ? { description } : {}),
-      ...(scope ? { scope } : {}),
-      ...(display
-        ? {
-            interface: {
-              ...(this.readString(display, "displayName")
-                ? { displayName: this.readString(display, "displayName") }
-                : {}),
-              ...(this.readString(display, "shortDescription")
-                ? {
-                    shortDescription: this.readString(display, "shortDescription"),
-                  }
-                : {}),
-            },
-          }
-        : {}),
-      ...(record.dependencies !== undefined ? { dependencies: record.dependencies } : {}),
-    } satisfies ProviderSkillDescriptor;
-  }
-
-  private parseSkillsListResponse(response: unknown, cwd: string): ProviderSkillDescriptor[] {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const dataItems = this.readArray(resultRecord, "data") ?? [];
-    const scopedData = dataItems.find((value) => {
-      const item = this.readObject(value);
-      const itemCwd = this.readString(item, "cwd");
-      return itemCwd === cwd;
-    });
-    const scopedSkills = this.readArray(this.readObject(scopedData), "skills");
-    const directSkills = this.readArray(resultRecord, "skills");
-    const rawSkills = scopedSkills ?? directSkills ?? [];
-
-    const parsedSkills = rawSkills.flatMap((skill) => {
-      const parsedSkill = this.parseSkillDescriptor(skill);
-      return parsedSkill ? [parsedSkill] : [];
-    });
-
-    return parsedSkills.toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  private parsePluginListResponse(
-    response: unknown,
-  ): Omit<ProviderListPluginsResult, "source" | "cached"> {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const marketplaces = (this.readArray(resultRecord, "marketplaces") ?? []).flatMap(
-      (marketplace) => {
-        const record = this.readObject(marketplace);
-        if (!record) return [];
-        const name = this.readString(record, "name")?.trim();
-        const path = this.readString(record, "path")?.trim();
-        if (!name || !path) {
-          return [];
-        }
-        const rawPlugins = this.readArray(record, "plugins") ?? [];
-        const plugins = rawPlugins.flatMap((plugin) => {
-          const parsedPlugin = this.parsePluginSummary(plugin);
-          return parsedPlugin ? [parsedPlugin] : [];
-        });
-        const marketplaceInterface = this.readObject(record, "interface");
-        const marketplaceDisplayName = this.readString(marketplaceInterface, "displayName")?.trim();
-        return [
-          {
-            name,
-            path,
-            ...(marketplaceDisplayName
-              ? {
-                  interface: {
-                    displayName: marketplaceDisplayName,
-                  },
-                }
-              : {}),
-            plugins,
-          },
-        ];
-      },
-    );
-    const marketplaceLoadErrors = (this.readArray(resultRecord, "marketplaceLoadErrors") ?? [])
-      .map((error) => this.readObject(error))
-      .flatMap((error) => {
-        if (!error) return [];
-        const marketplacePath = this.readString(error, "marketplacePath")?.trim();
-        const message = this.readString(error, "message")?.trim();
-        if (!marketplacePath || !message) {
-          return [];
-        }
-        return [{ marketplacePath, message }];
-      });
-    const featuredPluginIds = (this.readArray(resultRecord, "featuredPluginIds") ?? [])
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
-      .filter((value) => value.length > 0);
-    const remoteSyncError = this.readString(resultRecord, "remoteSyncError")?.trim() ?? null;
-
-    return {
-      marketplaces,
-      marketplaceLoadErrors,
-      remoteSyncError: remoteSyncError?.length ? remoteSyncError : null,
-      featuredPluginIds,
-    };
-  }
-
-  private parsePluginSummary(plugin: unknown): ProviderPluginDescriptor | undefined {
-    const record = this.readObject(plugin);
-    if (!record) return undefined;
-    const id = this.readString(record, "id")?.trim();
-    const name = this.readString(record, "name")?.trim();
-    const source = this.readObject(record, "source");
-    const sourcePath = this.readString(source, "path")?.trim();
-    const installPolicy = this.readString(record, "installPolicy");
-    const authPolicy = this.readString(record, "authPolicy");
-    if (
-      !id ||
-      !name ||
-      !sourcePath ||
-      (installPolicy !== "NOT_AVAILABLE" &&
-        installPolicy !== "AVAILABLE" &&
-        installPolicy !== "INSTALLED_BY_DEFAULT") ||
-      (authPolicy !== "ON_INSTALL" && authPolicy !== "ON_USE")
-    ) {
-      return undefined;
-    }
-
-    const pluginInterface = this.parsePluginInterface(this.readObject(record, "interface"));
-
-    return {
-      id,
-      name,
-      source: {
-        type: "local",
-        path: sourcePath,
-      },
-      installed: record.installed === true,
-      enabled: record.enabled === true,
-      installPolicy,
-      authPolicy,
-      ...(pluginInterface ? { interface: pluginInterface } : {}),
-    } satisfies ProviderPluginDescriptor;
-  }
-
-  private parsePluginInterface(value: unknown): ProviderPluginDescriptor["interface"] | undefined {
-    const record = this.readObject(value);
-    if (!record) return undefined;
-    const capabilities = (this.readArray(record, "capabilities") ?? [])
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
-    const defaultPrompt = (this.readArray(record, "defaultPrompt") ?? [])
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
-    const screenshots = (this.readArray(record, "screenshots") ?? [])
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
-
-    return {
-      ...(this.readString(record, "displayName")?.trim()
-        ? { displayName: this.readString(record, "displayName")?.trim() }
-        : {}),
-      ...(this.readString(record, "shortDescription")?.trim()
-        ? {
-            shortDescription: this.readString(record, "shortDescription")?.trim(),
-          }
-        : {}),
-      ...(this.readString(record, "longDescription")?.trim()
-        ? {
-            longDescription: this.readString(record, "longDescription")?.trim(),
-          }
-        : {}),
-      ...(this.readString(record, "developerName")?.trim()
-        ? { developerName: this.readString(record, "developerName")?.trim() }
-        : {}),
-      ...(this.readString(record, "category")?.trim()
-        ? { category: this.readString(record, "category")?.trim() }
-        : {}),
-      ...(capabilities.length > 0 ? { capabilities } : {}),
-      ...(this.readString(record, "websiteUrl")?.trim()
-        ? { websiteUrl: this.readString(record, "websiteUrl")?.trim() }
-        : {}),
-      ...(this.readString(record, "privacyPolicyUrl")?.trim()
-        ? {
-            privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim(),
-          }
-        : {}),
-      ...(this.readString(record, "termsOfServiceUrl")?.trim()
-        ? {
-            termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim(),
-          }
-        : {}),
-      ...(defaultPrompt.length > 0 ? { defaultPrompt } : {}),
-      ...(this.readString(record, "brandColor")?.trim()
-        ? { brandColor: this.readString(record, "brandColor")?.trim() }
-        : {}),
-      ...(this.readString(record, "composerIcon")?.trim()
-        ? { composerIcon: this.readString(record, "composerIcon")?.trim() }
-        : {}),
-      ...(this.readString(record, "logo")?.trim()
-        ? { logo: this.readString(record, "logo")?.trim() }
-        : {}),
-      ...(screenshots.length > 0 ? { screenshots } : {}),
-    };
-  }
-
-  private parsePluginReadResponse(response: unknown): ProviderPluginDetail {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const pluginRecord = this.readObject(resultRecord, "plugin") ?? resultRecord;
-    const marketplaceName = this.readString(pluginRecord, "marketplaceName")?.trim();
-    const marketplacePath = this.readString(pluginRecord, "marketplacePath")?.trim();
-    const summary = this.parsePluginSummary(this.readObject(pluginRecord, "summary"));
-    if (!marketplaceName || !marketplacePath || !summary) {
-      throw new Error("plugin/read response did not include a valid plugin payload.");
-    }
-    const skills = (this.readArray(pluginRecord, "skills") ?? []).flatMap((skill) => {
-      const parsedSkill = this.parseSkillDescriptor(skill);
-      return parsedSkill ? [parsedSkill] : [];
-    });
-    const apps = (this.readArray(pluginRecord, "apps") ?? []).flatMap((app) => {
-      const parsedApp = this.parsePluginAppSummary(app);
-      return parsedApp ? [parsedApp] : [];
-    });
-    const mcpServers = (this.readArray(pluginRecord, "mcpServers") ?? [])
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
-      .filter((value) => value.length > 0);
-    const description = this.readString(pluginRecord, "description")?.trim();
-
-    return {
-      marketplaceName,
-      marketplacePath,
-      summary,
-      ...(description ? { description } : {}),
-      skills,
-      apps,
-      mcpServers,
-    };
-  }
-
-  private parsePluginAppSummary(value: unknown): ProviderPluginAppSummary | undefined {
-    const record = this.readObject(value);
-    if (!record) return undefined;
-    const id = this.readString(record, "id")?.trim();
-    const name = this.readString(record, "name")?.trim();
-    if (!id || !name) {
-      return undefined;
-    }
-    const description = this.readString(record, "description")?.trim();
-    const installUrl = this.readString(record, "installUrl")?.trim();
-    return {
-      id,
-      name,
-      ...(description ? { description } : {}),
-      ...(installUrl ? { installUrl } : {}),
-      needsAuth: record.needsAuth === true,
-    };
-  }
-
-  private parseModelListResponse(response: unknown): ProviderListModelsResult["models"] {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const rawModels =
-      this.readArray(resultRecord, "items") ??
-      this.readArray(resultRecord, "data") ??
-      this.readArray(resultRecord, "models") ??
-      [];
-    const seen = new Set<string>();
-
-    return rawModels.flatMap((value) => {
-      const model = this.readObject(value);
-      if (!model) {
-        return [];
-      }
-
-      const slug =
-        this.readString(model, "id") ??
-        this.readString(model, "slug") ??
-        this.readString(model, "model");
-      const trimmedSlug = slug?.trim();
-      if (!trimmedSlug) {
-        return [];
-      }
-
-      const name =
-        this.readString(model, "name") ??
-        this.readString(model, "displayName") ??
-        this.readString(model, "display_name") ??
-        trimmedSlug;
-      const trimmedName = name.trim();
-      if (!trimmedName || seen.has(trimmedSlug)) {
-        return [];
-      }
-
-      // Accept both Synara's legacy string array and Remodex-style reasoning objects.
-      const supportedReasoningEfforts = Array.from(
-        new Map(
-          (
-            this.readArray(model, "supportedReasoningEfforts") ??
-            this.readArray(model, "supported_reasoning_efforts") ??
-            []
-          )
-            .flatMap((entry) => {
-              if (typeof entry === "string") {
-                const value = entry.trim();
-                return value.length > 0 ? [{ value }] : [];
-              }
-
-              const descriptor = this.readObject(entry);
-              if (!descriptor) {
-                return [];
-              }
-
-              const value =
-                this.readString(descriptor, "reasoningEffort") ??
-                this.readString(descriptor, "reasoning_effort") ??
-                this.readString(descriptor, "value");
-              const trimmedValue = value?.trim();
-              if (!trimmedValue) {
-                return [];
-              }
-
-              const label =
-                this.readString(descriptor, "description") ?? this.readString(descriptor, "label");
-              const trimmedLabel = label?.trim();
-              return [
-                {
-                  value: trimmedValue,
-                  ...(trimmedLabel ? { description: trimmedLabel } : {}),
-                },
-              ];
-            })
-            .map((descriptor) => [descriptor.value, descriptor] as const),
-        ).values(),
-      );
-      const defaultReasoningEffort =
-        this.readString(model, "defaultReasoningEffort") ??
-        this.readString(model, "default_reasoning_effort");
-      const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
-      const additionalSpeedTiers =
-        this.readArray(model, "additionalSpeedTiers") ??
-        this.readArray(model, "additional_speed_tiers") ??
-        [];
-      const hasFastSpeedTier = additionalSpeedTiers.some(
-        (tier) => typeof tier === "string" && tier.trim().toLowerCase() === "fast",
-      );
-      const supportsFastMode =
-        this.readFirstBoolean(model, [
-          "supportsFastMode",
-          "supports_fast_mode",
-          "fastMode",
-          "fast_mode",
-          "fastServiceTier",
-          "fast_service_tier",
-        ]) ?? (hasFastSpeedTier ? true : undefined);
-
-      seen.add(trimmedSlug);
-      return [
-        {
-          slug: trimmedSlug,
-          name: trimmedName,
-          ...(supportedReasoningEfforts.length > 0 ? { supportedReasoningEfforts } : {}),
-          ...(trimmedDefaultReasoningEffort &&
-          supportedReasoningEfforts.some(
-            (descriptor) => descriptor.value === trimmedDefaultReasoningEffort,
-          )
-            ? { defaultReasoningEffort: trimmedDefaultReasoningEffort }
-            : {}),
-          ...(supportsFastMode !== undefined ? { supportsFastMode } : {}),
-        },
-      ];
-    });
   }
 }
 

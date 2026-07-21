@@ -5,7 +5,7 @@
 //          Cancel/Comment actions (Comment stays disabled until non-empty text).
 // Layer: Chat file-preview interaction UI
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { FILE_COMMENT_TEXT_MAX_CHARS, normalizeFileCommentText } from "~/lib/fileComments";
 import { SynaraLogo } from "../SynaraLogo";
@@ -34,31 +34,28 @@ export function FileLineCommentBox(props: FileLineCommentBoxProps) {
   const normalized = normalizeFileCommentText(value);
   const canSubmit = normalized.length > 0 && normalized.length <= FILE_COMMENT_TEXT_MAX_CHARS;
 
-  const submit = useCallback(() => {
+  const submit = () => {
     const text = normalizeFileCommentText(value);
     if (text.length === 0 || text.length > FILE_COMMENT_TEXT_MAX_CHARS) {
       return;
     }
     onSubmit(text);
-  }, [onSubmit, value]);
+  };
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        onCancel();
-        return;
-      }
-      // Cmd/Ctrl+Enter commits; a bare Enter inserts a newline so multi-line
-      // requests stay possible.
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        submit();
-      }
-    },
-    [onCancel, submit],
-  );
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onCancel();
+      return;
+    }
+    // Cmd/Ctrl+Enter commits; a bare Enter inserts a newline so multi-line
+    // requests stay possible.
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      submit();
+    }
+  };
 
   return (
     <div

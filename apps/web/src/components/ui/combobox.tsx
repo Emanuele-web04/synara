@@ -21,7 +21,7 @@ function Combobox<Value, Multiple extends boolean | undefined = false>(
   props: ComboboxPrimitive.Root.Props<Value, Multiple>,
 ) {
   const chipsRef = React.useRef<Element | null>(null);
-  const value = React.useMemo(() => ({ chipsRef, multiple: !!props.multiple }), [props.multiple]);
+  const value = { chipsRef, multiple: !!props.multiple };
   return (
     <ComboboxContext.Provider value={value}>
       <ComboboxPrimitive.Root {...props} />

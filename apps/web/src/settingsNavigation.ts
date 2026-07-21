@@ -24,18 +24,14 @@ export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
 export type SettingsNavGroupId = "app" | "synara";
 
 /**
- * Deep-link scroll targets inside a settings panel. Each id is shared by the element that owns
- * it (its `id` + scroll ref), the panel effect that scrolls it into view, and any caller that
- * navigates to it via `?target=…`. Centralizing them keeps the anchor and its links from
- * silently drifting apart.
+ * Deep-link scroll targets inside settings panels. Each id is shared by its DOM owner and callers
+ * that navigate with `?target=…`; the settings route resolves every target after the active panel
+ * mounts.
  */
 export const SETTINGS_TARGETS = {
   providerUpdates: "provider-updates",
-  providerInstalls: "provider-installs",
   environmentPanel: "environment-panel",
 } as const;
-
-export type SettingsTargetId = (typeof SETTINGS_TARGETS)[keyof typeof SETTINGS_TARGETS];
 
 export type SettingsNavItem = {
   id: SettingsSectionId;
@@ -173,8 +169,8 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
 /**
  * Stable DOM id for a settings row, derived from its (string) title. Shared by the row that
  * renders the anchor and by the search index that deep-links to it via `?target=…`, so the
- * two can't drift. Panels mount one section at a time, so the slug only needs to be unique
- * within a section.
+ * two can't drift. Panels stay mounted and render null while inactive, so the slug only needs
+ * to be unique within a section.
  */
 export function settingRowAnchorId(title: string): string {
   const slug = title

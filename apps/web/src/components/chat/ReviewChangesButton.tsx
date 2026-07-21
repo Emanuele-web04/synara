@@ -5,7 +5,6 @@
 // Layer: Chat changed-files UI
 // Exports: ReviewChangesButton
 
-import { memo } from "react";
 import type { CSSProperties } from "react";
 
 import { cn } from "~/lib/utils";
@@ -17,7 +16,7 @@ interface ReviewChangesButtonProps {
   label?: string;
 }
 
-export const ReviewChangesButton = memo(function ReviewChangesButton({
+export const ReviewChangesButton = function ReviewChangesButton({
   onClick,
   className,
   style,
@@ -36,4 +35,4 @@ export const ReviewChangesButton = memo(function ReviewChangesButton({
       {label}
     </button>
   );
-});
+};

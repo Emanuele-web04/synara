@@ -6,7 +6,7 @@ import { Effect, Layer, Option, Schema, Struct } from "effect";
 import {
   toPersistenceDecodeError,
   toPersistenceSqlError,
-  type ProviderSessionRuntimeRepositoryError,
+  toPersistenceSqlOrDecodeError,
 } from "../Errors.ts";
 import {
   ProviderSessionRuntime,
@@ -28,13 +28,6 @@ const GetRuntimeRequestSchema = Schema.Struct({
 });
 
 const DeleteRuntimeRequestSchema = GetRuntimeRequestSchema;
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): ProviderSessionRuntimeRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
 
 const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
