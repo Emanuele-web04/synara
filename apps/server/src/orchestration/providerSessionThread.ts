@@ -1,4 +1,4 @@
-import type { OrchestrationThread, ThreadId } from "@synara/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery.ts";
@@ -12,7 +12,7 @@ export function resolveProviderSessionThread(
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
   threadId: ThreadId,
 ) {
-  return Effect.gen(function* (): Effect.fn.Return<OrchestrationThread | null> {
+  return Effect.gen(function* () {
     const thread = Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
     if (thread === null) {
       return null;

@@ -596,10 +596,7 @@ const make = Effect.gen(function* () {
   const resolveProviderSessionThread = (threadId: ThreadId) =>
     resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
 
-  const withProviderSessionLease = <A, E, R>(
-    threadId: ThreadId,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> =>
+  const withProviderSessionLease = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
     resolveProviderSessionThread(threadId).pipe(
       Effect.flatMap((providerThread) =>
         turnCheckpointCoordinator.withThreadLease(providerThread?.id ?? threadId, effect),
