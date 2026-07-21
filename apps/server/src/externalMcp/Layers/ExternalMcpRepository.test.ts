@@ -1,3 +1,4 @@
+import type { ExternalMcpClientKind } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -10,10 +11,15 @@ import { ExternalMcpRepositoryLive, makeExternalMcpRepository } from "./External
 
 const layer = it.layer(ExternalMcpRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)));
 
-const createIntegration = (repository: typeof ExternalMcpRepository.Service, suffix: string) =>
+const createIntegration = (
+  repository: typeof ExternalMcpRepository.Service,
+  suffix: string,
+  clientKind: ExternalMcpClientKind = "other",
+) =>
   repository.createIntegration({
     integrationId: `integration-${suffix}`,
     name: `Integration ${suffix}`,
+    clientKind,
     audience: "synara.external-mcp",
     capabilities: ["projects:read", "tasks:create", "tasks:read", "tasks:wait"],
     projectIds: [`project-${suffix}`],
@@ -60,6 +66,19 @@ layer("ExternalMcpRepository", (it) => {
         FROM external_mcp_integrations WHERE integration_id = 'integration-hash'
       `;
       expect(stored[0]).toEqual({ credentialHash, rawMatches: 0 });
+    }),
+  );
+
+  it.effect("lists the persisted external client kind", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      yield* createIntegration(repository, "listed-client-kind", "claudeDesktop");
+      const integrations = yield* repository.listIntegrations();
+      expect(
+        integrations.find(
+          (integration) => integration.integrationId === "integration-listed-client-kind",
+        )?.clientKind,
+      ).toBe("claudeDesktop");
     }),
   );
 
@@ -273,7 +292,7 @@ layer("ExternalMcpRepository", (it) => {
       }),
   );
 
-  it.effect("holds capacity for a dispatched running task across repository restart", () =>
+  it.effect("keeps running-task capacity while its operation compensates after restart", () =>
     Effect.gen(function* () {
       const repository = yield* ExternalMcpRepository;
       const sql = yield* SqlClient.SqlClient;
@@ -328,9 +347,8 @@ layer("ExternalMcpRepository", (it) => {
         status: "created",
         now: "2026-07-20T00:01:03.000Z",
       });
-      yield* repository.completeOperation({
+      yield* repository.markOperationCompensating({
         operationId: first.operationId,
-        resultJson: JSON.stringify({ threadIds: ["external-running-thread"] }),
         now: "2026-07-20T00:01:04.000Z",
       });
       yield* sql`
@@ -413,9 +431,55 @@ layer("ExternalMcpRepository", (it) => {
     }),
   );
 
+  it.effect("releases a compensating creation slot with a stranded planned task", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      yield* createIntegration(repository, "compensating-capacity");
+      const first = {
+        operationId: "external-operation-compensating-slot",
+        integrationId: "integration-compensating-capacity",
+        requestId: "compensating-slot-request",
+        fingerprint: "compensating-slot-plan",
+        requestedCount: 1 as const,
+        planJson: "[]",
+        now: "2026-07-20T00:01:00.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(first)).kind, "reserved");
+      assert.isTrue(
+        yield* repository.markOperationDispatching({
+          operationId: first.operationId,
+          now: "2026-07-20T00:01:01.000Z",
+        }),
+      );
+      yield* repository.registerTask({
+        integrationId: first.integrationId,
+        operationId: first.operationId,
+        requestId: first.requestId,
+        threadId: "external-compensating-thread",
+        projectId: "project-compensating-capacity",
+        now: "2026-07-20T00:01:02.000Z",
+      });
+      yield* repository.markOperationCompensating({
+        operationId: first.operationId,
+        now: "2026-07-20T00:01:03.000Z",
+      });
+      assert.equal(
+        (yield* repository.reserveOperation({
+          ...first,
+          operationId: "external-operation-after-compensation",
+          requestId: "after-compensation-request",
+          fingerprint: "after-compensation-plan",
+          now: "2026-07-20T00:01:04.000Z",
+        })).kind,
+        "reserved",
+      );
+    }),
+  );
+
   it.effect("refuses the creation commit when revocation wins the final race", () =>
     Effect.gen(function* () {
       const repository = yield* ExternalMcpRepository;
+      const sql = yield* SqlClient.SqlClient;
       yield* createIntegration(repository, "commit-revocation");
       const operation = {
         operationId: "external-operation-commit-revocation",
@@ -433,6 +497,19 @@ layer("ExternalMcpRepository", (it) => {
           now: "2026-07-20T00:01:01.000Z",
         }),
       );
+      yield* repository.registerTask({
+        integrationId: operation.integrationId,
+        operationId: operation.operationId,
+        requestId: operation.requestId,
+        threadId: "external-revoked-thread",
+        projectId: "project-commit-revocation",
+        now: "2026-07-20T00:01:01.000Z",
+      });
+      yield* repository.markTaskStatus({
+        operationId: operation.operationId,
+        status: "created",
+        now: "2026-07-20T00:01:01.000Z",
+      });
       assert.isTrue(
         yield* repository.revokeIntegration({
           integrationId: operation.integrationId,
@@ -452,8 +529,20 @@ layer("ExternalMcpRepository", (it) => {
         .pipe(Effect.exit);
       expect(completion._tag).toBe("Failure");
       expect((yield* repository.getOperationById(operation.operationId))?.status).toBe(
-        "dispatching",
+        "compensating",
       );
+      expect(
+        (yield* repository.getTask({
+          integrationId: operation.integrationId,
+          threadId: "external-revoked-thread",
+        }))?.status,
+      ).toBe("failed");
+      const activeClaims = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count
+        FROM external_mcp_active_capacity_claims
+        WHERE integration_id = ${operation.integrationId}
+      `;
+      expect(activeClaims).toEqual([{ count: 0 }]);
     }),
   );
 

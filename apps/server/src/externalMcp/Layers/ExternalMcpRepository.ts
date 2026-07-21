@@ -128,7 +128,7 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
   const listIntegrations: ExternalMcpRepositoryShape["listIntegrations"] = () =>
     sql<IntegrationRow>`
       SELECT
-        integration_id AS "integrationId", name, audience,
+        integration_id AS "integrationId", name, client_kind AS "clientKind", audience,
         credential_hash AS "credentialHash", capabilities_json AS "capabilitiesJson",
         created_at AS "createdAt", expires_at AS "expiresAt",
         last_used_at AS "lastUsedAt", paired_at AS "pairedAt", revoked_at AS "revokedAt",
@@ -497,28 +497,72 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
       );
 
   const completeOperation: ExternalMcpRepositoryShape["completeOperation"] = (input) =>
-    sql<{ readonly operationId: string }>`
-      UPDATE external_mcp_operations
-      SET status = 'completed', result_json = ${input.resultJson}, error_json = NULL,
-          updated_at = ${input.now}
-      WHERE operation_id = ${input.operationId}
-        AND status = 'dispatching'
-        AND EXISTS (
-          SELECT 1
-          FROM external_mcp_integrations AS integrations
-          WHERE integrations.integration_id = external_mcp_operations.integration_id
-            AND integrations.revoked_at IS NULL
-            AND integrations.expires_at > ${input.now}
-        )
-      RETURNING operation_id AS "operationId"
-    `.pipe(
-      Effect.filterOrFail(
-        (rows) => rows.length > 0,
-        () => new Error("External MCP integration became inactive before creation committed."),
-      ),
-      Effect.asVoid,
-      Effect.mapError(repositoryError("completeOperation")),
-    );
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const completed = yield* sql<{ readonly operationId: string }>`
+            UPDATE external_mcp_operations
+            SET status = 'completed', result_json = ${input.resultJson}, error_json = NULL,
+                updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+              AND status = 'dispatching'
+              AND EXISTS (
+                SELECT 1
+                FROM external_mcp_integrations AS integrations
+                WHERE integrations.integration_id = external_mcp_operations.integration_id
+                  AND integrations.revoked_at IS NULL
+                  AND integrations.expires_at > ${input.now}
+              )
+            RETURNING operation_id AS "operationId"
+          `;
+          if (completed.length > 0) return "completed" as const;
+
+          // Revocation or expiry must still reject the final commit, but the
+          // operation and its task must leave active-capacity state together.
+          // Returning the failure after the transaction commits lets the
+          // coordinator continue compensating already-created resources.
+          const compensating = yield* sql<{ readonly operationId: string }>`
+            UPDATE external_mcp_operations
+            SET status = 'compensating', result_json = NULL,
+                error_json = ${JSON.stringify({
+                  code: "integration_inactive_before_commit",
+                  message: "External MCP integration became inactive before creation committed.",
+                })},
+                updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+              AND status = 'dispatching'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM external_mcp_integrations AS integrations
+                WHERE integrations.integration_id = external_mcp_operations.integration_id
+                  AND integrations.revoked_at IS NULL
+                  AND integrations.expires_at > ${input.now}
+              )
+            RETURNING operation_id AS "operationId"
+          `;
+          if (compensating.length === 0) return "not_dispatching" as const;
+          yield* sql`
+            UPDATE external_mcp_tasks
+            SET status = 'failed', updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+          `;
+          return "integration_inactive" as const;
+        }),
+      )
+      .pipe(
+        Effect.flatMap((outcome) =>
+          outcome === "completed"
+            ? Effect.void
+            : Effect.fail(
+                new Error(
+                  outcome === "integration_inactive"
+                    ? "External MCP integration became inactive before creation committed."
+                    : "External MCP operation was not dispatching at creation commit.",
+                ),
+              ),
+        ),
+        Effect.mapError(repositoryError("completeOperation")),
+      );
 
   const failOperation: ExternalMcpRepositoryShape["failOperation"] = (input) =>
     updateOperationStatus("failOperation", input, "failed", input.errorJson);
