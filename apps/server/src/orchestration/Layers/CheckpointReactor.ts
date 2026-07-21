@@ -9,9 +9,10 @@ import {
   type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationThread,
+  type ProviderSession,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Schedule, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
@@ -34,8 +35,14 @@ import { CheckpointReactor, type CheckpointReactorShape } from "../Services/Chec
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
+import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import { OrchestrationDispatchError } from "../Errors.ts";
+import {
+  CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
+  checkpointRevertActiveTurnDetail,
+  threadHasInFlightTurn,
+} from "../commandInvariants.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 
 type ReactorInput =
@@ -59,6 +66,14 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function providerSessionHasInFlightTurn(session: ProviderSession | undefined): boolean {
+  return (
+    session?.status === "connecting" ||
+    session?.status === "running" ||
+    (session?.status !== "error" && session?.status !== "closed" && session?.activeTurnId != null)
+  );
 }
 
 function checkpointStatusFromRuntime(status: string | undefined): "ready" | "missing" | "error" {
@@ -111,6 +126,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const receiptBus = yield* RuntimeReceiptBus;
+  const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
   const pendingMessageStartByThread = new Map<ThreadId, MessageId>();
   // Coalesces live turn-diff recomputes: at most one queued + one in-flight per
   // thread. The flag is cleared when the worker starts processing the job so an
@@ -184,24 +200,26 @@ const make = Effect.gen(function* () {
     readonly detail: string;
     readonly createdAt: string;
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.activity.append",
-      commandId: serverCommandId("checkpoint-revert-failure"),
-      threadId: input.threadId,
-      activity: {
-        id: EventId.makeUnsafe(crypto.randomUUID()),
-        tone: "error",
-        kind: "checkpoint.revert.failed",
-        summary: "Checkpoint revert failed",
-        payload: {
-          turnCount: input.turnCount,
-          detail: input.detail,
+    orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId("checkpoint-revert-failure"),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.makeUnsafe(crypto.randomUUID()),
+          tone: "error",
+          kind: CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
+          summary: "Checkpoint revert failed",
+          payload: {
+            turnCount: input.turnCount,
+            detail: input.detail,
+          },
+          turnId: null,
+          createdAt: input.createdAt,
         },
-        turnId: null,
         createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
+      })
+      .pipe(Effect.retry(Schedule.spaced("100 millis")));
 
   const appendCaptureFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -863,7 +881,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const handleRevertRequested = Effect.fnUntraced(function* (
+  const handleRevertRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<OrchestrationEvent, { type: "thread.checkpoint-revert-requested" }>,
   ) {
     const now = new Date().toISOString();
@@ -874,6 +892,36 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         detail: "Thread was not found in projection state.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    const [commandReadModel, pendingTurnStart, providerSessions] = yield* Effect.all([
+      orchestrationEngine.getReadModel(),
+      projectionTurnRepository.getPendingTurnStartByThreadId({
+        threadId: event.payload.threadId,
+      }),
+      providerService.listSessions(),
+    ]);
+    const commandThread = commandReadModel.threads.find(
+      (entry) => entry.id === event.payload.threadId,
+    );
+    const providerSession = providerSessions.find(
+      (session) => session.threadId === event.payload.threadId,
+    );
+    const currentThread = commandThread ?? thread;
+    const hasPendingNonTerminalTurnStart =
+      Option.isSome(pendingTurnStart) && currentThread.session?.status !== "error";
+    if (
+      threadHasInFlightTurn(currentThread) ||
+      hasPendingNonTerminalTurnStart ||
+      providerSessionHasInFlightTurn(providerSession)
+    ) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: checkpointRevertActiveTurnDetail(event.payload.threadId),
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -1044,6 +1092,7 @@ const make = Effect.gen(function* () {
           : {}),
         checkpointTurnCount: targetCheckpoint.checkpointTurnCount,
         preserveLatestTurn: true,
+        checkpointRevertTurnCount: event.payload.turnCount,
         createdAt: now,
       });
       return;
@@ -1153,6 +1202,14 @@ const make = Effect.gen(function* () {
         Effect.asVoid,
       );
   });
+
+  const handleRevertRequested = (
+    event: Extract<OrchestrationEvent, { type: "thread.checkpoint-revert-requested" }>,
+  ) =>
+    turnCheckpointCoordinator.withThreadLease(
+      event.payload.threadId,
+      handleRevertRequestedWithoutLease(event),
+    );
 
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {

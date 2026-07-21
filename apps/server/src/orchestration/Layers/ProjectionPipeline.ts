@@ -65,6 +65,10 @@ import {
 } from "../projectMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
 import {
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "../turnStartSession.ts";
+import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
   parseThreadSegmentFromAttachmentId,
@@ -706,12 +710,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             existingRow.value.latestTurnId === null &&
             Option.isNone(session) &&
             messages.length <= 1;
+          const projectedModelSelection = deriveTurnStartModelSelection({
+            currentModelSelection: existingRow.value.modelSelection,
+            requestedModelSelection: event.payload.modelSelection,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+          });
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            ...(event.payload.modelSelection !== undefined &&
-            (event.payload.modelSelection.provider === existingRow.value.modelSelection.provider ||
-              canAdoptFirstTurnProvider)
-              ? { modelSelection: event.payload.modelSelection }
+            ...(projectedModelSelection !== existingRow.value.modelSelection
+              ? { modelSelection: projectedModelSelection }
               : {}),
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
@@ -1059,18 +1066,46 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     _attachmentSideEffects,
   ) =>
     Effect.gen(function* () {
-      if (event.type !== "thread.session-set") {
-        return;
+      switch (event.type) {
+        case "thread.turn-start-requested": {
+          const [currentSession, thread] = yield* Effect.all([
+            projectionThreadSessionRepository.getByThreadId({
+              threadId: event.payload.threadId,
+            }),
+            projectionThreadRepository.getById({ threadId: event.payload.threadId }),
+          ]);
+          const turnStartSession = deriveTurnStartSession({
+            threadId: event.payload.threadId,
+            currentSession: Option.getOrNull(currentSession),
+            providerName:
+              Option.getOrNull(thread)?.modelSelection.provider ??
+              Option.getOrNull(currentSession)?.providerName ??
+              event.payload.modelSelection?.provider ??
+              null,
+            requestedRuntimeMode: event.payload.runtimeMode,
+            requestedAt: event.payload.createdAt,
+          });
+          if (turnStartSession !== null) {
+            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+          }
+          return;
+        }
+
+        case "thread.session-set":
+          yield* projectionThreadSessionRepository.upsert({
+            threadId: event.payload.threadId,
+            status: event.payload.session.status,
+            providerName: event.payload.session.providerName,
+            runtimeMode: event.payload.session.runtimeMode,
+            activeTurnId: event.payload.session.activeTurnId,
+            lastError: event.payload.session.lastError,
+            updatedAt: event.payload.session.updatedAt,
+          });
+          return;
+
+        default:
+          return;
       }
-      yield* projectionThreadSessionRepository.upsert({
-        threadId: event.payload.threadId,
-        status: event.payload.session.status,
-        providerName: event.payload.session.providerName,
-        runtimeMode: event.payload.session.runtimeMode,
-        activeTurnId: event.payload.session.activeTurnId,
-        lastError: event.payload.session.lastError,
-        updatedAt: event.payload.session.updatedAt,
-      });
     });
 
   const applyThreadTurnsProjection: ProjectorDefinition["apply"] = (
@@ -1094,17 +1129,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const turnId = event.payload.session.activeTurnId;
           if (event.payload.session.status !== "running" || turnId === null) {
             if (
-              event.payload.session.activeTurnId === null &&
-              (event.payload.session.status === "ready" ||
-                event.payload.session.status === "error" ||
-                event.payload.session.status === "interrupted" ||
-                event.payload.session.status === "stopped")
+              event.payload.session.status === "ready" ||
+              event.payload.session.status === "error" ||
+              event.payload.session.status === "interrupted" ||
+              event.payload.session.status === "stopped"
             ) {
               // Close the newest still-open turn when the runtime reports that
-              // the thread is no longer running. Assistant message completion
-              // can happen multiple times inside one turn, so session status is
-              // the safer lifecycle boundary for `completedAt`.
-              const turnToFinalize = (yield* projectionTurnRepository.listByThreadId({
+              // the thread is no longer running. Error sessions may retain the
+              // failed turn id for attribution, so prefer that exact open turn
+              // before falling back to the newest open row.
+              const openTurns = (yield* projectionTurnRepository.listByThreadId({
                 threadId: event.payload.threadId,
               }))
                 .filter(
@@ -1118,8 +1152,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   (left, right) =>
                     right.requestedAt.localeCompare(left.requestedAt) ||
                     right.turnId.localeCompare(left.turnId),
-                )
-                .at(0);
+                );
+              const turnToFinalize =
+                (turnId === null ? undefined : openTurns.find((row) => row.turnId === turnId)) ??
+                openTurns.at(0);
 
               if (turnToFinalize) {
                 yield* projectionTurnRepository.upsertByTurnId({
@@ -1627,9 +1663,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadActivitiesProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threads,
+      phase: "hot",
+      shouldApply: shouldApplyThreadsProjection,
+      apply: applyThreadsProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
       phase: "hot",
-      shouldApply: (event) => event.type === "thread.session-set",
+      shouldApply: (event) =>
+        event.type === "thread.turn-start-requested" || event.type === "thread.session-set",
       apply: applyThreadSessionsProjection,
     },
     {
@@ -1643,12 +1686,6 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       phase: "hot",
       shouldApply: () => false,
       apply: applyCheckpointsProjection,
-    },
-    {
-      name: ORCHESTRATION_PROJECTOR_NAMES.threads,
-      phase: "hot",
-      shouldApply: shouldApplyThreadsProjection,
-      apply: applyThreadsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.pendingInteractions,

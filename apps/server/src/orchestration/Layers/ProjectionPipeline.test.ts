@@ -306,6 +306,288 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.equal(rows[0]!.runtimeMode, "approval-required");
       assert.equal(rows[0]!.interactionMode, "default");
       assert.equal(rows[0]!.updatedAt, turnRequestedAt);
+
+      const sessionRows = yield* sql<{
+        readonly status: string;
+        readonly providerName: string | null;
+        readonly runtimeMode: string;
+        readonly activeTurnId: string | null;
+        readonly updatedAt: string;
+      }>`
+        SELECT
+          status,
+          provider_name AS "providerName",
+          runtime_mode AS "runtimeMode",
+          active_turn_id AS "activeTurnId",
+          updated_at AS "updatedAt"
+        FROM projection_thread_sessions
+        WHERE thread_id = 'thread-turn-settings'
+      `;
+      assert.deepEqual(sessionRows, [
+        {
+          status: "starting",
+          providerName: "pi",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          updatedAt: turnRequestedAt,
+        },
+      ]);
+
+      const turnCompletedAt = "2026-02-26T13:00:10.000Z";
+      yield* eventStore.append({
+        type: "thread.session-set",
+        eventId: EventId.makeUnsafe("evt-turn-settings-ready"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-turn-settings"),
+        occurredAt: turnCompletedAt,
+        commandId: CommandId.makeUnsafe("cmd-turn-settings-ready"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-turn-settings-ready"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-turn-settings"),
+          session: {
+            threadId: ThreadId.makeUnsafe("thread-turn-settings"),
+            status: "ready",
+            providerName: "pi",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: turnCompletedAt,
+          },
+        },
+      });
+
+      yield* sql`
+        DELETE FROM projection_thread_sessions
+        WHERE thread_id = 'thread-turn-settings'
+      `;
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector IN (
+          ${ORCHESTRATION_PROJECTOR_NAMES.threadSessions},
+          ${ORCHESTRATION_PROJECTOR_NAMES.threads}
+        )
+      `;
+      yield* projectionPipeline.bootstrap;
+
+      const rebuiltSessionRows = yield* sql<{
+        readonly status: string;
+        readonly updatedAt: string;
+      }>`
+        SELECT status, updated_at AS "updatedAt"
+        FROM projection_thread_sessions
+        WHERE thread_id = 'thread-turn-settings'
+      `;
+      assert.deepEqual(rebuiltSessionRows, [
+        {
+          status: "ready",
+          updatedAt: turnCompletedAt,
+        },
+      ]);
+
+      const crossProviderRequestedAt = "2026-02-26T13:00:15.000Z";
+      const crossProviderEvent = yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-turn-settings-cross-provider"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-turn-settings"),
+        occurredAt: crossProviderRequestedAt,
+        commandId: CommandId.makeUnsafe("cmd-turn-settings-cross-provider"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-turn-settings-cross-provider"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-turn-settings"),
+          messageId: MessageId.makeUnsafe("message-turn-settings-cross-provider"),
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: crossProviderRequestedAt,
+        },
+      });
+      yield* projectionPipeline.projectEvent(crossProviderEvent);
+
+      const providerRows = yield* sql<{
+        readonly modelSelectionJson: string;
+        readonly providerName: string | null;
+      }>`
+        SELECT
+          threads.model_selection_json AS "modelSelectionJson",
+          sessions.provider_name AS "providerName"
+        FROM projection_threads AS threads
+        LEFT JOIN projection_thread_sessions AS sessions
+          ON sessions.thread_id = threads.thread_id
+        WHERE threads.thread_id = 'thread-turn-settings'
+      `;
+      assert.deepEqual(JSON.parse(providerRows[0]!.modelSelectionJson), {
+        provider: "pi",
+        model: "openai/gpt-5.5",
+      });
+      assert.equal(providerRows[0]!.providerName, "pi");
+    }),
+  );
+
+  it.effect("keeps a retained runtime-error turn terminal across projection rebuilds", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const threadId = ThreadId.makeUnsafe("thread-retained-error-turn");
+      const turnId = TurnId.makeUnsafe("turn-retained-error-turn");
+      const createdAt = "2026-07-21T00:00:00.000Z";
+      const requestedAt = "2026-07-21T00:00:01.000Z";
+      const startedAt = "2026-07-21T00:00:02.000Z";
+      const failedAt = "2026-07-21T00:00:03.000Z";
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-retained-error-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.makeUnsafe("project-retained-error"),
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-retained-error-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-retained-error-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.makeUnsafe("project-retained-error"),
+          title: "Retained error project",
+          workspaceRoot: "/tmp/project-retained-error",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-retained-error-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-retained-error-thread"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-retained-error-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.makeUnsafe("project-retained-error"),
+          title: "Retained error thread",
+          modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-retained-error-start"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        commandId: CommandId.makeUnsafe("cmd-retained-error-start"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-retained-error-start"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-retained-error"),
+          modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          createdAt: requestedAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.makeUnsafe("evt-retained-error-running"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: startedAt,
+        commandId: CommandId.makeUnsafe("cmd-retained-error-running"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-retained-error-running"),
+        metadata: {},
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: startedAt,
+          },
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.makeUnsafe("evt-retained-error-terminal"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: failedAt,
+        commandId: CommandId.makeUnsafe("cmd-retained-error-terminal"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-retained-error-terminal"),
+        metadata: {},
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: "provider failed",
+            updatedAt: failedAt,
+          },
+        },
+      });
+
+      const readTerminalRows = () =>
+        Effect.all({
+          sessions: sql<{
+            readonly status: string;
+            readonly activeTurnId: string | null;
+          }>`
+            SELECT status, active_turn_id AS "activeTurnId"
+            FROM projection_thread_sessions
+            WHERE thread_id = ${threadId}
+          `,
+          turns: sql<{
+            readonly state: string;
+            readonly completedAt: string | null;
+          }>`
+            SELECT state, completed_at AS "completedAt"
+            FROM projection_turns
+            WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+          `,
+        });
+
+      const liveRows = yield* readTerminalRows();
+      assert.deepEqual(liveRows, {
+        sessions: [{ status: "error", activeTurnId: turnId }],
+        turns: [{ state: "error", completedAt: failedAt }],
+      });
+
+      yield* sql`DELETE FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM projection_turns WHERE thread_id = ${threadId}`;
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector IN (
+          ${ORCHESTRATION_PROJECTOR_NAMES.threadSessions},
+          ${ORCHESTRATION_PROJECTOR_NAMES.threadTurns}
+        )
+      `;
+      yield* projectionPipeline.bootstrap;
+
+      assert.deepEqual(yield* readTerminalRows(), liveRows);
     }),
   );
 });
