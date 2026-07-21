@@ -44,6 +44,13 @@ export const DeleteProjectionProjectInput = Schema.Struct({
 });
 export type DeleteProjectionProjectInput = typeof DeleteProjectionProjectInput.Type;
 
+export const ClearProjectionProjectSpaceAssignmentsInput = Schema.Struct({
+  spaceId: SpaceId,
+  updatedAt: IsoDateTime,
+});
+export type ClearProjectionProjectSpaceAssignmentsInput =
+  typeof ClearProjectionProjectSpaceAssignmentsInput.Type;
+
 /**
  * ProjectionProjectRepositoryShape - Service API for projected project records.
  */
@@ -77,6 +84,11 @@ export interface ProjectionProjectRepositoryShape {
    */
   readonly deleteById: (
     input: DeleteProjectionProjectInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Clear every active or soft-deleted project assignment for a deleted space. */
+  readonly clearSpaceAssignments: (
+    input: ClearProjectionProjectSpaceAssignmentsInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

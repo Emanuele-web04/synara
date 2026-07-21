@@ -110,6 +110,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const [directoryEntries, setDirectoryEntries] = useState<readonly ProjectDirectoryEntry[]>([]);
   const isProjectSelectionMode = selectionMode === "project";
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
     const nextOptions: ActiveFolderOption[] = [];
@@ -310,38 +311,48 @@ export const ProjectPicker = memo(function ProjectPicker({
     ) {
       return;
     }
-    const api = readNativeApi();
-    if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
-      return;
-    }
+    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint
+    // render), which also keeps this component eligible for React Compiler.
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      const api = readNativeApi();
+      if (!api) {
+        setErrorMessage("App is still connecting. Try again in a moment.");
+        return;
+      }
 
-    setIsLoadingDirectories(true);
-    setErrorMessage(null);
-    void api.projects
-      .listDirectories({ cwd: homeDir })
-      .then((result) => {
-        setDirectoryEntries(
-          result.entries.flatMap((entry) =>
-            entry.kind === "directory"
-              ? [
-                  {
-                    path: entry.path,
-                    name: entry.name,
-                    hasChildren: entry.hasChildren ?? false,
-                    ...(entry.parentPath ? { parentPath: entry.parentPath } : {}),
-                  } satisfies ProjectDirectoryEntry,
-                ]
-              : [],
-          ),
-        );
-      })
-      .catch((error) => {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
-      })
-      .finally(() => {
-        setIsLoadingDirectories(false);
-      });
+      setIsLoadingDirectories(true);
+      setErrorMessage(null);
+      void api.projects
+        .listDirectories({ cwd: homeDir })
+        .then((result) => {
+          setDirectoryEntries(
+            result.entries.flatMap((entry) =>
+              entry.kind === "directory"
+                ? [
+                    {
+                      path: entry.path,
+                      name: entry.name,
+                      hasChildren: entry.hasChildren ?? false,
+                      ...(entry.parentPath ? { parentPath: entry.parentPath } : {}),
+                    } satisfies ProjectDirectoryEntry,
+                  ]
+                : [],
+            ),
+          );
+        })
+        .catch((error) => {
+          setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
+        })
+        .finally(() => {
+          setIsLoadingDirectories(false);
+        });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [directoryEntries.length, homeDir, isLoadingDirectories, isProjectSelectionMode, open]);
 
   const handleSelectActiveFolder = useCallback(

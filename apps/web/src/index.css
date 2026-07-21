@@ -847,6 +847,53 @@ label:has(> select#reasoning-effort) select {
   border-top: 1px solid var(--border);
 }
 
+/* Headings: restore visual hierarchy that Tailwind preflight flattens.
+   Keep sizes compact so assistant replies remain scannable. */
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 1.1em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.chat-markdown h1 {
+  font-size: 1.75em;
+}
+
+.chat-markdown h2 {
+  font-size: 1.55em;
+}
+
+.chat-markdown h3 {
+  font-size: 1.35em;
+}
+
+.chat-markdown h4 {
+  font-size: 1.2em;
+}
+
+.chat-markdown h5 {
+  font-size: 1.1em;
+}
+
+.chat-markdown h6 {
+  font-size: 1em;
+  color: var(--muted-foreground);
+}
+
+.chat-markdown h1 + h2,
+.chat-markdown h2 + h3,
+.chat-markdown h3 + h4,
+.chat-markdown h4 + h5,
+.chat-markdown h5 + h6 {
+  margin-top: 0.5em;
+}
+
 .chat-markdown a {
   color: var(--color-token-text-link-foreground);
   text-decoration: none;
@@ -2193,6 +2240,43 @@ label:has(> select#reasoning-effort) select {
   --scroll-fade-mask: none;
 }
 
+/* Static end-of-line fade for single-line truncation. Unlike the scroll-fade-*
+   family — which reveal/hide the fade based on scroll position and therefore
+   need a scrollable container — this is a plain overflow:hidden clip whose
+   trailing edge softly dissolves to transparent instead of showing an ellipsis.
+   It only bites into text that actually overflows: the target must be a
+   stretched box (e.g. flex-1) so short, left-aligned text ends before the faded
+   edge. Fade width is tunable via `--truncate-fade-size` (or the
+   `truncate-fade-*` value utility); RTL flips the fade to the inline start. */
+@utility truncate-fade {
+  overflow: hidden;
+  white-space: nowrap;
+  --_truncate-fade-size: var(--truncate-fade-size, 1.5rem);
+  --_truncate-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--_truncate-fade-size)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --_truncate-fade-mask: linear-gradient(
+      to left,
+      #000 0,
+      #000 calc(100% - var(--_truncate-fade-size)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--_truncate-fade-mask);
+  mask-image: var(--_truncate-fade-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+@utility truncate-fade-* {
+  --truncate-fade-size: calc(var(--spacing) * --value(integer));
+  --truncate-fade-size: --value([length], [percentage]);
+}
+
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the
@@ -2521,11 +2605,18 @@ diffs-container {
 /* A stacked panel marked attachedToPrevious merges into the panel above it:
    drop its top radius so the seam reads as one continuous, inline surface
    instead of a separate rounded card. The panel above has border-b-0, so this
-   panel's own top border becomes the 1px divider between the fused sections —
-   the same way live-change and queued follow-up rows fuse above the composer. */
+   panel's own top border becomes the full-width 1px divider between the fused
+   sections — the same hairline the queued follow-up rows use. */
 .chat-composer-stacked-top[data-composer-stacked-attached="true"] {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+}
+
+/* Stacked rail above the composer input: the composer's own surface color at
+   half opacity, so the rail reads as a lighter continuation of the input shell
+   rather than a differently-colored block. */
+.chat-composer-stacked-top {
+  background: color-mix(in srgb, var(--composer-surface) 50%, transparent);
 }
 
 .chat-composer-surface {

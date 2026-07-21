@@ -9,7 +9,9 @@ import { useStore } from "./store";
 import { getThreadFromState } from "./threadDerivation";
 
 const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
-const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = WS_STREAM_LIMITS.threadPerClient;
+// Keep one slot of headroom under the server's per-client thread-stream budget so
+// a newly visible thread can be admitted without waiting for a cache eviction.
+const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = WS_STREAM_LIMITS.threadPerClient - 1;
 
 type RetainedThreadEntry = {
   refCount: number;

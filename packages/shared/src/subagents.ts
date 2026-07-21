@@ -8,6 +8,8 @@ export interface ParsedSubagentReceiverAgent {
   nickname?: string | undefined;
   role?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  background?: boolean | undefined;
   prompt?: string | undefined;
   modelIsRequestedHint?: boolean | undefined;
 }
@@ -29,6 +31,8 @@ export interface ParsedSubagentIdentityHint {
   nickname?: string | undefined;
   role?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  background?: boolean | undefined;
   prompt?: string | undefined;
   status?: string | undefined;
   message?: string | undefined;
@@ -38,6 +42,18 @@ export interface ParsedSubagentIdentityHint {
 export interface ParsedSubagentIdentityDirectory {
   readonly byProviderThreadId: ReadonlyMap<string, ParsedSubagentIdentityHint>;
   readonly byAgentId: ReadonlyMap<string, ParsedSubagentIdentityHint>;
+}
+
+// Internal agent definitions that only exist to carry effort (already surfaced
+// separately); they must never render as a subagent role/nickname suffix.
+const WORKER_TIER_ROLE_PATTERN = /^worker-(?:low|medium|high|xhigh)$/i;
+
+export function isWorkerTierSubagentRole(role: string | null | undefined): boolean {
+  return typeof role === "string" && WORKER_TIER_ROLE_PATTERN.test(role.trim());
+}
+
+function sanitizeSubagentRole(role: string | undefined): string | undefined {
+  return role !== undefined && isWorkerTierSubagentRole(role) ? undefined : role;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -94,10 +110,11 @@ function extractSubagentIdentityFromSource(
     firstStringValue(item, ["agentNickname", "agent_nickname", "nickname"]) ??
     firstStringValue(threadSpawn, ["agentNickname", "agent_nickname", "nickname", "name"]) ??
     firstStringValue(subagent, ["agentNickname", "agent_nickname", "nickname", "name"]);
-  const role =
+  const role = sanitizeSubagentRole(
     firstStringValue(item, ["agentRole", "agent_role", "agentType", "agent_type"]) ??
-    firstStringValue(threadSpawn, ["agentRole", "agent_role", "agentType", "agent_type"]) ??
-    firstStringValue(subagent, ["agentRole", "agent_role", "agentType", "agent_type"]);
+      firstStringValue(threadSpawn, ["agentRole", "agent_role", "agentType", "agent_type"]) ??
+      firstStringValue(subagent, ["agentRole", "agent_role", "agentType", "agent_type"]),
+  );
 
   if (!providerThreadId && !agentId && !nickname && !role) {
     return null;
@@ -123,7 +140,7 @@ function pushUniqueThreadId(
   target.push(threadId);
 }
 
-export function normalizeSubagentIdentifier(value: unknown): string | undefined {
+function normalizeSubagentIdentifier(value: unknown): string | undefined {
   return asTrimmedString(value);
 }
 
@@ -169,6 +186,7 @@ export function decodeSubagentReceiverAgents(
     "requestedModel",
     "requested_model",
   ]);
+  const topLevelEffort = firstStringValue(item, ["effort", "reasoningEffort", "reasoning_effort"]);
   const topLevelPrompt = firstStringValue(item, ["prompt", "task", "message"]);
   const agentsValue =
     asArray(item.receiverAgents) ?? asArray(item.receiver_agents) ?? asArray(item.agents);
@@ -213,19 +231,25 @@ export function decodeSubagentReceiverAgents(
         "nickname",
         "name",
       ]);
-      const role = firstStringValue(object, [
-        "agentRole",
-        "agent_role",
-        "receiverAgentRole",
-        "receiver_agent_role",
-        "newAgentRole",
-        "new_agent_role",
-        "agentType",
-        "agent_type",
-      ]);
+      const role = sanitizeSubagentRole(
+        firstStringValue(object, [
+          "agentRole",
+          "agent_role",
+          "receiverAgentRole",
+          "receiver_agent_role",
+          "newAgentRole",
+          "new_agent_role",
+          "agentType",
+          "agent_type",
+        ]),
+      );
       const directModel = firstStringValue(object, ["model", "modelName", "model_name"]);
       const requestedModel = firstStringValue(object, ["requestedModel", "requested_model"]);
       const model = directModel ?? requestedModel ?? topLevelModel;
+      const effort =
+        firstStringValue(object, ["effort", "reasoningEffort", "reasoning_effort"]) ??
+        topLevelEffort;
+      const background = object.background === true || item.background === true;
       const prompt = firstStringValue(object, ["prompt", "task", "message"]) ?? topLevelPrompt;
 
       return [
@@ -235,6 +259,8 @@ export function decodeSubagentReceiverAgents(
           ...(nickname ? { nickname } : {}),
           ...(role ? { role } : {}),
           ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          ...(background ? { background } : {}),
           ...(prompt ? { prompt } : {}),
           ...(model && !directModel ? { modelIsRequestedHint: true } : {}),
         },
@@ -259,16 +285,18 @@ export function decodeSubagentReceiverAgents(
     "receiverAgentNickname",
     "receiver_agent_nickname",
   ]);
-  const role = firstStringValue(item, [
-    "receiverAgentRole",
-    "receiver_agent_role",
-    "newAgentRole",
-    "new_agent_role",
-    "agentRole",
-    "agent_role",
-    "agentType",
-    "agent_type",
-  ]);
+  const role = sanitizeSubagentRole(
+    firstStringValue(item, [
+      "receiverAgentRole",
+      "receiver_agent_role",
+      "newAgentRole",
+      "new_agent_role",
+      "agentRole",
+      "agent_role",
+      "agentType",
+      "agent_type",
+    ]),
+  );
 
   return [
     {
@@ -277,6 +305,8 @@ export function decodeSubagentReceiverAgents(
       ...(nickname ? { nickname } : {}),
       ...(role ? { role } : {}),
       ...(topLevelModel ? { model: topLevelModel, modelIsRequestedHint: true } : {}),
+      ...(topLevelEffort ? { effort: topLevelEffort } : {}),
+      ...(item.background === true ? { background: true } : {}),
       ...(topLevelPrompt ? { prompt: topLevelPrompt } : {}),
     },
   ];
@@ -286,80 +316,43 @@ function buildSubagentAgentState(
   threadId: string,
   object: Record<string, unknown> | null,
 ): ParsedSubagentAgentState {
-  return {
-    threadId,
-    ...(firstStringValue(object, ["agentId", "agent_id"])
-      ? {
-          agentId: firstStringValue(object, ["agentId", "agent_id"]),
-        }
-      : {}),
-    ...(firstStringValue(object, [
-      "agentNickname",
-      "agent_nickname",
-      "receiverAgentNickname",
-      "receiver_agent_nickname",
-    ])
-      ? {
-          nickname: firstStringValue(object, [
-            "agentNickname",
-            "agent_nickname",
-            "receiverAgentNickname",
-            "receiver_agent_nickname",
-          ]),
-        }
-      : {}),
-    ...(firstStringValue(object, [
+  const agentId = firstStringValue(object, ["agentId", "agent_id"]);
+  const nickname = firstStringValue(object, [
+    "agentNickname",
+    "agent_nickname",
+    "receiverAgentNickname",
+    "receiver_agent_nickname",
+  ]);
+  const role = sanitizeSubagentRole(
+    firstStringValue(object, [
       "agentRole",
       "agent_role",
       "receiverAgentRole",
       "receiver_agent_role",
       "agentType",
       "agent_type",
-    ])
-      ? {
-          role: firstStringValue(object, [
-            "agentRole",
-            "agent_role",
-            "receiverAgentRole",
-            "receiver_agent_role",
-            "agentType",
-            "agent_type",
-          ]),
-        }
-      : {}),
-    ...(firstStringValue(object, [
-      "model",
-      "modelName",
-      "model_name",
-      "requestedModel",
-      "requested_model",
-    ])
-      ? {
-          model: firstStringValue(object, [
-            "model",
-            "modelName",
-            "model_name",
-            "requestedModel",
-            "requested_model",
-          ]),
-        }
-      : {}),
-    ...(firstStringValue(object, ["prompt", "task", "message"])
-      ? { prompt: firstStringValue(object, ["prompt", "task", "message"]) }
-      : {}),
-    ...(firstStringValue(object, ["status", "state"])
-      ? { status: firstStringValue(object, ["status", "state"]) }
-      : {}),
-    ...(firstStringValue(object, ["summary", "message", "latestUpdate", "latest_update"])
-      ? {
-          message: firstStringValue(object, [
-            "summary",
-            "message",
-            "latestUpdate",
-            "latest_update",
-          ]),
-        }
-      : {}),
+    ]),
+  );
+  const model = firstStringValue(object, [
+    "model",
+    "modelName",
+    "model_name",
+    "requestedModel",
+    "requested_model",
+  ]);
+  const prompt = firstStringValue(object, ["prompt", "task", "message"]);
+  const status = firstStringValue(object, ["status", "state"]);
+  const message = firstStringValue(object, ["summary", "message", "latestUpdate", "latest_update"]);
+
+  return {
+    threadId,
+    ...(agentId ? { agentId } : {}),
+    ...(nickname ? { nickname } : {}),
+    ...(role ? { role } : {}),
+    ...(model ? { model } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(status ? { status } : {}),
+    ...(message ? { message } : {}),
   };
 }
 
@@ -453,6 +446,8 @@ export function extractSubagentIdentityHints(
       hint.nickname ?? "",
       hint.role ?? "",
       hint.model ?? "",
+      hint.effort ?? "",
+      hint.background ? "1" : "0",
       hint.prompt ?? "",
       hint.status ?? "",
       hint.message ?? "",
@@ -492,16 +487,18 @@ export function extractSubagentIdentityHints(
       "agent_nickname",
       "nickname",
     ]),
-    role: firstStringValue(item, [
-      "newAgentRole",
-      "new_agent_role",
-      "receiverAgentRole",
-      "receiver_agent_role",
-      "agentRole",
-      "agent_role",
-      "agentType",
-      "agent_type",
-    ]),
+    role: sanitizeSubagentRole(
+      firstStringValue(item, [
+        "newAgentRole",
+        "new_agent_role",
+        "receiverAgentRole",
+        "receiver_agent_role",
+        "agentRole",
+        "agent_role",
+        "agentType",
+        "agent_type",
+      ]),
+    ),
   });
 
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
@@ -562,7 +559,7 @@ function selectMergedModel(input: {
   };
 }
 
-export function mergeSubagentIdentityHints(
+function mergeSubagentIdentityHints(
   existing: ParsedSubagentIdentityHint | undefined,
   incoming: ParsedSubagentIdentityHint,
 ): ParsedSubagentIdentityHint {
@@ -573,6 +570,8 @@ export function mergeSubagentIdentityHints(
     nickname: incoming.nickname ?? existing?.nickname,
     role: incoming.role ?? existing?.role,
     model: mergedModel.model,
+    effort: incoming.effort ?? existing?.effort,
+    background: incoming.background ?? existing?.background,
     prompt: incoming.prompt ?? existing?.prompt,
     status: incoming.status ?? existing?.status,
     message: incoming.message ?? existing?.message,
@@ -652,7 +651,7 @@ export function resolveSubagentIdentityFromDirectory(
   }
 
   return mergeSubagentIdentityHints(agentEntry, {
-    ...(threadEntry ?? {}),
+    ...threadEntry,
     providerThreadId:
       threadEntry?.providerThreadId ?? agentEntry?.providerThreadId ?? normalizedProviderThreadId,
     agentId: threadEntry?.agentId ?? agentEntry?.agentId ?? normalizedAgentId,

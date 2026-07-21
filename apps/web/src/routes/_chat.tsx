@@ -22,6 +22,7 @@ import { useLatestProjectStore } from "../latestProjectStore";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
+  resolveLatestProjectTargetIdWithFallback,
   resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
 import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
@@ -276,12 +277,7 @@ function ChatRouteGlobalShortcuts() {
   // The remembered project is global, so it is unusable the moment you switch Space. Fall
   // back to this Space's most recently touched project rather than to nothing.
   const latestUsableProjectId = useMemo(
-    () =>
-      resolveLatestProjectTargetId(activeSpaceProjects, latestProjectId) ??
-      activeSpaceProjects
-        .toSorted((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))
-        .at(0)?.id ??
-      null,
+    () => resolveLatestProjectTargetIdWithFallback(activeSpaceProjects, latestProjectId),
     [activeSpaceProjects, latestProjectId],
   );
   // Deliberately unscoped: the persisted id is only cleared once the project is gone from

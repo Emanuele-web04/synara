@@ -20,4 +20,12 @@ describe("resolveActiveSpaceId", () => {
     expect(resolveActiveSpaceId(SpaceId.makeUnsafe("space-deleted"), [workSpace])).toBeNull();
     expect(resolveActiveSpaceId(null, [workSpace])).toBeNull();
   });
+
+  it("keeps a receipt-fenced optimistic selection until shell hydration catches up", () => {
+    const pendingSpaceId = SpaceId.makeUnsafe("space-pending");
+
+    expect(resolveActiveSpaceId(pendingSpaceId, [workSpace], pendingSpaceId)).toBe(
+      pendingSpaceId,
+    );
+  });
 });

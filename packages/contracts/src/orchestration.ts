@@ -229,10 +229,13 @@ export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
 export const TurnDispatchMode = Schema.Literals(["queue", "steer"]);
 export type TurnDispatchMode = typeof TurnDispatchMode.Type;
 export const DEFAULT_TURN_DISPATCH_MODE: TurnDispatchMode = "queue";
-// Marks who dispatched a user turn: a person typing, or an automation run.
-// Absent is treated as "user"; only automation-dispatched turns carry the flag.
-export const MessageDispatchOrigin = Schema.Literals(["user", "automation"]);
+// Marks who dispatched a user turn: a person typing, an automation run, or
+// another agent through the Synara agent gateway (MCP tools).
+// Absent is treated as "user"; only server-dispatched turns carry the flag.
+export const MessageDispatchOrigin = Schema.Literals(["user", "automation", "agent"]);
 export type MessageDispatchOrigin = typeof MessageDispatchOrigin.Type;
+export const ThreadCreationSource = Schema.Literals(["synara_mcp", "provider_native"]);
+export type ThreadCreationSource = typeof ThreadCreationSource.Type;
 export const ProviderReviewTarget = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("uncommittedChanges"),
@@ -374,6 +377,8 @@ export type ProjectScript = typeof ProjectScript.Type;
 
 export const SPACE_NAME_MAX_LENGTH = 32;
 export const SPACES_MAX_COUNT = 50;
+/** Reserved client-side identity for the virtual collection of unassigned projects. */
+export const RESERVED_VOID_SPACE_ID = "void";
 /** Per-command cap for bulk assignment; clients chunk larger selections. */
 export const SPACE_PROJECTS_ASSIGN_MAX_COUNT = 200;
 export const SPACE_ICON_NAMES = [
@@ -715,6 +720,19 @@ export const OrchestrationThread = Schema.Struct({
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sourceTurnId: Schema.optional(Schema.NullOr(TurnId)).pipe(Schema.withDecodingDefault(() => null)),
+  gatewayOperationId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -783,6 +801,19 @@ export const OrchestrationThreadShell = Schema.Struct({
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sourceTurnId: Schema.optional(Schema.NullOr(TurnId)).pipe(Schema.withDecodingDefault(() => null)),
+  gatewayOperationId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -842,6 +873,7 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     kind: Schema.Literal("space-removed"),
     sequence: NonNegativeInt,
     spaceId: SpaceId,
+    updatedAt: IsoDateTime,
   }),
   Schema.Struct({
     kind: Schema.Literal("space-order-updated"),
@@ -992,6 +1024,11 @@ const ThreadCreateCommand = Schema.Struct({
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  creationSource: Schema.optional(ThreadCreationSource),
+  sourceThreadId: Schema.optional(ThreadId),
+  sourceTurnId: Schema.optional(TurnId),
+  gatewayOperationId: Schema.optional(TrimmedNonEmptyString),
+  gatewayOperationIndex: Schema.optional(NonNegativeInt),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1258,6 +1295,22 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTaskStopCommand = Schema.Struct({
+  type: Schema.Literal("thread.task.stop"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const ThreadTaskBackgroundCommand = Schema.Struct({
+  type: Schema.Literal("thread.task.background"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const ThreadDispatchQueuedTurnCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.dispatch-queued"),
   commandId: CommandId,
@@ -1373,6 +1426,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadTaskStopCommand,
+  ThreadTaskBackgroundCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1411,6 +1466,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadTaskStopCommand,
+  ThreadTaskBackgroundCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1546,6 +1603,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-queued",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  "thread.task-stop-requested",
+  "thread.task-background-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1650,6 +1709,11 @@ export const ThreadCreatedPayload = Schema.Struct({
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)),
+  sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  sourceTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  gatewayOperationId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1819,6 +1883,18 @@ export const ThreadTurnQueuedPayload = ThreadTurnStartRequestedPayload;
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadTaskStopRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadTaskBackgroundRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
 });
 
@@ -2064,6 +2140,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.task-stop-requested"),
+    payload: ThreadTaskStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.task-background-requested"),
+    payload: ThreadTaskBackgroundRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

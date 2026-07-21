@@ -69,13 +69,16 @@ function recordsEqual<T extends string>(
 }
 
 interface SpacesUiState extends PersistedSpacesUiState {
+  pendingActiveSpace: { spaceId: SpaceId; minSequence: number } | null;
   setActiveSpaceId: (spaceId: SpaceId | null) => void;
+  setOptimisticActiveSpaceId: (spaceId: SpaceId, minSequence: number) => void;
   rememberThread: (spaceId: SpaceId | null, threadId: ThreadId) => void;
   rememberProject: (spaceId: SpaceId | null, projectId: ProjectId) => void;
   getLastThreadId: (spaceId: SpaceId | null) => ThreadId | null;
   getLastProjectId: (spaceId: SpaceId | null) => ProjectId | null;
   reconcile: (input: {
     activeSpaceIds: ReadonlySet<SpaceId>;
+    snapshotSequence: number;
     projectSpaceById: ReadonlyMap<ProjectId, SpaceId | null>;
     threadProjectById: ReadonlyMap<ThreadId, ProjectId>;
   }) => void;
@@ -85,8 +88,13 @@ const persisted = readPersisted();
 
 export const useSpacesUiStore = create<SpacesUiState>((set, get) => ({
   ...persisted,
+  pendingActiveSpace: null,
   setActiveSpaceId: (activeSpaceId) => {
-    set({ activeSpaceId });
+    set({ activeSpaceId, pendingActiveSpace: null });
+    persist(get());
+  },
+  setOptimisticActiveSpaceId: (activeSpaceId, minSequence) => {
+    set({ activeSpaceId, pendingActiveSpace: { spaceId: activeSpaceId, minSequence } });
     persist(get());
   },
   rememberThread: (spaceId, threadId) => {
@@ -114,10 +122,21 @@ export const useSpacesUiStore = create<SpacesUiState>((set, get) => ({
   },
   getLastThreadId: (spaceId) => get().lastThreadIdBySpace[spaceKey(spaceId)] ?? null,
   getLastProjectId: (spaceId) => get().lastProjectIdBySpace[spaceKey(spaceId)] ?? null,
-  reconcile: ({ activeSpaceIds, projectSpaceById, threadProjectById }) => {
+  reconcile: ({ activeSpaceIds, snapshotSequence, projectSpaceById, threadProjectById }) => {
     const current = get();
+    const pendingActiveSpace =
+      current.pendingActiveSpace !== null &&
+      (activeSpaceIds.has(current.pendingActiveSpace.spaceId) ||
+        snapshotSequence >= current.pendingActiveSpace.minSequence)
+        ? null
+        : current.pendingActiveSpace;
     const activeSpaceId =
-      current.activeSpaceId !== null && !activeSpaceIds.has(current.activeSpaceId)
+      current.activeSpaceId !== null &&
+      !activeSpaceIds.has(current.activeSpaceId) &&
+      !(
+        pendingActiveSpace?.spaceId === current.activeSpaceId &&
+        snapshotSequence < pendingActiveSpace.minSequence
+      )
         ? null
         : current.activeSpaceId;
     const lastThreadIdBySpace: Record<string, ThreadId> = {};
@@ -138,12 +157,13 @@ export const useSpacesUiStore = create<SpacesUiState>((set, get) => ({
     }
     if (
       activeSpaceId === current.activeSpaceId &&
+      pendingActiveSpace === current.pendingActiveSpace &&
       recordsEqual(lastThreadIdBySpace, current.lastThreadIdBySpace) &&
       recordsEqual(lastProjectIdBySpace, current.lastProjectIdBySpace)
     ) {
       return;
     }
-    set({ activeSpaceId, lastThreadIdBySpace, lastProjectIdBySpace });
+    set({ activeSpaceId, pendingActiveSpace, lastThreadIdBySpace, lastProjectIdBySpace });
     persist(get());
   },
 }));

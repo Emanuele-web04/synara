@@ -8,6 +8,7 @@ import type {
 import {
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
+  RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
   THREAD_MARKERS_MAX_COUNT,
   TurnId,
@@ -241,6 +242,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   switch (command.type) {
     case "space.create": {
       yield* requireSpaceAbsent({ readModel, command, spaceId: command.spaceId });
+      if (command.spaceId === RESERVED_VOID_SPACE_ID) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The reserved Void identity cannot be used for a custom space.",
+        });
+      }
       yield* requireSpaceNameAvailable({ readModel, command, name: command.name });
       const activeSpaces = listActiveSpaces(readModel);
       if (activeSpaces.length >= SPACES_MAX_COUNT) {
@@ -351,25 +358,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "space.delete": {
       yield* requireSpace({ readModel, command, spaceId: command.spaceId });
       const occurredAt = nowIso();
-      // Deleted projects are re-filed too: a soft-deleted row must not keep pointing at a
-      // dead space in case a recovery flow ever resurrects it.
-      const events: Array<Omit<OrchestrationEvent, "sequence">> = readModel.projects
-        .filter((project) => project.spaceId === command.spaceId)
-        .map((project) => ({
-          ...withEventBase({
-            aggregateKind: "project",
-            aggregateId: project.id,
-            occurredAt,
-            commandId: command.commandId,
-          }),
-          type: "project.meta-updated" as const,
-          payload: {
-            projectId: project.id,
-            spaceId: null,
-            updatedAt: occurredAt,
-          },
-        }));
-      events.push({
+      // The deletion event owns the re-filing invariant. Projectors clear every matching
+      // assignment in one pass, avoiding an unbounded event fanout for large spaces while
+      // still including soft-deleted projects that a recovery flow could resurrect.
+      return {
         ...withEventBase({
           aggregateKind: "space",
           aggregateId: command.spaceId,
@@ -378,8 +370,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }),
         type: "space.deleted",
         payload: { spaceId: command.spaceId, deletedAt: occurredAt },
-      });
-      return events;
+      };
     }
 
     case "space.projects.assign": {
@@ -764,6 +755,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createBranchFlowCompleted: command.createBranchFlowCompleted,
           isPinned: command.isPinned,
           parentThreadId: command.parentThreadId,
+          ...(command.creationSource !== undefined
+            ? {
+                creationSource: command.creationSource,
+                sourceThreadId: command.sourceThreadId ?? null,
+                sourceTurnId: command.sourceTurnId ?? null,
+                gatewayOperationId: command.gatewayOperationId ?? null,
+                gatewayOperationIndex: command.gatewayOperationIndex ?? null,
+              }
+            : {}),
           subagentAgentId: command.subagentAgentId,
           subagentNickname: command.subagentNickname,
           subagentRole: command.subagentRole,
@@ -1458,9 +1458,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
           dispatchMode,
-          ...(command.dispatchOrigin !== undefined
-            ? { dispatchOrigin: command.dispatchOrigin }
-            : {}),
+          // Explicit "user" (not absent): edit-resends replay through a fresh
+          // server-side turn.start without an origin, and the projection
+          // upsert coalesces absent origins — a human resend of a message
+          // originally dispatched by an automation/agent must overwrite the
+          // stale origin instead of inheriting it.
+          dispatchOrigin: command.dispatchOrigin ?? "user",
           turnId: null,
           streaming: false,
           source: "native",
@@ -1487,8 +1490,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThread.session?.providerName ?? targetThread.modelSelection.provider;
       const isThreadRunning =
         targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
+      // Subagent threads never queue: their messages steer the running child task
+      // through the parent session, so deferring until the turn settles would
+      // deliver the message only after the subagent already finished.
       const shouldQueue =
-        isThreadRunning && (dispatchMode === "queue" || activeProvider !== "codex");
+        targetThread.parentThreadId === null &&
+        isThreadRunning &&
+        (dispatchMode === "queue" || activeProvider !== "codex");
       const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1577,6 +1585,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.task.stop": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.task-stop-requested",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.task.background": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.task-background-requested",
+        payload: {
+          threadId: command.threadId,
+          toolUseId: command.toolUseId,
           createdAt: command.createdAt,
         },
       };

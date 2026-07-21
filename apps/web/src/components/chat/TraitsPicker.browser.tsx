@@ -12,7 +12,6 @@ import {
   ThreadId,
 } from "@synara/contracts";
 import { page } from "vitest/browser";
-import { useCallback } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -52,12 +51,9 @@ function ClaudeTraitsPickerHarness(props: {
       pi: [],
     },
   });
-  const handlePromptChange = useCallback(
-    (nextPrompt: string) => {
-      setPrompt(CLAUDE_THREAD_ID, nextPrompt);
-    },
-    [setPrompt],
-  );
+  const handlePromptChange = (nextPrompt: string) => {
+    setPrompt(CLAUDE_THREAD_ID, nextPrompt);
+  };
 
   return (
     <TraitsPicker
@@ -159,16 +155,31 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("shows fast mode controls for Opus", async () => {
+  it("shows the fast mode toggle in the Effort header for Opus", async () => {
     await using _ = await mountClaudePicker();
 
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Speed");
-      expect(text).toContain("Default");
-      expect(text).toContain("Fast");
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(document.body.textContent ?? "").not.toContain("Speed");
+      const toggle = document.body.querySelector('[aria-label="Fast mode"]');
+      expect(toggle).not.toBeNull();
+      expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+    });
+  });
+
+  it("flips the fast mode toggle in place without closing the menu", async () => {
+    await using _ = await mountClaudePicker();
+
+    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Fast mode" }).click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(
+        document.body.querySelector('[aria-label="Fast mode"]')?.getAttribute("aria-pressed"),
+      ).toBe("true");
     });
   });
 
@@ -191,7 +202,8 @@ describe("TraitsPicker (Claude)", () => {
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").not.toContain("Speed");
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(document.body.querySelector('[aria-label="Fast mode"]')).toBeNull();
     });
   });
 
@@ -391,7 +403,7 @@ describe("TraitsPicker (Codex)", () => {
     });
   });
 
-  it("shows fast mode controls", async () => {
+  it("shows the fast mode toggle in the Effort header", async () => {
     await using _ = await mountCodexPicker({
       options: { fastMode: false },
     });
@@ -399,10 +411,11 @@ describe("TraitsPicker (Codex)", () => {
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Speed");
-      expect(text).toContain("Default");
-      expect(text).toContain("Fast");
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(document.body.textContent ?? "").not.toContain("Speed");
+      const toggle = document.body.querySelector('[aria-label="Fast mode"]');
+      expect(toggle).not.toBeNull();
+      expect(toggle?.getAttribute("aria-pressed")).toBe("false");
     });
   });
 
@@ -450,17 +463,24 @@ describe("TraitsPicker (Codex)", () => {
     });
   });
 
-  it("persists sticky codex model options when traits change", async () => {
+  it("persists sticky codex model options when the fast mode toggle flips", async () => {
     await using _ = await mountCodexPicker({
       options: { fastMode: false },
     });
 
     await page.getByRole("button").click();
-    await page.getByRole("menuitemradio", { name: "Fast" }).click();
+    await page.getByRole("button", { name: "Fast mode" }).click();
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
       provider: "codex",
       options: { fastMode: true },
+    });
+
+    // The toggle flips in place: the menu stays open. (This harness passes
+    // `modelOptions` as a static prop, so the pressed state itself only
+    // re-renders in store-backed mounts like the Claude harness above.)
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Effort");
     });
   });
 });
@@ -631,12 +651,9 @@ function OpenCodeTraitsPickerHarness(props: {
       pi: [],
     },
   });
-  const handlePromptChange = useCallback(
-    (nextPrompt: string) => {
-      setPrompt(OPENCODE_THREAD_ID, nextPrompt);
-    },
-    [setPrompt],
-  );
+  const handlePromptChange = (nextPrompt: string) => {
+    setPrompt(OPENCODE_THREAD_ID, nextPrompt);
+  };
 
   return (
     <TraitsPicker

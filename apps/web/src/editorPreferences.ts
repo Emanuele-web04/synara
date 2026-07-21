@@ -1,16 +1,17 @@
 import { EDITORS, EditorId, NativeApi } from "@synara/contracts";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
-import { useMemo } from "react";
 
 const LAST_EDITOR_KEY = "synara:last-editor";
 
 export function usePreferredEditor(availableEditors: ReadonlyArray<EditorId>) {
   const [lastEditor, setLastEditor] = useLocalStorage(LAST_EDITOR_KEY, null, EditorId);
 
-  const effectiveEditor = useMemo(() => {
-    if (lastEditor && availableEditors.includes(lastEditor)) return lastEditor;
-    return EDITORS.find((editor) => availableEditors.includes(editor.id))?.id ?? null;
-  }, [lastEditor, availableEditors]);
+  let effectiveEditor: EditorId | null;
+  if (lastEditor && availableEditors.includes(lastEditor)) {
+    effectiveEditor = lastEditor;
+  } else {
+    effectiveEditor = EDITORS.find((editor) => availableEditors.includes(editor.id))?.id ?? null;
+  }
 
   return [effectiveEditor, setLastEditor] as const;
 }

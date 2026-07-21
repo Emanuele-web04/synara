@@ -121,24 +121,24 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
   yield* sql`
     INSERT INTO projection_thread_messages (
       message_id, thread_id, turn_id, role, text, skills_json, mentions_json,
-      is_streaming, source, created_at, updated_at
+      is_streaming, source, dispatch_origin, created_at, updated_at
     )
     VALUES
       (
         'message-keep-1', 'thread-keep', 'turn-keep-1', 'user',
         'keep one', NULL, NULL,
-        0, 'native', '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:00.000Z'
+        0, 'native', 'user', '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:00.000Z'
       ),
       (
         'message-purge-1', 'thread-purge', 'turn-purge-1', 'user',
         'Use /check-code here',
         '[{"name":"check-code","path":"/skills/check-code/SKILL.md"}]', NULL,
-        0, 'native', '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:00.000Z'
+        0, 'native', 'user', '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:00.000Z'
       ),
       (
         'message-purge-2', 'thread-purge', 'turn-purge-2', 'user',
         'purge two', NULL, '[{"name":"reviewer","path":"agent://reviewer"}]',
-        0, 'native', '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
+        0, 'native', 'agent', '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
       )
   `;
 
@@ -233,19 +233,19 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
     )
     VALUES
       (
-        'thread-keep', 'turn-keep-1', NULL, NULL, 'completed',
+        'thread-keep', 'turn-keep-1', 'message-keep-1', NULL, 'completed',
         '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:10.000Z',
         '2026-06-13T08:06:00.000Z', 1,
         'refs/historical/checkpoints/dGhyZWFkLWtlZXA/turn/1', 'captured', '[]'
       ),
       (
-        'thread-purge', 'turn-purge-1', NULL, NULL, 'completed',
+        'thread-purge', 'turn-purge-1', 'message-purge-1', NULL, 'completed',
         '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:10.000Z',
         '2026-06-13T09:06:00.000Z', 1,
         'refs/historical/checkpoints/dGhyZWFkLXB1cmdl/turn/1', 'captured', '[]'
       ),
       (
-        'thread-purge', 'turn-purge-2', NULL, NULL, 'completed',
+        'thread-purge', 'turn-purge-2', 'message-purge-2', NULL, 'completed',
         '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:10.000Z',
         '2026-06-14T10:06:00.000Z', 2,
         'provider-diff:event-purge-2', 'captured', '[]'
@@ -333,6 +333,64 @@ describe("ProfileStatsArchive", () => {
         provider: "claudeAgent",
         model: "claude-haiku-4-5",
         tokens: 1000,
+      },
+    ]);
+  });
+
+  it("computes cumulative deltas across agent turns before excluding their usage", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 1_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        dispatchOrigin: "user",
+        createdAt: "2026-06-13T12:00:00.000Z",
+      },
+      {
+        totalProcessedTokens: 2_500,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        dispatchOrigin: "agent",
+        createdAt: "2026-06-13T12:01:00.000Z",
+      },
+      {
+        totalProcessedTokens: 3_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        dispatchOrigin: "user",
+        createdAt: "2026-06-13T12:02:00.000Z",
+      },
+    ]);
+
+    expect(rows.map(({ createdAt, tokens }) => ({ createdAt, tokens }))).toEqual([
+      { createdAt: "2026-06-13T12:00:00.000Z", tokens: 1_000 },
+      { createdAt: "2026-06-13T12:02:00.000Z", tokens: 500 },
+    ]);
+  });
+
+  it("keeps a stamped activity provider instead of a mismatched thread fallback", () => {
+    const rows = aggregateThreadTokenRows(
+      [
+        {
+          totalProcessedTokens: 1_500,
+          usedTokens: null,
+          provider: "claudeAgent",
+          model: null,
+          createdAt: "2026-06-13T12:00:00.000Z",
+        },
+      ],
+      { provider: "codex", model: "gpt-5.5" },
+    );
+
+    expect(rows).toEqual([
+      {
+        createdAt: "2026-06-13T12:00:00.000Z",
+        provider: "claudeAgent",
+        model: null,
+        tokens: 1_500,
       },
     ]);
   });
@@ -461,6 +519,130 @@ describe("ProfileStatsArchive", () => {
         expect(purgedAgain).toBe(false);
         const statsAfterRepurge = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfterRepurge.activity).toEqual(statsBefore.activity);
+      }),
+    );
+  });
+
+  it("deletes terminal gateway plans and redacts live recovery plans with a purged caller", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+
+        const livePlan = JSON.stringify([
+          {
+            index: 0,
+            spec: { prompt: "private live prompt", branchName: "agent/private" },
+            projectId: "project-archive",
+            workspaceRoot: "/work/archive",
+            environment: "worktree",
+            runtimeMode: "full-access",
+            baseBranch: "main",
+            newBranch: "agent/private",
+            plannedWorktreePath: "/worktrees/private",
+            ownershipPreflightPassed: true,
+            worktreeOwnership: {
+              operationId: "operation-live",
+              path: "/worktrees/private",
+              branch: "agent/private",
+              token: "private-owner-token",
+              gitDir: "/repo/.git/worktrees/private",
+              head: "0123456789abcdef",
+              recordedAt: "2026-06-14T10:06:00.000Z",
+            },
+            ids: {
+              threadId: "agent-private-child",
+              compensateCommandId: "delete-agent-private-child",
+            },
+          },
+        ]);
+        yield* sql`
+          INSERT INTO agent_gateway_operations (
+            operation_id, caller_thread_id, caller_turn_id, operation_kind,
+            request_id, fingerprint, requested_count, plan_json, status,
+            result_json, error_json, created_at, updated_at
+          ) VALUES
+            (
+              'operation-terminal', 'thread-purge', 'turn-purge-terminal', 'create_threads',
+              'terminal-request', 'terminal-fingerprint', 1,
+              '[{"spec":{"prompt":"private terminal prompt"}}]', 'completed',
+              '{"workspaceRoot":"/private/result"}', NULL,
+              '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
+            ),
+            (
+              'operation-live', 'thread-purge', 'turn-purge-live', 'create_threads',
+              'private-request-id', 'private-fingerprint', 1,
+              ${livePlan}, 'dispatching', NULL, '{"path":"/private/error"}',
+              '2026-06-14T10:06:00.000Z', '2026-06-14T10:06:00.000Z'
+            )
+        `;
+
+        expect(yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" })).toBe(
+          true,
+        );
+        const rows = yield* sql<{
+          readonly operationId: string;
+          readonly callerThreadId: string;
+          readonly callerTurnId: string;
+          readonly requestId: string;
+          readonly fingerprint: string;
+          readonly planJson: string;
+          readonly status: string;
+          readonly resultJson: string | null;
+          readonly errorJson: string | null;
+          readonly callerPurgedAt: string | null;
+        }>`
+          SELECT
+            operation_id AS "operationId", caller_thread_id AS "callerThreadId",
+            caller_turn_id AS "callerTurnId", request_id AS "requestId", fingerprint,
+            plan_json AS "planJson", status, result_json AS "resultJson",
+            error_json AS "errorJson", caller_purged_at AS "callerPurgedAt"
+          FROM agent_gateway_operations
+          WHERE operation_id = 'operation-live'
+        `;
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          operationId: "operation-live",
+          callerThreadId: "purged-thread:operation-live",
+          callerTurnId: "purged-turn:operation-live",
+          requestId: "operation-live",
+          fingerprint: "operation-live",
+          status: "dispatching",
+          resultJson: null,
+          errorJson: null,
+          callerPurgedAt: expect.any(String),
+        });
+        const retainedCallerIds = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM agent_gateway_operations
+          WHERE caller_thread_id = 'thread-purge'
+             OR caller_turn_id IN ('turn-purge-terminal', 'turn-purge-live')
+        `;
+        expect(retainedCallerIds[0]?.count).toBe(0);
+        expect(rows[0]!.planJson).not.toContain("private live prompt");
+        expect(rows[0]!.planJson).not.toContain("project-archive");
+        expect(JSON.parse(rows[0]!.planJson)[0]).toEqual({
+          workspaceRoot: "/work/archive",
+          environment: "worktree",
+          newBranch: "agent/private",
+          plannedWorktreePath: "/worktrees/private",
+          ownershipPreflightPassed: true,
+          worktreeOwnership: {
+            operationId: "operation-live",
+            path: "/worktrees/private",
+            branch: "agent/private",
+            token: "private-owner-token",
+            gitDir: "/repo/.git/worktrees/private",
+            head: "0123456789abcdef",
+            recordedAt: "2026-06-14T10:06:00.000Z",
+          },
+          ids: {
+            threadId: "agent-private-child",
+            compensateCommandId: "delete-agent-private-child",
+          },
+        });
       }),
     );
   });
@@ -1165,6 +1347,10 @@ describe("ProfileStatsArchive", () => {
               '{"threadId":"thread-retention","deletedAt":"2026-06-15T09:00:00.000Z"}', '{}'
             )
         `;
+        // The purge fence blocks while provider-intent events (thread.deleted
+        // included) are still unconsumed; a real sweep only runs after the
+        // reactor has acked them.
+        yield* acknowledgeProviderCommandJournal(sql);
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsBefore.activity.totalPromptsSent).toBe(2);

@@ -1,4 +1,4 @@
-import { memo, useRef, type RefObject } from "react";
+import { useRef, type RefObject } from "react";
 import { CheckIcon, CopyIcon } from "~/lib/icons";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { anchoredToastManager } from "../ui/toast";
@@ -26,13 +26,7 @@ function showCopyToast(
   });
 }
 
-export const MessageCopyButton = memo(function MessageCopyButton({
-  text,
-  className,
-}: {
-  text: string;
-  className?: string;
-}) {
+export function MessageCopyButton({ text, className }: { text: string; className?: string }) {
   const ref = useRef<HTMLButtonElement>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
     onCopy: () => showCopyToast(ref, "Copied!"),
@@ -56,4 +50,4 @@ export const MessageCopyButton = memo(function MessageCopyButton({
       )}
     </MessageActionButton>
   );
-});
+}

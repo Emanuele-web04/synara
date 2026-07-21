@@ -709,7 +709,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (isShellMetadataEvent(savedEvent)) {
             yield* projectionPipeline.projectMetadataEvent(savedEvent);
           } else {
-            yield* projectionPipeline.projectHotEvent(savedEvent);
+            yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
           }
           committedEvents.push(savedEvent);
         }

@@ -15,6 +15,7 @@ describe("spacesUiStore", () => {
     });
     useSpacesUiStore.setState({
       activeSpaceId: null,
+      pendingActiveSpace: null,
       lastThreadIdBySpace: {},
       lastProjectIdBySpace: {},
     });
@@ -51,6 +52,7 @@ describe("spacesUiStore", () => {
 
     useSpacesUiStore.getState().reconcile({
       activeSpaceIds: new Set(),
+      snapshotSequence: 1,
       projectSpaceById: new Map([
         [voidProjectId, null],
         [removedProjectId, null],
@@ -63,6 +65,41 @@ describe("spacesUiStore", () => {
 
     expect(useSpacesUiStore.getState().activeSpaceId).toBeNull();
     expect(useSpacesUiStore.getState().lastThreadIdBySpace).toEqual({ void: voidThreadId });
+  });
+
+  it("keeps an optimistic selection until a non-lagging snapshot can judge it", () => {
+    const createdSpaceId = SpaceId.makeUnsafe("space-created");
+    useSpacesUiStore.getState().setOptimisticActiveSpaceId(createdSpaceId, 12);
+
+    const reconcile = (snapshotSequence: number, activeSpaceIds: ReadonlySet<SpaceId>) =>
+      useSpacesUiStore.getState().reconcile({
+        activeSpaceIds,
+        snapshotSequence,
+        projectSpaceById: new Map(),
+        threadProjectById: new Map(),
+      });
+
+    reconcile(11, new Set());
+    expect(useSpacesUiStore.getState().activeSpaceId).toBe(createdSpaceId);
+
+    reconcile(12, new Set([createdSpaceId]));
+    expect(useSpacesUiStore.getState().activeSpaceId).toBe(createdSpaceId);
+    expect(useSpacesUiStore.getState().pendingActiveSpace).toBeNull();
+  });
+
+  it("clears a missing optimistic selection once the snapshot reaches its receipt", () => {
+    const createdSpaceId = SpaceId.makeUnsafe("space-never-projected");
+    useSpacesUiStore.getState().setOptimisticActiveSpaceId(createdSpaceId, 12);
+
+    useSpacesUiStore.getState().reconcile({
+      activeSpaceIds: new Set(),
+      snapshotSequence: 12,
+      projectSpaceById: new Map(),
+      threadProjectById: new Map(),
+    });
+
+    expect(useSpacesUiStore.getState().activeSpaceId).toBeNull();
+    expect(useSpacesUiStore.getState().pendingActiveSpace).toBeNull();
   });
 
   it("keeps only the most recent project-or-thread target per space", () => {

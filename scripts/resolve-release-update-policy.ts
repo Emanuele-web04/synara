@@ -9,6 +9,7 @@ import {
   readReleaseUpdatePolicyConfig,
   resolveReleaseUpdatePolicy,
 } from "./lib/release-update-policy.ts";
+import { serializeReleaseGithubOutput } from "./lib/release-github-output.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rawVersion = process.argv[2];
@@ -28,12 +29,7 @@ const output = {
 
 const githubOutput = process.env.GITHUB_OUTPUT;
 if (githubOutput) {
-  appendFileSync(
-    githubOutput,
-    `${Object.entries(output)
-      .map(([key, value]) => `${key}=${value}`)
-      .join("\n")}\n`,
-  );
+  appendFileSync(githubOutput, serializeReleaseGithubOutput(output));
 } else {
   console.log(JSON.stringify(output, null, 2));
 }

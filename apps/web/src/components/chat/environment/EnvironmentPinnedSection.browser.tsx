@@ -79,4 +79,48 @@ describe("EnvironmentPinnedSection", () => {
 
     expect(onRename).not.toHaveBeenCalled();
   });
+
+  it("delays an available-pin jump so a double-click can enter rename without jumping", async () => {
+    const onJump = vi.fn();
+    await render(
+      <EnvironmentPinnedSection
+        pins={[pin("double-click", { label: "Original" })]}
+        messageTextById={new Map([[messageId("double-click"), "Available text"]])}
+        onJump={onJump}
+        onToggleDone={vi.fn()}
+        onUnpin={vi.fn()}
+        onRename={vi.fn()}
+      />,
+    );
+
+    const labelButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Jump to pinned message. Press F2 to rename."]',
+    );
+    labelButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    labelButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    labelButton?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 }));
+
+    await vi.waitFor(() => expect(document.querySelector('input[class*="flex-1"]')).not.toBeNull());
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("jumps once after the single-click delay", async () => {
+    const onJump = vi.fn();
+    await render(
+      <EnvironmentPinnedSection
+        pins={[pin("single-click")]}
+        messageTextById={new Map([[messageId("single-click"), "Available text"]])}
+        onJump={onJump}
+        onToggleDone={vi.fn()}
+        onUnpin={vi.fn()}
+        onRename={vi.fn()}
+      />,
+    );
+
+    await page.getByRole("button", { name: "Jump to pinned message. Press F2 to rename." }).click();
+
+    expect(onJump).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(onJump).toHaveBeenCalledWith(messageId("single-click")));
+  });
 });

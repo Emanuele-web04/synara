@@ -2,7 +2,7 @@
 // Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
-import { useMemo, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
@@ -34,7 +34,7 @@ export interface ProviderUsageMenuModel {
 
 export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
   const { settings } = useAppSettings();
-  const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  const selectAllThreads = createAllThreadsSelector();
   const threads = useStore(selectAllThreads);
   const usageSummary = useProviderUsageSummary({
     provider,
@@ -42,11 +42,8 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
     codexHomePath: settings.codexHomePath || null,
     fetchProviderData: false,
   });
-  const usageRows = useMemo(
-    () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
-    [usageSummary.rateLimits],
-  );
-  const primaryRow = useMemo(() => selectPrimaryProviderUsageDisplayRow(usageRows), [usageRows]);
+  const usageRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
+  const primaryRow = selectPrimaryProviderUsageDisplayRow(usageRows);
 
   if (!primaryRow) {
     return null;

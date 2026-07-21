@@ -107,25 +107,29 @@ layer("QueuedTurnPromotionRepository", (it) => {
           laterSteerSequence,
         );
 
+        // `laterSteerSequence` is currently claimed ('promoting'). cancelThread now
+        // widens to cancel BOTH 'queued' and 'promoting' rows, so the in-flight
+        // claim is cancelled immediately -> nothing pending.
         yield* repository.cancelThread({
           threadId: "thread-queued-promotion",
           updatedAt: now,
         });
-        assert.isTrue(
+        assert.isFalse(
           yield* repository.hasPendingMessage({
             threadId: "thread-queued-promotion",
             messageId: "message-steer",
           }),
         );
-        yield* repository.releaseClaim({
+
+        // The drain's error path releasing the (now cancelled) claim must NOT
+        // resurrect it: releaseClaim only matches state='promoting', which the
+        // cancelled row no longer is, so it reports no-op and the row stays dead.
+        const released = yield* repository.releaseClaim({
           queuedEventSequence: laterSteerSequence,
           claimOwner: "owner-later-generation",
           updatedAt: now,
         });
-        yield* repository.cancelThread({
-          threadId: "thread-queued-promotion",
-          updatedAt: now,
-        });
+        assert.isFalse(released);
         assert.isFalse(
           yield* repository.hasPendingMessage({
             threadId: "thread-queued-promotion",

@@ -39,9 +39,9 @@ export async function createSpace(input: {
   api: NativeApi;
   name: string;
   icon: SpaceIconName;
-}): Promise<SpaceId> {
+}): Promise<{ spaceId: SpaceId; sequence: number }> {
   const spaceId = newSpaceId();
-  await input.api.orchestration.dispatchCommand({
+  const receipt = await input.api.orchestration.dispatchCommand({
     type: "space.create",
     commandId: newCommandId(),
     spaceId,
@@ -49,7 +49,7 @@ export async function createSpace(input: {
     icon: input.icon,
     createdAt: new Date().toISOString(),
   });
-  return spaceId;
+  return { spaceId, sequence: receipt.sequence };
 }
 
 /**
@@ -132,7 +132,23 @@ export async function moveProjectsToSpace(input: {
         projectIds: chunk,
       });
     } catch {
-      return { failedProjectIds: input.projectIds.slice(offset) };
+      const remainingProjectIds = input.projectIds.slice(offset);
+      // A transport error can race a committed command. Re-read the authoritative shell
+      // before offering a retry so we do not report projects that already reached the target.
+      try {
+        const snapshot = await input.api.orchestration.getShellSnapshot();
+        const projectById = new Map(snapshot.projects.map((project) => [project.id, project]));
+        return {
+          failedProjectIds: remainingProjectIds.filter((projectId) => {
+            const project = projectById.get(projectId);
+            // Missing shell rows were deleted concurrently and are settled just like rows
+            // already assigned to the target; neither should be offered for a doomed retry.
+            return project !== undefined && project.spaceId !== input.spaceId;
+          }),
+        };
+      } catch {
+        return { failedProjectIds: remainingProjectIds };
+      }
     }
   }
   return { failedProjectIds: [] };

@@ -6,7 +6,7 @@
 // Layer: Chat/diff UI primitives
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { type ReactNode, memo, useMemo } from "react";
+import { type ReactNode } from "react";
 
 import {
   resolveFileDiffPath,
@@ -21,7 +21,7 @@ function stripPatchPathPrefix(path: string): string {
   return path.startsWith("a/") || path.startsWith("b/") ? path.slice(2) : path;
 }
 
-export const FileDiffHeader = memo(function FileDiffHeader(props: {
+export const FileDiffHeader = function FileDiffHeader(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";
   /** Optional trailing chrome (file-actions menu, collapse chevron, etc.). */
@@ -37,7 +37,7 @@ export const FileDiffHeader = memo(function FileDiffHeader(props: {
       : null;
   const prevPath =
     isRename && props.fileDiff.prevName ? stripPatchPathPrefix(props.fileDiff.prevName) : null;
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
 
   return (
     <div
@@ -84,4 +84,4 @@ export const FileDiffHeader = memo(function FileDiffHeader(props: {
       ) : null}
     </div>
   );
-});
+};

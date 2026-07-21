@@ -14,7 +14,6 @@ import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
 import {
-  type ChatAssistantSelectionAttachment,
   type ChatMessage,
   type SessionPhase,
   type Thread,
@@ -34,6 +33,7 @@ import {
 import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
   humanizeSubagentStatus,
+  normalizeSubagentStatusKind,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
 import {
@@ -72,10 +72,11 @@ export function hasFileUndoSettled(input: {
     return true;
   }
 
+  const existingFailureActivityIdSet = new Set(input.pending.existingFailureActivityIds);
   return input.thread.activities.some((activity) => {
     if (
       activity.kind !== "checkpoint.revert.failed" ||
-      input.pending.existingFailureActivityIds.includes(activity.id) ||
+      existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
       !("turnCount" in activity.payload)
@@ -138,6 +139,13 @@ export function buildComposerMenuSelectionKey(input: {
     ? `picker:${input.picker}`
     : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
+}
+
+export function buildTranscriptAutoFollowSignal(input: {
+  readonly messageCount: number;
+  readonly tailKey: string;
+}): string {
+  return `${input.messageCount}\u001f${input.tailKey}`;
 }
 
 export interface PromptHistoryNavigationState {
@@ -942,6 +950,8 @@ export interface QueuedSteerGate {
   sawInterruptGap: boolean;
   /** Epoch ms when the gap started; null while the original turn still runs. */
   gapStartedAt: number | null;
+  /** Active turn id at steer time; a different live id means the steered turn started. */
+  armedActiveTurnId: string | null;
 }
 
 /** Recovery bound: a healthy interrupt→steered-turn handoff takes ~1-2s. */
@@ -955,6 +965,7 @@ export function resolveQueuedSteerGateTransition(input: {
   gate: QueuedSteerGate;
   phase: SessionPhase;
   sessionErrored: boolean;
+  activeTurnId: string | null;
   now: number;
 }): QueuedSteerGateTransition {
   if (input.phase === "disconnected" || input.sessionErrored) {
@@ -966,10 +977,23 @@ export function resolveQueuedSteerGateTransition(input: {
       // The steered turn is live; normal live-turn guards take over from here.
       return { kind: "clear" };
     }
+    // A fast interrupt→steered-turn handoff may never render an idle gap: the
+    // active turn id flipping while still "running" is the same signal.
+    if (
+      input.gate.armedActiveTurnId !== null &&
+      input.activeTurnId !== null &&
+      input.activeTurnId !== input.gate.armedActiveTurnId
+    ) {
+      return { kind: "clear" };
+    }
     // Original turn still running (interrupt not processed yet): keep holding.
     return {
       kind: "hold",
-      gate: { sawInterruptGap: false, gapStartedAt: null },
+      gate: {
+        sawInterruptGap: false,
+        gapStartedAt: null,
+        armedActiveTurnId: input.gate.armedActiveTurnId ?? input.activeTurnId,
+      },
       expiresInMs: null,
     };
   }
@@ -982,7 +1006,11 @@ export function resolveQueuedSteerGateTransition(input: {
   }
   return {
     kind: "hold",
-    gate: { sawInterruptGap: true, gapStartedAt },
+    gate: {
+      sawInterruptGap: true,
+      gapStartedAt,
+      armedActiveTurnId: input.gate.armedActiveTurnId,
+    },
     expiresInMs,
   };
 }
@@ -1042,18 +1070,6 @@ export function deriveComposerSendState(options: {
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0,
   };
-}
-
-export function collectUserMessageAssistantSelections(
-  message: ChatMessage,
-): ChatAssistantSelectionAttachment[] {
-  if (message.role !== "user" || !message.attachments) {
-    return [];
-  }
-  return message.attachments.filter(
-    (attachment): attachment is ChatAssistantSelectionAttachment =>
-      attachment.type === "assistant-selection",
-  );
 }
 
 export function buildExpiredTerminalContextToastCopy(
@@ -1226,6 +1242,23 @@ function humanizeSubagentRawStatus(rawStatus: string | undefined): string | unde
   return humanizeSubagentStatus(rawStatus);
 }
 
+// Terminal work-log statuses are authoritative over child-thread session state:
+// a finished subagent's thread merely parks in an "Idle"/"Closed" session status,
+// which must not mask Completed/Failed/Stopped. The per-agent rawStatus wins over
+// the collab item's own status, which only covers the whole tool call.
+function terminalSubagentStatusLabel(
+  rawStatus: string | undefined,
+  entryStatus: string | undefined,
+): string | undefined {
+  for (const candidate of rawStatus !== undefined ? [rawStatus] : [entryStatus]) {
+    const statusKind = normalizeSubagentStatusKind(candidate);
+    if (statusKind === "completed" || statusKind === "failed" || statusKind === "stopped") {
+      return humanizeSubagentStatus(candidate);
+    }
+  }
+  return undefined;
+}
+
 function resolveTimelineSubagentThread(input: {
   subagent: NonNullable<WorkLogEntry["subagents"]>[number];
   parentThreadId: ThreadIdType | null;
@@ -1292,6 +1325,9 @@ export function enrichSubagentWorkEntries(
       });
       const status = deriveSubagentStatus(matchedThread);
       const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
+      const terminalStatusLabel = status.isActive
+        ? undefined
+        : terminalSubagentStatusLabel(subagent.rawStatus, entry.subagentAction?.status);
       const matchedPresentation =
         matchedThread !== undefined
           ? resolveSubagentPresentationForThread({ thread: matchedThread, threads })
@@ -1303,8 +1339,8 @@ export function enrichSubagentWorkEntries(
       if (matchedPresentation) {
         nextSubagent.title = matchedPresentation.fullLabel;
       }
-      if (status.label ?? fallbackStatusLabel) {
-        nextSubagent.statusLabel = status.label ?? fallbackStatusLabel;
+      if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
+        nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
       if (status.isActive || fallbackStatusLabel === "Running") {
         nextSubagent.isActive = true;

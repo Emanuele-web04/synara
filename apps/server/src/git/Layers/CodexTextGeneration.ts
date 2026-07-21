@@ -302,7 +302,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
       const runCodexCommand = Effect.gen(function* () {
-        const env = buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath });
+        const env = yield* Effect.promise(() =>
+          buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
+        );
         const args = [
           "exec",
           "--ephemeral",

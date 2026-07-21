@@ -25,17 +25,13 @@ import {
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionSpaceRepository } from "../../persistence/Services/ProjectionSpaces.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
-import {
-  type ProjectionThreadActivity,
-  ProjectionThreadActivityRepository,
-} from "../../persistence/Services/ProjectionThreadActivities.ts";
+import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
   type ProjectionThreadMessage,
   type ProjectionThreadMessageRepositoryShape,
   ProjectionThreadMessageRepository,
 } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import {
-  type ProjectionThreadProposedPlan,
   type ProjectionThreadProposedPlanRepositoryShape,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
@@ -488,8 +484,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       case "space.created":
       case "space.meta-updated":
       case "space.order-updated":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.asVoid,
+        );
       case "space.deleted":
         return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.zipRight(
+            projectionProjectRepository.clearSpaceAssignments({
+              spaceId: event.payload.spaceId,
+              updatedAt: event.payload.deletedAt,
+            }),
+          ),
           Effect.asVoid,
         );
       default:
@@ -527,6 +532,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             createBranchFlowCompleted: event.payload.createBranchFlowCompleted ?? false,
             isPinned: event.payload.isPinned ?? false,
             parentThreadId: event.payload.parentThreadId ?? null,
+            creationSource: event.payload.creationSource ?? null,
+            sourceThreadId: event.payload.sourceThreadId ?? null,
+            sourceTurnId: event.payload.sourceTurnId ?? null,
+            gatewayOperationId: event.payload.gatewayOperationId ?? null,
+            gatewayOperationIndex: event.payload.gatewayOperationIndex ?? null,
             subagentAgentId: event.payload.subagentAgentId ?? null,
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,
@@ -1266,6 +1276,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "thread.task-stop-requested": {
+          // Same as interrupts: intent only. Task state settles via the
+          // provider's task lifecycle events.
+          return;
+        }
+
+        case "thread.task-background-requested": {
+          // Intent only: the provider confirms via a task_updated backgrounded patch.
+          return;
+        }
+
         case "thread.turn-diff-completed": {
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
@@ -1678,85 +1699,108 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     );
   };
 
-  const runProjectorsForEvent = (
+  const runProjectorsForEventCore = (
     selectedProjectors: ReadonlyArray<ProjectorDefinition>,
     event: OrchestrationEvent,
     phaseCursor?: ProjectorName,
   ) =>
     Effect.gen(function* () {
       if (selectedProjectors.length === 0 && phaseCursor === undefined) {
-        return;
+        return null;
       }
       const attachmentSideEffects: AttachmentSideEffects = {
         deletedThreadIds: new Set<string>(),
         prunedThreadRelativePaths: new Map<string, Set<string>>(),
       };
 
-      yield* sql.withTransaction(
-        Effect.forEach(selectedProjectors, (projector) =>
-          projector.apply(event, attachmentSideEffects).pipe(
-            Effect.flatMap(() => {
-              if (projector.name === phaseCursor) {
-                return Effect.void;
-              }
-              return projectionStateRepository.upsert({
-                projector: projector.name,
-                lastAppliedSequence: event.sequence,
-                updatedAt: event.occurredAt,
-              });
-            }),
-          ),
-        ).pipe(
-          Effect.flatMap(() =>
-            phaseCursor === undefined
-              ? Effect.void
-              : projectionStateRepository.upsert({
-                  projector: phaseCursor,
-                  lastAppliedSequence: event.sequence,
-                  updatedAt: event.occurredAt,
-                }),
-          ),
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              for (const threadId of attachmentSideEffects.deletedThreadIds) {
-                yield* managedAttachments.markCleanupByThread({
-                  ownerThreadId: threadId,
-                  reason: "thread-deleted",
-                  requestedAt: event.occurredAt,
-                });
-              }
-              for (const [
-                threadId,
-                relativePaths,
-              ] of attachmentSideEffects.prunedThreadRelativePaths.entries()) {
-                yield* managedAttachments.markUnreferencedClaimedForCleanup({
-                  ownerThreadId: threadId,
-                  retainedAttachmentIds: [...relativePaths]
-                    .map(parseAttachmentIdFromRelativePath)
-                    .filter(
-                      (attachmentId): attachmentId is string =>
-                        attachmentId?.startsWith("att_v2_") === true,
-                    ),
-                  reason: "projection-pruned",
-                  requestedAt: event.occurredAt,
-                });
-              }
-            }),
-          ),
-        ),
-      );
-
-      yield* runAttachmentSideEffects(attachmentSideEffects).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("failed to apply projected attachment side-effects", {
-            projectors: selectedProjectors.map((projector) => projector.name),
-            sequence: event.sequence,
-            eventType: event.type,
-            cause,
+      yield* Effect.forEach(selectedProjectors, (projector) =>
+        projector.apply(event, attachmentSideEffects).pipe(
+          Effect.flatMap(() => {
+            if (projector.name === phaseCursor) {
+              return Effect.void;
+            }
+            return projectionStateRepository.upsert({
+              projector: projector.name,
+              lastAppliedSequence: event.sequence,
+              updatedAt: event.occurredAt,
+            });
           }),
         ),
       );
+      if (phaseCursor !== undefined) {
+        yield* projectionStateRepository.upsert({
+          projector: phaseCursor,
+          lastAppliedSequence: event.sequence,
+          updatedAt: event.occurredAt,
+        });
+      }
+      for (const threadId of attachmentSideEffects.deletedThreadIds) {
+        yield* managedAttachments.markCleanupByThread({
+          ownerThreadId: threadId,
+          reason: "thread-deleted",
+          requestedAt: event.occurredAt,
+        });
+      }
+      for (const [threadId, relativePaths] of attachmentSideEffects.prunedThreadRelativePaths) {
+        yield* managedAttachments.markUnreferencedClaimedForCleanup({
+          ownerThreadId: threadId,
+          retainedAttachmentIds: [...relativePaths]
+            .map(parseAttachmentIdFromRelativePath)
+            .filter(
+              (attachmentId): attachmentId is string =>
+                attachmentId?.startsWith("att_v2_") === true,
+            ),
+          reason: "projection-pruned",
+          requestedAt: event.occurredAt,
+        });
+      }
+
+      return attachmentSideEffects;
+    });
+
+  const runProjectorAttachmentSideEffects = (
+    selectedProjectors: ReadonlyArray<ProjectorDefinition>,
+    event: OrchestrationEvent,
+    attachmentSideEffects: AttachmentSideEffects | null,
+  ) =>
+    attachmentSideEffects === null
+      ? Effect.void
+      : runAttachmentSideEffects(attachmentSideEffects).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("failed to apply projected attachment side-effects", {
+              projectors: selectedProjectors.map((projector) => projector.name),
+              sequence: event.sequence,
+              eventType: event.type,
+              cause,
+            }),
+          ),
+        );
+
+  const runProjectorsForEvent = (
+    selectedProjectors: ReadonlyArray<ProjectorDefinition>,
+    event: OrchestrationEvent,
+    phaseCursor?: ProjectorName,
+  ) =>
+    Effect.gen(function* () {
+      const attachmentSideEffects = yield* sql.withTransaction(
+        runProjectorsForEventCore(selectedProjectors, event, phaseCursor),
+      );
+      yield* runProjectorAttachmentSideEffects(selectedProjectors, event, attachmentSideEffects);
     }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig, serverConfig),
+    );
+
+  const runProjectorsForHotEvent = (
+    selectedProjectors: ReadonlyArray<ProjectorDefinition>,
+    event: OrchestrationEvent,
+    phaseCursor: ProjectorName,
+  ) =>
+    runProjectorsForEventCore(selectedProjectors, event, phaseCursor).pipe(
+      Effect.flatMap((attachmentSideEffects) =>
+        runProjectorAttachmentSideEffects(selectedProjectors, event, attachmentSideEffects),
+      ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.provideService(ServerConfig, serverConfig),
@@ -1884,8 +1928,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       case "space.created":
       case "space.meta-updated":
       case "space.order-updated":
-      case "space.deleted":
         return applySpaceMetadataProjection({ event, projectionSpaceRepository });
+      case "space.deleted":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.zipRight(
+            projectionProjectRepository.clearSpaceAssignments({
+              spaceId: event.payload.spaceId,
+              updatedAt: event.payload.deletedAt,
+            }),
+          ),
+        );
       case "project.created":
       case "project.meta-updated":
       case "project.deleted":
@@ -1906,14 +1958,26 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       Effect.asVoid,
     );
 
-  const projectHotEvent: OrchestrationProjectionPipelineShape["projectHotEvent"] = (event) =>
+  const projectHotEventInCurrentTransaction: OrchestrationProjectionPipelineShape["projectHotEventInCurrentTransaction"] =
+    (event) =>
+      runProjectorsForHotEvent(
+        selectProjectorsForEvent(event, "hot"),
+        event,
+        ORCHESTRATION_PROJECTOR_NAMES.hot,
+      );
+
+  const projectHotEventInOwnTransaction = (event: OrchestrationEvent) =>
     runProjectorsForEvent(
       selectProjectorsForEvent(event, "hot"),
       event,
       ORCHESTRATION_PROJECTOR_NAMES.hot,
     ).pipe(
       Effect.catchTag("SqlError", (sqlError) =>
-        Effect.fail(toPersistenceSqlError("ProjectionPipeline.projectHotEvent:query")(sqlError)),
+        Effect.fail(
+          toPersistenceSqlError("ProjectionPipeline.projectHotEventInOwnTransaction:query")(
+            sqlError,
+          ),
+        ),
       ),
     );
 
@@ -1933,7 +1997,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     );
 
   const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
-    projectHotEvent(event).pipe(
+    projectHotEventInOwnTransaction(event).pipe(
       Effect.andThen(projectDeferredEvent(event)),
       Effect.flatMap(() =>
         PROJECT_EVENT_TYPES.has(event.type) ? advanceSnapshotProjectorStates(event) : Effect.void,
@@ -1965,7 +2029,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   return {
     bootstrap,
     projectEvent,
-    projectHotEvent,
+    projectHotEventInCurrentTransaction,
     projectDeferredEvent,
     projectMetadataEvent,
   } satisfies OrchestrationProjectionPipelineShape;

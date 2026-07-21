@@ -901,7 +901,6 @@
 
 - Added Codex-style chat workspace folder creation and associated workspace/worktree metadata so generated chat files are easier to isolate per conversation.
 - Added settings sidebar search deep links and related project/settings navigation polish.
-- Added a World Cup soccer ball physics playground as a self-contained interactive visual surface.
 - Added file-only workspace search refinements and stronger provider probe handling around Gemini-backed paths.
 
 ### Changed
@@ -915,7 +914,6 @@
 
 ### Fixed
 
-- Fixed server typecheck and formatting drift that reached `main` after the soccer playground merge.
 - Fixed transcript turn collapse and tail jitter cases where visible turn ids could be empty while a latest turn still had active work.
 - Fixed browser/copy-link edge cases that could leave stale browser session state or awkward link movement.
 - Fixed editor mode production feedback and local image preview duplication between chat and editor surfaces.

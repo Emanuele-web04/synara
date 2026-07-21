@@ -4,7 +4,7 @@
 //          accent styling everywhere.
 // Layer: Shared UI component
 
-import { memo, type MouseEvent } from "react";
+import { type MouseEvent } from "react";
 
 import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
 import {
@@ -22,11 +22,7 @@ export interface InlineLinkChipProps {
   readonly className?: string | undefined;
 }
 
-export const InlineLinkChip = memo(function InlineLinkChip({
-  url,
-  interactive = false,
-  className,
-}: InlineLinkChipProps) {
+export function InlineLinkChip({ url, interactive = false, className }: InlineLinkChipProps) {
   const { label } = describeLinkChip(url);
   const chipClassName = className ?? COMPOSER_INLINE_LINK_CHIP_CLASS_NAME;
 
@@ -64,4 +60,4 @@ export const InlineLinkChip = memo(function InlineLinkChip({
       {content}
     </span>
   );
-});
+}

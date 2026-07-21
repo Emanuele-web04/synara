@@ -6,8 +6,8 @@ import { migrationEntries, runMigrations } from "./Migrations.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
-import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
-import SpacesMigration from "./Migrations/070_Spaces.ts";
+import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
+import SpacesMigration from "./Migrations/074_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -210,6 +210,7 @@ managedAttachmentsFreshLayer("managed attachment migration on a fresh database",
       assert.deepInclude(executed, [65, "DurableQueuedTurnPromotions"]);
       assert.deepInclude(executed, [66, "DurableProviderRuntimeEvents"]);
       assert.deepInclude(executed, [67, "ProviderDeliveryReconciliation"]);
+      assert.deepInclude(executed, [74, "Spaces"]);
 
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name
@@ -264,11 +265,15 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [67, "ProviderDeliveryReconciliation"],
         [68, "GitHandoffOperations"],
         [69, "ProjectPullRequestPins"],
-        [70, "Spaces"],
+        [70, "AgentGatewayOperations"],
+        [71, "ProjectionThreadsGatewayProvenance"],
+        [72, "AgentGatewayOperationRetention"],
+        [73, "OperationalDiagnostics"],
+        [74, "Spaces"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-17), [
+      assert.deepStrictEqual(tracker.slice(-21), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -285,7 +290,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 67, name: "ProviderDeliveryReconciliation" },
         { migration_id: 68, name: "GitHandoffOperations" },
         { migration_id: 69, name: "ProjectPullRequestPins" },
-        { migration_id: 70, name: "Spaces" },
+        { migration_id: 70, name: "AgentGatewayOperations" },
+        { migration_id: 71, name: "ProjectionThreadsGatewayProvenance" },
+        { migration_id: 72, name: "AgentGatewayOperationRetention" },
+        { migration_id: 73, name: "OperationalDiagnostics" },
+        { migration_id: 74, name: "Spaces" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -295,42 +304,178 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
   );
 });
 
-const spacesLegacyLineageLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const agentGatewayRetentionLegacyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-spacesLegacyLineageLayer("Spaces migration after the pre-refactor private lineage", (it) => {
-  it.effect("reconciles old migration IDs while preserving the already-created schema", () =>
+agentGatewayRetentionLegacyLayer(
+  "agent gateway retention migration after legacy migration 71",
+  (it) => {
+    it.effect("adds caller purge tracking without losing legacy operation rows", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 69 });
+        yield* sql`
+        CREATE TABLE agent_gateway_operations (
+          operation_id TEXT PRIMARY KEY,
+          caller_thread_id TEXT NOT NULL,
+          caller_turn_id TEXT NOT NULL,
+          operation_kind TEXT NOT NULL CHECK (operation_kind IN ('create_threads')),
+          request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 256),
+          fingerprint TEXT NOT NULL,
+          requested_count INTEGER NOT NULL CHECK (requested_count BETWEEN 1 AND 20),
+          plan_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('reserved', 'dispatching', 'completed', 'failed', 'compensating')
+          ),
+          result_json TEXT,
+          error_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (caller_thread_id, caller_turn_id, operation_kind)
+        )
+      `;
+        yield* sql`
+        CREATE INDEX idx_agent_gateway_operations_status
+        ON agent_gateway_operations (status, updated_at)
+      `;
+        yield* ProjectionThreadsGatewayProvenanceMigration;
+        yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES
+          (70, 'AgentGatewayOperations'),
+          (71, 'ProjectionThreadsGatewayProvenance')
+      `;
+        yield* sql`
+        INSERT INTO agent_gateway_operations (
+          operation_id, caller_thread_id, caller_turn_id, operation_kind,
+          request_id, fingerprint, requested_count, plan_json, status,
+          result_json, error_json, created_at, updated_at
+        ) VALUES (
+          'legacy-operation', 'legacy-thread', 'legacy-turn', 'create_threads',
+          'legacy-request', 'legacy-fingerprint', 1, '[{"legacy":true}]', 'dispatching',
+          NULL, NULL, '2026-07-18T00:00:00.000Z', '2026-07-18T00:00:00.000Z'
+        )
+      `;
+
+        const executed = yield* runMigrations();
+        assert.deepStrictEqual(executed, [
+          [72, "AgentGatewayOperationRetention"],
+          [73, "OperationalDiagnostics"],
+          [74, "Spaces"],
+        ]);
+
+        const columns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('agent_gateway_operations')
+      `;
+        assert.include(
+          columns.map(({ name }) => name),
+          "caller_purged_at",
+        );
+        const rows = yield* sql<{
+          readonly operationId: string;
+          readonly callerThreadId: string;
+          readonly callerTurnId: string;
+          readonly planJson: string;
+          readonly status: string;
+          readonly callerPurgedAt: string | null;
+        }>`
+        SELECT
+          operation_id AS "operationId", caller_thread_id AS "callerThreadId",
+          caller_turn_id AS "callerTurnId", plan_json AS "planJson", status,
+          caller_purged_at AS "callerPurgedAt"
+        FROM agent_gateway_operations
+      `;
+        assert.deepStrictEqual(rows, [
+          {
+            operationId: "legacy-operation",
+            callerThreadId: "legacy-thread",
+            callerTurnId: "legacy-turn",
+            planJson: '[{"legacy":true}]',
+            status: "dispatching",
+            callerPurgedAt: null,
+          },
+        ]);
+      }),
+    );
+  },
+);
+
+const spacesMigrationCollisionLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+spacesMigrationCollisionLayer("Spaces migration after the private migration 70 collision", (it) => {
+  it.effect("reconciles the tracker and preserves pre-existing Spaces data", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* runMigrations({ toMigrationInclusive: 69 });
 
-      // The Spaces branch originally assigned these schemas IDs 54 and 55.
-      // Simulate a developer database that ran that branch before the durable
-      // delivery lineage claimed 54 through 69 on main.
-      yield* ProjectPullRequestPinsMigration;
+      // Private builds of the original Spaces branch claimed migration 70 before
+      // current main assigned that ID to AgentGatewayOperations.
       yield* SpacesMigration;
       yield* sql`
+        INSERT INTO projection_spaces (
+          space_id, name, icon, sort_order, created_at, updated_at, deleted_at
+        ) VALUES (
+          'space-private-70', 'Private Space', 'bag', 0,
+          '2026-07-17T00:00:00.000Z', '2026-07-17T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
         INSERT INTO effect_sql_migrations (migration_id, name)
-        VALUES (54, 'ProjectPullRequestPins'), (55, 'Spaces')
+        VALUES (70, 'Spaces')
       `;
 
       const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [70, "AgentGatewayOperations"],
+        [71, "ProjectionThreadsGatewayProvenance"],
+        [72, "AgentGatewayOperationRetention"],
+        [73, "OperationalDiagnostics"],
+        [74, "Spaces"],
+      ]);
+
+      const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        executed,
-        migrationEntries.filter(([id]) => id >= 54).map(([id, name]) => [id, name]),
+        tracker.slice(-5).map((row) => [row.migration_id, row.name]),
+        [
+          [70, "AgentGatewayOperations"],
+          [71, "ProjectionThreadsGatewayProvenance"],
+          [72, "AgentGatewayOperationRetention"],
+          [73, "OperationalDiagnostics"],
+          [74, "Spaces"],
+        ],
       );
+
+      const preservedSpaces = yield* sql<{ readonly spaceId: string; readonly name: string }>`
+        SELECT space_id AS "spaceId", name
+        FROM projection_spaces
+        WHERE space_id = 'space-private-70'
+      `;
+      assert.deepStrictEqual(preservedSpaces, [
+        { spaceId: "space-private-70", name: "Private Space" },
+      ]);
 
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name
         FROM sqlite_master
         WHERE type = 'table'
-          AND name IN ('project_pull_request_pins', 'projection_spaces')
+          AND name IN (
+            'agent_gateway_operations',
+            'operational_diagnostics',
+            'projection_spaces'
+          )
         ORDER BY name
       `;
       assert.deepStrictEqual(
         tables.map((row) => row.name),
-        ["project_pull_request_pins", "projection_spaces"],
+        ["agent_gateway_operations", "operational_diagnostics", "projection_spaces"],
       );
-      assert.include(yield* projectionThreadsColumnNames(sql), "env_mode");
+      assert.include(yield* projectionThreadsColumnNames(sql), "gateway_operation_id");
+      const gatewayColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('agent_gateway_operations')
+      `;
+      assert.include(
+        gatewayColumns.map((row) => row.name),
+        "caller_purged_at",
+      );
     }),
   );
 });

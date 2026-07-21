@@ -324,8 +324,13 @@ const makeCheckpointStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const operation = "CheckpointStore.diffCheckpoints";
 
-      let fromCommitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
-      const toCommitOid = yield* resolveCheckpointCommit(input.cwd, input.toCheckpointRef);
+      let [fromCommitOid, toCommitOid] = yield* Effect.all(
+        [
+          resolveCheckpointCommit(input.cwd, input.fromCheckpointRef),
+          resolveCheckpointCommit(input.cwd, input.toCheckpointRef),
+        ],
+        { concurrency: "unbounded" },
+      );
 
       if (!fromCommitOid && input.fallbackFromToHead === true) {
         const headCommit = yield* resolveHeadCommit(input.cwd);
@@ -366,8 +371,13 @@ const makeCheckpointStore = Effect.gen(function* () {
   const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.reverseCheckpointDiff";
-      const fromCommitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
-      const toCommitOid = yield* resolveCheckpointCommit(input.cwd, input.toCheckpointRef);
+      const [fromCommitOid, toCommitOid] = yield* Effect.all(
+        [
+          resolveCheckpointCommit(input.cwd, input.fromCheckpointRef),
+          resolveCheckpointCommit(input.cwd, input.toCheckpointRef),
+        ],
+        { concurrency: "unbounded" },
+      );
 
       if (!fromCommitOid || !toCommitOid) {
         return false;
@@ -449,6 +459,8 @@ const makeCheckpointStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const operation = "CheckpointStore.deleteCheckpointRefs";
 
+      // Ref deletion writes contend on packed-refs.lock; concurrent deletes
+      // lose the lock race and allowNonZeroExit would swallow the failure.
       yield* Effect.forEach(
         input.checkpointRefs,
         (checkpointRef) =>

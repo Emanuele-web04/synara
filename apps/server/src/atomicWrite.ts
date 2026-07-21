@@ -87,7 +87,7 @@ function assertSameRegularFile(descriptorStat: Stats, pathStat: Stats, tempPath:
 
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
-  readonly contents: string;
+  readonly contents: string | Uint8Array;
   readonly mode?: number;
 }) => {
   const directoryPath = path.dirname(input.filePath);
@@ -109,7 +109,7 @@ export const writeFileStringAtomically = (input: {
             let descriptorStat: Stats | undefined;
             try {
               if (supportsPosixPermissions()) await handle.chmod(mode);
-              await handle.writeFile(input.contents, "utf8");
+              await handle.writeFile(input.contents);
               await handle.sync();
               descriptorStat = await handle.stat();
             } finally {

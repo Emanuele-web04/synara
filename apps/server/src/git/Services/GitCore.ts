@@ -122,10 +122,36 @@ export interface GitDeleteBranchInput {
   force?: boolean | undefined;
 }
 
+export interface GitWorktreeOwnershipProof {
+  readonly token: string;
+  readonly gitDir: string;
+  readonly branch: string | null;
+  readonly head: string;
+  /** Baseline state, including copied tracked, untracked, and .worktreeinclude files. */
+  readonly stateHash?: string;
+}
+
+export interface GitVerifyWorktreeOwnershipResult {
+  readonly verified: boolean;
+  readonly reason: string | null;
+}
+
+export interface GitSnapshotWorktreeInput {
+  readonly cwd: string;
+  readonly outputPath: string;
+}
+
 export interface GitFetchPullRequestBranchInput {
   cwd: string;
   prNumber: number;
   branch: string;
+}
+
+export interface GitFetchPullRequestCommitInput {
+  cwd: string;
+  prNumber: number;
+  /** When provided by a full PR URL, must match the remote used for the fetch. */
+  expectedRepositoryNameWithOwner?: string;
 }
 
 export interface GitEnsureRemoteInput {
@@ -260,6 +286,24 @@ export interface GitCoreShape {
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;
 
+  /** Attach a non-versioned marker to a newly-created linked worktree's Git admin entry. */
+  readonly recordWorktreeOwnership: (input: {
+    readonly path: string;
+    readonly branch: string | null;
+    readonly token: string;
+  }) => Effect.Effect<GitWorktreeOwnershipProof, GitCommandError>;
+
+  /** Verify that a linked worktree is still the unchanged object carrying a marker. */
+  readonly verifyWorktreeOwnership: (input: {
+    readonly path: string;
+    readonly proof: GitWorktreeOwnershipProof;
+  }) => Effect.Effect<GitVerifyWorktreeOwnershipResult, GitCommandError>;
+
+  /** Snapshot tracked changes and transferable local files before managed cleanup. */
+  readonly snapshotWorktree: (
+    input: GitSnapshotWorktreeInput,
+  ) => Effect.Effect<void, GitCommandError>;
+
   /**
    * Create a detached worktree from a branch or ref.
    */
@@ -273,6 +317,11 @@ export interface GitCoreShape {
   readonly fetchPullRequestBranch: (
     input: GitFetchPullRequestBranchInput,
   ) => Effect.Effect<void, GitCommandError>;
+
+  /** Fetch a GitHub pull request head without creating or occupying a local branch. */
+  readonly fetchPullRequestCommit: (
+    input: GitFetchPullRequestCommitInput,
+  ) => Effect.Effect<string, GitCommandError>;
 
   /**
    * Ensure a named remote exists for the provided URL, returning the reused or created remote name.
@@ -302,6 +351,13 @@ export interface GitCoreShape {
    * Delete an existing local branch.
    */
   readonly deleteBranch: (input: GitDeleteBranchInput) => Effect.Effect<void, GitCommandError>;
+
+  /** Atomically delete a local branch only when it still points at the expected object id. */
+  readonly deleteBranchIfUnchanged: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly expectedHead: string;
+  }) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Rename an existing local branch.

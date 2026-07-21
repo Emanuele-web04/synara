@@ -3,10 +3,9 @@
 // Layer: Chat presentation
 // Depends on: the caller-supplied project display name.
 
-import { memo } from "react";
 import { SynaraLogo } from "~/components/SynaraLogo";
 
-export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
+export const ChatEmptyStateHero = function ChatEmptyStateHero({
   projectName,
 }: {
   projectName: string | undefined;
@@ -21,4 +20,4 @@ export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
       </div>
     </div>
   );
-});
+};

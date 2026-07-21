@@ -67,8 +67,12 @@ export function useSpacesController(input: {
   const spaces = useStore((store) => store.spaces);
   const reorderSpacesLocally = useStore((store) => store.reorderSpacesLocally);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const shellSnapshotSequence = useStore((store) => store.shellSnapshotSequence ?? 0);
   const activeSpaceId = useSpacesUiStore((store) => store.activeSpaceId);
   const setActiveSpaceId = useSpacesUiStore((store) => store.setActiveSpaceId);
+  const setOptimisticActiveSpaceId = useSpacesUiStore(
+    (store) => store.setOptimisticActiveSpaceId,
+  );
   const rememberSpaceThread = useSpacesUiStore((store) => store.rememberThread);
   const rememberSpaceProject = useSpacesUiStore((store) => store.rememberProject);
   const getLastSpaceThreadId = useSpacesUiStore((store) => store.getLastThreadId);
@@ -99,6 +103,7 @@ export function useSpacesController(input: {
     if (!threadsHydrated) return;
     reconcileSpacesUi({
       activeSpaceIds: new Set(spaces.map((space) => space.id)),
+      snapshotSequence: shellSnapshotSequence,
       projectSpaceById: new Map(
         ordinarySpaceProjects.map((project) => [project.id, project.spaceId ?? null] as const),
       ),
@@ -108,7 +113,14 @@ export function useSpacesController(input: {
           .map((thread) => [thread.id, thread.projectId] as const),
       ),
     });
-  }, [ordinarySpaceProjects, reconcileSpacesUi, sidebarThreads, spaces, threadsHydrated]);
+  }, [
+    ordinarySpaceProjects,
+    reconcileSpacesUi,
+    shellSnapshotSequence,
+    sidebarThreads,
+    spaces,
+    threadsHydrated,
+  ]);
 
   useRouteSpaceSync({
     isOnKanban,
@@ -231,7 +243,7 @@ export function useSpacesController(input: {
         return;
       }
 
-      const spaceId = await createSpace({ api, name: value.name, icon: value.icon });
+      const { spaceId, sequence } = await createSpace({ api, name: value.name, icon: value.icon });
       const projectId = spaceEditorState.projectIdAfterCreate;
       if (projectId) {
         try {
@@ -247,11 +259,13 @@ export function useSpacesController(input: {
 
         if (activeRouteProjectId === projectId || (isOnKanban && routeProjectId === projectId)) {
           selectSpaceForNavigation(spaceId);
+          setOptimisticActiveSpaceId(spaceId, sequence);
         }
         return;
       }
 
       handleSelectSpace(spaceId);
+      setOptimisticActiveSpaceId(spaceId, sequence);
       setSpaceProjectPickerTargetId(spaceId);
     },
     [
@@ -260,6 +274,7 @@ export function useSpacesController(input: {
       isOnKanban,
       routeProjectId,
       selectSpaceForNavigation,
+      setOptimisticActiveSpaceId,
       spaceEditorState,
       spaces,
     ],

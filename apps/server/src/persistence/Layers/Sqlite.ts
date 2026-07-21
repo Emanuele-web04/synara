@@ -54,7 +54,24 @@ const makeSetup = (dbPath?: string) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`PRAGMA journal_mode = WAL;`;
+      const journalModeRows = yield* sql<{ readonly journal_mode: string }>`
+        PRAGMA journal_mode = WAL;
+      `;
+      const journalMode = journalModeRows[0]?.journal_mode;
+      if (journalMode?.toLowerCase() !== "wal") {
+        yield* Effect.logWarning("SQLite WAL journal mode could not be enabled", {
+          resultingJournalMode: journalMode ?? "unknown",
+        });
+      }
+      // synchronous = NORMAL under WAL preserves database consistency and is
+      // safe across application crashes (no corruption, no torn writes). The
+      // only accepted risk is that an OS crash or power loss may lose the most
+      // recent committed transaction(s) that had not yet been checkpointed.
+      // That tradeoff is deliberate: at our per-event write rate, FULL's fsync
+      // on every commit is too costly, and losing the last few events on a hard
+      // power loss is acceptable.
+      yield* sql`PRAGMA synchronous = NORMAL;`;
+      yield* sql`PRAGMA busy_timeout = 5000;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
       const migrations = dbPath
         ? runWithPreMigrationBackup(dbPath, runMigrations())

@@ -11,10 +11,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { moveProjectsToSpace } from "./spaces";
 
-function makeApi(dispatchCommand: ReturnType<typeof vi.fn>): NativeApi {
+function makeApi(
+  dispatchCommand: ReturnType<typeof vi.fn>,
+  getShellSnapshot: ReturnType<typeof vi.fn> = vi.fn().mockRejectedValue(new Error("offline")),
+): NativeApi {
   return {
     orchestration: {
       dispatchCommand,
+      getShellSnapshot,
     },
   } as unknown as NativeApi;
 }
@@ -53,5 +57,43 @@ describe("moveProjectsToSpace", () => {
         spaceId: SpaceId.makeUnsafe("space-target"),
       }),
     ).resolves.toEqual({ failedProjectIds: [] });
+  });
+
+  it("does not report projects that committed before a transport failure", async () => {
+    const targetSpaceId = SpaceId.makeUnsafe("space-target");
+    const projectIds = ["project-1", "project-2"] as ProjectId[];
+    const dispatchCommand = vi.fn().mockRejectedValue(new Error("connection closed"));
+    const getShellSnapshot = vi.fn().mockResolvedValue({
+      projects: [
+        { id: projectIds[0], spaceId: targetSpaceId },
+        { id: projectIds[1], spaceId: null },
+      ],
+    });
+
+    await expect(
+      moveProjectsToSpace({
+        api: makeApi(dispatchCommand, getShellSnapshot),
+        projectIds,
+        spaceId: targetSpaceId,
+      }),
+    ).resolves.toEqual({ failedProjectIds: [projectIds[1]] });
+    expect(getShellSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("does not report projects deleted concurrently with an ambiguous dispatch", async () => {
+    const targetSpaceId = SpaceId.makeUnsafe("space-target");
+    const projectIds = ["project-deleted", "project-still-active"] as ProjectId[];
+    const dispatchCommand = vi.fn().mockRejectedValue(new Error("connection closed"));
+    const getShellSnapshot = vi.fn().mockResolvedValue({
+      projects: [{ id: projectIds[1], spaceId: null }],
+    });
+
+    await expect(
+      moveProjectsToSpace({
+        api: makeApi(dispatchCommand, getShellSnapshot),
+        projectIds,
+        spaceId: targetSpaceId,
+      }),
+    ).resolves.toEqual({ failedProjectIds: [projectIds[1]] });
   });
 });

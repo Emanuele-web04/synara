@@ -12,7 +12,8 @@ import {
 } from "@synara/contracts";
 import { applyClaudePromptEffortPrefix } from "@synara/shared/model";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronDownIcon, FastModeIcon, FastModeOutlineIcon, SettingsIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -149,6 +150,40 @@ export function resolveTraitsTriggerSummary(options: {
   };
 }
 
+// Compact icon toggle for fast mode, docked at the far right of the Effort
+// section header. Outline zap (Central reversed set) = default speed, filled
+// zap (Central fill set) = fast mode on. Toggling keeps the menu open so the
+// state flip is visible in place.
+function FastModeToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  const Icon = enabled ? FastModeIcon : FastModeOutlineIcon;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Fast mode"
+            aria-pressed={enabled}
+            className="-my-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)]"
+            onClick={onToggle}
+          />
+        }
+      >
+        <Icon
+          aria-hidden="true"
+          className={cn(
+            "size-3.5",
+            enabled ? "text-[hsl(var(--chart-4))]" : "text-muted-foreground/70",
+          )}
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top" variant="picker">
+        {enabled ? "Fast mode on" : "Fast mode off"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 interface TraitRadioOption {
   value: string;
   label: string;
@@ -163,6 +198,7 @@ interface TraitRadioOption {
 // `onValueChange` does not fire when the value is unchanged.
 function TraitRadioSection({
   label,
+  labelTrailing,
   note,
   value,
   options,
@@ -171,6 +207,7 @@ function TraitRadioSection({
   onSelectionComplete,
 }: {
   label: string;
+  labelTrailing?: ReactNode;
   note?: ReactNode;
   value: string;
   options: ReadonlyArray<TraitRadioOption>;
@@ -180,7 +217,14 @@ function TraitRadioSection({
 }) {
   return (
     <MenuGroup>
-      <MenuGroupLabel>{label}</MenuGroupLabel>
+      {labelTrailing ? (
+        <MenuGroupLabel className="flex items-center justify-between gap-2">
+          {label}
+          {labelTrailing}
+        </MenuGroupLabel>
+      ) : (
+        <MenuGroupLabel>{label}</MenuGroupLabel>
+      )}
       {note}
       <MenuRadioGroup value={value} onValueChange={onValueChange}>
         {options.map((option) => {
@@ -229,6 +273,7 @@ export interface TraitsMenuContentProps {
   onSelectionComplete?: () => void;
 }
 
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   provider,
   threadId,
@@ -263,6 +308,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     { includeFastMode },
   );
   const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
+  // Fast mode rides the Effort header as a compact icon toggle whenever an
+  // effort section exists; fast-only models (no effort levels) keep the
+  // standalone radio section instead.
+  const showsFastModeEffortToggle =
+    includeFastMode && supportsFastModeControl && effortLevels.length > 0;
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
@@ -274,15 +324,18 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
 
   // Single home for committing a trait change: merge the patch into the provider
   // options, persist it as sticky, and close the menu. Every section funnels here.
+  // The fast-mode header toggle passes `keepMenuOpen` so its state flip stays visible.
   const commitTrait = useCallback(
-    (patch: Record<string, unknown>) => {
+    (patch: Record<string, unknown>, options?: { keepMenuOpen?: boolean }) => {
       setProviderModelOptions(
         threadId,
         provider,
         buildNextProviderOptions(provider, modelOptions, patch),
         { ...(model !== undefined ? { model } : {}), persistSticky: true },
       );
-      onSelectionComplete?.();
+      if (!options?.keepMenuOpen) {
+        onSelectionComplete?.();
+      }
     },
     [threadId, provider, modelOptions, model, setProviderModelOptions, onSelectionComplete],
   );
@@ -367,6 +420,16 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           {hasPriorEffortSection ? <MenuDivider /> : null}
           <TraitRadioSection
             label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+            labelTrailing={
+              showsFastModeEffortToggle ? (
+                <FastModeToggle
+                  enabled={fastModeEnabled}
+                  onToggle={() =>
+                    commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
+                  }
+                />
+              ) : undefined
+            }
             note={
               ultrathinkPromptControlled ? (
                 <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
@@ -387,7 +450,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           />
         </>
       ) : null}
-      {includeFastMode && supportsFastModeControl ? (
+      {includeFastMode && supportsFastModeControl && !showsFastModeEffortToggle ? (
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <TraitRadioSection
@@ -531,7 +594,6 @@ export const TraitsPicker = memo(function TraitsPicker({
     </span>
   ) : isCodexStyle ? (
     <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-      <SettingsIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
       <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
         {visiblePrimaryTriggerLabel ? (
           <span className="truncate">{visiblePrimaryTriggerLabel}</span>
@@ -560,7 +622,6 @@ export const TraitsPicker = memo(function TraitsPicker({
     </span>
   ) : (
     <>
-      <SettingsIcon aria-hidden="true" className="size-3.5 opacity-75" />
       <span className="inline-flex items-center gap-1.5">
         <span>{visiblePrimaryTriggerLabel ?? "Options"}</span>
         {showsFastBadge ? (

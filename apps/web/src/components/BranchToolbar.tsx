@@ -2,16 +2,10 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@synara/contracts";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  HandoffIcon,
-  WorktreeIcon,
-} from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
@@ -51,6 +45,7 @@ import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
   MenuGroup,
@@ -234,7 +229,8 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const threads = useStore(useRef(createAllThreadsSelector()).current);
+  const [allThreadsSelector] = useState(() => createAllThreadsSelector());
+  const threads = useStore(allThreadsSelector);
   const { settings } = useAppSettings();
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
@@ -471,11 +467,9 @@ export default function BranchToolbar({
                 <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
                   <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
-                  <ChevronRightIcon
-                    className={cn(
-                      "size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)] transition-transform duration-150",
-                      rateLimitsOpen && "rotate-90",
-                    )}
+                  <DisclosureChevron
+                    open={rateLimitsOpen}
+                    className="text-[var(--color-text-foreground-secondary)]"
                   />
                 </MenuItem>
                 <CollapsiblePanel>

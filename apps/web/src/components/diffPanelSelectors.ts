@@ -5,7 +5,7 @@
 
 import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
 
-import type { AppState } from "../store";
+import type { AppState } from "../storeState";
 import { collectByIds } from "../threadDerivation";
 import type { ChatMessage, Thread, ThreadShell, TurnDiffSummary } from "../types";
 import { resolveDiffPanelRepoLiveRefresh } from "./DiffPanel.logic";

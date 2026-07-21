@@ -7,14 +7,12 @@
 // Exports: PullRequestList
 
 import type { ProjectId, PullRequestListEntry } from "@synara/contracts";
-import { memo } from "react";
-
 import { pullRequestListEntryKey, type PullRequestListGroup } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
 import { PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
-export const PullRequestList = memo(function PullRequestList({
+export const PullRequestList = function PullRequestList({
   entries,
   grouped,
   selectedProjectId,
@@ -70,4 +68,4 @@ export const PullRequestList = memo(function PullRequestList({
     );
   }
   return <div className="space-y-0.5">{entries.map(renderEntry)}</div>;
-});
+};

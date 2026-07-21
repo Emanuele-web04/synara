@@ -310,10 +310,11 @@ async function mountApp(options?: {
         expect(threadStreamRequestIdByThreadId.has(expectedThreadId)).toBe(true);
         const expectedThread = findThreadDetailFromFixtureSnapshot(expectedThreadId);
         if (!expectedThread) return;
-        const hydratedMessageIds =
-          useStore.getState().messageIdsByThreadId?.[expectedThreadId] ?? [];
+        const hydratedMessageIdSet = new Set(
+          useStore.getState().messageIdsByThreadId?.[expectedThreadId] ?? [],
+        );
         expect(
-          expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+          expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
       },
       { timeout: 20_000, interval: 16 },

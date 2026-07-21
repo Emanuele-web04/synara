@@ -6,7 +6,7 @@
 
 import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
@@ -67,12 +67,8 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     projectId === null
       ? null
       : (board.projects.find((candidate) => candidate.projectId === projectId) ?? null);
-  const hasActiveCardWork = useMemo(
-    () =>
-      board.projects.some((project) =>
-        project.inProgress.some((card) => card.activeWorkStartedAt !== null),
-      ),
-    [board.projects],
+  const hasActiveCardWork = board.projects.some((project) =>
+    project.inProgress.some((card) => card.activeWorkStartedAt !== null),
   );
   const nowMs = useNowMs(hasActiveCardWork);
 
@@ -81,40 +77,38 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     projectId: ProjectId | null;
     sendAsDraft: boolean;
   } | null>(null);
-  const handleNewTask = useCallback(
-    (targetProjectId: ProjectId | null, options?: { sendAsDraft?: boolean }) => {
-      setNewTaskDialog({
-        key: Date.now(),
-        projectId: targetProjectId,
-        sendAsDraft: options?.sendAsDraft ?? false,
-      });
-    },
-    [],
-  );
+  const handleNewTask = (
+    targetProjectId: ProjectId | null,
+    options?: { sendAsDraft?: boolean },
+  ) => {
+    setNewTaskDialog({
+      key: Date.now(),
+      projectId: targetProjectId,
+      sendAsDraft: options?.sendAsDraft ?? false,
+    });
+  };
   const projectBoardId = projectBoard?.projectId ?? null;
-  const handleNewTaskInProjectBoard = useCallback(() => {
+  const handleNewTaskInProjectBoard = () => {
     handleNewTask(projectBoardId);
-  }, [handleNewTask, projectBoardId]);
+  };
   // The Draft column's "+" implies "add a card here" — seed the dialog's
   // "Send as draft" toggle so the task parks in Draft instead of dispatching.
-  const handleNewDraftInProjectBoard = useCallback(() => {
+  const handleNewDraftInProjectBoard = () => {
     handleNewTask(projectBoardId, { sendAsDraft: true });
-  }, [handleNewTask, projectBoardId]);
-  const newTaskProjectOptions = useMemo(
-    () =>
-      board.projects.map((project) => ({
-        id: project.projectId,
-        name: project.projectName,
-      })),
-    [board.projects],
-  );
+  };
+  const newTaskProjectOptions = board.projects.map((project) => ({
+    id: project.projectId,
+    name: project.projectName,
+  }));
 
   // Kanban-scoped ⌥⌘T: open the New task dialog targeting the current board (or
   // unscoped on the overview). A ref mirrors the open state so a repeat press
   // doesn't remount an already-open dialog and wipe a half-typed prompt — and so
   // the listener stays registered once instead of re-binding on every open/close.
   const isNewTaskDialogOpenRef = useRef(false);
-  isNewTaskDialogOpenRef.current = newTaskDialog !== null;
+  useEffect(() => {
+    isNewTaskDialogOpenRef.current = newTaskDialog !== null;
+  }, [newTaskDialog]);
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!isNewTaskShortcut(event) || isNewTaskDialogOpenRef.current) {
@@ -140,25 +134,19 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     }
   }, [navigate, projectBoard, projectId, threadsHydrated]);
 
-  const handleOpenCard = useCallback(
-    (card: KanbanCard) => {
-      void navigate({ to: "/$threadId", params: { threadId: card.threadId } });
-    },
-    [navigate],
-  );
+  const handleOpenCard = (card: KanbanCard) => {
+    void navigate({ to: "/$threadId", params: { threadId: card.threadId } });
+  };
 
   const { onCardContextMenu, renameDialog } = useKanbanCardContextMenu();
 
-  const handleOpenProject = useCallback(
-    (targetProjectId: ProjectId) => {
-      void navigate({ to: "/kanban/$projectId", params: { projectId: targetProjectId } });
-    },
-    [navigate],
-  );
+  const handleOpenProject = (targetProjectId: ProjectId) => {
+    void navigate({ to: "/kanban/$projectId", params: { projectId: targetProjectId } });
+  };
 
-  const handleBackToOverview = useCallback(() => {
+  const handleBackToOverview = () => {
     void navigate({ to: "/kanban" });
-  }, [navigate]);
+  };
 
   return (
     <RouteInsetSurface>

@@ -24,6 +24,19 @@ async function dispatch(
 }
 
 describe("Spaces", () => {
+  it("reserves the virtual Void identity", async () => {
+    await expect(
+      dispatch(createEmptyReadModel("2026-07-15T10:00:00.000Z"), {
+        type: "space.create",
+        commandId: CommandId.makeUnsafe("cmd-reserved-void-space"),
+        spaceId: SpaceId.makeUnsafe("void"),
+        name: "Custom space",
+        icon: "bag",
+        createdAt: "2026-07-15T10:00:00.000Z",
+      }),
+    ).rejects.toThrow(/reserved Void identity/i);
+  });
+
   it("orders custom spaces, assigns projects, and moves them to Void on deletion", async () => {
     const createdAt = "2026-07-15T10:00:00.000Z";
     const workSpaceId = SpaceId.makeUnsafe("space-work");
@@ -117,10 +130,7 @@ describe("Spaces", () => {
       spaceId: workSpaceId,
     });
     readModel = deletion.readModel;
-    expect(deletion.events.map((event) => event.type)).toEqual([
-      "project.meta-updated",
-      "space.deleted",
-    ]);
+    expect(deletion.events.map((event) => event.type)).toEqual(["space.deleted"]);
     expect(readModel.projects[0]?.spaceId).toBeNull();
     expect(readModel.spaces.find((space) => space.id === workSpaceId)?.deletedAt).not.toBeNull();
 
@@ -679,11 +689,45 @@ describe("Spaces", () => {
       commandId: CommandId.makeUnsafe("cmd-delete-space"),
       spaceId,
     });
-    expect(deletion.events.map((event) => event.type)).toEqual([
-      "project.meta-updated",
-      "space.deleted",
-    ]);
+    expect(deletion.events.map((event) => event.type)).toEqual(["space.deleted"]);
     expect(deletion.readModel.projects[0]?.spaceId).toBeNull();
     expect(deletion.readModel.projects[0]?.deletedAt).not.toBeNull();
+  });
+
+  it("preserves a newer project timestamp when deleting its space", async () => {
+    const spaceId = SpaceId.makeUnsafe("space-clock-skew");
+    const projectId = ProjectId.makeUnsafe("project-clock-skew");
+    const futureCreatedAt = "2099-07-15T10:00:00.000Z";
+    let readModel = createEmptyReadModel("2026-07-15T10:00:00.000Z");
+
+    ({ readModel } = await dispatch(readModel, {
+      type: "space.create",
+      commandId: CommandId.makeUnsafe("cmd-space-clock-skew"),
+      spaceId,
+      name: "Future",
+      icon: "bag",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    }));
+    ({ readModel } = await dispatch(readModel, {
+      type: "project.create",
+      commandId: CommandId.makeUnsafe("cmd-project-clock-skew"),
+      projectId,
+      title: "Future project",
+      workspaceRoot: "/tmp/future-project",
+      spaceId,
+      createdAt: futureCreatedAt,
+    }));
+
+    const deletion = await dispatch(readModel, {
+      type: "space.delete",
+      commandId: CommandId.makeUnsafe("cmd-delete-space-clock-skew"),
+      spaceId,
+    });
+
+    expect(deletion.readModel.projects[0]).toMatchObject({
+      id: projectId,
+      spaceId: null,
+      updatedAt: futureCreatedAt,
+    });
   });
 });

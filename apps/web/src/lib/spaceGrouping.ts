@@ -5,7 +5,7 @@
 //      rebuilt "active space first, then Void, then the rest" plus the `Name · Active` label by
 //      hand. Three copies drift; this is the single source they all read from.
 
-import type { SpaceIconName, SpaceId } from "@synara/contracts";
+import { RESERVED_VOID_SPACE_ID, type SpaceIconName, type SpaceId } from "@synara/contracts";
 
 import type { Space } from "~/types";
 
@@ -18,14 +18,19 @@ export const VOID_SPACE_ICON = "black-hole";
  * sentinel that three modules each spell out by hand is a sentinel that eventually only
  * two of them agree on.
  */
-export const VOID_SPACE_KEY = "void";
+export const VOID_SPACE_KEY = RESERVED_VOID_SPACE_ID;
 
-/** Resolve stale persisted selection to Void before any Space-scoped list filters on it. */
+/**
+ * Resolve stale persisted selection to Void before Space-scoped lists filter on it. A receipt-
+ * fenced optimistic selection remains usable until shell hydration reaches the command sequence.
+ */
 export function resolveActiveSpaceId(
   activeSpaceId: SpaceId | null,
   spaces: ReadonlyArray<Space>,
+  pendingActiveSpaceId: SpaceId | null = null,
 ): SpaceId | null {
-  return activeSpaceId !== null && spaces.some((space) => space.id === activeSpaceId)
+  return activeSpaceId !== null &&
+    (activeSpaceId === pendingActiveSpaceId || spaces.some((space) => space.id === activeSpaceId))
     ? activeSpaceId
     : null;
 }

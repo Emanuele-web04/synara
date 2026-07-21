@@ -4,7 +4,6 @@
 // Exports: ActiveTaskListCard
 
 import { pluralize } from "@synara/shared/text";
-import { memo } from "react";
 import {
   PiArrowsInSimple,
   PiArrowsOutSimple,
@@ -48,7 +47,7 @@ function taskStatusIcon(status: ActiveTaskListState["tasks"][number]["status"]) 
   return <span className="block size-[7px] rounded-full border border-current" />;
 }
 
-export const ActiveTaskListCard = memo(function ActiveTaskListCard({
+export function ActiveTaskListCard({
   activeTaskList,
   backgroundTaskCount = 0,
   compact = false,
@@ -159,6 +158,6 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
       )}
     </>
   );
-});
+}
 
 export type { ActiveTaskListCardProps };

@@ -23,6 +23,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "codex.eventmsg",
   "claude.sdk.message",
   "claude.sdk.permission",
+  "claude.sdk.hook",
   "codex.sdk.thread-event",
   "antigravity.cli.event",
   "acp.jsonrpc",
@@ -172,6 +173,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "turn.proposed.delta",
   "turn.proposed.completed",
   "turn.diff.updated",
+  "turn.steered",
   "item.started",
   "item.updated",
   "item.completed",
@@ -182,6 +184,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "user-input.resolved",
   "task.started",
   "task.progress",
+  "task.updated",
   "task.completed",
   "hook.started",
   "hook.progress",
@@ -222,6 +225,7 @@ const TurnTasksUpdatedType = Schema.Literal("turn.tasks.updated");
 const TurnProposedDeltaType = Schema.Literal("turn.proposed.delta");
 const TurnProposedCompletedType = Schema.Literal("turn.proposed.completed");
 const TurnDiffUpdatedType = Schema.Literal("turn.diff.updated");
+const TurnSteeredType = Schema.Literal("turn.steered");
 const ItemStartedType = Schema.Literal("item.started");
 const ItemUpdatedType = Schema.Literal("item.updated");
 const ItemCompletedType = Schema.Literal("item.completed");
@@ -232,6 +236,7 @@ const UserInputRequestedType = Schema.Literal("user-input.requested");
 const UserInputResolvedType = Schema.Literal("user-input.resolved");
 const TaskStartedType = Schema.Literal("task.started");
 const TaskProgressType = Schema.Literal("task.progress");
+const TaskUpdatedType = Schema.Literal("task.updated");
 const TaskCompletedType = Schema.Literal("task.completed");
 const HookStartedType = Schema.Literal("hook.started");
 const HookProgressType = Schema.Literal("hook.progress");
@@ -475,10 +480,78 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
+// Phase declared in a workflow script's `meta.phases` literal.
+const WorkflowPhase = Schema.Struct({
+  title: TrimmedNonEmptyStringSchema,
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowPhase = typeof WorkflowPhase.Type;
+
+// Final per-agent snapshot from a settled workflow's progress file.
+const WorkflowAgentSnapshot = Schema.Struct({
+  label: TrimmedNonEmptyStringSchema,
+  phaseIndex: Schema.optional(Schema.Int),
+  // Authoritative phase name from the progress file; phaseIndex is 1-based in
+  // recent CLI output files, so prefer the title when both are present.
+  phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Backfilled from the live runtime snapshots at settle when the progress
+  // file itself carries no effort.
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(TrimmedNonEmptyStringSchema),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  durationMs: Schema.optional(Schema.Int),
+  lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentSnapshot = typeof WorkflowAgentSnapshot.Type;
+
+// Live per-agent snapshot polled from a running workflow's transcript directory
+// (journal.jsonl + agent-<id>.jsonl). The label is a best-effort join against
+// the workflow's progress descriptions and may be absent.
+const WorkflowAgentRuntimeSnapshot = Schema.Struct({
+  agentId: TrimmedNonEmptyStringSchema,
+  label: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Top-level `effort` field on the transcript's assistant lines.
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(Schema.Literals(["running", "completed"])),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  recentToolNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+  startedAt: Schema.optional(TrimmedNonEmptyStringSchema),
+  lastActivityAt: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentRuntimeSnapshot = typeof WorkflowAgentRuntimeSnapshot.Type;
+
+// Per-agent() opts scanned statically from a workflow script (string literals
+// only): planned phase/model/effort for an agent label before it runs live.
+const WorkflowAgentPlan = Schema.Struct({
+  phase: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentPlan = typeof WorkflowAgentPlan.Type;
+
 const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Parsed statically from the workflow script (task_started.prompt or the
+  // Workflow tool input); absent when the meta literal is not parseable.
+  workflowPhases: Schema.optional(Schema.Array(WorkflowPhase)),
+  // agent() label -> phase title pairs scanned from the script text.
+  workflowAgentPhases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  // agent() label -> planned {phase, model, effort} opts scanned from the script
+  // text. Superset of workflowAgentPhases (kept for already-persisted events).
+  workflowAgentPlans: Schema.optional(Schema.Record(Schema.String, WorkflowAgentPlan)),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
 
@@ -488,16 +561,45 @@ const TaskProgressPayload = Schema.Struct({
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Live per-agent snapshots for workflow tasks, polled from the run's
+  // transcript directory while the workflow is running.
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
+
+const TaskUpdatedPayload = Schema.Struct({
+  taskId: RuntimeTaskId,
+  status: Schema.optional(
+    Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
+  ),
+  error: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Set when the SDK moves a blocking Task call between foreground and background.
+  isBackgrounded: Schema.optional(Schema.Boolean),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Persisted launch identifiers from the Workflow tool result; re-invoking the
+  // tool with {scriptPath, resumeFromRunId} resumes the run.
+  workflowRunId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowScriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 const TaskCompletedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
+
+// A queued mid-task user message was injected into a running subagent.
+const TurnSteeredPayload = Schema.Struct({
+  message: TrimmedNonEmptyStringSchema,
+});
+export type TurnSteeredPayload = typeof TurnSteeredPayload.Type;
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
@@ -771,6 +873,13 @@ const ProviderRuntimeTurnDiffUpdatedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTurnDiffUpdatedEvent = typeof ProviderRuntimeTurnDiffUpdatedEvent.Type;
 
+const ProviderRuntimeTurnSteeredEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TurnSteeredType,
+  payload: TurnSteeredPayload,
+});
+export type ProviderRuntimeTurnSteeredEvent = typeof ProviderRuntimeTurnSteeredEvent.Type;
+
 const ProviderRuntimeItemStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: ItemStartedType,
@@ -842,6 +951,13 @@ const ProviderRuntimeTaskProgressEvent = Schema.Struct({
   payload: TaskProgressPayload,
 });
 export type ProviderRuntimeTaskProgressEvent = typeof ProviderRuntimeTaskProgressEvent.Type;
+
+const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskUpdatedType,
+  payload: TaskUpdatedPayload,
+});
+export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
 
 const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -986,6 +1102,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeTurnProposedDeltaEvent,
   ProviderRuntimeTurnProposedCompletedEvent,
   ProviderRuntimeTurnDiffUpdatedEvent,
+  ProviderRuntimeTurnSteeredEvent,
   ProviderRuntimeItemStartedEvent,
   ProviderRuntimeItemUpdatedEvent,
   ProviderRuntimeItemCompletedEvent,
@@ -996,6 +1113,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeUserInputResolvedEvent,
   ProviderRuntimeTaskStartedEvent,
   ProviderRuntimeTaskProgressEvent,
+  ProviderRuntimeTaskUpdatedEvent,
   ProviderRuntimeTaskCompletedEvent,
   ProviderRuntimeHookStartedEvent,
   ProviderRuntimeHookProgressEvent,

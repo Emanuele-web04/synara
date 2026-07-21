@@ -6,6 +6,7 @@ import * as SchemaGetter from "effect/SchemaGetter";
 import { ModelSelection, ProjectScript } from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
+  ClearProjectionProjectSpaceAssignmentsInput,
   DeleteProjectionProjectInput,
   GetProjectionProjectInput,
   ProjectionProject,
@@ -130,6 +131,18 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       `,
   });
 
+  const clearProjectionProjectSpaceAssignments = SqlSchema.void({
+    Request: ClearProjectionProjectSpaceAssignmentsInput,
+    execute: ({ spaceId, updatedAt }) =>
+      sql`
+        UPDATE projection_projects
+        SET
+          space_id = NULL,
+          updated_at = CASE WHEN updated_at > ${updatedAt} THEN updated_at ELSE ${updatedAt} END
+        WHERE space_id = ${spaceId}
+      `,
+  });
+
   const upsert: ProjectionProjectRepositoryShape["upsert"] = (row) =>
     upsertProjectionProjectRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.upsert:query")),
@@ -150,11 +163,20 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.deleteById:query")),
     );
 
+  const clearSpaceAssignments: ProjectionProjectRepositoryShape["clearSpaceAssignments"] =
+    (input) =>
+      clearProjectionProjectSpaceAssignments(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionProjectRepository.clearSpaceAssignments:query"),
+        ),
+      );
+
   return {
     upsert,
     getById,
     listAll,
     deleteById,
+    clearSpaceAssignments,
   } satisfies ProjectionProjectRepositoryShape;
 });
 

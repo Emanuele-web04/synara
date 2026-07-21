@@ -30,6 +30,7 @@ import type {
   ProviderInteractionMode,
   ProjectKind,
   RuntimeMode,
+  ThreadCreationSource,
   ThreadEnvironmentMode,
 } from "@synara/contracts";
 
@@ -235,6 +236,8 @@ export interface Thread extends ThreadWorkspaceState {
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -272,6 +275,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   threadMarkers?: ThreadMarker[];
   notes?: string;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

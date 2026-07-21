@@ -1,6 +1,6 @@
 import { Effect } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -9,7 +9,7 @@ import {
   resolveGrokAcpAuthMethodId,
 } from "./GrokAcpSupport.ts";
 
-function initializeWithAuthMethods(ids: ReadonlyArray<string>): EffectAcpSchema.InitializeResponse {
+function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeResponse {
   return {
     protocolVersion: 1,
     authMethods: ids.map((id) => ({ id, name: id })),
@@ -120,7 +120,7 @@ describe("resolveGrokAcpAuthMethodId", () => {
       resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["browser_login"])).pipe(Effect.flip),
     );
 
-    expect(error).toBeInstanceOf(EffectAcpErrors.AcpRequestError);
+    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
     expect(error.message).toBe("Grok ACP authentication is unavailable.");
   });
 });
@@ -147,7 +147,7 @@ describe("applyGrokAcpModelSelection", () => {
             { value: "high", name: "High" },
           ],
         },
-      ] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] as ReadonlyArray<Acp.SessionConfigOption>),
       setConfigOption: (id: string, value: string | boolean) =>
         Effect.sync(() => {
           calls.push({ type: "config", id, value: String(value) });

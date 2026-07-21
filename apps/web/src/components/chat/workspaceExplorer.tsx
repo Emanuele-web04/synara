@@ -15,7 +15,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   forwardRef,
-  useCallback,
 } from "react";
 
 import {
@@ -95,28 +94,23 @@ function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
  */
 export function useExplorerEntryPrefetch(cwd: string | null) {
   const queryClient = useQueryClient();
-  return useCallback(
-    (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => {
-      if (!cwd) {
-        return;
-      }
-      if (entry.kind === "directory") {
-        void queryClient.prefetchQuery(
-          projectListDirectoriesQueryOptions({
-            cwd,
-            relativePath: entry.path,
-            includeFiles: true,
-          }),
-        );
-        return;
-      }
+  return (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => {
+    if (!cwd) {
+      return;
+    }
+    if (entry.kind === "directory") {
       void queryClient.prefetchQuery(
-        projectReadFileQueryOptions({ cwd, relativePath: entry.path }),
+        projectListDirectoriesQueryOptions({
+          cwd,
+          relativePath: entry.path,
+          includeFiles: true,
+        }),
       );
-      void getSyntaxHighlighterPromise(getSyntaxLanguageForPath(entry.path)).catch(() => undefined);
-    },
-    [cwd, queryClient],
-  );
+      return;
+    }
+    void queryClient.prefetchQuery(projectReadFileQueryOptions({ cwd, relativePath: entry.path }));
+    void getSyntaxHighlighterPromise(getSyntaxLanguageForPath(entry.path)).catch(() => undefined);
+  };
 }
 
 // Forwards its ref and spreads incoming props so directory rows can act as the
@@ -150,32 +144,23 @@ const ExplorerRow = forwardRef<
   const isDirectory = entry.kind === "directory";
   // Directory rows are the Collapsible trigger: chain Base UI's injected onClick
   // (which toggles open/close) and skip file selection. File rows open the preview.
-  const handleClick = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
-      onClick?.(event);
-      if (isDirectory) {
-        return;
-      }
-      onSelectFile(entry.path);
-    },
-    [entry.path, isDirectory, onClick, onSelectFile],
-  );
-  const handlePrefetch = useCallback(() => {
+  const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    onClick?.(event);
+    if (isDirectory) {
+      return;
+    }
+    onSelectFile(entry.path);
+  };
+  const handlePrefetch = () => {
     onPrefetchEntry(entry);
-  }, [entry, onPrefetchEntry]);
-  const handleContextMenu = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      onEntryContextMenu(entry, { x: event.clientX, y: event.clientY });
-    },
-    [entry, onEntryContextMenu],
-  );
-  const handleDragStart = useCallback(
-    (event: ReactDragEvent<HTMLButtonElement>) => {
-      setFileReferenceDragData(event.dataTransfer, entry.path);
-    },
-    [entry.path],
-  );
+  };
+  const handleContextMenu = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    onEntryContextMenu(entry, { x: event.clientX, y: event.clientY });
+  };
+  const handleDragStart = (event: ReactDragEvent<HTMLButtonElement>) => {
+    setFileReferenceDragData(event.dataTransfer, entry.path);
+  };
 
   return (
     <button
@@ -323,23 +308,17 @@ function WorkspaceDirectory(props: {
 function useTreeEntryContextMenu(
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
 ) {
-  return useCallback(
-    (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => {
-      void showFileReferenceContextMenu({ path: entry.path, position, onReferenceInChat });
-    },
-    [onReferenceInChat],
-  );
+  return (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => {
+    void showFileReferenceContextMenu({ path: entry.path, position, onReferenceInChat });
+  };
 }
 
 function useResultEntryContextMenu(
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
 ) {
-  return useCallback(
-    (path: string, position: { x: number; y: number }) => {
-      void showFileReferenceContextMenu({ path, position, onReferenceInChat });
-    },
-    [onReferenceInChat],
-  );
+  return (path: string, position: { x: number; y: number }) => {
+    void showFileReferenceContextMenu({ path, position, onReferenceInChat });
+  };
 }
 
 // Scrollable file-tree body, shared by the standalone files sidebar and the
@@ -415,9 +394,9 @@ function WorkspaceSearchResultRow(props: {
 }) {
   const { entry, onEntryContextMenu, onPrefetchEntry, onSelectFile } = props;
   const { dir, name } = splitRepoRelativePath(entry.path);
-  const handlePrefetch = useCallback(() => {
+  const handlePrefetch = () => {
     onPrefetchEntry(entry);
-  }, [entry, onPrefetchEntry]);
+  };
 
   return (
     <button
@@ -507,26 +486,23 @@ function WorkspaceSearchInputHeader(props: {
   onSelectFile: (path: string) => void;
 }) {
   const { onQueryChange, onSelectFile, query, search } = props;
-  const handleInputKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        if (!search.searchResultsCurrent) {
-          return;
-        }
-        const topMatch = search.fileMatches[0];
-        if (topMatch) {
-          onSelectFile(topMatch.path);
-        }
+  const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!search.searchResultsCurrent) {
         return;
       }
-      if (event.key === "Escape" && query.length > 0) {
-        event.stopPropagation();
-        onQueryChange("");
+      const topMatch = search.fileMatches[0];
+      if (topMatch) {
+        onSelectFile(topMatch.path);
       }
-    },
-    [onQueryChange, onSelectFile, query.length, search.fileMatches, search.searchResultsCurrent],
-  );
+      return;
+    }
+    if (event.key === "Escape" && query.length > 0) {
+      event.stopPropagation();
+      onQueryChange("");
+    }
+  };
 
   return (
     <div className="shrink-0 border-b border-border/65 p-2">

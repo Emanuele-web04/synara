@@ -360,6 +360,16 @@ export function projectEvent(
               ? { ...space, deletedAt: payload.deletedAt, updatedAt: payload.deletedAt }
               : space,
           ),
+          projects: nextBase.projects.map((project) =>
+            project.spaceId === payload.spaceId
+              ? {
+                  ...project,
+                  spaceId: null,
+                  updatedAt:
+                    project.updatedAt > payload.deletedAt ? project.updatedAt : payload.deletedAt,
+                }
+              : project,
+          ),
         })),
       );
 
@@ -460,6 +470,11 @@ export function projectEvent(
             createBranchFlowCompleted: payload.createBranchFlowCompleted,
             isPinned: payload.isPinned,
             parentThreadId: payload.parentThreadId,
+            creationSource: payload.creationSource ?? null,
+            sourceThreadId: payload.sourceThreadId ?? null,
+            sourceTurnId: payload.sourceTurnId ?? null,
+            gatewayOperationId: payload.gatewayOperationId ?? null,
+            gatewayOperationIndex: payload.gatewayOperationIndex ?? null,
             subagentAgentId: payload.subagentAgentId,
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,

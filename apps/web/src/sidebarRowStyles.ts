@@ -34,9 +34,6 @@ export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
  */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
-/** Dimmer idle label color shared by project header rows, thread rows, and settings nav rows. */
-export const SIDEBAR_ROW_MUTED_TEXT_CLASS_NAME = "text-muted-foreground/79";
-
 /** Section label ("Threads"/"Pinned"/"Workspace" and settings "App"/"Synara"). */
 export const SIDEBAR_SECTION_LABEL_CLASS_NAME =
   "text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58";
@@ -97,7 +94,5 @@ const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, stri
 export function sidebarHoverRevealHideClassName(group: SidebarHoverRevealGroup): string {
   return SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME[group];
 }
-
-export const SIDEBAR_HEADER_ICON_CLASS_NAME = "size-4 shrink-0 text-inherit";
 
 export const SIDEBAR_HEADER_LABEL_CLASS_NAME = "truncate";
