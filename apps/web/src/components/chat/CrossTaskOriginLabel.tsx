@@ -1,11 +1,10 @@
 // FILE: CrossTaskOriginLabel.tsx
-// Purpose: Identify the source task for conversations created by another Synara agent.
+// Purpose: Identify the source thread for conversations created by another Synara agent.
 // Layer: Chat transcript UI
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind, type ThreadId } from "@synara/contracts";
+import { type ProviderKind, type ThreadId } from "@synara/contracts";
 import { memo, type ReactNode } from "react";
 
-import { ProviderIcon } from "../ProviderIcon";
 import { SynaraLogo } from "../SynaraLogo";
 import { cn } from "~/lib/utils";
 
@@ -14,23 +13,16 @@ export interface CrossTaskOrigin {
   readonly sourceProvider: ProviderKind | null;
 }
 
-function OriginContent({ origin }: { readonly origin: CrossTaskOrigin }): ReactNode {
-  const providerLabel = origin.sourceProvider
-    ? PROVIDER_DISPLAY_NAMES[origin.sourceProvider]
-    : null;
-
+// A single, app-level attribution: the message reached this thread from another
+// Synara thread, so it always reads as "Sent by Synara" with the Synara mark
+// (the origin provider is not surfaced here to keep one consistent label).
+function OriginContent(): ReactNode {
   return (
     <>
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground/70">
-        {origin.sourceProvider ? (
-          <ProviderIcon provider={origin.sourceProvider} className="size-4" />
-        ) : (
-          <SynaraLogo className="h-4 w-auto" aria-label="Synara" />
-        )}
+        <SynaraLogo className="h-4 w-auto" aria-label="Synara" />
       </span>
-      <span className="truncate">
-        {providerLabel ? `Sent by ${providerLabel} from another task` : "Sent from another task"}
-      </span>
+      <span className="truncate">Sent by Synara from another thread</span>
     </>
   );
 }
@@ -55,17 +47,17 @@ export const CrossTaskOriginLabel = memo(function CrossTaskOriginLabel({
         type="button"
         className={className}
         data-cross-task-origin="true"
-        aria-label="Open source task"
+        aria-label="Open source thread"
         onClick={() => onOpenSourceThread(origin.sourceThreadId)}
       >
-        <OriginContent origin={origin} />
+        <OriginContent />
       </button>
     );
   }
 
   return (
     <div className={className} data-cross-task-origin="true">
-      <OriginContent origin={origin} />
+      <OriginContent />
     </div>
   );
 });

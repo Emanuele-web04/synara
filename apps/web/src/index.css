@@ -2240,6 +2240,43 @@ label:has(> select#reasoning-effort) select {
   --scroll-fade-mask: none;
 }
 
+/* Static end-of-line fade for single-line truncation. Unlike the scroll-fade-*
+   family — which reveal/hide the fade based on scroll position and therefore
+   need a scrollable container — this is a plain overflow:hidden clip whose
+   trailing edge softly dissolves to transparent instead of showing an ellipsis.
+   It only bites into text that actually overflows: the target must be a
+   stretched box (e.g. flex-1) so short, left-aligned text ends before the faded
+   edge. Fade width is tunable via `--truncate-fade-size` (or the
+   `truncate-fade-*` value utility); RTL flips the fade to the inline start. */
+@utility truncate-fade {
+  overflow: hidden;
+  white-space: nowrap;
+  --_truncate-fade-size: var(--truncate-fade-size, 1.5rem);
+  --_truncate-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--_truncate-fade-size)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --_truncate-fade-mask: linear-gradient(
+      to left,
+      #000 0,
+      #000 calc(100% - var(--_truncate-fade-size)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--_truncate-fade-mask);
+  mask-image: var(--_truncate-fade-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+@utility truncate-fade-* {
+  --truncate-fade-size: calc(var(--spacing) * --value(integer));
+  --truncate-fade-size: --value([length], [percentage]);
+}
+
 /* Text shimmer utility — vendored verbatim from shadcn 4.12.0
    (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
    imported because it would clash with this project's custom theme, so the

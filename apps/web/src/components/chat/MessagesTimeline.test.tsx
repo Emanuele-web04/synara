@@ -264,11 +264,59 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup.match(/data-cross-task-origin="true"/g)).toHaveLength(1);
-    expect(markup).toContain("Sent by Codex from another task");
-    expect(markup).toContain('aria-label="Open source task"');
-    expect(markup.indexOf("Sent by Codex from another task")).toBeLessThan(
+    expect(markup).toContain("Sent by Synara from another thread");
+    expect(markup).toContain('aria-label="Open source thread"');
+    expect(markup.indexOf("Sent by Synara from another thread")).toBeLessThan(
       markup.indexOf("Inspect the repository"),
     );
+  });
+
+  it("shows only the cross-task label (not the agent chip) when both apply", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        crossTaskOrigin={{
+          sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+          sourceProvider: "codex",
+        }}
+        timelineEntries={[
+          {
+            id: "entry-first-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("first-user-message"),
+              role: "user",
+              text: "Inspect the repository",
+              dispatchOrigin: "agent",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:14:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        onOpenThread={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Sent by Synara from another thread");
+    expect(markup).not.toContain("Sent by agent");
   });
 
   it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {

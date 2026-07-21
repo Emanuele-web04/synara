@@ -1129,11 +1129,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   )}
                 >
                   {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                  <UserDispatchModeChip
-                    dispatchMode={row.message.dispatchMode}
-                    dispatchOrigin={row.message.dispatchOrigin}
-                    hasLeadingMedia={hasLeadingMedia}
-                  />
+                  {/* The cross-task origin label already attributes this turn to another Synara thread,
+                      so suppress the dispatch chip here to avoid a duplicate "Sent by …" marker. */}
+                  {showCrossTaskOrigin ? null : (
+                    <UserDispatchModeChip
+                      dispatchMode={row.message.dispatchMode}
+                      dispatchOrigin={row.message.dispatchOrigin}
+                      hasLeadingMedia={hasLeadingMedia}
+                    />
+                  )}
                   {renderedAssistantSelections.length > 0 && (
                     <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                       <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />

@@ -218,8 +218,7 @@ const make = Effect.gen(function* () {
       });
     };
 
-  const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] =
-    sql`
+  const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] = sql`
       DELETE FROM provider_runtime_open_turns
       WHERE EXISTS (
         SELECT 1
@@ -229,9 +228,9 @@ const make = Effect.gen(function* () {
           AND turn.state IN ('interrupted', 'completed', 'error')
       )
     `.pipe(
-      Effect.asVoid,
-      Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
-    );
+    Effect.asVoid,
+    Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
+  );
 
   const getConsumerCursor: ProviderRuntimeEventRepositoryShape["getConsumerCursor"] = (
     consumerName,
