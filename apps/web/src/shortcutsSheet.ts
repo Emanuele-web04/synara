@@ -61,6 +61,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Bring an existing conversation into the current workspace.",
   },
   {
+    command: "space.previous",
+    label: "Previous space",
+    description: "Switch to the previous project space and restore its last working context.",
+  },
+  {
+    command: "space.next",
+    label: "Next space",
+    description: "Switch to the next project space and restore its last working context.",
+  },
+  {
     command: "chat.new",
     label: "New thread",
     description: "Start a fresh thread in the current project, or the most recent one.",

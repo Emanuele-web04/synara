@@ -6,6 +6,7 @@ import * as SchemaGetter from "effect/SchemaGetter";
 import { ModelSelection, ProjectScript } from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
+  ClearProjectionProjectSpaceAssignmentsInput,
   DeleteProjectionProjectInput,
   GetProjectionProjectInput,
   ProjectionProject,
@@ -44,6 +45,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json,
           scripts_json,
           is_pinned,
+          space_id,
           created_at,
           updated_at,
           deleted_at
@@ -56,6 +58,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${JSON.stringify(row.scripts)},
           ${row.isPinned ? 1 : 0},
+          ${row.spaceId},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -68,6 +71,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json = excluded.default_model_selection_json,
           scripts_json = excluded.scripts_json,
           is_pinned = excluded.is_pinned,
+          space_id = excluded.space_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -87,6 +91,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          space_id AS "spaceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -108,6 +113,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          space_id AS "spaceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -122,6 +128,18 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       sql`
         DELETE FROM projection_projects
         WHERE project_id = ${projectId}
+      `,
+  });
+
+  const clearProjectionProjectSpaceAssignments = SqlSchema.void({
+    Request: ClearProjectionProjectSpaceAssignmentsInput,
+    execute: ({ spaceId, updatedAt }) =>
+      sql`
+        UPDATE projection_projects
+        SET
+          space_id = NULL,
+          updated_at = CASE WHEN updated_at > ${updatedAt} THEN updated_at ELSE ${updatedAt} END
+        WHERE space_id = ${spaceId}
       `,
   });
 
@@ -145,11 +163,20 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.deleteById:query")),
     );
 
+  const clearSpaceAssignments: ProjectionProjectRepositoryShape["clearSpaceAssignments"] =
+    (input) =>
+      clearProjectionProjectSpaceAssignments(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionProjectRepository.clearSpaceAssignments:query"),
+        ),
+      );
+
   return {
     upsert,
     getById,
     listAll,
     deleteById,
+    clearSpaceAssignments,
   } satisfies ProjectionProjectRepositoryShape;
 });
 

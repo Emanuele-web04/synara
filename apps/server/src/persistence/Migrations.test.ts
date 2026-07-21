@@ -7,6 +7,7 @@ import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
+import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -209,6 +210,7 @@ managedAttachmentsFreshLayer("managed attachment migration on a fresh database",
       assert.deepInclude(executed, [65, "DurableQueuedTurnPromotions"]);
       assert.deepInclude(executed, [66, "DurableProviderRuntimeEvents"]);
       assert.deepInclude(executed, [67, "ProviderDeliveryReconciliation"]);
+      assert.deepInclude(executed, [79, "Spaces"]);
 
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name
@@ -272,10 +274,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [76, "ExternalMcpHardening"],
         [77, "ExternalMcpCompensatingCapacity"],
         [78, "ExternalMcpLiveTurnCapacity"],
+        [79, "Spaces"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-25), [
+      assert.deepStrictEqual(tracker.slice(-26), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -301,6 +304,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 76, name: "ExternalMcpHardening" },
         { migration_id: 77, name: "ExternalMcpCompensatingCapacity" },
         { migration_id: 78, name: "ExternalMcpLiveTurnCapacity" },
+        { migration_id: 79, name: "Spaces" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -371,6 +375,7 @@ agentGatewayRetentionLegacyLayer(
           [76, "ExternalMcpHardening"],
           [77, "ExternalMcpCompensatingCapacity"],
           [78, "ExternalMcpLiveTurnCapacity"],
+          [79, "Spaces"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -408,6 +413,151 @@ agentGatewayRetentionLegacyLayer(
     );
   },
 );
+
+const spacesMigrationCollisionLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+spacesMigrationCollisionLayer("Spaces migration after the private migration 70 collision", (it) => {
+  it.effect("reconciles the tracker and preserves pre-existing Spaces data", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 69 });
+
+      // Private builds of the original Spaces branch claimed migration 70 before
+      // current main assigned that ID to AgentGatewayOperations.
+      yield* SpacesMigration;
+      yield* sql`
+        INSERT INTO projection_spaces (
+          space_id, name, icon, sort_order, created_at, updated_at, deleted_at
+        ) VALUES (
+          'space-private-70', 'Private Space', 'bag', 0,
+          '2026-07-17T00:00:00.000Z', '2026-07-17T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (70, 'Spaces')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [70, "AgentGatewayOperations"],
+        [71, "ProjectionThreadsGatewayProvenance"],
+        [72, "AgentGatewayOperationRetention"],
+        [73, "OperationalDiagnostics"],
+        [74, "ExternalMcpIntegrations"],
+        [75, "ExternalMcpActiveCapacity"],
+        [76, "ExternalMcpHardening"],
+        [77, "ExternalMcpCompensatingCapacity"],
+        [78, "ExternalMcpLiveTurnCapacity"],
+        [79, "Spaces"],
+      ]);
+
+      const tracker = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        tracker.slice(-10).map((row) => [row.migration_id, row.name]),
+        [
+          [70, "AgentGatewayOperations"],
+          [71, "ProjectionThreadsGatewayProvenance"],
+          [72, "AgentGatewayOperationRetention"],
+          [73, "OperationalDiagnostics"],
+          [74, "ExternalMcpIntegrations"],
+          [75, "ExternalMcpActiveCapacity"],
+          [76, "ExternalMcpHardening"],
+          [77, "ExternalMcpCompensatingCapacity"],
+          [78, "ExternalMcpLiveTurnCapacity"],
+          [79, "Spaces"],
+        ],
+      );
+
+      const preservedSpaces = yield* sql<{ readonly spaceId: string; readonly name: string }>`
+        SELECT space_id AS "spaceId", name
+        FROM projection_spaces
+        WHERE space_id = 'space-private-70'
+      `;
+      assert.deepStrictEqual(preservedSpaces, [
+        { spaceId: "space-private-70", name: "Private Space" },
+      ]);
+
+      const tables = yield* sql<{ readonly name: string }>`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+            'agent_gateway_operations',
+            'operational_diagnostics',
+            'projection_spaces'
+          )
+        ORDER BY name
+      `;
+      assert.deepStrictEqual(
+        tables.map((row) => row.name),
+        ["agent_gateway_operations", "operational_diagnostics", "projection_spaces"],
+      );
+      assert.include(yield* projectionThreadsColumnNames(sql), "gateway_operation_id");
+      const gatewayColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('agent_gateway_operations')
+      `;
+      assert.include(
+        gatewayColumns.map((row) => row.name),
+        "caller_purged_at",
+      );
+    }),
+  );
+
+  it.effect("upgrades the previous Spaces-at-74 lineage without losing data", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 74 });
+
+      // PR #365 previously published Spaces as migration 74. Main now owns 74–78 for
+      // External MCP, so lineage reconciliation must replay that canonical range and
+      // apply Spaces at 79 without dropping the already-created table or rows.
+      yield* SpacesMigration;
+      yield* sql`
+        INSERT INTO projection_spaces (
+          space_id, name, icon, sort_order, created_at, updated_at, deleted_at
+        ) VALUES (
+          'space-previous-74', 'Previous Space', 'bag', 0,
+          '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        UPDATE effect_sql_migrations
+        SET name = 'Spaces'
+        WHERE migration_id = 74
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, [
+        [74, "ExternalMcpIntegrations"],
+        [75, "ExternalMcpActiveCapacity"],
+        [76, "ExternalMcpHardening"],
+        [77, "ExternalMcpCompensatingCapacity"],
+        [78, "ExternalMcpLiveTurnCapacity"],
+        [79, "Spaces"],
+      ]);
+
+      const tracker = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        tracker.slice(-6).map((row) => [row.migration_id, row.name]),
+        [
+          [74, "ExternalMcpIntegrations"],
+          [75, "ExternalMcpActiveCapacity"],
+          [76, "ExternalMcpHardening"],
+          [77, "ExternalMcpCompensatingCapacity"],
+          [78, "ExternalMcpLiveTurnCapacity"],
+          [79, "Spaces"],
+        ],
+      );
+      const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
+        SELECT space_id AS "spaceId"
+        FROM projection_spaces
+        WHERE space_id = 'space-previous-74'
+      `;
+      assert.deepStrictEqual(preservedSpaces, [{ spaceId: "space-previous-74" }]);
+    }),
+  );
+});
 
 const managedAttachmentsConstraintsLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 

@@ -8,6 +8,7 @@ import {
   OrchestrationEvent,
   OrchestrationEventType,
   ProjectId,
+  SpaceId,
   ThreadId,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -35,7 +36,7 @@ const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const AppendEventRequestSchema = Schema.Struct({
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  streamId: Schema.Union([ProjectId, ThreadId]),
+  streamId: Schema.Union([SpaceId, ProjectId, ThreadId]),
   type: OrchestrationEventType,
   causationEventId: Schema.NullOr(EventId),
   correlationId: Schema.NullOr(CommandId),

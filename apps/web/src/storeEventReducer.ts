@@ -35,10 +35,13 @@ import {
   withOrchestrationEventSequence,
 } from "./storeNormalization";
 import {
+  applySpaceOrder,
   applyThreadUpdate,
+  removeSpace,
   removeDeletedProjectFromClientState,
   removeDeletedThreadFromClientState,
   upsertProject,
+  upsertSpace,
 } from "./storeProjection";
 import type { AppState } from "./storeState";
 import type { ChatMessage, Thread } from "./types";
@@ -735,6 +738,34 @@ function applyOrchestrationEvent(
   options?: ApplyOrchestrationEventOptions,
 ): AppState {
   switch (event.type) {
+    case "space.created":
+      return upsertSpace(state, {
+        id: event.payload.spaceId,
+        name: event.payload.name,
+        icon: event.payload.icon,
+        sortOrder: event.payload.sortOrder,
+        createdAt: event.payload.createdAt,
+        updatedAt: event.payload.updatedAt,
+      });
+
+    case "space.meta-updated": {
+      const existing = state.spaces.find((space) => space.id === event.payload.spaceId);
+      return existing
+        ? upsertSpace(state, {
+            ...existing,
+            name: event.payload.name ?? existing.name,
+            icon: event.payload.icon ?? existing.icon,
+            updatedAt: event.payload.updatedAt,
+          })
+        : state;
+    }
+
+    case "space.order-updated":
+      return applySpaceOrder(state, event.payload.orderedSpaceIds, event.payload.updatedAt);
+
+    case "space.deleted":
+      return removeSpace(state, event.payload.spaceId, event.payload.deletedAt);
+
     case "project.created":
       return upsertProject(
         state,
@@ -746,6 +777,7 @@ function applyOrchestrationEvent(
           defaultModelSelection: event.payload.defaultModelSelection,
           scripts: event.payload.scripts,
           isPinned: event.payload.isPinned ?? false,
+          spaceId: event.payload.spaceId ?? null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -772,6 +804,10 @@ function applyOrchestrationEvent(
               : existingProject.defaultModelSelection,
           scripts: event.payload.scripts ?? existingProject.scripts,
           isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
+          spaceId:
+            event.payload.spaceId !== undefined
+              ? event.payload.spaceId
+              : (existingProject.spaceId ?? null),
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },

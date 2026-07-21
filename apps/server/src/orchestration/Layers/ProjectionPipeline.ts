@@ -23,6 +23,7 @@ import {
   ProjectionPendingInteractionRepository,
 } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
+import { ProjectionSpaceRepository } from "../../persistence/Services/ProjectionSpaces.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
@@ -45,6 +46,7 @@ import {
 } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
+import { ProjectionSpaceRepositoryLive } from "../../persistence/Layers/ProjectionSpaces.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
@@ -57,13 +59,16 @@ import { ServerConfig } from "../../config.ts";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
+  type ShellMetadataOrchestrationEvent,
 } from "../Services/ProjectionPipeline.ts";
 import {
   applyProjectMetadataProjection,
   advanceProjectMetadataSnapshotState,
   PROJECT_METADATA_SNAPSHOT_PROJECTORS,
 } from "../projectMetadataProjection.ts";
+import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
+import { settleTurnStateFromSession } from "../turnLifecycle.ts";
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
@@ -110,15 +115,6 @@ interface AttachmentSideEffects {
   readonly prunedThreadRelativePaths: Map<string, Set<string>>;
 }
 
-function finalizeTurnStateFromSessionStatus(
-  status: "starting" | "running" | "ready" | "interrupted" | "stopped" | "error",
-  existingState: ProjectionTurn["state"],
-): ProjectionTurn["state"] {
-  if (status === "error" || status === "interrupted") return status;
-  if (status === "starting" || status === "running") return "running";
-  return existingState === "error" || existingState === "interrupted" ? existingState : "completed";
-}
-
 function payloadRecord(payload: unknown): Record<string, unknown> | undefined {
   return typeof payload === "object" && payload !== null
     ? (payload as Record<string, unknown>)
@@ -143,6 +139,10 @@ function extractApprovalFailureSettlementStatus(
 }
 
 const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "space.created",
+  "space.meta-updated",
+  "space.order-updated",
+  "space.deleted",
   "project.created",
   "project.meta-updated",
   "project.deleted",
@@ -461,6 +461,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const managedAttachments = yield* ManagedAttachmentRepository;
   const projectionStateRepository = yield* ProjectionStateRepository;
   const projectionProjectRepository = yield* ProjectionProjectRepository;
+  const projectionSpaceRepository = yield* ProjectionSpaceRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -473,15 +474,34 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
 
-  const applyProjectsProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) =>
-    event.type === "project.created" ||
-    event.type === "project.meta-updated" ||
-    event.type === "project.deleted"
-      ? applyProjectMetadataProjection({
-          event,
-          projectionProjectRepository,
-        })
-      : Effect.void;
+  const applyProjectsProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) => {
+    switch (event.type) {
+      case "project.created":
+      case "project.meta-updated":
+      case "project.deleted":
+        return applyProjectMetadataProjection({ event, projectionProjectRepository }).pipe(
+          Effect.asVoid,
+        );
+      case "space.created":
+      case "space.meta-updated":
+      case "space.order-updated":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.asVoid,
+        );
+      case "space.deleted":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.zipRight(
+            projectionProjectRepository.clearSpaceAssignments({
+              spaceId: event.payload.spaceId,
+              updatedAt: event.payload.deletedAt,
+            }),
+          ),
+          Effect.asVoid,
+        );
+      default:
+        return Effect.void;
+    }
+  };
 
   const updateThreadProjection = Effect.fnUntraced(function* (
     threadId: ProjectionThread["threadId"],
@@ -1125,12 +1145,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
           if (event.payload.session.status !== "running" || turnId === null) {
-            if (
-              event.payload.session.status === "ready" ||
-              event.payload.session.status === "error" ||
-              event.payload.session.status === "interrupted" ||
-              event.payload.session.status === "stopped"
-            ) {
+            const settledState = settleTurnStateFromSession(event.payload.session, "running");
+            if (settledState !== null) {
               // Close the newest still-open turn when the runtime reports that
               // the thread is no longer running. Error sessions may retain the
               // failed turn id for attribution, so prefer that exact open turn
@@ -1157,10 +1173,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               if (turnToFinalize) {
                 yield* projectionTurnRepository.upsertByTurnId({
                   ...turnToFinalize,
-                  state: finalizeTurnStateFromSessionStatus(
-                    event.payload.session.status,
+                  state:
+                    settleTurnStateFromSession(event.payload.session, turnToFinalize.state) ??
                     turnToFinalize.state,
-                  ),
                   startedAt: turnToFinalize.startedAt ?? event.payload.session.updatedAt,
                   requestedAt: turnToFinalize.requestedAt ?? event.payload.session.updatedAt,
                   completedAt: event.payload.session.updatedAt,
@@ -1943,19 +1958,39 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  const applyShellMetadataProjection = (event: ShellMetadataOrchestrationEvent) => {
+    switch (event.type) {
+      case "space.created":
+      case "space.meta-updated":
+      case "space.order-updated":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository });
+      case "space.deleted":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.zipRight(
+            projectionProjectRepository.clearSpaceAssignments({
+              spaceId: event.payload.spaceId,
+              updatedAt: event.payload.deletedAt,
+            }),
+          ),
+        );
+      case "project.created":
+      case "project.meta-updated":
+      case "project.deleted":
+        return applyProjectMetadataProjection({ event, projectionProjectRepository });
+    }
+  };
+
   const projectMetadataEvent: OrchestrationProjectionPipelineShape["projectMetadataEvent"] = (
     event,
   ) =>
-    applyProjectMetadataProjection({
-      event,
-      projectionProjectRepository,
-    }).pipe(
+    applyShellMetadataProjection(event).pipe(
       Effect.flatMap(() =>
         advanceProjectMetadataSnapshotState({
           event,
           projectionStateRepository,
         }),
       ),
+      Effect.asVoid,
     );
 
   const projectHotEventInCurrentTransaction: OrchestrationProjectionPipelineShape["projectHotEventInCurrentTransaction"] =
@@ -2041,6 +2076,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
 ).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(ProjectionSpaceRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),

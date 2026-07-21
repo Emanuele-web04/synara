@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  SpaceId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -29,6 +30,52 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("hydrates Space identity and project assignments in full and shell snapshots", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_spaces`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`
+        INSERT INTO projection_spaces (
+          space_id, name, icon, sort_order, created_at, updated_at, deleted_at
+        ) VALUES (
+          'space-snapshot', 'Snapshot Space', 'bag', 0,
+          '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:01.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, space_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-space-snapshot', 'Space project', '/tmp/space-project', NULL,
+          '[]', 'space-snapshot', '2026-07-20T00:00:00.000Z',
+          '2026-07-20T00:00:01.000Z', NULL
+        )
+      `;
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        yield* sql`
+          INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
+          VALUES (${projector}, 7, '2026-07-20T00:00:01.000Z')
+        `;
+      }
+
+      const shell = yield* snapshotQuery.getShellSnapshot();
+      const full = yield* snapshotQuery.getSnapshot();
+      assert.equal(shell.spaces[0]?.id, SpaceId.makeUnsafe("space-snapshot"));
+      assert.equal(shell.projects[0]?.spaceId, SpaceId.makeUnsafe("space-snapshot"));
+      assert.equal(full.spaces[0]?.id, SpaceId.makeUnsafe("space-snapshot"));
+      assert.equal(full.projects[0]?.spaceId, SpaceId.makeUnsafe("space-snapshot"));
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_spaces`;
+      yield* sql`DELETE FROM projection_state`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -291,6 +338,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         {
           id: asProjectId("project-1"),
           kind: "project",
+          spaceId: null,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           defaultModelSelection: {

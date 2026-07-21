@@ -3956,6 +3956,139 @@ it.layer(
     }),
   );
 
+  it.effect("matches in-memory turn settlement for terminal session statuses", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const scenarios = [
+        {
+          key: "ready-cleared",
+          status: "ready",
+          retainsActiveTurn: false,
+          expectedState: "completed",
+          expectedCompleted: true,
+        },
+        {
+          key: "interrupted-cleared",
+          status: "interrupted",
+          retainsActiveTurn: false,
+          expectedState: "interrupted",
+          expectedCompleted: true,
+        },
+        {
+          key: "stopped-cleared",
+          status: "stopped",
+          retainsActiveTurn: false,
+          expectedState: "interrupted",
+          expectedCompleted: true,
+        },
+        {
+          key: "error-retained",
+          status: "error",
+          retainsActiveTurn: true,
+          expectedState: "error",
+          expectedCompleted: true,
+        },
+        {
+          key: "interrupted-retained",
+          status: "interrupted",
+          retainsActiveTurn: true,
+          expectedState: "running",
+          expectedCompleted: false,
+        },
+        {
+          key: "stopped-retained",
+          status: "stopped",
+          retainsActiveTurn: true,
+          expectedState: "running",
+          expectedCompleted: false,
+        },
+      ] as const;
+
+      for (const [index, scenario] of scenarios.entries()) {
+        const threadId = ThreadId.makeUnsafe(`thread-session-settlement-${scenario.key}`);
+        const turnId = TurnId.makeUnsafe(`turn-session-settlement-${scenario.key}`);
+        const startedAt = `2026-02-27T12:00:${String(index * 2).padStart(2, "0")}.000Z`;
+        const settledAt = `2026-02-27T12:00:${String(index * 2 + 1).padStart(2, "0")}.000Z`;
+
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.makeUnsafe(`evt-session-settlement-${scenario.key}-running`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: startedAt,
+          commandId: CommandId.makeUnsafe(`cmd-session-settlement-${scenario.key}-running`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-session-settlement-${scenario.key}-running`),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnId,
+              lastError: null,
+              updatedAt: startedAt,
+            },
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.makeUnsafe(`evt-session-settlement-${scenario.key}-terminal`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: settledAt,
+          commandId: CommandId.makeUnsafe(`cmd-session-settlement-${scenario.key}-terminal`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(
+            `cmd-session-settlement-${scenario.key}-terminal`,
+          ),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: scenario.status,
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: scenario.retainsActiveTurn ? turnId : null,
+              lastError: scenario.status === "error" ? "provider crashed" : null,
+              updatedAt: settledAt,
+            },
+          },
+        });
+      }
+
+      yield* projectionPipeline.bootstrap;
+
+      for (const [index, scenario] of scenarios.entries()) {
+        const threadId = ThreadId.makeUnsafe(`thread-session-settlement-${scenario.key}`);
+        const turnId = TurnId.makeUnsafe(`turn-session-settlement-${scenario.key}`);
+        const settledAt = `2026-02-27T12:00:${String(index * 2 + 1).padStart(2, "0")}.000Z`;
+        const rows = yield* sql<{
+          readonly state: string;
+          readonly completedAt: string | null;
+        }>`
+          SELECT state, completed_at AS "completedAt"
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id = ${turnId}
+        `;
+
+        assert.deepEqual(rows, [
+          {
+            state: scenario.expectedState,
+            completedAt: scenario.expectedCompleted ? settledAt : null,
+          },
+        ]);
+      }
+    }),
+  );
+
   it.effect("projects steer dispatch mode onto the triggering user message", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;

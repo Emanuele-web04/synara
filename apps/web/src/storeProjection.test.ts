@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  SpaceId,
   ThreadId,
   ThreadMarkerId,
   TurnId,
@@ -221,6 +222,7 @@ describe("store projection", () => {
 
   it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: ProjectId.makeUnsafe("project-old"),
@@ -255,6 +257,44 @@ describe("store projection", () => {
       remoteName: "Server Name",
       localName: "Local Name",
       cwd: "/tmp/shared-root",
+    });
+  });
+
+  it("moves shell projects to Void with the deletion timestamp", () => {
+    const spaceId = SpaceId.makeUnsafe("space-shell-delete");
+    const initialState: AppState = {
+      spaces: [
+        {
+          id: spaceId,
+          name: "Work",
+          icon: "bag",
+          sortOrder: 0,
+          createdAt: "2026-07-15T10:00:00.000Z",
+          updatedAt: "2026-07-15T10:00:00.000Z",
+        },
+      ],
+      projects: [
+        makeProject({
+          id: ProjectId.makeUnsafe("project-shell-space"),
+          spaceId,
+          updatedAt: "2026-07-15T10:00:01.000Z",
+        }),
+      ],
+      sidebarThreadSummaryById: {},
+      threadsHydrated: true,
+    };
+
+    const next = applyShellEvent(initialState, {
+      kind: "space-removed",
+      sequence: 3,
+      spaceId,
+      updatedAt: "2026-07-15T10:00:02.000Z",
+    } satisfies OrchestrationShellStreamEvent);
+
+    expect(next.spaces).toEqual([]);
+    expect(next.projects[0]).toMatchObject({
+      spaceId: null,
+      updatedAt: "2026-07-15T10:00:02.000Z",
     });
   });
 

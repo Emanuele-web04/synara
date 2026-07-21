@@ -2,6 +2,7 @@ import {
   CommandId,
   EventId,
   ProjectId,
+  SpaceId,
   ThreadId,
   type OrchestrationEvent,
 } from "@synara/contracts";
@@ -25,9 +26,11 @@ function makeEvent(input: {
     type: input.type,
     aggregateKind: input.aggregateKind,
     aggregateId:
-      input.aggregateKind === "project"
-        ? ProjectId.makeUnsafe(input.aggregateId)
-        : ThreadId.makeUnsafe(input.aggregateId),
+      input.aggregateKind === "space"
+        ? SpaceId.makeUnsafe(input.aggregateId)
+        : input.aggregateKind === "project"
+          ? ProjectId.makeUnsafe(input.aggregateId)
+          : ThreadId.makeUnsafe(input.aggregateId),
     occurredAt: input.occurredAt,
     commandId: input.commandId === null ? null : CommandId.makeUnsafe(input.commandId),
     causationEventId: null,
@@ -715,6 +718,34 @@ describe("orchestration projector", () => {
       turnId: "turn-1",
       state: "completed",
       completedAt: settledAt,
+    });
+  });
+
+  it("settles an errored turn even when the session still retains the active turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const startedAt = "2026-02-23T08:00:05.000Z";
+    const erroredAt = "2026-02-23T08:00:10.000Z";
+
+    const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+    const afterError = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeSessionSetEvent({
+          sequence: 3,
+          commandId: "cmd-error",
+          occurredAt: erroredAt,
+          status: "error",
+          activeTurnId: "turn-1",
+          lastError: "provider crashed",
+          updatedAt: erroredAt,
+        }),
+      ),
+    );
+
+    expect(afterError.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "error",
+      completedAt: erroredAt,
     });
   });
 

@@ -1059,6 +1059,7 @@ function EventRouter() {
       // Desktop can briefly hydrate from an empty startup stream before the
       // projection reader is fully ready. Let the later non-empty shell query win.
       return (
+        (currentState.spaces.length === 0 && snapshot.spaces.length > 0) ||
         (currentState.projects.length === 0 && snapshot.projects.length > 0) ||
         ((currentState.threadIds?.length ?? 0) === 0 && snapshot.threads.length > 0)
       );

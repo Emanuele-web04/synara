@@ -9,6 +9,7 @@ import {
   MessageId,
   OrchestrationProposedPlanId,
   ProjectId,
+  SpaceId,
   ThreadId,
   ThreadMarkerId,
   TurnId,
@@ -36,6 +37,39 @@ import {
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 describe("store event reducer", () => {
+  it("hydrates and removes Spaces while clearing matching project assignments", () => {
+    const spaceId = SpaceId.makeUnsafe("space-work");
+    let state = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent("space.created", {
+        spaceId,
+        name: "Work",
+        icon: "bag",
+        sortOrder: 0,
+        createdAt: "2026-07-15T10:00:00.000Z",
+        updatedAt: "2026-07-15T10:00:00.000Z",
+      }),
+      makeDomainEvent("project.meta-updated", {
+        projectId: ProjectId.makeUnsafe("project-1"),
+        spaceId,
+        updatedAt: "2026-07-15T10:00:01.000Z",
+      }),
+    ]);
+
+    expect(state.spaces.map((space) => space.id)).toEqual([spaceId]);
+    expect(state.projects[0]?.spaceId).toBe(spaceId);
+
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent("space.deleted", {
+        spaceId,
+        deletedAt: "2026-07-15T10:00:02.000Z",
+      }),
+    ]);
+
+    expect(state.spaces).toEqual([]);
+    expect(state.projects[0]?.spaceId).toBeNull();
+    expect(state.projects[0]?.updatedAt).toBe("2026-07-15T10:00:02.000Z");
+  });
+
   it("preserves plugin mention references from live thread.message-sent events", () => {
     const messageId = MessageId.makeUnsafe("message-with-plugin-mention");
     const next = applyOrchestrationEvents(makeState(makeThread()), [
@@ -216,6 +250,7 @@ describe("store event reducer", () => {
 
   it("updates existing projects immediately from live project.meta-updated events", () => {
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: ProjectId.makeUnsafe("project-live"),

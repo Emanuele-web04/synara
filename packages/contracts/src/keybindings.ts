@@ -12,6 +12,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "sidebar.search",
   "sidebar.addProject",
   "sidebar.importThread",
+  "space.previous",
+  "space.next",
   "terminal.toggle",
   "terminal.split",
   "terminal.splitRight",
