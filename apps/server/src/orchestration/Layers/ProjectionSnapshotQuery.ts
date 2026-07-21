@@ -1,5 +1,4 @@
 import {
-  ChatAttachment,
   CheckpointRef,
   IsoDateTime,
   MessageId,
@@ -8,7 +7,6 @@ import {
   OrchestrationCheckpointFile,
   OrchestrationProjectShell,
   OrchestrationProposedPlanId,
-  MessageDispatchOrigin,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
@@ -18,12 +16,9 @@ import {
   ProjectScript,
   ProjectId,
   ProjectKind,
-  ProviderMentionReference,
-  ProviderSkillReference,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   ThreadId,
   ThreadEnvironmentMode,
-  TurnDispatchMode,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
@@ -44,6 +39,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import {
   isPersistenceError,
   toPersistenceDecodeError,
+  toPersistenceSqlOrDecodeError,
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
@@ -53,7 +49,11 @@ import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheck
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
-import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import {
+  ProjectionThreadMessageDbRowSchema,
+  orchestrationMessageFromProjectionRow,
+  type ProjectionThreadMessageDbRow,
+} from "../../persistence/projectionThreadMessageRow.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
@@ -83,17 +83,6 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
     isPinned: Schema.Number,
-  }),
-);
-const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
-  Struct.assign({
-    isStreaming: Schema.Number,
-    attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
-    skills: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderSkillReference))),
-    mentions: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderMentionReference))),
-    dispatchMode: Schema.NullOr(TurnDispatchMode),
-    dispatchOrigin: Schema.NullOr(MessageDispatchOrigin),
-    sequence: Schema.NullOr(NonNegativeInt),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -219,7 +208,6 @@ type ProjectionThreadShellDbRow = Omit<ProjectionThreadShellDbRowRaw, "modelSele
 type ProjectionProjectDbRow = Omit<ProjectionProjectDbRowRaw, "defaultModelSelection"> & {
   readonly defaultModelSelection: typeof ModelSelection.Type | null;
 };
-type ProjectionThreadMessageDbRow = Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>;
 type ProjectionThreadProposedPlanDbRow = Schema.Schema.Type<
   typeof ProjectionThreadProposedPlanDbRowSchema
 >;
@@ -332,24 +320,6 @@ function pushGrouped<T>(map: Map<string, T[]>, threadId: string, value: T): void
     return;
   }
   map.set(threadId, [value]);
-}
-
-function toProjectedMessage(row: ProjectionThreadMessageDbRow): OrchestrationMessage {
-  return {
-    id: row.messageId,
-    role: row.role,
-    text: row.text,
-    ...(row.attachments !== null ? { attachments: row.attachments } : {}),
-    ...(row.skills !== null ? { skills: row.skills } : {}),
-    ...(row.mentions !== null ? { mentions: row.mentions } : {}),
-    ...(row.dispatchMode ? { dispatchMode: row.dispatchMode } : {}),
-    ...(row.dispatchOrigin ? { dispatchOrigin: row.dispatchOrigin } : {}),
-    turnId: row.turnId,
-    streaming: row.isStreaming === 1,
-    source: row.source,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
 }
 
 function toProjectedProposedPlan(
@@ -470,7 +440,7 @@ function collectProjectedMessages(rows: ReadonlyArray<ProjectionThreadMessageDbR
   let updatedAt: string | null = null;
   for (const row of rows) {
     updatedAt = maxIso(updatedAt, row.updatedAt);
-    pushGrouped(byThread, row.threadId, toProjectedMessage(row));
+    pushGrouped(byThread, row.threadId, orchestrationMessageFromProjectionRow(row));
   }
   return { byThread, updatedAt };
 }
@@ -703,13 +673,6 @@ function computeSnapshotSequence(
   }
 
   return Number.isFinite(minSequence) ? minSequence : 0;
-}
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): ProjectionRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
 }
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
@@ -2430,7 +2393,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           onNone: () => null,
           onSome: (row) => toProjectedLatestTurn(row),
         }),
-        messages: messageRows.map((row) => toProjectedMessage(row)),
+        messages: messageRows.map(orchestrationMessageFromProjectionRow),
         proposedPlans: proposedPlanRows.map((row) => toProjectedProposedPlan(row)),
         activities: activityRows.map((row) => toProjectedActivity(row)),
         pendingInteractions: pendingInteractionRows,

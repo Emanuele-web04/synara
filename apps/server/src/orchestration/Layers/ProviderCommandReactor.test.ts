@@ -5352,7 +5352,6 @@ describe("ProviderCommandReactor", () => {
     };
     const harness = await createHarness({ threadModelSelection: initialSelection });
     const threadId = ThreadId.makeUnsafe("thread-1");
-    const now = new Date().toISOString();
 
     // Mirrors native import: ProviderService owns the runtime start directly,
     // while the reactor learns the original selection from thread.created.

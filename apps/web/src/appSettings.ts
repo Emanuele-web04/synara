@@ -267,6 +267,26 @@ export const AppSettingsSchema = Schema.Struct({
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 
+/** The settings values and mutation used by a mounted settings panel.
+ * The route owns the subscription so extracted workflow panels do not create
+ * duplicate local-storage/server-settings subscriptions. */
+export type AppSettingsBinding = {
+  readonly settings: AppSettings;
+  readonly defaults: AppSettings;
+  readonly updateSettings: (patch: Partial<AppSettings>) => void;
+};
+
+export function isGitTextGenerationSettingsDirty(
+  settings: AppSettings,
+  defaults: AppSettings,
+): boolean {
+  return (
+    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
+    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
+      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
+  );
+}
+
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;

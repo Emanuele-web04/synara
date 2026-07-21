@@ -82,9 +82,6 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
                   {threadMeta(thread)}
                 </p>
               </div>
-              <span className="shrink-0 rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-0.5 text-[9px] font-medium text-emerald-700/85 dark:text-emerald-200/85">
-                Created
-              </span>
               {onOpenThread ? (
                 <Button
                   type="button"

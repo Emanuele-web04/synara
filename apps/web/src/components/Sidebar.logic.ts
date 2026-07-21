@@ -117,6 +117,13 @@ type SidebarThreadSortInput = {
   updatedAt?: string | undefined;
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
+  // Present on real thread summaries; lets finished-but-unseen threads float to
+  // the top of the sort (see sortThreadsForSidebar). Optional so minimal test
+  // fixtures and legacy shapes keep plain timestamp ordering.
+  latestTurn?: Thread["latestTurn"] | undefined;
+  lastVisitedAt?: Thread["lastVisitedAt"] | undefined;
+  hasLiveTailWork?: boolean | undefined;
+  session?: Thread["session"] | undefined;
 };
 
 function nonEmptyDisplayValue(value: string | null | undefined): string | null {
@@ -199,8 +206,6 @@ export type SidebarProjectEntry = {
   rootRowId: ThreadId;
   thread: SidebarThreadSummary;
   depth: number;
-  childCount: number;
-  isExpanded: boolean;
 };
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project";
@@ -292,7 +297,7 @@ function createCompletedDismissalKey(thread: ThreadStatusInput): string | null {
   return ["Completed", thread.latestTurn.turnId, thread.latestTurn.completedAt].join(":");
 }
 
-export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
+export function hasUnseenCompletion(thread: Pick<Thread, "latestTurn" | "lastVisitedAt">): boolean {
   if (!thread.latestTurn?.completedAt) return false;
   const completedAt = Date.parse(thread.latestTurn.completedAt);
   if (Number.isNaN(completedAt)) return false;
@@ -449,6 +454,24 @@ export function resolveThreadRowClassName(input: {
   return cn(baseClassName, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME);
 }
 
+// Single definition of "this thread is actively doing work" shared by the
+// Working status pill and the sidebar sort, so a thread's position and its
+// pill never disagree.
+export function isThreadActivelyWorking(thread: {
+  hasLiveTailWork?: boolean | undefined;
+  session?: Thread["session"] | undefined;
+  latestTurn?: Thread["latestTurn"] | undefined;
+}): boolean {
+  if (thread.hasLiveTailWork === true) {
+    return true;
+  }
+  const session = thread.session ?? null;
+  return (
+    session?.status === "running" &&
+    (thread.latestTurn == null || hasLiveLatestTurn(thread.latestTurn, session))
+  );
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
   hasPendingApprovals: boolean;
@@ -492,20 +515,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasLiveTailWork) {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-      dismissible: false,
-    };
-  }
-
-  if (
-    thread.session?.status === "running" &&
-    (thread.latestTurn === null || hasLiveLatestTurn(thread.latestTurn, thread.session))
-  ) {
+  if (isThreadActivelyWorking(thread)) {
     return {
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -739,14 +749,12 @@ export interface SidebarThreadTreeRow<
   thread: T;
   depth: number;
   rootThreadId: T["id"];
-  childCount: number;
-  isExpanded: boolean;
 }
 
-function collectForcedExpandedParentIds<
+function collectActiveThreadAncestorIds<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 >(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
-  const forcedParentIds = new Set<T["id"]>();
+  const ancestorIds = new Set<T["id"]>();
   let currentThreadId = forceVisibleThreadId;
 
   while (currentThreadId) {
@@ -754,11 +762,11 @@ function collectForcedExpandedParentIds<
     if (!parentThreadId) {
       break;
     }
-    forcedParentIds.add(parentThreadId);
+    ancestorIds.add(parentThreadId);
     currentThreadId = parentThreadId;
   }
 
-  return forcedParentIds;
+  return ancestorIds;
 }
 
 // Build the project-local parent/child thread tree while preserving sort order from the input list.
@@ -766,10 +774,9 @@ export function buildProjectThreadTree<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 >(input: {
   threads: readonly T[];
-  expandedParentThreadIds?: ReadonlySet<T["id"]> | undefined;
   forceVisibleThreadId?: T["id"] | undefined;
 }): SidebarThreadTreeRow<T>[] {
-  const { expandedParentThreadIds, forceVisibleThreadId, threads } = input;
+  const { forceVisibleThreadId, threads } = input;
   const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
   const childrenByParentId = new Map<T["id"], T[]>();
   const roots: T[] = [];
@@ -785,24 +792,21 @@ export function buildProjectThreadTree<
     childrenByParentId.set(parentThreadId, siblings);
   }
 
-  const forcedExpandedParentIds = collectForcedExpandedParentIds(threadById, forceVisibleThreadId);
+  const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
   const orderedRows: SidebarThreadTreeRow<T>[] = [];
 
   const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
     const childThreads = childrenByParentId.get(thread.id) ?? [];
-    const isExpanded =
-      childThreads.length > 0 &&
-      (expandedParentThreadIds?.has(thread.id) === true || forcedExpandedParentIds.has(thread.id));
+    const revealsActiveDescendant =
+      childThreads.length > 0 && activeThreadAncestorIds.has(thread.id);
 
     orderedRows.push({
       thread,
       depth,
       rootThreadId,
-      childCount: childThreads.length,
-      isExpanded,
     });
 
-    if (!isExpanded) {
+    if (!revealsActiveDescendant) {
       return;
     }
 
@@ -1031,14 +1035,12 @@ export function getVisibleSidebarThreadIds(input: {
     SidebarThreadSortInput)[];
   activeThreadId: Thread["id"] | undefined;
   threadListExtraPagesByProjectId: ReadonlyMap<Project["id"], number>;
-  expandedSubagentParentIds?: ReadonlySet<Thread["id"]>;
   previewLimit: number;
   previewPageSize: number;
   threadSortOrder: SidebarThreadSortOrder;
 }): Thread["id"][] {
   const {
     activeThreadId,
-    expandedSubagentParentIds,
     previewLimit,
     previewPageSize,
     projects,
@@ -1065,7 +1067,7 @@ export function getVisibleSidebarThreadIds(input: {
     );
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
-      expandedParentThreadIds: expandedSubagentParentIds,
+      forceVisibleThreadId: activeThreadId,
     });
     const paging = resolveSidebarThreadListPaging({
       totalCount: projectThreadTree.length,
@@ -1232,11 +1234,41 @@ function getThreadSortTimestamp(
   return getLatestUserMessageTimestamp(thread);
 }
 
+// A finished chat the user hasn't opened yet floats above the plain timestamp
+// order so it gets seen. Opening it (or dismissing its Completed pill, which
+// marks it visited) updates lastVisitedAt and the thread falls back into place.
+// A thread with live tail work isn't finished, so it stays in plain order.
+function isUnseenFinishedThread(thread: SidebarThreadSortInput): boolean {
+  if (thread.hasLiveTailWork === true) {
+    return false;
+  }
+  return hasUnseenCompletion({
+    latestTurn: thread.latestTurn ?? null,
+    lastVisitedAt: thread.lastVisitedAt,
+  });
+}
+
+// Attention groups for the sidebar order: finished-but-unseen threads first —
+// they are done and waiting on the user, so they must get seen — then threads
+// doing live work so what's going on stays visible, then everything else by
+// timestamp.
+function threadSortAttentionRank(thread: SidebarThreadSortInput): number {
+  if (isUnseenFinishedThread(thread)) {
+    return 2;
+  }
+  if (isThreadActivelyWorking(thread) || thread.session?.status === "connecting") {
+    return 1;
+  }
+  return 0;
+}
+
 export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarThreadSortInput>(
   threads: readonly T[],
   sortOrder: SidebarThreadSortOrder,
 ): T[] {
   return threads.toSorted((left, right) => {
+    const byAttentionRank = threadSortAttentionRank(right) - threadSortAttentionRank(left);
+    if (byAttentionRank !== 0) return byAttentionRank;
     const rightTimestamp = getThreadSortTimestamp(right, sortOrder);
     const leftTimestamp = getThreadSortTimestamp(left, sortOrder);
     const byTimestamp =
@@ -1370,7 +1402,6 @@ export function deriveSidebarProjectData(input: {
   projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];
   sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
   pinnedThreadIds: readonly ThreadId[];
-  expandedParentThreadIds: ReadonlySet<ThreadId>;
   threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
   normalizeProjectCwd: (cwd: string) => string;
   activeSidebarThreadId: ThreadId | undefined;
@@ -1407,10 +1438,6 @@ export function deriveSidebarProjectData(input: {
         input.activeSidebarThreadId === undefined
           ? null
           : (projectThreads.find((thread) => thread.id === input.activeSidebarThreadId) ?? null);
-      const childCount =
-        activeThread === null
-          ? 0
-          : projectThreads.filter((thread) => thread.parentThreadId === activeThread.id).length;
       const visibleEntries =
         activeThread === null
           ? []
@@ -1421,8 +1448,6 @@ export function deriveSidebarProjectData(input: {
                 rootRowId: activeThread.id,
                 thread: activeThread,
                 depth: 0,
-                childCount,
-                isExpanded: false,
               },
             ];
 
@@ -1443,17 +1468,15 @@ export function deriveSidebarProjectData(input: {
 
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
-      expandedParentThreadIds: input.expandedParentThreadIds,
+      forceVisibleThreadId: input.activeSidebarThreadId,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
-      ({ thread, depth, rootThreadId, childCount, isExpanded }) => ({
+      ({ thread, depth, rootThreadId }) => ({
         kind: "thread",
         rowId: thread.id,
         rootRowId: rootThreadId,
         thread,
         depth,
-        childCount,
-        isExpanded,
       }),
     );
 

@@ -12,7 +12,7 @@ import type {
   PullRequestMergeMethod,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import {

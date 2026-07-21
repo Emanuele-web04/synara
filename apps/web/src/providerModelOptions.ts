@@ -43,10 +43,6 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
-function modelOptionKey(option: Pick<ProviderModelOption, "slug">): string {
-  return option.slug.trim().toLowerCase();
-}
-
 export function formatProviderModelOptionName(input: {
   provider: ProviderKind;
   slug: string;

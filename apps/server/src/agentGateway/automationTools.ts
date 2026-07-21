@@ -65,6 +65,7 @@ export function makeAgentGatewayAutomationTools(
     });
 
   const createAutomation: ToolEntry = {
+    requiredCapability: "automation:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_create_automation",
@@ -150,6 +151,7 @@ export function makeAgentGatewayAutomationTools(
   };
 
   const listAutomations: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_list_automations",
       description:
@@ -186,6 +188,7 @@ export function makeAgentGatewayAutomationTools(
   };
 
   const cancelAutomation: ToolEntry = {
+    requiredCapability: "automation:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_cancel_automation",

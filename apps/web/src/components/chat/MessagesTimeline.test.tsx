@@ -7,7 +7,7 @@ import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
-import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 
@@ -264,11 +264,59 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup.match(/data-cross-task-origin="true"/g)).toHaveLength(1);
-    expect(markup).toContain("Sent by Codex from another task");
-    expect(markup).toContain('aria-label="Open source task"');
-    expect(markup.indexOf("Sent by Codex from another task")).toBeLessThan(
+    expect(markup).toContain("Sent by Synara from another thread");
+    expect(markup).toContain('aria-label="Open source thread"');
+    expect(markup.indexOf("Sent by Synara from another thread")).toBeLessThan(
       markup.indexOf("Inspect the repository"),
     );
+  });
+
+  it("shows only the cross-task label (not the agent chip) when both apply", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        crossTaskOrigin={{
+          sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+          sourceProvider: "codex",
+        }}
+        timelineEntries={[
+          {
+            id: "entry-first-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("first-user-message"),
+              role: "user",
+              text: "Inspect the repository",
+              dispatchOrigin: "agent",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:14:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        onOpenThread={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Sent by Synara from another thread");
+    expect(markup).not.toContain("Sent by agent");
   });
 
   it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {
@@ -1425,7 +1473,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("```tsx");
   });
 
-  it("keeps the latest inline tool calls visible while the turn is still active", async () => {
+  it("collapses a leading tool run behind its summary once the assistant text follows, even mid-turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1530,11 +1578,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
+    // The assistant's text block already follows the run, so it compacts
+    // behind the summary row even while the turn is still live.
+    expect(markup).toContain("Ran 6 tool calls");
     expect(markup).not.toContain("Tool 1");
-    expect(markup).not.toContain("Tool 2");
-    expect(markup).toContain("Tool 3");
-    expect(markup).toContain("Tool 6");
-    expect(markup).toContain("+2 more tool calls");
+    expect(markup).not.toContain("Tool 6");
+    expect(markup).not.toContain("+2 more tool calls");
   });
 
   it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
@@ -1780,7 +1829,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("expands inline tool calls when the group is toggled open", async () => {
+  it("expands live inline tool calls past the cap when the group is toggled open", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1789,6 +1838,20 @@ describe("MessagesTimeline", () => {
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
+          // The message comes first so the tools are the turn's live inline
+          // tail: the run stays expanded and keeps the +N cap behavior.
+          {
+            id: "entry-assistant-inline-tools-expanded",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:27.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-inline-tools-expanded"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:27.000Z",
+              streaming: true,
+            },
+          },
           {
             id: "entry-inline-tools-expanded",
             kind: "work",
@@ -1842,19 +1905,6 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.400Z",
               label: "tool 5",
               tone: "tool",
-            },
-          },
-          {
-            id: "entry-assistant-inline-tools-expanded",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-assistant-inline-tools-expanded"),
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
             },
           },
         ]}
@@ -2073,11 +2123,13 @@ describe("MessagesTimeline", () => {
 
   it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    // Rendered as a live turn: once settled, consecutive command rows fold into
+    // a closed "Ran N commands" summary and individual rows are not in markup.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
         isWorking={false}
-        activeTurnInProgress={false}
+        activeTurnInProgress={true}
         activeTurnStartedAt={null}
         timelineEntries={[
           {
@@ -2186,93 +2238,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("apps/web/src/session-logic.ts:55: toolDetails");
     expect(markup).not.toContain("Stdout");
     expect(markup).toContain("Searched");
-  });
-
-  it("finds tool details entries attached inline to assistant message rows", async () => {
-    const { findToolDetailsEntryById } = await import("./MessagesTimeline");
-    const entry = findToolDetailsEntryById(
-      [
-        {
-          kind: "message",
-          id: "row-assistant-inline-work",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          message: {
-            id: MessageId.makeUnsafe("assistant-inline-work"),
-            role: "assistant",
-            text: "done",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            streaming: false,
-          },
-          inlineWorkEntries: [
-            {
-              id: "inline-command-details",
-              createdAt: "2026-03-17T19:12:27.000Z",
-              label: "Ran command",
-              tone: "tool",
-              itemType: "command_execution",
-              toolDetails: {
-                kind: "command",
-                title: "Searched",
-                command: "rg toolDetails",
-              },
-            },
-          ],
-          durationStart: "2026-03-17T19:12:27.000Z",
-          showAssistantCopyButton: true,
-          assistantCopyStreaming: false,
-        },
-      ],
-      "inline-command-details",
-    );
-
-    expect(entry?.toolDetails?.kind).toBe("command");
-    expect(entry?.toolDetails?.command).toBe("rg toolDetails");
-  });
-
-  it("finds tool details entries inside collapsed assistant work disclosures", async () => {
-    const { findToolDetailsEntryById } = await import("./MessagesTimeline");
-    const entry = findToolDetailsEntryById(
-      [
-        {
-          kind: "message",
-          id: "row-assistant-collapsed-work",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          message: {
-            id: MessageId.makeUnsafe("assistant-collapsed-work"),
-            role: "assistant",
-            text: "done",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            streaming: false,
-          },
-          collapsedTurnItems: [
-            {
-              kind: "work",
-              id: "collapsed-command-details",
-              entry: {
-                id: "collapsed-command-details",
-                createdAt: "2026-03-17T19:12:27.000Z",
-                label: "Ran command",
-                tone: "tool",
-                itemType: "command_execution",
-                toolDetails: {
-                  kind: "command",
-                  title: "Searched",
-                  command: "rg collapsed",
-                },
-              },
-            },
-          ],
-          collapsedWorkElapsed: "1s",
-          durationStart: "2026-03-17T19:12:27.000Z",
-          showAssistantCopyButton: true,
-          assistantCopyStreaming: false,
-        },
-      ],
-      "collapsed-command-details",
-    );
-
-    expect(entry?.toolDetails?.kind).toBe("command");
-    expect(entry?.toolDetails?.command).toBe("rg collapsed");
   });
 
   it("renders command text even when commandActions provide a short preview", async () => {

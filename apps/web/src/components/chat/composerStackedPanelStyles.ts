@@ -9,8 +9,10 @@ import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyl
 
 /** Frame, border, radius, and surface chrome for a stacked composer panel.
  *  Uses `chat-composer-stacked-top` (not `chat-composer-surface`) so the rail
- *  reads as a darker recessed strip above the input. No raised z-index: the
- *  input shell paints later and keeps its top border visible across the seam. */
+ *  reads as a translucent continuation of the input shell (same color at half
+ *  opacity), with full-width hairline dividers between fused sections. No raised
+ *  z-index: the input shell paints later and keeps its top border visible across
+ *  the seam. */
 export const COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME = [
   "chat-composer-stacked-top relative overflow-hidden border border-b-0",
   COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME,

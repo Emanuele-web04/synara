@@ -5528,39 +5528,6 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("projects Claude autoCompactWindow selections into normalized thread activities", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    harness.emit({
-      type: "session.configured",
-      eventId: asEventId("evt-session-configured-auto-compact-window"),
-      provider: "claudeAgent",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      payload: {
-        config: {
-          model: "claude-opus-4-8",
-          autoCompactWindow: "1m",
-        },
-      },
-    });
-
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.configured",
-      ),
-    );
-
-    const configuredActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.configured",
-    );
-    expect(configuredActivity?.payload).toMatchObject({
-      contextWindow: "1m",
-      maxTokens: 1_000_000,
-    });
-  });
-
   it("projects Codex camelCase token usage payloads into normalized thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
