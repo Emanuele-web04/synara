@@ -54,6 +54,7 @@ import {
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import { settleTurnStateFromSession } from "./turnLifecycle.ts";
+import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -806,16 +807,27 @@ export function projectEvent(
           }
           const canAdoptFirstTurnProvider =
             thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
+          const projectedModelSelection = deriveTurnStartModelSelection({
+            currentModelSelection: thread.modelSelection,
+            requestedModelSelection: payload.modelSelection,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+          });
           const modelSelectionPatch =
-            payload.modelSelection !== undefined &&
-            (payload.modelSelection.provider === thread.modelSelection.provider ||
-              canAdoptFirstTurnProvider)
-              ? { modelSelection: payload.modelSelection }
+            projectedModelSelection !== thread.modelSelection
+              ? { modelSelection: projectedModelSelection }
               : {};
+          const turnStartSession = deriveTurnStartSession({
+            threadId: thread.id,
+            currentSession: thread.session,
+            providerName: projectedModelSelection.provider,
+            requestedRuntimeMode: payload.runtimeMode,
+            requestedAt: payload.createdAt,
+          });
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               ...modelSelectionPatch,
+              ...(turnStartSession !== null ? { session: turnStartSession } : {}),
               runtimeMode: payload.runtimeMode,
               interactionMode: payload.interactionMode,
               updatedAt: payload.createdAt,
@@ -1195,7 +1207,10 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = upsertThreadActivity(thread.activities, payload.activity);
+          const activities = upsertThreadActivity(thread.activities, {
+            ...payload.activity,
+            sequence: event.sequence,
+          });
 
           return {
             ...nextBase,

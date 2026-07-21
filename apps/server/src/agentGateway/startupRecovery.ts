@@ -6,7 +6,10 @@ import { Effect, Option } from "effect";
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import type { AgentGatewayOperationRepositoryShape } from "./Services/AgentGatewayOperationRepository.ts";
+import type {
+  AgentGatewayOperationRecord,
+  AgentGatewayOperationRepositoryShape,
+} from "./Services/AgentGatewayOperationRepository.ts";
 import { gatewayIsoNow } from "./creationUtils.ts";
 import { parseRecoverableCreationPlan } from "./operationPlan.ts";
 import { errorText } from "./toolInput.ts";
@@ -17,7 +20,17 @@ import { errorText } from "./toolInput.ts";
  * when its post-creation ownership proof still matches the live Git state.
  */
 export function recoverInterruptedAgentGatewayOperations(input: {
-  readonly operationRepository: AgentGatewayOperationRepositoryShape;
+  readonly operationRepository: Pick<
+    AgentGatewayOperationRepositoryShape,
+    "markCompensating" | "recordCompensationFailure" | "fail"
+  > & {
+    readonly listNonTerminal: () => Effect.Effect<
+      ReadonlyArray<Pick<AgentGatewayOperationRecord, "operationId" | "status" | "planJson">>,
+      Error
+    >;
+  };
+  readonly creationSource?: "synara_mcp" | "external_mcp";
+  readonly retainOnMissingThreadProjection?: boolean;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly git: GitCoreShape;
@@ -52,6 +65,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
           });
           const plan = parseRecoverableCreationPlan(operation.planJson, operation.operationId);
           const recoveryErrors: string[] = [];
+          const projectionDeferredThreadIds = new Set<string>();
           yield* Effect.forEach(
             [...plan].reverse(),
             (entry) =>
@@ -61,7 +75,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                 );
                 if (Option.isSome(projected)) {
                   if (
-                    projected.value.creationSource !== "synara_mcp" ||
+                    projected.value.creationSource !== (input.creationSource ?? "synara_mcp") ||
                     projected.value.gatewayOperationId !== operation.operationId
                   ) {
                     return yield* Effect.fail(
@@ -75,6 +89,13 @@ export function recoverInterruptedAgentGatewayOperations(input: {
                     commandId: CommandId.makeUnsafe(entry.ids.compensateCommandId),
                     threadId: ThreadId.makeUnsafe(entry.ids.threadId),
                   });
+                } else if (input.retainOnMissingThreadProjection) {
+                  projectionDeferredThreadIds.add(entry.ids.threadId);
+                  return yield* Effect.fail(
+                    new Error(
+                      `Cleanup remains pending for thread ${entry.ids.threadId}: its durable creation may still be awaiting projection.`,
+                    ),
+                  );
                 }
               }).pipe(
                 Effect.catch((error) => Effect.sync(() => recoveryErrors.push(errorText(error)))),
@@ -84,7 +105,9 @@ export function recoverInterruptedAgentGatewayOperations(input: {
           yield* Effect.forEach(
             [...plan].reverse(),
             (entry) =>
-              entry.environment === "worktree" && entry.plannedWorktreePath
+              projectionDeferredThreadIds.has(entry.ids.threadId)
+                ? Effect.void
+                : entry.environment === "worktree" && entry.plannedWorktreePath
                 ? input.git
                     .withMutation(
                       entry.workspaceRoot,

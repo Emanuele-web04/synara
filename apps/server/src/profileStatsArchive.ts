@@ -738,6 +738,15 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       // retain only deterministic ids and git ownership evidence until startup
       // or live compensation terminalizes them; repository terminal writes
       // then delete the caller-purged row atomically.
+      // External MCP task ownership outlives the projection for authorization
+      // and audit. Terminalize it in the same transaction before its projected
+      // turn disappears so durable capacity cannot be stranded by a purge.
+      yield* sql`
+        UPDATE external_mcp_tasks
+        SET status = 'failed', updated_at = ${deletedAt}
+        WHERE thread_id = ${threadId}
+          AND status IN ('planned', 'created')
+      `;
       yield* sql`
         DELETE FROM agent_gateway_operations
         WHERE caller_thread_id = ${threadId}

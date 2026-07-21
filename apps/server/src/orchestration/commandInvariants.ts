@@ -1,9 +1,12 @@
 import type {
   OrchestrationCommand,
+  OrchestrationLatestTurn,
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationSpace,
+  OrchestrationSession,
   OrchestrationThread,
+  OrchestrationThreadActivity,
   ProjectKind,
   ProjectId,
   SpaceId,
@@ -23,6 +26,66 @@ function invariantError(commandType: string, detail: string): OrchestrationComma
     commandType,
     detail,
   });
+}
+
+/**
+ * True when the thread still has an in-flight / unsettled turn:
+ * session mid-lifecycle ("starting"/"running"), a non-error session with an
+ * activeTurnId, or a latestTurn still projected as "running".
+ *
+ * Runtime errors can retain the failed turn id for attribution even though the
+ * session and turn are terminal, so an errored session's activeTurnId is stale.
+ */
+export function threadHasInFlightTurn(thread: {
+  readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
+  readonly latestTurn: Pick<OrchestrationLatestTurn, "state"> | null;
+}): boolean {
+  const session = thread.session;
+  return (
+    (session?.status !== "error" && session?.activeTurnId != null) ||
+    session?.status === "starting" ||
+    session?.status === "running" ||
+    thread.latestTurn?.state === "running"
+  );
+}
+
+export function checkpointRevertActiveTurnDetail(threadId: ThreadId): string {
+  return `Thread '${threadId}' has an active turn. Interrupt the current turn before reverting checkpoints.`;
+}
+
+export const CHECKPOINT_REVERT_STARTED_ACTIVITY_KIND = "checkpoint.revert.started";
+export const CHECKPOINT_REVERT_SUCCEEDED_ACTIVITY_KIND = "checkpoint.revert.succeeded";
+export const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
+
+const CHECKPOINT_REVERT_LIFECYCLE_ACTIVITY_KINDS = new Set([
+  CHECKPOINT_REVERT_STARTED_ACTIVITY_KIND,
+  CHECKPOINT_REVERT_SUCCEEDED_ACTIVITY_KIND,
+  CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
+]);
+
+export function threadHasCheckpointRevertInProgress(thread: {
+  readonly activities: ReadonlyArray<
+    Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "sequence">
+  >;
+}): boolean {
+  const latestLifecycleActivity = thread.activities
+    .filter((activity) => CHECKPOINT_REVERT_LIFECYCLE_ACTIVITY_KINDS.has(activity.kind))
+    .toSorted(
+      (left, right) =>
+        (right.sequence ?? -1) - (left.sequence ?? -1) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    )
+    .at(0);
+  return latestLifecycleActivity?.kind === CHECKPOINT_REVERT_STARTED_ACTIVITY_KIND;
+}
+
+export function checkpointRevertInProgressDetail(threadId: ThreadId): string {
+  return `Thread '${threadId}' has a checkpoint revert in progress. Wait for it to finish before starting a turn.`;
+}
+
+export function checkpointRevertDeleteInProgressDetail(threadId: ThreadId): string {
+  return `Thread '${threadId}' has a checkpoint revert in progress. Wait for it to finish before deleting the thread.`;
 }
 
 export function findThreadById(

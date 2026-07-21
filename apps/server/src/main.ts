@@ -45,11 +45,36 @@ import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
+import {
+  pairExternalMcpClient,
+  resolveExternalMcpBaseDir,
+  serveExternalMcpStdio,
+} from "./externalMcp/bridge";
+import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
+
+function consumeDesktopShutdownTokenFromProcessEnvironment(): string | undefined {
+  const matchingKeys =
+    process.platform === "win32"
+      ? Object.keys(process.env).filter(
+          (key) => key.toUpperCase() === DESKTOP_SHUTDOWN_TOKEN_ENV_KEY,
+        )
+      : [DESKTOP_SHUTDOWN_TOKEN_ENV_KEY];
+  let token: string | undefined;
+
+  for (const key of matchingKeys) {
+    token ??= process.env[key];
+    delete process.env[key];
+  }
+
+  return token;
+}
 
 interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
@@ -130,6 +155,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
   ),
@@ -148,6 +177,9 @@ const ServerConfigLive = (input: CliInput) =>
           (cause) =>
             new StartupError({ message: "Failed to read environment configuration", cause }),
         ),
+      );
+      const liveProcessDesktopShutdownToken = yield* Effect.sync(
+        consumeDesktopShutdownTokenFromProcessEnvironment,
       );
 
       const mode = Option.getOrElse(input.mode, () => env.mode);
@@ -192,6 +224,7 @@ const ServerConfigLive = (input: CliInput) =>
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd,
@@ -248,6 +281,7 @@ const ServerConfigLive = (input: CliInput) =>
         allowInsecureRemote,
         noBrowser,
         authToken,
+        desktopShutdownToken,
         autoBootstrapProjectFromCwd,
         logProviderEvents,
         logWebSocketEvents,
@@ -297,6 +331,19 @@ export const recordStartupHeartbeat = Effect.gen(function* () {
     projectCount,
   });
 });
+
+export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
+  const safeConfig: Record<string, unknown> = { ...config };
+  delete safeConfig.authToken;
+  delete safeConfig.desktopShutdownToken;
+  delete safeConfig.devUrl;
+
+  return {
+    ...safeConfig,
+    devUrl: config.devUrl?.toString(),
+    authEnabled: Boolean(config.authToken),
+  };
+}
 
 const makeServerProgram = (input: CliInput) =>
   Effect.gen(function* () {
@@ -365,12 +412,7 @@ const makeServerProgram = (input: CliInput) =>
       }),
     );
 
-    const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("Synara running", {
-      ...safeConfig,
-      devUrl: devUrl?.toString(),
-      authEnabled: Boolean(authToken),
-    });
+    yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));
     if (startupPairingUrl) {
       if (config.allowInsecureRemote && !config.publicUrl) {
         yield* Effect.logWarning(
@@ -407,7 +449,7 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     return yield* stopSignal;
-  }).pipe(Effect.provide(LayerLive(input)));
+  }).pipe(Effect.scoped, Effect.provide(LayerLive(input)));
 
 /**
  * These flags mirrors the environment variables and the config shape.
@@ -469,7 +511,70 @@ const logWebSocketEventsFlag = optionalBooleanFlag("log-websocket-events", {
   aliases: ["log-ws-events"],
 });
 
-export const synaraCli = Command.make("synara", {
+const mcpHomeDirFlag = Flag.string("home-dir").pipe(
+  Flag.withDescription("Synara data directory to discover and use."),
+  Flag.optional,
+);
+const mcpIntegrationFlag = Flag.string("integration").pipe(
+  Flag.withDescription(
+    "Paired integration id to serve (required only when more than one is stored).",
+  ),
+  Flag.optional,
+);
+
+const mcpServeCommand = Command.make(
+  "serve",
+  { homeDir: mcpHomeDirFlag, integration: mcpIntegrationFlag },
+  ({ homeDir, integration }) =>
+    Effect.tryPromise({
+      try: () =>
+        serveExternalMcpStdio({
+          baseDir: resolveExternalMcpBaseDir(Option.getOrUndefined(homeDir)),
+          ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
+        }),
+      catch: (cause) => new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+    }),
+).pipe(
+  Command.withDescription(
+    "Serve the paired Synara external MCP integration over stdio for Codex, Claude, and other MCP clients.",
+  ),
+);
+
+const mcpPairCommand = Command.make(
+  "pair",
+  {
+    code: Flag.string("code").pipe(
+      Flag.withDescription("Short-lived pairing code issued by Synara Settings."),
+    ),
+    homeDir: mcpHomeDirFlag,
+  },
+  ({ code, homeDir }) =>
+    Effect.tryPromise({
+      try: async () => {
+        const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(homeDir));
+        const paired = await pairExternalMcpClient({
+          baseDir,
+          pairingCode: code,
+        });
+        process.stdout.write(
+          `Paired Synara external MCP integration "${paired.paired.name}".\nCredential stored privately at ${paired.storePath}.\nConfigure the MCP client command as: ${externalMcpShellCommand(externalMcpLauncher(["mcp", "serve", "--integration", paired.paired.integrationId, "--home-dir", baseDir]))}\n`,
+        );
+        if (process.platform === "win32") {
+          process.stdout.write(
+            "Windows note: Synara stores this credential under your user profile, but Windows does not expose POSIX 0600 permission checks. Protect the profile and its Synara data directory.\n",
+          );
+        }
+      },
+      catch: (cause) => new StartupError({ message: "External MCP pairing failed.", cause }),
+    }),
+).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
+
+const mcpCommand = Command.make("mcp").pipe(
+  Command.withDescription("Manage Synara's loopback external MCP bridge."),
+  Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
+);
+
+const serverCommand = Command.make("synara", {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
@@ -484,5 +589,7 @@ export const synaraCli = Command.make("synara", {
   logWebSocketEvents: logWebSocketEventsFlag,
 }).pipe(
   Command.withDescription("Run the Synara server."),
-  Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
+  Command.withHandler((input) => makeServerProgram(input)),
 );
+
+export const synaraCli = serverCommand.pipe(Command.withSubcommands([mcpCommand]));

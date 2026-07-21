@@ -1,4 +1,4 @@
-// FILE: 074_Spaces.ts
+// FILE: 079_Spaces.ts
 // Purpose: Adds durable custom spaces and nullable project assignments.
 // Layer: SQLite migration
 

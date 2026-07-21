@@ -205,6 +205,13 @@ export function makeAgentGatewayMcpTransport(input: {
           }
         });
       const context: Omit<ToolContext, "jsonRpcRequestId"> = {
+        principal: {
+          kind: "provider-session",
+          sessionKey: callerSession.sessionKey,
+          threadId: callerThreadId,
+          provider: callerSession.provider,
+          turnId: callerWriteAuthority?.turnId ?? null,
+        },
         callerThreadId,
         callerSessionKey: callerSession.sessionKey,
         callerProvider: callerSession.provider,

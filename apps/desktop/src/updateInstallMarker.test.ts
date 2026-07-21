@@ -6,13 +6,29 @@ import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const fsFailure = vi.hoisted(() => ({ failRename: false }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    renameSync: (oldPath: FS.PathLike, newPath: FS.PathLike) => {
+      if (fsFailure.failRename) {
+        throw new Error("simulated atomic rename failure");
+      }
+      return actual.renameSync(oldPath, newPath);
+    },
+  };
+});
 
 import {
   clearInstallMarker,
   createUpdateInstallMarker,
   markInstallHandoffSync,
   readInstallMarker,
+  recordInstallMarkerFailureSync,
   resolveInstallMarkerOutcome,
   writeInstallMarker,
   type UpdateInstallMarker,
@@ -48,6 +64,7 @@ function marker(overrides: Partial<UpdateInstallMarker> = {}): UpdateInstallMark
 }
 
 afterEach(() => {
+  fsFailure.failRename = false;
   for (const directory of temporaryDirectories.splice(0)) {
     FS.rmSync(directory, { recursive: true, force: true });
   }
@@ -167,5 +184,96 @@ describe("updateInstallMarker", () => {
       }),
     ).toBeNull();
     expect(readInstallMarker(filePath)).toEqual({ status: "valid", marker: marker() });
+  });
+
+  it("records the same install failure only once", () => {
+    const filePath = createMarkerPath();
+    const expected = { attemptId: "attempt-1", artifact };
+    writeInstallMarker(filePath, marker({ phase: "handoff" }));
+
+    const first = recordInstallMarkerFailureSync(
+      filePath,
+      expected,
+      "2026-07-02T00:00:00.000Z",
+    );
+    const repeated = recordInstallMarkerFailureSync(
+      filePath,
+      expected,
+      "2026-07-02T00:00:01.000Z",
+    );
+
+    expect(first).toMatchObject({ status: "recorded", marker: { consecutiveFailures: 1 } });
+    expect(repeated).toEqual({
+      status: "already-failed",
+      marker: marker({
+        phase: "failed",
+        consecutiveFailures: 1,
+        lastFailureAt: "2026-07-02T00:00:00.000Z",
+      }),
+    });
+    expect(readInstallMarker(filePath)).toEqual({
+      status: "valid",
+      marker: marker({
+        phase: "failed",
+        consecutiveFailures: 1,
+        lastFailureAt: "2026-07-02T00:00:00.000Z",
+      }),
+    });
+  });
+
+  it("returns one attempted increment when repeated writes fail", () => {
+    const filePath = createMarkerPath();
+    const expected = { attemptId: "attempt-1", artifact };
+    const original = marker({ phase: "handoff" });
+    writeInstallMarker(filePath, original);
+    fsFailure.failRename = true;
+
+    const first = recordInstallMarkerFailureSync(
+      filePath,
+      expected,
+      "2026-07-02T00:00:00.000Z",
+    );
+    const repeated = recordInstallMarkerFailureSync(
+      filePath,
+      expected,
+      "2026-07-02T00:00:01.000Z",
+    );
+
+    expect(first).toMatchObject({
+      status: "write-failed",
+      marker: { phase: "failed", consecutiveFailures: 1 },
+      error: expect.any(Error),
+    });
+    expect(repeated).toMatchObject({
+      status: "write-failed",
+      marker: { phase: "failed", consecutiveFailures: 1 },
+      error: expect.any(Error),
+    });
+    expect(readInstallMarker(filePath)).toEqual({ status: "valid", marker: original });
+    expect(FS.readdirSync(Path.dirname(filePath))).toEqual(["pending-update-install.json"]);
+  });
+
+  it("leaves mismatched and invalid install markers unchanged", () => {
+    const filePath = createMarkerPath();
+    writeInstallMarker(filePath, marker());
+
+    expect(
+      recordInstallMarkerFailureSync(
+        filePath,
+        { attemptId: "attempt-2", artifact },
+        "2026-07-02T00:00:00.000Z",
+      ),
+    ).toEqual({ status: "mismatch" });
+    expect(readInstallMarker(filePath)).toEqual({ status: "valid", marker: marker() });
+
+    FS.writeFileSync(filePath, "{not-json", "utf8");
+    expect(
+      recordInstallMarkerFailureSync(
+        filePath,
+        { attemptId: "attempt-1", artifact },
+        "2026-07-02T00:00:00.000Z",
+      ),
+    ).toMatchObject({ status: "invalid" });
+    expect(FS.readFileSync(filePath, "utf8")).toBe("{not-json");
   });
 });

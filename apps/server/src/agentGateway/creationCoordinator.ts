@@ -23,7 +23,15 @@ import type { OrchestrationEngineShape } from "../orchestration/Services/Orchest
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
 import { runWorktreeSetupScript } from "../worktreeSetup.ts";
-import type { AgentGatewayOperationRepositoryShape } from "./Services/AgentGatewayOperationRepository.ts";
+import type {
+  AgentGatewayOperationRecord,
+  AgentGatewayOperationRepositoryShape,
+} from "./Services/AgentGatewayOperationRepository.ts";
+import type {
+  ExternalMcpRepositoryShape,
+  ExternalMcpOperationRecord,
+} from "../externalMcp/Services/ExternalMcpRepository.ts";
+import { resolveExternalMcpRuntimePolicy } from "../externalMcp/runtimePolicy.ts";
 import {
   canonicalJson,
   gatewayIsoNow,
@@ -37,7 +45,7 @@ import {
   type AgentGatewayProviderAvailability,
 } from "./targetResolver.ts";
 import { ToolInputError, errorText } from "./toolInput.ts";
-import { GatewayToolError, gatewayToolErrorResult, type ToolContext } from "./toolRuntime.ts";
+import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
 
 const CREATION_REPLAY_WAIT_MS = 60_000;
 
@@ -72,6 +80,7 @@ interface CreationCoordinatorDependencies {
   readonly git: GitCoreShape;
   readonly providerDiscovery: ProviderDiscoveryServiceShape;
   readonly operationRepository: AgentGatewayOperationRepositoryShape;
+  readonly externalMcpRepository?: ExternalMcpRepositoryShape;
   readonly serverConfig: ServerConfigShape;
   readonly loadProviderAvailabilities: Effect.Effect<
     ReadonlyMap<ProviderKind, AgentGatewayProviderAvailability>,
@@ -80,6 +89,64 @@ interface CreationCoordinatorDependencies {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, ToolInputError>;
+}
+
+export type GatewayCreationContext =
+  | {
+      readonly kind: "provider-session";
+      readonly callerThreadId: string;
+      readonly callerTurnId: string | null;
+      readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
+    }
+  | {
+      readonly kind: "external-client";
+      readonly integrationId: string;
+      readonly allowedProjectIds: ReadonlySet<string>;
+      readonly capabilities: ReadonlySet<string>;
+      readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
+    };
+
+type CreationOperationRecord = AgentGatewayOperationRecord | ExternalMcpOperationRecord;
+
+interface CreationOperationStore {
+  readonly getExisting: () => Effect.Effect<CreationOperationRecord | null, Error>;
+  readonly getById: (operationId: string) => Effect.Effect<CreationOperationRecord | null, Error>;
+  readonly reserve: (input: {
+    readonly operationId: string;
+    readonly requestId: string;
+    readonly fingerprint: string;
+    readonly requestedCount: number;
+    readonly planJson: string;
+    readonly now: string;
+  }) => Effect.Effect<
+    | {
+        readonly kind: "reserved" | "replay" | "idempotency_conflict" | "creation_plan_locked";
+        readonly operation: CreationOperationRecord;
+      }
+    | {
+        readonly kind: "concurrency_limited";
+        readonly activeCount: number;
+        readonly limit: number;
+      },
+    Error
+  >;
+  readonly markDispatching: AgentGatewayOperationRepositoryShape["markDispatching"];
+  readonly recordWorktreeCreated: AgentGatewayOperationRepositoryShape["recordWorktreeCreated"];
+  readonly markCompensating: AgentGatewayOperationRepositoryShape["markCompensating"];
+  readonly recordCompensationFailure: AgentGatewayOperationRepositoryShape["recordCompensationFailure"];
+  readonly complete: AgentGatewayOperationRepositoryShape["complete"];
+  readonly fail: AgentGatewayOperationRepositoryShape["fail"];
+  readonly registerTask: (input: {
+    readonly operationId: string;
+    readonly requestId: string;
+    readonly threadId: string;
+    readonly projectId: string;
+    readonly now: string;
+  }) => Effect.Effect<void, Error>;
+  readonly markTaskStatus: (
+    operationId: string,
+    status: "created" | "failed",
+  ) => Effect.Effect<void, Error>;
 }
 
 /**
@@ -98,6 +165,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     git,
     providerDiscovery,
     operationRepository,
+    externalMcpRepository,
     serverConfig,
     loadProviderAvailabilities,
     requireThreadShell,
@@ -130,11 +198,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     );
 
   const awaitCreationReplay = (
+    operationStore: CreationOperationStore,
     operationId: string,
+    assertAuthority: () => Effect.Effect<void, GatewayToolError>,
   ): Effect.Effect<McpToolCallResult, GatewayToolError | ToolInputError> =>
     Effect.gen(function* () {
       const deadline = Date.now() + CREATION_REPLAY_WAIT_MS;
-      let operation = yield* operationRepository
+      let operation = yield* operationStore
         .getById(operationId)
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       while (
@@ -143,11 +213,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         operation.status !== "failed" &&
         Date.now() < deadline
       ) {
+        yield* assertAuthority();
         yield* Effect.sleep(25);
-        operation = yield* operationRepository
+        operation = yield* operationStore
           .getById(operationId)
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       }
+      yield* assertAuthority();
       if (operation?.status === "completed") {
         return mcpToolResultJson(JSON.parse(operation.resultJson ?? "{}"));
       }
@@ -217,9 +289,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       );
   };
 
-  const run = (input: typeof SynaraCreateThreadsInput.Type, context: ToolContext) => {
+  const run = (input: typeof SynaraCreateThreadsInput.Type, context: GatewayCreationContext) => {
     return Effect.gen(function* () {
-      if (context.callerTurnId === null) {
+      if (context.kind === "provider-session" && context.callerTurnId === null) {
         return yield* Effect.fail(
           new GatewayToolError(
             "caller_turn_inactive",
@@ -227,23 +299,104 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           ),
         );
       }
-      const callerTurnId = context.callerTurnId;
-      const caller = yield* requireThreadShell(context.callerThreadId);
+      if (context.kind === "external-client" && input.threads.length !== 1) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "creation_limit_exceeded",
+            "External MCP integrations may create exactly one task per request.",
+          ),
+        );
+      }
+      const callerTurnId = context.kind === "provider-session" ? context.callerTurnId! : null;
+      const caller =
+        context.kind === "provider-session"
+          ? yield* requireThreadShell(context.callerThreadId)
+          : null;
       const operationId = `gateway:create:${stableGatewayDigest({
-        callerThreadId: context.callerThreadId,
-        callerTurnId,
+        principalKind: context.kind,
+        principalId:
+          context.kind === "provider-session" ? context.callerThreadId : context.integrationId,
+        ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
       const fingerprint = stableGatewayDigest(input, 64);
-      const existingOperation = yield* operationRepository
-        .getByScope({
-          callerThreadId: context.callerThreadId,
-          callerTurnId,
-          operationKind: "create_threads",
-        })
+      const externalOperationRepository =
+        context.kind === "external-client" ? externalMcpRepository : undefined;
+      if (context.kind === "external-client" && externalOperationRepository === undefined) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "external_mcp_unavailable",
+            "External MCP persistence is unavailable.",
+          ),
+        );
+      }
+      const operationStore: CreationOperationStore =
+        context.kind === "provider-session"
+          ? {
+              getExisting: () =>
+                operationRepository.getByScope({
+                  callerThreadId: context.callerThreadId,
+                  callerTurnId: context.callerTurnId!,
+                  operationKind: "create_threads",
+                }),
+              getById: operationRepository.getById,
+              reserve: (reservation) =>
+                operationRepository.reserve({
+                  ...reservation,
+                  callerThreadId: context.callerThreadId,
+                  callerTurnId: context.callerTurnId!,
+                  operationKind: "create_threads",
+                }),
+              markDispatching: operationRepository.markDispatching,
+              recordWorktreeCreated: operationRepository.recordWorktreeCreated,
+              markCompensating: operationRepository.markCompensating,
+              recordCompensationFailure: operationRepository.recordCompensationFailure,
+              complete: operationRepository.complete,
+              fail: operationRepository.fail,
+              registerTask: () => Effect.void,
+              markTaskStatus: () => Effect.void,
+            }
+          : {
+              getExisting: () =>
+                externalOperationRepository!.getOperationByRequest({
+                  integrationId: context.integrationId,
+                  requestId: input.requestId,
+                }),
+              getById: externalOperationRepository!.getOperationById,
+              reserve: (reservation) =>
+                externalOperationRepository!.reserveOperation({
+                  ...reservation,
+                  integrationId: context.integrationId,
+                  requestedCount: 1,
+                }),
+              markDispatching: externalOperationRepository!.markOperationDispatching,
+              recordWorktreeCreated: externalOperationRepository!.recordOperationWorktreeCreated,
+              markCompensating: externalOperationRepository!.markOperationCompensating,
+              recordCompensationFailure:
+                externalOperationRepository!.recordOperationCompensationFailure,
+              complete: externalOperationRepository!.completeOperation,
+              fail: externalOperationRepository!.failOperation,
+              registerTask: (task) =>
+                externalOperationRepository!.registerTask({
+                  ...task,
+                  integrationId: context.integrationId,
+                }),
+              markTaskStatus: (operationId, status) =>
+                externalOperationRepository!.markTaskStatus({
+                  operationId,
+                  status,
+                  now: gatewayIsoNow(),
+                }),
+            };
+      const existingOperation = yield* operationStore
+        .getExisting()
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       if (existingOperation !== null) {
-        if (existingOperation.requestId !== input.requestId) {
+        yield* context.assertAuthority();
+        if (
+          context.kind === "provider-session" &&
+          existingOperation.requestId !== input.requestId
+        ) {
           return yield* Effect.fail(
             new GatewayToolError(
               "creation_plan_locked",
@@ -281,7 +434,11 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             ),
           );
         }
-        return yield* awaitCreationReplay(existingOperation.operationId);
+        return yield* awaitCreationReplay(
+          operationStore,
+          existingOperation.operationId,
+          context.assertAuthority,
+        );
       }
       const deprecatedBranchName = input.threads.find((spec) => spec.branchName !== undefined);
       if (deprecatedBranchName) {
@@ -291,12 +448,25 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           ),
         );
       }
-      const callerIsolatedInWorktree = caller.envMode === "worktree";
+      const callerIsolatedInWorktree = caller?.envMode === "worktree";
       const providerAvailabilities = yield* loadProviderAvailabilities;
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
-          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller.projectId);
+          if (context.kind === "external-client" && spec.projectId === undefined) {
+            return yield* Effect.fail(
+              new ToolInputError("External MCP task creation requires an explicit projectId."),
+            );
+          }
+          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
+          if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "capability_denied",
+                `This integration is not authorized for project "${projectId}".`,
+              ),
+            );
+          }
           const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
             Effect.mapError((error) => new ToolInputError(errorText(error))),
             Effect.flatMap(
@@ -315,7 +485,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               : {}),
             cwd: project.workspaceRoot,
           });
-          const environment = spec.environment ?? (callerIsolatedInWorktree ? "worktree" : "local");
+          const externalPolicy =
+            context.kind === "external-client"
+              ? resolveExternalMcpRuntimePolicy({
+                  ...(spec.environment ? { requestedEnvironment: spec.environment } : {}),
+                  ...(spec.runtimeMode ? { requestedRuntimeMode: spec.runtimeMode } : {}),
+                  capabilities: context.capabilities,
+                })
+              : null;
+          const environment =
+            externalPolicy?.environment ??
+            spec.environment ??
+            (callerIsolatedInWorktree ? "worktree" : "local");
           if (environment === "local" && callerIsolatedInWorktree) {
             return yield* Effect.fail(
               new ToolInputError(
@@ -323,14 +504,21 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
-          if (spec.runtimeMode === "full-access" && caller.runtimeMode !== "full-access") {
+          if (
+            context.kind === "provider-session" &&
+            spec.runtimeMode === "full-access" &&
+            caller!.runtimeMode !== "full-access"
+          ) {
             return yield* Effect.fail(
               new ToolInputError(
                 'Your thread runs in "approval-required" mode, so created threads cannot use "full-access".',
               ),
             );
           }
-          const runtimeMode = spec.runtimeMode ?? caller.runtimeMode;
+          const runtimeMode =
+            externalPolicy?.runtimeMode ??
+            spec.runtimeMode ??
+            (context.kind === "external-client" ? "approval-required" : caller!.runtimeMode);
           const title = spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
           let worktreeRef: string | null = null;
           let copyChangesFrom: string | null = null;
@@ -346,7 +534,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             // Always resolve same-project requests from the caller's selected checkout so
             // an explicit baseRef:"HEAD" cannot silently jump back to the primary checkout.
             const sourceCwd =
-              caller.projectId === projectId
+              caller?.projectId === projectId
                 ? (caller.worktreePath ?? project.workspaceRoot)
                 : project.workspaceRoot;
             const pullRequest = parsePullRequestSelector(requestedRef);
@@ -438,7 +626,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         );
       }
 
-      yield* context.assertCallerTurnActive();
+      yield* context.assertAuthority();
 
       const createdThreads: Array<(typeof prepared)[number]> = [];
       const createdWorktrees: Array<{
@@ -460,7 +648,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const failureMessage = interrupted
             ? "The MCP request was interrupted after thread creation dispatch began."
             : errorText(Cause.squash(cause));
-          yield* operationRepository.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
+          yield* operationStore.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
             Effect.catch((error) =>
               Effect.logWarning("agent gateway could not persist compensating status", {
                 operationId,
@@ -570,6 +758,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 ),
             { discard: true },
           );
+          // Do not make a task terminal before cleanup has been attempted. The
+          // durable capacity view treats planned/created tasks and non-terminal
+          // failed compensation as active, so projector lag and restart cannot
+          // briefly admit a replacement while this task may still be running.
+          yield* operationStore.markTaskStatus(operationId, "failed").pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("agent gateway could not mark external task failed", {
+                operationId,
+                error: errorText(error),
+              }),
+            ),
+          );
           const failure = {
             code: interrupted ? "request_interrupted" : "dispatch_failed",
             message: failureMessage,
@@ -579,7 +779,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             compensationErrors,
           };
           if (compensationErrors.length > 0) {
-            yield* operationRepository
+            yield* operationStore
               .recordCompensationFailure({
                 operationId,
                 errorJson: JSON.stringify(failure),
@@ -604,7 +804,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             );
           }
 
-          const statusFailure = yield* operationRepository
+          const statusFailure = yield* operationStore
             .fail({
               operationId,
               errorJson: JSON.stringify(failure),
@@ -619,7 +819,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           if (statusFailure !== null) {
             const statusError = `operation status: ${errorText(statusFailure)}`;
             compensationErrors.push(statusError);
-            yield* operationRepository
+            yield* operationStore
               .recordCompensationFailure({
                 operationId,
                 errorJson: JSON.stringify(failure),
@@ -652,19 +852,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           // Reservation and claim form one uninterruptible handshake. Once the
           // durable reservation exists, this fiber either claims it while the
           // compensation boundary is already installed or returns a replay.
-          const reservation = yield* operationRepository
+          const reservation = yield* operationStore
             .reserve({
               operationId,
-              callerThreadId: context.callerThreadId,
-              callerTurnId,
-              operationKind: "create_threads",
               requestId: input.requestId,
               fingerprint,
               requestedCount: prepared.length,
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
-                  spec: entry.spec,
                   projectId: entry.projectId,
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,
@@ -686,6 +882,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 "idempotency_conflict",
                 `Request id "${input.requestId}" was already used with a different creation plan.`,
                 { operationId: reservation.operation.operationId },
+              ),
+            );
+          }
+          if (reservation.kind === "concurrency_limited") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "concurrency_limited",
+                `This integration already has ${reservation.activeCount} active externally created tasks/operations (limit ${reservation.limit}).`,
               ),
             );
           }
@@ -726,27 +930,44 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           if (reservation.kind === "replay" && reservation.operation.status !== "reserved") {
             return {
               kind: "replay" as const,
-              result: yield* restore(awaitCreationReplay(operationId)),
+              result: yield* restore(
+                awaitCreationReplay(operationStore, operationId, context.assertAuthority),
+              ),
             };
           }
 
-          const claimed = yield* operationRepository
+          const claimed = yield* operationStore
             .markDispatching({ operationId, now: gatewayIsoNow() })
             .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
           if (!claimed) {
             return {
               kind: "replay" as const,
-              result: yield* restore(awaitCreationReplay(operationId)),
+              result: yield* restore(
+                awaitCreationReplay(operationStore, operationId, context.assertAuthority),
+              ),
             };
           }
           claimedByThisFiber = true;
+
+          yield* Effect.forEach(
+            prepared,
+            (entry) =>
+              operationStore.registerTask({
+                operationId,
+                requestId: input.requestId,
+                threadId: entry.ids.threadId,
+                projectId: entry.projectId,
+                now: gatewayIsoNow(),
+              }),
+            { discard: true },
+          );
 
           const results = yield* restore(
             Effect.forEach(
               prepared,
               (entry) =>
                 Effect.gen(function* () {
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
                   let branch: string | null = null;
                   let worktreePath: string | null = null;
                   let associatedWorktreeRef: string | null = null;
@@ -788,7 +1009,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           token: randomUUID(),
                         });
                         trackedWorktree.proof = proof;
-                        const ownershipRecorded = yield* operationRepository.recordWorktreeCreated({
+                        const ownershipRecorded = yield* operationStore.recordWorktreeCreated({
                           operationId,
                           index: entry.index,
                           workspaceRoot: entry.workspaceRoot,
@@ -814,7 +1035,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     associatedWorktreeRef = created.worktree.ref;
                   }
 
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
                   yield* orchestrationEngine
                     .dispatch({
                       type: "thread.create",
@@ -828,9 +1049,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       envMode: entry.environment,
                       branch,
                       worktreePath,
-                      creationSource: "synara_mcp",
-                      sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
-                      sourceTurnId: TurnId.makeUnsafe(callerTurnId),
+                      creationSource:
+                        context.kind === "external-client" ? "external_mcp" : "synara_mcp",
+                      ...(context.kind === "provider-session"
+                        ? {
+                            sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+                            sourceTurnId: TurnId.makeUnsafe(callerTurnId!),
+                          }
+                        : {}),
                       gatewayOperationId: operationId,
                       gatewayOperationIndex: entry.index,
                       ...(worktreePath !== null
@@ -847,7 +1073,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       Effect.uninterruptible,
                     );
 
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
                   yield* orchestrationEngine.dispatch({
                     type: "thread.turn.start",
                     commandId: entry.ids.turnStartCommandId,
@@ -868,7 +1094,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   // The dispatch can outlive the caller turn. Recheck after it returns so
                   // a child started in that final race window is compensated as part of
                   // the same durable operation instead of being left detached.
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
+
+                  yield* operationStore.markTaskStatus(operationId, "created");
 
                   return {
                     index: entry.index,
@@ -899,7 +1127,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           // Once every deterministic dispatch succeeded, durable completion is
           // the commit point. A late client cancellation must not roll back a
           // fully-created operation or strand it between dispatching/completed.
-          yield* operationRepository.complete({
+          yield* operationStore.complete({
             operationId,
             resultJson: JSON.stringify(result),
             now: gatewayIsoNow(),
@@ -922,16 +1150,20 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       if (outcome.kind === "replay") return outcome.result;
       const result = outcome.result;
-      yield* appendThreadCreationRecap({
-        callerThreadId: context.callerThreadId,
-        callerTurnId,
-        result,
-      });
+      if (context.kind === "provider-session") {
+        yield* appendThreadCreationRecap({
+          callerThreadId: context.callerThreadId,
+          callerTurnId: callerTurnId!,
+          result,
+        });
+      }
       return mcpToolResultJson(result);
     }).pipe(
       (effect) =>
         withCreationPlanLock(
-          `${context.callerThreadId}\u0000${context.callerTurnId ?? "inactive"}`,
+          context.kind === "provider-session"
+            ? `${context.callerThreadId}\u0000${context.callerTurnId ?? "inactive"}`
+            : `${context.integrationId}\u0000${input.requestId}`,
           effect,
         ),
       Effect.catch((error) =>

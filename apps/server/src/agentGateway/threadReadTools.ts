@@ -307,7 +307,6 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         return mcpToolResultJson(
           summarizeThreadDetail({
             thread: detail,
-            callerThreadId: context.callerThreadId,
             cursor,
             messageLimit,
             maxMessageChars,

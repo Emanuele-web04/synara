@@ -16,6 +16,11 @@ import {
   type AuthRevokePairingLinkInput,
   type AuthSessionState,
   type AuthWebSocketTokenResult,
+  type ExternalMcpCreateIntegrationInput,
+  type ExternalMcpCreateIntegrationResult,
+  type ExternalMcpIntegration,
+  type ExternalMcpRefreshPairingInput,
+  type ExternalMcpRevokeIntegrationInput,
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
@@ -592,6 +597,14 @@ export function createWsNativeApi(): NativeApi {
         await transport.dispose();
         return result;
       },
+      listExternalMcpIntegrations: () =>
+        transport.request(WS_METHODS.serverListExternalMcpIntegrations),
+      createExternalMcpIntegration: (input: ExternalMcpCreateIntegrationInput) =>
+        transport.request(WS_METHODS.serverCreateExternalMcpIntegration, input),
+      revokeExternalMcpIntegration: (input: ExternalMcpRevokeIntegrationInput) =>
+        transport.request(WS_METHODS.serverRevokeExternalMcpIntegration, input),
+      refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
+        transport.request(WS_METHODS.serverRefreshExternalMcpPairing, input),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.

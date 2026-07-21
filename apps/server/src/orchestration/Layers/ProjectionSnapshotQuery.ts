@@ -1011,6 +1011,44 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listCheckpointRevertLifecycleActivityRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC,
+                created_at DESC,
+                activity_id DESC
+            ) AS activity_rank
+          FROM projection_thread_activities
+          WHERE kind IN (
+            'checkpoint.revert.started',
+            'checkpoint.revert.succeeded',
+            'checkpoint.revert.failed'
+          )
+        ) AS ranked
+        WHERE activity_rank = 1
+        ORDER BY thread_id ASC
+      `,
+  });
+
   const listPendingInteractionRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: OrchestrationPendingInteraction,
@@ -1864,6 +1902,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             proposedPlanRows,
+            checkpointRevertActivityRows,
             sessionRows,
             latestTurnRows,
             stateRows,
@@ -1912,6 +1951,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
+            listCheckpointRevertLifecycleActivityRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listCheckpointRevertActivities:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listCheckpointRevertActivities:decodeRows",
+                ),
+              ),
+            ),
             listThreadSessionRows(undefined).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
@@ -1939,11 +1986,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ]);
 
           const proposedPlans = collectProjectedProposedPlans(proposedPlanRows);
+          const checkpointRevertActivities = collectProjectedActivities(
+            checkpointRevertActivityRows,
+          );
           const sessions = collectProjectedSessions(sessionRows);
           const latestTurns = collectProjectedLatestTurns(latestTurnRows);
 
           let updatedAt = collectBaseUpdatedAt({ spaceRows, projectRows, threadRows, stateRows });
           updatedAt = maxOptionalIso(updatedAt, proposedPlans.updatedAt);
+          updatedAt = maxOptionalIso(updatedAt, checkpointRevertActivities.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, sessions.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
 
@@ -1955,7 +2006,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               latestTurn: latestTurns.byThread.get(row.threadId) ?? null,
               messages: [],
               proposedPlans: proposedPlans.byThread.get(row.threadId) ?? [],
-              activities: [],
+              activities: checkpointRevertActivities.byThread.get(row.threadId) ?? [],
               pendingInteractions: [],
               checkpoints: [],
               session: sessions.byThread.get(row.threadId) ?? null,

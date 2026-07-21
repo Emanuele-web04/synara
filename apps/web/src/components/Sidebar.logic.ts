@@ -1256,15 +1256,15 @@ function isUnseenFinishedThread(thread: SidebarThreadSortInput): boolean {
   });
 }
 
-// Attention groups for the sidebar order: finished-but-unseen threads first —
-// they are done and waiting on the user, so they must get seen — then threads
-// doing live work so what's going on stays visible, then everything else by
-// timestamp.
+// Attention groups for the sidebar order: threads doing live work first so you
+// can watch what's going on, then finished-but-unseen ones so they get noticed,
+// then everything else by timestamp. Mirrors THREAD_STATUS_PRIORITY, where
+// Working/Connecting outrank Completed.
 function threadSortAttentionRank(thread: SidebarThreadSortInput): number {
-  if (isUnseenFinishedThread(thread)) {
+  if (isThreadActivelyWorking(thread) || thread.session?.status === "connecting") {
     return 2;
   }
-  if (isThreadActivelyWorking(thread) || thread.session?.status === "connecting") {
+  if (isUnseenFinishedThread(thread)) {
     return 1;
   }
   return 0;

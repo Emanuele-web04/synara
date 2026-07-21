@@ -234,7 +234,11 @@ export const DEFAULT_TURN_DISPATCH_MODE: TurnDispatchMode = "queue";
 // Absent is treated as "user"; only server-dispatched turns carry the flag.
 export const MessageDispatchOrigin = Schema.Literals(["user", "automation", "agent"]);
 export type MessageDispatchOrigin = typeof MessageDispatchOrigin.Type;
-export const ThreadCreationSource = Schema.Literals(["synara_mcp", "provider_native"]);
+export const ThreadCreationSource = Schema.Literals([
+  "synara_mcp",
+  "external_mcp",
+  "provider_native",
+]);
 export type ThreadCreationSource = typeof ThreadCreationSource.Type;
 export const ProviderReviewTarget = Schema.Union([
   Schema.Struct({
@@ -1532,6 +1536,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   assistantMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
   preserveLatestTurn: Schema.optional(Schema.Boolean),
+  checkpointRevertTurnCount: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 

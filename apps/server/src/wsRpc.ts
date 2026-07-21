@@ -26,7 +26,18 @@ import {
   type ServerLifecycleStreamEvent,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Queue,
+  Schema,
+  Scope,
+  ServiceMap,
+  Stream,
+} from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -88,6 +99,7 @@ import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
+import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -112,6 +124,15 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
+
+const CurrentWsSessionRole = ServiceMap.Reference<"owner" | "client">(
+  "synara/ws/CurrentSessionRole",
+  { defaultValue: () => "client" },
+);
+
+export function canManageExternalMcp(role: "owner" | "client"): boolean {
+  return role === "owner";
+}
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
@@ -283,6 +304,7 @@ const makeWsRpcHandlersLayer = () =>
       const config = yield* ServerConfig;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
+      const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
@@ -718,6 +740,21 @@ const makeWsRpcHandlersLayer = () =>
 
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+
+      const requireOwner = Effect.gen(function* () {
+        if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
+          return yield* Effect.fail(
+            new WsRpcError({ message: "Owner authorization is required for this operation." }),
+          );
+        }
+        if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+          return yield* Effect.fail(
+            new WsRpcError({
+              message: "External MCP management is available only on a loopback-only instance.",
+            }),
+          );
+        }
+      });
 
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -1282,6 +1319,29 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to refresh providers",
           ),
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
+        [WS_METHODS.serverListExternalMcpIntegrations]: () =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
+            "Failed to list external MCP integrations",
+          ),
+        [WS_METHODS.serverCreateExternalMcpIntegration]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
+            "Failed to create external MCP integration",
+          ),
+        [WS_METHODS.serverRevokeExternalMcpIntegration]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(
+              Effect.andThen(externalMcp.revokeIntegration(input.integrationId)),
+              Effect.map((revoked) => ({ revoked })),
+            ),
+            "Failed to revoke external MCP integration",
+          ),
+        [WS_METHODS.serverRefreshExternalMcpPairing]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
+            "Failed to refresh external MCP pairing",
+          ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(
             pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
@@ -1693,6 +1753,7 @@ export function makeWebsocketRpcRouteLayer<R>(
 
           if (!authenticatedSession) {
             return yield* rpcWebSocketHttpEffect.pipe(
+              Effect.provideService(CurrentWsSessionRole, "owner"),
               Effect.provideService(
                 CurrentManagedAttachmentPrincipal,
                 LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
@@ -1703,6 +1764,7 @@ export function makeWebsocketRpcRouteLayer<R>(
           return yield* sessions.runAuthenticatedConnection(
             authenticatedSession.sessionId,
             rpcWebSocketHttpEffect.pipe(
+              Effect.provideService(CurrentWsSessionRole, authenticatedSession.role),
               Effect.provideService(
                 CurrentManagedAttachmentPrincipal,
                 attachmentPrincipalForSession(authenticatedSession.sessionId),
