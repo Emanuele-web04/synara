@@ -43,6 +43,7 @@ import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
 import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -1079,6 +1080,7 @@ function SettingsRouteView() {
                   updateSettings={updateSettings}
                   resetEpoch={resetEpoch}
                 />
+                <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
                   onOpenReleaseHistory={() => setReleaseHistoryOpen(true)}

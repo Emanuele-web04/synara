@@ -610,6 +610,49 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
   });
 
+  it("uses websocket RPC for external MCP management in packaged and browser builds", async () => {
+    requestMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } })
+      .mockResolvedValueOnce({ revoked: true })
+      .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const createInput = {
+      name: "Desktop MCP",
+      capabilities: ["tasks.create", "tasks.read"] as const,
+      projectIds: ["project-1"],
+    };
+
+    await api.server.listExternalMcpIntegrations();
+    await api.server.createExternalMcpIntegration(createInput);
+    await api.server.revokeExternalMcpIntegration({ integrationId: "integration-1" });
+    await api.server.refreshExternalMcpPairing({ integrationId: "integration-1" });
+
+    expect(requestMock).toHaveBeenNthCalledWith(
+      1,
+      WS_METHODS.serverListExternalMcpIntegrations,
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      WS_METHODS.serverCreateExternalMcpIntegration,
+      createInput,
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      WS_METHODS.serverRevokeExternalMcpIntegration,
+      { integrationId: "integration-1" },
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(
+      4,
+      WS_METHODS.serverRefreshExternalMcpPairing,
+      { integrationId: "integration-1" },
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("fetches auth session state over HTTP", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

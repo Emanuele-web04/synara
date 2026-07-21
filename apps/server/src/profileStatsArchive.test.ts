@@ -404,6 +404,37 @@ describe("ProfileStatsArchive", () => {
 
         yield* seedTwoThreadsWithActivity;
         yield* acknowledgeProviderCommandJournal(sql);
+        yield* sql`
+          INSERT INTO external_mcp_integrations (
+            integration_id, name, audience, client_kind, credential_hash,
+            capabilities_json, created_at, expires_at, rate_limit_per_minute,
+            concurrency_limit
+          ) VALUES (
+            'integration-purge', 'Purge integration', 'synara.external-mcp', 'other',
+            'credential-purge', '["tasks.create","tasks.read"]',
+            '2026-06-13T17:00:00.000Z', '2027-06-13T17:00:00.000Z', 60, 1
+          )
+        `;
+        yield* sql`
+          INSERT INTO external_mcp_operations (
+            operation_id, integration_id, request_id, fingerprint, requested_count,
+            plan_json, status, result_json, created_at, updated_at
+          ) VALUES (
+            'operation-purge', 'integration-purge', 'request-purge', 'fingerprint-purge', 1,
+            '[]', 'completed', '{}', '2026-06-13T17:00:00.000Z',
+            '2026-06-13T17:01:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO external_mcp_tasks (
+            integration_id, operation_id, request_id, thread_id, project_id,
+            status, created_at, updated_at
+          ) VALUES (
+            'integration-purge', 'operation-purge', 'request-purge', 'thread-purge',
+            'project-archive', 'created', '2026-06-13T17:00:00.000Z',
+            '2026-06-13T17:01:00.000Z'
+          )
+        `;
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         const tokenStatsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
@@ -433,6 +464,19 @@ describe("ProfileStatsArchive", () => {
             (SELECT COUNT(*) FROM projection_turns WHERE thread_id = 'thread-purge') AS turns
         `;
         expect(remaining[0]).toMatchObject({ threads: 0, messages: 0, turns: 0 });
+        expect(
+          yield* sql<{ readonly status: string; readonly activeClaims: number }>`
+            SELECT
+              tasks.status,
+              (
+                SELECT COUNT(*)
+                FROM external_mcp_active_capacity_claims
+                WHERE integration_id = 'integration-purge'
+              ) AS activeClaims
+            FROM external_mcp_tasks AS tasks
+            WHERE tasks.thread_id = 'thread-purge'
+          `,
+        ).toEqual([{ status: "failed", activeClaims: 0 }]);
         expect(deletedCheckpointRefCalls).toEqual([
           {
             cwd: "/work/archive",

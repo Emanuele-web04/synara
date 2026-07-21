@@ -34,6 +34,7 @@ export interface JsonRpcRequest {
 
 export interface JsonRpcNotification {
   readonly method: string;
+  readonly params: Record<string, unknown>;
 }
 
 export interface McpToolDefinition {
@@ -80,7 +81,7 @@ export function jsonRpcError(
 
 export type ParsedMcpMessage =
   | { readonly kind: "request"; readonly request: JsonRpcRequest }
-  | { readonly kind: "notification"; readonly method: string }
+  | { readonly kind: "notification"; readonly notification: JsonRpcNotification }
   | { readonly kind: "response" }
   | { readonly kind: "invalid"; readonly id: JsonRpcId };
 
@@ -116,7 +117,11 @@ export function parseMcpMessage(raw: unknown): ParsedMcpMessage {
     return { kind: "invalid", id: null };
   }
   if (rawId === undefined) {
-    return { kind: "notification", method: record.method };
+    const params =
+      typeof record.params === "object" && record.params !== null && !Array.isArray(record.params)
+        ? (record.params as Record<string, unknown>)
+        : {};
+    return { kind: "notification", notification: { method: record.method, params } };
   }
   const params =
     typeof record.params === "object" && record.params !== null && !Array.isArray(record.params)

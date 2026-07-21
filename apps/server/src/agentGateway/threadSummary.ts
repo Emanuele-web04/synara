@@ -218,7 +218,6 @@ export interface AgentThreadDetail {
 
 export function summarizeThreadDetail(input: {
   readonly thread: OrchestrationThread;
-  readonly callerThreadId: string;
   readonly cursor?: string | undefined;
   readonly messageLimit?: number | undefined;
   readonly maxMessageChars?: number | undefined;

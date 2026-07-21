@@ -21,16 +21,17 @@ export const AGENT_GATEWAY_MCP_MAX_BODY_BYTES = 1024 * 1024;
 
 const BODY_TOO_LARGE = Symbol("AgentGatewayMcpBodyTooLarge");
 
-type McpBodyReadResult =
+export type McpBodyReadResult =
   | { readonly kind: "ok"; readonly body: unknown }
   | { readonly kind: "invalid" }
   | { readonly kind: "too-large" };
 
-function readMcpJsonBody(
+export function readMcpJsonBody(
   request: HttpServerRequest.HttpServerRequest,
+  maxBytes = AGENT_GATEWAY_MCP_MAX_BODY_BYTES,
 ): Effect.Effect<McpBodyReadResult> {
   const declaredLength = Number.parseInt(request.headers["content-length"] ?? "", 10);
-  if (Number.isFinite(declaredLength) && declaredLength > AGENT_GATEWAY_MCP_MAX_BODY_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     return Effect.succeed({ kind: "too-large" });
   }
 
@@ -39,7 +40,7 @@ function readMcpJsonBody(
       () => ({ chunks: [] as Buffer[], totalBytes: 0 }),
       (state, chunk) => {
         const totalBytes = state.totalBytes + chunk.byteLength;
-        if (totalBytes > AGENT_GATEWAY_MCP_MAX_BODY_BYTES) {
+        if (totalBytes > maxBytes) {
           return Effect.fail(BODY_TOO_LARGE);
         }
         state.chunks.push(Buffer.from(chunk));

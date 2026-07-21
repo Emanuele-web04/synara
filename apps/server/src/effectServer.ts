@@ -42,6 +42,9 @@ import { makeServerShutdownController, type ServerShutdownController } from "./s
 import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
+import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
+import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
+import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -50,6 +53,8 @@ export interface ServerShape {
     | Scope.Scope
     | ServerConfig
     | AgentGatewayCredentials
+    | ExternalMcpGateway
+    | ExternalMcpService
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
@@ -156,6 +161,7 @@ export const createEffectServer = Effect.fn(function* (
     makeEffectHttpRouteLayer(readiness, shutdownController),
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
+    externalMcpRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer

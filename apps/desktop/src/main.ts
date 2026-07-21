@@ -2769,6 +2769,7 @@ function startBackend(): void {
     env: {
       ...backendEnv(),
       ELECTRON_RUN_AS_NODE: "1",
+      SYNARA_SERVER_ENTRY: backendEntry,
     },
     stdio: captureBackendLogs ? ["ignore", "pipe", "pipe"] : "inherit",
   });
