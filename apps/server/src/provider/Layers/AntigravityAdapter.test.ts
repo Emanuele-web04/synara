@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import {
   antigravityPromptCommandLineIssue,
   buildAntigravityCaptureCommand,
   buildAntigravityHookConfig,
+  hookScriptSource,
   makeAntigravityRuntimeEventBase,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
@@ -16,6 +17,21 @@ import {
   resolveAntigravityCliModelLabel,
   runAntigravityHelperProcess,
 } from "./AntigravityAdapter";
+
+function runCaptureCommand(
+  command: string,
+  input: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
+  const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
+  return spawnSync(shell, args, {
+    env: { ...process.env, ...env },
+    input,
+    encoding: "utf8",
+    timeout: 1_000,
+  });
+}
 
 describe("Antigravity CLI model translation", () => {
   it("collapses CLI model/effort labels into base models with effort ladders", () => {
@@ -147,34 +163,43 @@ describe("Antigravity CLI integration helpers", () => {
     });
   });
 
-  it("keeps the globally installed hook neutral outside Synara sessions", async () => {
+  it("keeps the globally installed hook neutral outside Synara sessions", () => {
     const command = buildAntigravityCaptureCommand(
       "__synara_gui_must_not_launch__",
       "__capture_script_must_not_run__",
       "pre-tool",
     );
-    const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
-    const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
-    const child = spawn(shell, args, {
-      env: { ...process.env, SYNARA_ANTIGRAVITY_EVENTS: "" },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    const exit = new Promise<number | null>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", resolve);
-    });
+    const result = runCaptureCommand(
+      command,
+      JSON.stringify({ payload: "x".repeat(2 * 1024 * 1024) }),
+      { SYNARA_ANTIGRAVITY_EVENTS: "" },
+    );
 
-    await new Promise<void>((resolve, reject) => {
-      child.stdin.once("error", reject);
-      child.stdin.end(JSON.stringify({ payload: "x".repeat(2 * 1024 * 1024) }), resolve);
-    });
-    const code = await exit;
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("{}");
+  });
 
-    expect(code).toBe(0);
-    expect(stdout.trim()).toBe("{}");
+  it("runs the capture script for Synara-managed sessions", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-hook-test-"));
+    const scriptPath = path.join(directory, "capture.cjs");
+    const eventPath = path.join(directory, "events.ndjson");
+    try {
+      await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
+      const command = buildAntigravityCaptureCommand(process.execPath, scriptPath, "pre-tool");
+      const payload = JSON.stringify({ tool: "shell" });
+      const result = runCaptureCommand(command, payload, {
+        SYNARA_ANTIGRAVITY_EVENTS: eventPath,
+        SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('{"decision":"allow"}');
+      expect(await fs.readFile(eventPath, "utf8")).toBe(`pre-tool\t${payload}\n`);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("runs packaged Electron as Node only for Synara-managed sessions", () => {
