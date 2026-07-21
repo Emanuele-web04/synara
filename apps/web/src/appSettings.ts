@@ -3,7 +3,7 @@
 // Layer: Web settings state
 // Exports: app setting schema, normalization helpers, provider option builders
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema, SchemaTransformation } from "effect";
 import {
@@ -266,6 +266,26 @@ export const AppSettingsSchema = Schema.Struct({
   ).pipe(withDefaults(() => [])),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
+/** The settings values and mutation used by a mounted settings panel.
+ * The route owns the subscription so extracted workflow panels do not create
+ * duplicate local-storage/server-settings subscriptions. */
+export type AppSettingsBinding = {
+  readonly settings: AppSettings;
+  readonly defaults: AppSettings;
+  readonly updateSettings: (patch: Partial<AppSettings>) => void;
+};
+
+export function isGitTextGenerationSettingsDirty(
+  settings: AppSettings,
+  defaults: AppSettings,
+): boolean {
+  return (
+    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
+    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
+      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
+  );
+}
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
@@ -1149,23 +1169,15 @@ export function useAppSettings() {
   );
   const normalizedStoredSettingsRef = useRef(false);
 
-  const defaults = useMemo(
-    () =>
-      normalizeAppSettings({
-        ...DEFAULT_APP_SETTINGS,
-        ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW),
-      }),
-    [],
-  );
+  const defaults = normalizeAppSettings({
+    ...DEFAULT_APP_SETTINGS,
+    ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW),
+  });
 
-  const settings = useMemo(
-    () =>
-      normalizeAppSettings({
-        ...localSettings,
-        ...(serverSettingsQuery.data ? serverSettingsToAppSettings(serverSettingsQuery.data) : {}),
-      }),
-    [localSettings, serverSettingsQuery.data],
-  );
+  const settings = normalizeAppSettings({
+    ...localSettings,
+    ...(serverSettingsQuery.data ? serverSettingsToAppSettings(serverSettingsQuery.data) : {}),
+  });
 
   useEffect(() => {
     if (normalizedStoredSettingsRef.current) {
@@ -1205,42 +1217,39 @@ export function useAppSettings() {
       });
   }, [localSettings, queryClient, serverSettingsQuery.data]);
 
-  const updateSettings = useCallback(
-    (patch: Partial<AppSettings>) => {
-      setSettings((prev) =>
-        normalizeAppSettings({
-          ...prev,
-          ...patch,
-          ...(hasOwn(patch, "kiloServerPassword")
-            ? { kiloServerPasswordConfigured: Boolean(patch.kiloServerPassword?.trim()) }
-            : {}),
-          ...(hasOwn(patch, "openCodeServerPassword")
-            ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
-            : {}),
-        }),
-      );
-      if (touchesProviderDiscoverySettings(patch)) {
-        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
-      }
+  const updateSettings = (patch: Partial<AppSettings>) => {
+    setSettings((prev) =>
+      normalizeAppSettings({
+        ...prev,
+        ...patch,
+        ...(hasOwn(patch, "kiloServerPassword")
+          ? { kiloServerPasswordConfigured: Boolean(patch.kiloServerPassword?.trim()) }
+          : {}),
+        ...(hasOwn(patch, "openCodeServerPassword")
+          ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+          : {}),
+      }),
+    );
+    if (touchesProviderDiscoverySettings(patch)) {
+      void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+    }
 
-      const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
-      if (isServerSettingsPatchEmpty(serverPatch)) {
-        return;
-      }
+    const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
+    if (isServerSettingsPatchEmpty(serverPatch)) {
+      return;
+    }
 
-      void ensureNativeApi()
-        .server.updateSettings(serverPatch)
-        .then((nextSettings) => {
-          queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
-        })
-        .catch(() => {
-          void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
-        });
-    },
-    [queryClient, setSettings],
-  );
+    void ensureNativeApi()
+      .server.updateSettings(serverPatch)
+      .then((nextSettings) => {
+        queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+      })
+      .catch(() => {
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+      });
+  };
 
-  const resetSettings = useCallback(() => {
+  const resetSettings = () => {
     setSettings(DEFAULT_APP_SETTINGS);
     void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
     const serverPatch = appSettingsPatchToServerSettingsPatch(defaults);
@@ -1252,7 +1261,7 @@ export function useAppSettings() {
       .catch(() => {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
       });
-  }, [defaults, queryClient, setSettings]);
+  };
 
   return {
     settings,

@@ -31,11 +31,15 @@ export function DebouncedSettingTextInput({
   const focusedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestDraftRef = useRef(value);
-  // Read latest committed value / callback without re-subscribing the commit timer.
+  // Read latest committed value / callback without re-subscribing the commit
+  // timer. Mirrored in an effect (not during render) so the component stays
+  // eligible for React Compiler; the timer only fires post-commit anyway.
   const valueRef = useRef(value);
-  valueRef.current = value;
   const onCommitRef = useRef(onCommit);
-  onCommitRef.current = onCommit;
+  useEffect(() => {
+    valueRef.current = value;
+    onCommitRef.current = onCommit;
+  }, [value, onCommit]);
 
   // Sync the field when the committed value changes from elsewhere (e.g. Restore defaults),
   // but never clobber what the user is actively typing.
@@ -46,6 +50,7 @@ export function DebouncedSettingTextInput({
     }
   }, [value]);
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);

@@ -91,10 +91,15 @@ export function useCopyToClipboard<TContext = void>({
   const onErrorRef = React.useRef(onError);
   const timeoutRef = React.useRef(timeout);
 
-  onCopyRef.current = onCopy;
-  onErrorRef.current = onError;
-  timeoutRef.current = timeout;
+  // Mirrored in an effect (not during render) so the hook stays eligible for
+  // React Compiler; copyToClipboard only runs from post-commit user events.
+  React.useEffect(() => {
+    onCopyRef.current = onCopy;
+    onErrorRef.current = onError;
+    timeoutRef.current = timeout;
+  }, [onCopy, onError, timeout]);
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const copyToClipboard = React.useCallback((value: string, ctx: TContext): void => {
     void copyTextToClipboard(value).then(
       () => {
@@ -149,7 +154,7 @@ export function useCopyPathToClipboard(): (path: string) => void {
         description: error instanceof Error ? error.message : "An error occurred.",
       }),
   });
-  return React.useCallback((path: string) => copyToClipboard(path, { path }), [copyToClipboard]);
+  return (path: string) => copyToClipboard(path, { path });
 }
 
 /** Copy a thread id and surface the shared "Thread ID copied" toast. */
@@ -164,8 +169,5 @@ export function useCopyThreadIdToClipboard(): (threadId: string) => void {
         description: error instanceof Error ? error.message : "An error occurred.",
       }),
   });
-  return React.useCallback(
-    (threadId: string) => copyToClipboard(threadId, { threadId }),
-    [copyToClipboard],
-  );
+  return (threadId: string) => copyToClipboard(threadId, { threadId });
 }

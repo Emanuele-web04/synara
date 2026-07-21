@@ -5,7 +5,7 @@
 
 import type { ModelSlug, ProviderKind } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   filterPromptProviderMentionReferences,
@@ -38,17 +38,11 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
   const composerTerminalContexts = scratchDraft.terminalContexts;
   const composerSkills = scratchDraft.skills;
   const composerMentions = scratchDraft.mentions;
-  const nonPersistedComposerImageIdSet = useMemo(
-    () => new Set(scratchDraft.nonPersistedImageIds),
-    [scratchDraft.nonPersistedImageIds],
-  );
+  const nonPersistedComposerImageIdSet = new Set(scratchDraft.nonPersistedImageIds);
 
-  const setPrompt = useCallback(
-    (nextPrompt: string) => {
-      useComposerDraftStore.getState().setPrompt(scratchThreadId, nextPrompt);
-    },
-    [scratchThreadId],
-  );
+  const setPrompt = (nextPrompt: string) => {
+    useComposerDraftStore.getState().setPrompt(scratchThreadId, nextPrompt);
+  };
 
   const stickyActiveProvider = useComposerDraftStore((state) => state.stickyActiveProvider);
   const stickyModelSelectionByProvider = useComposerDraftStore(
@@ -99,54 +93,42 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     useComposerDraftStore.getState().setMentions(scratchThreadId, []);
   }, [scratchThreadId, selectedProvider]);
 
-  const handleProviderModelChange = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
-      const store = useComposerDraftStore.getState();
-      const nextSelection = buildModelSelection(provider, model);
-      // Mirrors the composer: update the scratch draft and persist the sticky selection.
-      store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
-    },
-    [scratchThreadId],
-  );
+  const handleProviderModelChange = (provider: ProviderKind, model: ModelSlug) => {
+    const store = useComposerDraftStore.getState();
+    const nextSelection = buildModelSelection(provider, model);
+    // Mirrors the composer: update the scratch draft and persist the sticky selection.
+    store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
+  };
 
-  const addComposerImages = useCallback(
-    (files: readonly File[]) => {
-      if (files.length === 0) return;
-      const { images, error } = buildComposerImageAttachmentsFromFiles({
-        files,
-        existingAttachmentCount: composerImages.length + composerAssistantSelections.length,
-      });
-      if (images.length > 0) {
-        useComposerDraftStore.getState().addImages(scratchThreadId, images);
-      }
-      if (error) {
-        toastManager.add({ type: "warning", title: error });
-      }
-    },
-    [composerAssistantSelections.length, composerImages.length, scratchThreadId],
-  );
+  const addComposerImages = (files: readonly File[]) => {
+    if (files.length === 0) return;
+    const { images, error } = buildComposerImageAttachmentsFromFiles({
+      files,
+      existingAttachmentCount: composerImages.length + composerAssistantSelections.length,
+    });
+    if (images.length > 0) {
+      useComposerDraftStore.getState().addImages(scratchThreadId, images);
+    }
+    if (error) {
+      toastManager.add({ type: "warning", title: error });
+    }
+  };
 
-  const removeComposerImage = useCallback(
-    (imageId: string) => {
-      useComposerDraftStore.getState().removeImage(scratchThreadId, imageId);
-    },
-    [scratchThreadId],
-  );
+  const removeComposerImage = (imageId: string) => {
+    useComposerDraftStore.getState().removeImage(scratchThreadId, imageId);
+  };
 
-  const clearComposerAssistantSelections = useCallback(() => {
+  const clearComposerAssistantSelections = () => {
     useComposerDraftStore.getState().clearAssistantSelections(scratchThreadId);
-  }, [scratchThreadId]);
+  };
 
-  const clearComposerFileComments = useCallback(() => {
+  const clearComposerFileComments = () => {
     useComposerDraftStore.getState().clearFileComments(scratchThreadId);
-  }, [scratchThreadId]);
+  };
 
-  const removeComposerTerminalContext = useCallback(
-    (contextId: string) => {
-      useComposerDraftStore.getState().removeTerminalContext(scratchThreadId, contextId);
-    },
-    [scratchThreadId],
-  );
+  const removeComposerTerminalContext = (contextId: string) => {
+    useComposerDraftStore.getState().removeTerminalContext(scratchThreadId, contextId);
+  };
 
   return {
     scratchThreadId,

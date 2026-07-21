@@ -5,7 +5,6 @@
 
 import type { ServerProviderStatus } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import { getCustomBinaryPathForProvider, useAppSettings } from "../appSettings";
 import { normalizeProviderStatusForLocalConfig } from "../lib/providerAvailability";
@@ -17,17 +16,13 @@ export function useProviderStatusesForLocalConfig(): readonly ServerProviderStat
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
 
-  return useMemo(
-    () =>
-      (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
-        .map((status) =>
-          normalizeProviderStatusForLocalConfig({
-            provider: status.provider,
-            status,
-            customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
-          }),
-        )
-        .flatMap((status) => (status ? [status] : [])),
-    [serverConfigQuery.data?.providers, settings],
-  );
+  return (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
+    .map((status) =>
+      normalizeProviderStatusForLocalConfig({
+        provider: status.provider,
+        status,
+        customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
+      }),
+    )
+    .flatMap((status) => (status ? [status] : []));
 }

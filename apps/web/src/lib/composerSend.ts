@@ -21,12 +21,13 @@ import {
 } from "@synara/shared/binaryTransfer";
 import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
 
-import type {
-  ComposerAssistantSelectionAttachment,
-  ComposerFileAttachment,
-  ComposerImageAttachment,
-  PersistedComposerImageAttachment,
-} from "../composerDraftStore";
+import {
+  cloneComposerImageAttachment,
+  type ComposerAssistantSelectionAttachment,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+  type PersistedComposerImageAttachment,
+} from "../composerDraftDomain";
 import { readComposerImageBlob } from "./composerImageBlobStore";
 import { normalizeComposerImageSource } from "./composerImageSource";
 import { randomUUID } from "./utils";
@@ -34,6 +35,8 @@ import { resolveWsHttpUrl } from "./wsHttpUrl";
 
 const ATTACHMENT_CANCEL_CONCURRENCY = 2;
 const ATTACHMENT_CANCEL_BODY_MAX_BYTES = 512;
+
+export { cloneComposerImageAttachment };
 
 export const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024),
@@ -168,22 +171,6 @@ export function readFileAsDataUrl(file: File): Promise<string> {
     });
     reader.readAsDataURL(file);
   });
-}
-
-export function cloneComposerImageAttachment(
-  image: ComposerImageAttachment,
-): ComposerImageAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
-    return image;
-  }
-  try {
-    return {
-      ...image,
-      previewUrl: URL.createObjectURL(image.file),
-    };
-  } catch {
-    return image;
-  }
 }
 
 // Provider-specific prompt massaging. Claude prompt-injected efforts must be

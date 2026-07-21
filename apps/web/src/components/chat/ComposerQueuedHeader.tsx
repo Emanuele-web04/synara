@@ -6,8 +6,6 @@
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
-import { memo } from "react";
-
 import type { QueuedComposerTurn } from "../../composerDraftStore";
 import { SteerIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -67,7 +65,7 @@ interface ComposerQueuedHeaderProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
+export const ComposerQueuedHeader = function ComposerQueuedHeader({
   queuedTurns,
   onSteer,
   onRemove,
@@ -107,4 +105,4 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
       ))}
     </ComposerStackedPanel>
   );
-});
+};

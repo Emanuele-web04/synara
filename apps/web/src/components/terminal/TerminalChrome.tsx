@@ -30,7 +30,7 @@ export interface TerminalChromeActionItem {
   children: ReactNode;
 }
 
-export function TerminalChromeActions(props: {
+function TerminalChromeActions(props: {
   actions: ReadonlyArray<TerminalChromeActionItem>;
   variant: "compact" | "workspace" | "sidebar";
 }) {

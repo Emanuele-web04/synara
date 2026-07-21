@@ -316,6 +316,7 @@ export default function GitActionsControl({
 }: GitActionsControlProps) {
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const gitTextGenerationModelSelection = useMemo(
     (): ModelSelection => ({
@@ -1523,10 +1524,20 @@ export default function GitActionsControl({
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setPendingDefaultBranchAction(null)}>
+            <Button
+              variant="outline"
+              size="sm"
+              shape="capsule"
+              onClick={() => setPendingDefaultBranchAction(null)}
+            >
               Abort
             </Button>
-            <Button variant="outline" size="sm" onClick={continuePendingDefaultBranchAction}>
+            <Button
+              variant="outline"
+              size="sm"
+              shape="capsule"
+              onClick={continuePendingDefaultBranchAction}
+            >
               {pendingDefaultBranchAction &&
               requiresFeatureBranchForDefaultBranchAction(pendingDefaultBranchAction.action)
                 ? "Create feature branch & continue"
@@ -1534,7 +1545,11 @@ export default function GitActionsControl({
             </Button>
             {pendingDefaultBranchAction &&
             !requiresFeatureBranchForDefaultBranchAction(pendingDefaultBranchAction.action) ? (
-              <Button size="sm" onClick={checkoutFeatureBranchAndContinuePendingAction}>
+              <Button
+                size="sm"
+                shape="capsule"
+                onClick={checkoutFeatureBranchAndContinuePendingAction}
+              >
                 Checkout feature branch & continue
               </Button>
             ) : null}

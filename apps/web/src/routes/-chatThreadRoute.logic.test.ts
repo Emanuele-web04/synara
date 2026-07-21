@@ -1,13 +1,17 @@
-import { ThreadId, TurnId } from "@synara/contracts";
+import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  collectParentDirectoryPaths,
+  normalizeSingleSearchFromPane,
   resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
+  resolveSingleProjectId,
   resolveSplitPaneCloseDecision,
   resolveSplitPaneMaximizeDecision,
   resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
+  stripEditorViewSearchParams,
 } from "./-chatThreadRoute.logic";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
@@ -15,6 +19,8 @@ const SIDECHAT_THREAD_ID = ThreadId.makeUnsafe("thread-sidechat");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-2");
 const TURN_ID = TurnId.makeUnsafe("turn-1");
 const OTHER_TURN_ID = TurnId.makeUnsafe("turn-2");
+const PROJECT_ID = ProjectId.makeUnsafe("project-1");
+const DRAFT_PROJECT_ID = ProjectId.makeUnsafe("project-draft");
 
 describe("resolveThreadPickerTitle", () => {
   it("falls back to a stable untitled label", () => {
@@ -56,6 +62,74 @@ describe("resolveFilePreviewWorkspaceRoot", () => {
         threadWorktreePath: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("single chat route helpers", () => {
+  it("prefers the server thread project and falls back to the draft project", () => {
+    expect(
+      resolveSingleProjectId({
+        threadProjectId: PROJECT_ID,
+        draftProjectId: DRAFT_PROJECT_ID,
+      }),
+    ).toBe(PROJECT_ID);
+    expect(
+      resolveSingleProjectId({
+        threadProjectId: null,
+        draftProjectId: DRAFT_PROJECT_ID,
+      }),
+    ).toBe(DRAFT_PROJECT_ID);
+    expect(resolveSingleProjectId({ threadProjectId: null, draftProjectId: null })).toBeNull();
+  });
+
+  it("normalizes split pane browser and diff state for single-chat navigation", () => {
+    expect(
+      normalizeSingleSearchFromPane({
+        panel: "browser",
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/ignored.tsx",
+      }),
+    ).toEqual({ panel: "browser" });
+    expect(
+      normalizeSingleSearchFromPane({
+        panel: "diff",
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/chat.tsx",
+      }),
+    ).toEqual({
+      panel: "diff",
+      diff: "1",
+      diffTurnId: TURN_ID,
+      diffFilePath: "src/chat.tsx",
+    });
+    expect(
+      normalizeSingleSearchFromPane({
+        panel: null,
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/chat.tsx",
+      }),
+    ).toEqual({});
+  });
+
+  it("strips only editor-owned search fields", () => {
+    expect(
+      stripEditorViewSearchParams({
+        view: "editor",
+        editorFilePath: "src/chat.tsx",
+        splitViewId: "split-1",
+        q: "keep",
+      }),
+    ).toEqual({ splitViewId: "split-1", q: "keep" });
+  });
+
+  it("collects workspace-relative parent directories from shallow to deep", () => {
+    expect(collectParentDirectoryPaths("src/components/chat/View.tsx")).toEqual([
+      "src",
+      "src/components",
+      "src/components/chat",
+    ]);
+    expect(collectParentDirectoryPaths("View.tsx")).toEqual([]);
+    expect(collectParentDirectoryPaths("/src//chat/View.tsx")).toEqual(["src", "src/chat"]);
   });
 });
 

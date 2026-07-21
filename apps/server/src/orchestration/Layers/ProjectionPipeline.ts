@@ -24,17 +24,13 @@ import {
 } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
-import {
-  type ProjectionThreadActivity,
-  ProjectionThreadActivityRepository,
-} from "../../persistence/Services/ProjectionThreadActivities.ts";
+import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
   type ProjectionThreadMessage,
   type ProjectionThreadMessageRepositoryShape,
   ProjectionThreadMessageRepository,
 } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import {
-  type ProjectionThreadProposedPlan,
   type ProjectionThreadProposedPlanRepositoryShape,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
@@ -516,6 +512,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             createBranchFlowCompleted: event.payload.createBranchFlowCompleted ?? false,
             isPinned: event.payload.isPinned ?? false,
             parentThreadId: event.payload.parentThreadId ?? null,
+            creationSource: event.payload.creationSource ?? null,
+            sourceThreadId: event.payload.sourceThreadId ?? null,
+            sourceTurnId: event.payload.sourceTurnId ?? null,
+            gatewayOperationId: event.payload.gatewayOperationId ?? null,
+            gatewayOperationIndex: event.payload.gatewayOperationIndex ?? null,
             subagentAgentId: event.payload.subagentAgentId ?? null,
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,

@@ -3,7 +3,6 @@
 // server-derived default (home-dir basename) until the user overrides it. Local-only.
 // Layer: web profile feature.
 
-import { useCallback } from "react";
 import { Schema } from "effect";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 
@@ -17,13 +16,10 @@ export function useProfileName(defaultName: string) {
 
   const name = stored.trim().length > 0 ? stored.trim() : defaultName;
 
-  const setName = useCallback(
-    (next: string) => {
-      const trimmed = next.trim();
-      setStored(trimmed === defaultName ? "" : trimmed);
-    },
-    [defaultName, setStored],
-  );
+  const setName = (next: string) => {
+    const trimmed = next.trim();
+    setStored(trimmed === defaultName ? "" : trimmed);
+  };
 
   return { name, setName } as const;
 }

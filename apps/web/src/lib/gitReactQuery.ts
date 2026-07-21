@@ -8,7 +8,6 @@ import type {
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
-import { buildPatchCacheKey } from "./diffRendering";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 // Freshness is driven primarily by event-based invalidation (turn lifecycle +
@@ -18,7 +17,6 @@ const GIT_STATUS_STALE_TIME_MS = 30_000;
 const GIT_STATUS_REFETCH_INTERVAL_MS = 300_000;
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
-const GIT_DIFF_SUMMARY_GC_TIME_MS = 30 * 60_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
 export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
 
@@ -216,63 +214,6 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   });
 }
 
-export function gitSummarizeDiffQueryOptions(input: {
-  cwd: string | null;
-  scope?: "workingTree" | "unstaged" | "staged" | "branch";
-  cacheScope?: string | null;
-  patch: string | null;
-  model?: string | null;
-  modelSelection?: ModelSelection | null;
-  codexHomePath?: string | null;
-  providerOptions?: ProviderStartOptions | null;
-  enabled?: boolean;
-}) {
-  // Cache summaries by patch hash so reopening the same diff does not regenerate it.
-  const normalizedPatch = input.patch?.trim() ?? null;
-  const patchKey =
-    normalizedPatch && normalizedPatch.length > 0
-      ? buildPatchCacheKey(normalizedPatch, "git-diff-summary")
-      : null;
-
-  const providerOptionsKey = input.providerOptions ? JSON.stringify(input.providerOptions) : null;
-  const modelSelectionKey = input.modelSelection ? JSON.stringify(input.modelSelection) : null;
-
-  return queryOptions({
-    queryKey: gitQueryKeys.diffSummary(
-      input.cacheScope ?? input.cwd,
-      input.model ?? null,
-      modelSelectionKey,
-      input.codexHomePath ?? null,
-      providerOptionsKey,
-      patchKey,
-    ),
-    queryFn: async () => {
-      const api = ensureNativeApi();
-      if (!input.cwd || !normalizedPatch) {
-        throw new Error("Diff summary is unavailable.");
-      }
-      return api.git.summarizeDiff({
-        cwd: input.cwd,
-        scope: input.scope ?? "workingTree",
-        ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-        ...(input.model ? { textGenerationModel: input.model } : {}),
-        ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),
-        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      });
-    },
-    enabled:
-      (input.enabled ?? true) &&
-      input.cwd !== null &&
-      normalizedPatch !== null &&
-      normalizedPatch.length > 0,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: GIT_DIFF_SUMMARY_GC_TIME_MS,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-}
-
 type GitMutationInvalidation = "all" | "cwd";
 type GitMutationInvalidateOn = "success" | "settled";
 
@@ -359,20 +300,6 @@ export function gitUnstageFilesMutationOptions(input: {
   });
 }
 
-export function gitCheckoutMutationOptions(input: {
-  cwd: string | null;
-  queryClient: QueryClient;
-}) {
-  return makeGitMutationOptions<string, void>({
-    cwd: input.cwd,
-    queryClient: input.queryClient,
-    mutationKey: gitMutationKeys.checkout(input.cwd),
-    unavailableMessage: "Git checkout is unavailable.",
-    invalidateOn: "success",
-    run: (api, cwd, branch) => api.git.checkout({ cwd, branch }),
-  });
-}
-
 export function gitRunStackedActionMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
@@ -447,10 +374,25 @@ export function gitCreateWorktreeMutationOptions(input: { queryClient: QueryClie
 
 export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
-    mutationFn: async ({ cwd, ref, path }: { cwd: string; ref: string; path?: string | null }) => {
+    mutationFn: async ({
+      cwd,
+      ref,
+      path,
+      copyChangesFrom,
+    }: {
+      cwd: string;
+      ref: string;
+      path?: string | null;
+      copyChangesFrom?: string;
+    }) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git worktree creation is unavailable.");
-      return api.git.createDetachedWorktree({ cwd, ref, path: path ?? null });
+      return api.git.createDetachedWorktree({
+        cwd,
+        ref,
+        path: path ?? null,
+        ...(copyChangesFrom ? { copyChangesFrom } : {}),
+      });
     },
     mutationKey: ["git", "mutation", "create-detached-worktree"] as const,
     onSettled: async () => {

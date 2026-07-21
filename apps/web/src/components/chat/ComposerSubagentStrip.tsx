@@ -7,7 +7,6 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
-import { memo } from "react";
 
 import {
   BackgroundTrayIcon,
@@ -52,7 +51,7 @@ interface ComposerSubagentStripProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
+export const ComposerSubagentStrip = function ComposerSubagentStrip({
   items,
   compact,
   onCompactChange,
@@ -227,4 +226,4 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
       </DisclosureRegion>
     </ComposerStackedPanel>
   );
-});
+};

@@ -21,11 +21,21 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import * as nodeFs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
+import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
+import {
+  countTextFileLines,
+  normalizeConfiguredMergeBranch,
+  parseGitStatusPorcelain,
+  summarizeGitNumstatOutputs,
+} from "../gitStatusParsing.ts";
 import {
   GitCore,
   type ExecuteGitProgress,
@@ -35,7 +45,6 @@ import {
   type ExecuteGitResult,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
-import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -49,6 +58,8 @@ const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
+const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
+const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -81,83 +92,10 @@ interface ExecuteGitOptions {
   fallbackErrorMessage?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   progress?: ExecuteGitProgress | undefined;
+  maxOutputBytes?: number | undefined;
 }
 
-type WorkingTreeFileStat = { path: string; insertions: number; deletions: number };
-
-type WorkingTreeStatSummary = {
-  files: WorkingTreeFileStat[];
-  insertions: number;
-  deletions: number;
-};
-
-function parseBranchAb(value: string): { ahead: number; behind: number } {
-  const match = value.match(/^\+(\d+)\s+-(\d+)$/);
-  if (!match) return { ahead: 0, behind: 0 };
-  return {
-    ahead: Number(match[1] ?? "0"),
-    behind: Number(match[2] ?? "0"),
-  };
-}
-
-function normalizeConfiguredMergeBranch(value: string): string | null {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  const normalized = trimmed.replace(/^refs\/heads\//, "");
-  return normalized.length > 0 ? normalized : null;
-}
-
-function parseNumstatEntries(stdout: string): Array<WorkingTreeFileStat> {
-  const entries: Array<WorkingTreeFileStat> = [];
-  const records = stdout.split("\0");
-  for (let index = 0; index < records.length; index += 1) {
-    const record = records[index] ?? "";
-    if (record.length === 0) continue;
-    const firstTab = record.indexOf("\t");
-    const secondTab = firstTab < 0 ? -1 : record.indexOf("\t", firstTab + 1);
-    if (firstTab < 0 || secondTab < 0) continue;
-    const addedRaw = record.slice(0, firstTab);
-    const deletedRaw = record.slice(firstTab + 1, secondTab);
-    let filePath = record.slice(secondTab + 1);
-    if (filePath.length === 0) {
-      index += 2;
-      filePath = records[index] ?? "";
-    }
-    if (filePath.length === 0) continue;
-    const added = Number.parseInt(addedRaw ?? "0", 10);
-    const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    entries.push({
-      path: filePath,
-      insertions: Number.isFinite(added) ? added : 0,
-      deletions: Number.isFinite(deleted) ? deleted : 0,
-    });
-  }
-  return entries;
-}
-
-function summarizeNumstatEntries(
-  entries: ReadonlyArray<WorkingTreeFileStat>,
-): WorkingTreeStatSummary {
-  const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
-  for (const entry of entries) {
-    const existing = fileStatMap.get(entry.path) ?? { insertions: 0, deletions: 0 };
-    existing.insertions += entry.insertions;
-    existing.deletions += entry.deletions;
-    fileStatMap.set(entry.path, existing);
-  }
-
-  let insertions = 0;
-  let deletions = 0;
-  const files = Array.from(fileStatMap.entries())
-    .map(([filePath, stat]) => {
-      insertions += stat.insertions;
-      deletions += stat.deletions;
-      return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
-    })
-    .toSorted((a, b) => a.path.localeCompare(b.path));
-
-  return { files, insertions, deletions };
-}
+type WorkingTreeStatSummary = ReturnType<typeof summarizeGitNumstatOutputs>;
 
 function resolveGitPath(cwd: string, gitPath: string): string {
   return nodePath.isAbsolute(gitPath) ? gitPath : nodePath.join(cwd, gitPath);
@@ -170,55 +108,6 @@ function hasNodeErrorCode(cause: unknown, code: string): boolean {
     "code" in cause &&
     (cause as { code?: unknown }).code === code
   );
-}
-
-function porcelainPathAfterFields(record: string, fieldCount: number): string | null {
-  let offset = 0;
-  for (let field = 0; field < fieldCount; field += 1) {
-    offset = record.indexOf(" ", offset);
-    if (offset < 0) return null;
-    offset += 1;
-  }
-  const filePath = record.slice(offset);
-  return filePath.length > 0 ? filePath : null;
-}
-
-function parsePorcelainV2Records(stdout: string): Array<{ record: string; path: string | null }> {
-  const rawRecords = stdout.split("\0");
-  const records: Array<{ record: string; path: string | null }> = [];
-  for (let index = 0; index < rawRecords.length; index += 1) {
-    const record = rawRecords[index] ?? "";
-    if (record.length === 0) continue;
-    const path =
-      record.startsWith("? ") || record.startsWith("! ")
-        ? record.slice(2)
-        : record.startsWith("1 ")
-          ? porcelainPathAfterFields(record, 8)
-          : record.startsWith("2 ")
-            ? porcelainPathAfterFields(record, 9)
-            : record.startsWith("u ")
-              ? porcelainPathAfterFields(record, 10)
-              : null;
-    records.push({ record, path });
-    if (record.startsWith("2 ")) index += 1;
-  }
-  return records;
-}
-
-function countTextLines(contents: Uint8Array): number {
-  if (contents.length === 0) return 0;
-
-  let lineFeeds = 0;
-  for (const byte of contents) {
-    if (byte === 0) {
-      return 0;
-    }
-    if (byte === 10) {
-      lineFeeds += 1;
-    }
-  }
-
-  return contents.at(-1) === 10 ? lineFeeds : lineFeeds + 1;
 }
 
 function joinPatchSegments(segments: ReadonlyArray<string>): string {
@@ -428,10 +317,6 @@ function parseStashEntries(input: string): StashEntry[] {
   });
 }
 
-function quoteGitCommand(args: ReadonlyArray<string>): string {
-  return `git ${args.join(" ")}`;
-}
-
 function toGitCommandError(
   input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
   detail: string,
@@ -441,7 +326,7 @@ function toGitCommandError(
       ? cause
       : new GitCommandError({
           operation: input.operation,
-          command: quoteGitCommand(input.args),
+          command: commandLabel(input.args),
           cwd: input.cwd,
           detail: `${cause instanceof Error && cause.message.length > 0 ? cause.message : "Unknown error"} - ${detail}`,
           ...(cause !== undefined ? { cause } : {}),
@@ -501,7 +386,7 @@ const createTrace2Monitor = Effect.fn(function* (
       const traceRecord = decodeJsonResult(Trace2Record)(trimmedLine);
       if (Result.isFailure(traceRecord)) {
         yield* Effect.logDebug(
-          `GitCore.trace2: failed to parse trace line for ${quoteGitCommand(input.args)} in ${input.cwd}`,
+          `GitCore.trace2: failed to parse trace line for ${commandLabel(input.args)} in ${input.cwd}`,
           traceRecord.failure,
         );
         return;
@@ -650,9 +535,9 @@ const collectOutput = Effect.fn(function* <E>(
       if (bytes > maxOutputBytes) {
         return yield* new GitCommandError({
           operation: input.operation,
-          command: quoteGitCommand(input.args),
+          command: commandLabel(input.args),
           cwd: input.cwd,
-          detail: `${quoteGitCommand(input.args)} output exceeded ${maxOutputBytes} bytes and was truncated.`,
+          detail: `${commandLabel(input.args)} output exceeded ${maxOutputBytes} bytes and was truncated.`,
         });
       }
       const decoded = decoder.decode(chunk, { stream: true });
@@ -675,7 +560,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const path = yield* Path.Path;
     const { worktreesDir } = yield* ServerConfig;
 
-    const buildGeneratedDetachedWorktreePath = (cwd: string) =>
+    const buildGeneratedDetachedWorktreePath = () =>
       Effect.gen(function* () {
         // Keep auto-generated detached worktrees short and opaque so the
         // filesystem path stays stable-looking regardless of the source ref.
@@ -756,12 +641,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             const trimmedStderr = stderr.trim();
             return yield* new GitCommandError({
               operation: commandInput.operation,
-              command: quoteGitCommand(commandInput.args),
+              command: commandLabel(commandInput.args),
               cwd: commandInput.cwd,
               detail:
                 trimmedStderr.length > 0
-                  ? `${quoteGitCommand(commandInput.args)} failed: ${trimmedStderr}`
-                  : `${quoteGitCommand(commandInput.args)} failed with code ${exitCode}.`,
+                  ? `${commandLabel(commandInput.args)} failed: ${trimmedStderr}`
+                  : `${commandLabel(commandInput.args)} failed with code ${exitCode}.`,
             });
           }
 
@@ -777,9 +662,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 Effect.fail(
                   new GitCommandError({
                     operation: commandInput.operation,
-                    command: quoteGitCommand(commandInput.args),
+                    command: commandLabel(commandInput.args),
                     cwd: commandInput.cwd,
-                    detail: `${quoteGitCommand(commandInput.args)} timed out.`,
+                    detail: `${commandLabel(commandInput.args)} timed out.`,
                   }),
                 ),
               onSome: Effect.succeed,
@@ -803,6 +688,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         ...(options.env ? { env: options.env } : {}),
         ...(options.progress ? { progress: options.progress } : {}),
+        ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
       }).pipe(
         Effect.flatMap((result) => {
           if (options.allowNonZeroExit || result.code === 0) {
@@ -956,7 +842,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             },
           ).pipe(Effect.map((result) => result.stdout));
 
-          return summarizeNumstatEntries(parseNumstatEntries(numstatStdout));
+          return summarizeGitNumstatOutputs([numstatStdout]);
         }),
       ).pipe(
         Effect.catch((cause) =>
@@ -1410,53 +1296,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return NON_REPOSITORY_STATUS_DETAILS;
         }
 
-        let branch: string | null = null;
-        let upstreamRef: string | null = null;
+        const parsedStatus = parseGitStatusPorcelain(statusStdout);
+        const branch = parsedStatus.branch;
+        const upstreamRef = parsedStatus.upstreamRef;
         let upstreamBranch: string | null = null;
-        let aheadCount = 0;
-        let behindCount = 0;
-        let hasWorkingTreeChanges = false;
-        let hasTrackedDeletion = false;
-        let hasUntrackedDirectory = false;
-        const changedFilesWithoutNumstat = new Set<string>();
-        const untrackedFilesWithoutNumstat = new Set<string>();
-
-        for (const { record: line, path: pathValue } of parsePorcelainV2Records(statusStdout)) {
-          if (line.startsWith("# branch.head ")) {
-            const value = line.slice("# branch.head ".length).trim();
-            branch = value.startsWith("(") ? null : value;
-            continue;
-          }
-          if (line.startsWith("# branch.upstream ")) {
-            const value = line.slice("# branch.upstream ".length).trim();
-            upstreamRef = value.length > 0 ? value : null;
-            continue;
-          }
-          if (line.startsWith("# branch.ab ")) {
-            const value = line.slice("# branch.ab ".length).trim();
-            const parsed = parseBranchAb(value);
-            aheadCount = parsed.ahead;
-            behindCount = parsed.behind;
-            continue;
-          }
-          if (!line.startsWith("#")) {
-            hasWorkingTreeChanges = true;
-            const statusCode =
-              line.startsWith("1 ") || line.startsWith("2 ") ? line.slice(2, 4) : "";
-            if (statusCode.includes("D")) {
-              hasTrackedDeletion = true;
-            }
-            if (pathValue) {
-              changedFilesWithoutNumstat.add(pathValue);
-              if (line.startsWith("? ")) {
-                untrackedFilesWithoutNumstat.add(pathValue);
-                if (pathValue.endsWith("/")) {
-                  hasUntrackedDirectory = true;
-                }
-              }
-            }
-          }
-        }
+        let aheadCount = parsedStatus.aheadCount;
+        let behindCount = parsedStatus.behindCount;
+        const {
+          hasWorkingTreeChanges,
+          hasTrackedDeletion,
+          hasUntrackedDirectory,
+          changedFilesWithoutNumstat,
+          untrackedFilesWithoutNumstat,
+        } = parsedStatus;
 
         if (branch && upstreamRef) {
           upstreamBranch = yield* runGitStdout(
@@ -1535,9 +1387,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         const [unstagedNumstatStdout, stagedNumstatStdout] = numstatOutputs;
-        const stagedEntries = parseNumstatEntries(stagedNumstatStdout);
-        const unstagedEntries = parseNumstatEntries(unstagedNumstatStdout);
-        const workingTree = summarizeNumstatEntries([...stagedEntries, ...unstagedEntries]);
+        const workingTree = summarizeGitNumstatOutputs([
+          stagedNumstatStdout,
+          unstagedNumstatStdout,
+        ]);
         const files = [...workingTree.files];
         const numstatFilePaths = new Set(files.map((file) => file.path));
         const filePathsWithStats = new Set(numstatFilePaths);
@@ -1549,7 +1402,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
           const insertions = untrackedFilesWithoutNumstat.has(filePath)
             ? yield* Effect.tryPromise(() => nodeFs.readFile(nodePath.join(cwd, filePath))).pipe(
-                Effect.map((contents) => countTextLines(new Uint8Array(contents))),
+                Effect.map((contents) => countTextFileLines(new Uint8Array(contents))),
                 Effect.catch(() => Effect.succeed(0)),
               )
             : 0;
@@ -2212,11 +2065,464 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const parseNullSeparatedPaths = (stdout: string): ReadonlyArray<string> =>
+      stdout
+        .split("\0")
+        .filter((entry) => entry.length > 0)
+        .filter(
+          (entry) =>
+            !nodePath.isAbsolute(entry) &&
+            entry !== ".." &&
+            !entry.startsWith(`..${nodePath.sep}`) &&
+            !entry.split(/[\\/]/u).includes(".."),
+        );
+
+    const updateHashFromFile = async (
+      hash: ReturnType<typeof createHash>,
+      filePath: string,
+    ): Promise<void> => {
+      for await (const chunk of createReadStream(filePath)) {
+        hash.update(chunk);
+      }
+    };
+
+    const listWorktreeTransferPaths = (cwd: string) =>
+      Effect.gen(function* () {
+        const untracked = yield* executeGit(
+          "GitCore.listWorktreeTransferPaths.untracked",
+          cwd,
+          ["ls-files", "--others", "--exclude-standard", "-z"],
+          { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+        ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)));
+        const includeFile = nodePath.join(cwd, ".worktreeinclude");
+        const hasIncludeFile = yield* Effect.tryPromise({
+          try: () =>
+            nodeFs
+              .stat(includeFile)
+              .then((entry) => entry.isFile())
+              .catch((cause: unknown) => {
+                if (hasNodeErrorCode(cause, "ENOENT")) return false;
+                throw cause;
+              }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.listWorktreeTransferPaths",
+              cwd,
+              ["worktree", "include", "read"],
+              "could not inspect .worktreeinclude.",
+              cause,
+            ),
+        });
+        const included = hasIncludeFile
+          ? yield* executeGit(
+              "GitCore.listWorktreeTransferPaths.included",
+              cwd,
+              ["ls-files", "--others", "--ignored", "--exclude-from=.worktreeinclude", "-z"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)))
+          : [];
+        return [...new Set([...untracked, ...included])].sort();
+      });
+
+    const readWorktreeStateHash = (cwd: string) =>
+      Effect.gen(function* () {
+        const [staged, unstaged, transferPaths] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.readWorktreeStateHash.staged",
+              cwd,
+              ["diff", "--cached", "--binary", "--full-index", "HEAD", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ),
+            executeGit(
+              "GitCore.readWorktreeStateHash.unstaged",
+              cwd,
+              ["diff", "--binary", "--full-index", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ),
+            listWorktreeTransferPaths(cwd),
+          ],
+          { concurrency: "unbounded" },
+        );
+        return yield* Effect.tryPromise({
+          try: async () => {
+            const hash = createHash("sha256");
+            hash.update("staged\0").update(staged.stdout);
+            hash.update("unstaged\0").update(unstaged.stdout);
+            for (const relativePath of transferPaths) {
+              const absolutePath = nodePath.join(cwd, relativePath);
+              const entry = await nodeFs.lstat(absolutePath);
+              hash.update("path\0").update(relativePath).update("\0");
+              if (entry.isSymbolicLink()) {
+                hash.update("symlink\0").update(await nodeFs.readlink(absolutePath));
+              } else if (entry.isFile()) {
+                hash.update("file\0");
+                await updateHashFromFile(hash, absolutePath);
+              } else {
+                hash.update("other\0").update(String(entry.mode));
+              }
+            }
+            return hash.digest("hex");
+          },
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.readWorktreeStateHash",
+              cwd,
+              ["worktree", "state", "hash"],
+              "could not fingerprint the linked worktree state.",
+              cause,
+            ),
+        });
+      });
+
+    const copyCheckoutChanges = (sourceCwd: string, worktreePath: string) =>
+      Effect.gen(function* () {
+        const [patch, listedTransferPaths] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.copyCheckoutChanges.patch",
+              sourceCwd,
+              ["diff", "--binary", "--full-index", "HEAD", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(Effect.map((result) => result.stdout)),
+            listWorktreeTransferPaths(sourceCwd),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const transferPaths = listedTransferPaths.filter((relativePath) => {
+          const relativeToTarget = nodePath.relative(
+            worktreePath,
+            nodePath.join(sourceCwd, relativePath),
+          );
+          return (
+            relativeToTarget === ".." ||
+            relativeToTarget.startsWith(`..${nodePath.sep}`) ||
+            nodePath.isAbsolute(relativeToTarget)
+          );
+        });
+
+        if (patch.length > 0) {
+          yield* Effect.acquireUseRelease(
+            Effect.tryPromise({
+              try: () => nodeFs.mkdtemp(nodePath.join(tmpdir(), "synara-worktree-patch-")),
+              catch: (cause) =>
+                createGitCommandError(
+                  "GitCore.copyCheckoutChanges",
+                  sourceCwd,
+                  ["worktree", "copy", "changes"],
+                  "could not create a temporary patch directory.",
+                  cause,
+                ),
+            }),
+            (temporaryDirectory) =>
+              Effect.gen(function* () {
+                const patchPath = nodePath.join(temporaryDirectory, "changes.patch");
+                yield* Effect.tryPromise({
+                  try: () => nodeFs.writeFile(patchPath, patch, "utf8"),
+                  catch: (cause) =>
+                    createGitCommandError(
+                      "GitCore.copyCheckoutChanges",
+                      sourceCwd,
+                      ["worktree", "copy", "changes"],
+                      "could not write the temporary worktree patch.",
+                      cause,
+                    ),
+                });
+                yield* executeGit(
+                  "GitCore.copyCheckoutChanges.apply",
+                  worktreePath,
+                  ["apply", "--whitespace=nowarn", patchPath],
+                  { timeoutMs: 30_000 },
+                );
+              }),
+            (temporaryDirectory) =>
+              Effect.promise(() =>
+                nodeFs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => {}),
+              ),
+          );
+        }
+
+        yield* Effect.forEach(
+          transferPaths,
+          (relativePath) =>
+            Effect.tryPromise({
+              try: async () => {
+                const sourcePath = nodePath.join(sourceCwd, relativePath);
+                const targetPath = nodePath.join(worktreePath, relativePath);
+                await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
+                await nodeFs.cp(sourcePath, targetPath, {
+                  recursive: true,
+                  force: false,
+                  errorOnExist: true,
+                  preserveTimestamps: true,
+                });
+              },
+              catch: (cause) =>
+                createGitCommandError(
+                  "GitCore.copyCheckoutChanges",
+                  sourceCwd,
+                  ["worktree", "copy", relativePath],
+                  `could not copy ${relativePath} into the detached worktree.`,
+                  cause,
+                ),
+            }),
+          { discard: true, concurrency: 4 },
+        );
+      });
+
+    const snapshotWorktree: GitCoreShape["snapshotWorktree"] = (input) =>
+      Effect.gen(function* () {
+        const [patch, transferPaths, head] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.snapshotWorktree.patch",
+              input.cwd,
+              ["diff", "--binary", "--full-index", "HEAD", "--"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(Effect.map((result) => result.stdout)),
+            listWorktreeTransferPaths(input.cwd),
+            executeGit("GitCore.snapshotWorktree.head", input.cwd, [
+              "rev-parse",
+              "--verify",
+              "HEAD^{commit}",
+            ]).pipe(Effect.map((result) => result.stdout.trim())),
+          ],
+          { concurrency: "unbounded" },
+        );
+        yield* Effect.tryPromise({
+          try: async () => {
+            const outputParent = nodePath.dirname(input.outputPath);
+            const temporaryPath = await nodeFs.mkdtemp(
+              nodePath.join(outputParent, `${nodePath.basename(input.outputPath)}.tmp-`),
+            );
+            try {
+              await nodeFs.chmod(temporaryPath, 0o700);
+              await nodeFs.writeFile(nodePath.join(temporaryPath, "changes.patch"), patch, {
+                encoding: "utf8",
+                mode: 0o600,
+              });
+              const filesRoot = nodePath.join(temporaryPath, "files");
+              for (const relativePath of transferPaths) {
+                const targetPath = nodePath.join(filesRoot, relativePath);
+                await nodeFs.mkdir(nodePath.dirname(targetPath), {
+                  recursive: true,
+                  mode: 0o700,
+                });
+                await nodeFs.cp(nodePath.join(input.cwd, relativePath), targetPath, {
+                  recursive: true,
+                  force: false,
+                  errorOnExist: true,
+                  preserveTimestamps: true,
+                });
+              }
+              await nodeFs.writeFile(
+                nodePath.join(temporaryPath, "snapshot.json"),
+                JSON.stringify(
+                  {
+                    sourceWorktree: input.cwd,
+                    head,
+                    copiedPaths: transferPaths,
+                    createdAt: new Date().toISOString(),
+                  },
+                  null,
+                  2,
+                ),
+                { encoding: "utf8", mode: 0o600 },
+              );
+              await nodeFs.rm(input.outputPath, { recursive: true, force: true });
+              await nodeFs.rename(temporaryPath, input.outputPath);
+            } finally {
+              await nodeFs.rm(temporaryPath, { recursive: true, force: true }).catch(() => {});
+            }
+          },
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.snapshotWorktree",
+              input.cwd,
+              ["worktree", "snapshot", input.outputPath],
+              "could not snapshot the managed worktree.",
+              cause,
+            ),
+        });
+      });
+
+    const readWorktreeIdentity = (worktreePath: string) =>
+      Effect.gen(function* () {
+        const gitDirResult = yield* executeGit(
+          "GitCore.readWorktreeIdentity.gitDir",
+          worktreePath,
+          ["rev-parse", "--absolute-git-dir"],
+        );
+        const branchResult = yield* executeGit(
+          "GitCore.readWorktreeIdentity.branch",
+          worktreePath,
+          ["symbolic-ref", "--quiet", "--short", "HEAD"],
+          { allowNonZeroExit: true },
+        );
+        const headResult = yield* executeGit("GitCore.readWorktreeIdentity.head", worktreePath, [
+          "rev-parse",
+          "--verify",
+          "HEAD",
+        ]);
+        const statusResult = yield* executeGit(
+          "GitCore.readWorktreeIdentity.status",
+          worktreePath,
+          ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        );
+        const rawGitDir = gitDirResult.stdout.trim();
+        const gitDir = yield* Effect.tryPromise({
+          try: () => nodeFs.realpath(rawGitDir),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.readWorktreeIdentity.gitDir",
+              worktreePath,
+              ["rev-parse", "--absolute-git-dir"],
+              "could not canonicalize the linked worktree Git directory.",
+              cause,
+            ),
+        });
+        return {
+          gitDir,
+          branch: branchResult.code === 0 ? branchResult.stdout.trim() || null : null,
+          head: headResult.stdout.trim(),
+          clean: statusResult.stdout.length === 0,
+        };
+      });
+
+    const recordWorktreeOwnership: GitCoreShape["recordWorktreeOwnership"] = (input) =>
+      Effect.gen(function* () {
+        const identity = yield* readWorktreeIdentity(input.path);
+        if (identity.branch !== input.branch) {
+          return yield* new GitCommandError({
+            operation: "GitCore.recordWorktreeOwnership",
+            command: "git worktree ownership record",
+            cwd: input.path,
+            detail: `Expected ${input.branch ? `branch ${input.branch}` : "detached HEAD"}, found ${
+              identity.branch ? `branch ${identity.branch}` : "detached HEAD"
+            }.`,
+          });
+        }
+        const stateHash = yield* readWorktreeStateHash(input.path);
+        const proof = {
+          token: input.token,
+          gitDir: identity.gitDir,
+          branch: identity.branch,
+          head: identity.head,
+          stateHash,
+        };
+        const markerPath = nodePath.join(identity.gitDir, WORKTREE_OWNERSHIP_MARKER);
+        yield* Effect.tryPromise({
+          try: () =>
+            nodeFs.writeFile(markerPath, JSON.stringify(proof), {
+              encoding: "utf8",
+              flag: "wx",
+              mode: 0o600,
+            }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.recordWorktreeOwnership",
+              input.path,
+              ["worktree", "ownership", "record"],
+              "could not persist the linked worktree ownership marker.",
+              cause,
+            ),
+        });
+        return proof;
+      });
+
+    const verifyWorktreeOwnership: GitCoreShape["verifyWorktreeOwnership"] = (input) =>
+      Effect.gen(function* () {
+        const identity = yield* readWorktreeIdentity(input.path);
+        if (identity.gitDir !== input.proof.gitDir) {
+          return { verified: false, reason: "linked worktree Git directory changed" };
+        }
+        const markerPath = nodePath.join(identity.gitDir, WORKTREE_OWNERSHIP_MARKER);
+        const markerText = yield* Effect.tryPromise({
+          try: () =>
+            nodeFs.readFile(markerPath, "utf8").catch((cause: unknown) => {
+              if (hasNodeErrorCode(cause, "ENOENT")) return null;
+              throw cause;
+            }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.verifyWorktreeOwnership",
+              input.path,
+              ["worktree", "ownership", "verify"],
+              "could not read the linked worktree ownership marker.",
+              cause,
+            ),
+        });
+        if (markerText === null) {
+          return { verified: false, reason: "ownership marker is missing" };
+        }
+        let marker: unknown;
+        try {
+          marker = JSON.parse(markerText);
+        } catch {
+          return { verified: false, reason: "ownership marker is invalid" };
+        }
+        if (
+          typeof marker !== "object" ||
+          marker === null ||
+          !("token" in marker) ||
+          marker.token !== input.proof.token ||
+          !("gitDir" in marker) ||
+          marker.gitDir !== input.proof.gitDir ||
+          !("branch" in marker) ||
+          marker.branch !== input.proof.branch ||
+          !("head" in marker) ||
+          marker.head !== input.proof.head ||
+          (input.proof.stateHash === undefined
+            ? "stateHash" in marker
+            : !("stateHash" in marker) || marker.stateHash !== input.proof.stateHash)
+        ) {
+          return { verified: false, reason: "ownership marker does not match" };
+        }
+        if (identity.branch !== input.proof.branch) {
+          return { verified: false, reason: "worktree branch changed" };
+        }
+        if (identity.head !== input.proof.head) {
+          return { verified: false, reason: "worktree HEAD changed" };
+        }
+        if (input.proof.stateHash === undefined) {
+          if (!identity.clean) {
+            return { verified: false, reason: "worktree has uncommitted changes" };
+          }
+        } else {
+          const stateHash = yield* readWorktreeStateHash(input.path);
+          if (stateHash !== input.proof.stateHash) {
+            return { verified: false, reason: "worktree state changed" };
+          }
+        }
+        return { verified: true, reason: null };
+      });
+
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
       Effect.gen(function* () {
+        const refResult = yield* executeGit(
+          "GitCore.createDetachedWorktree.resolveRef",
+          input.cwd,
+          ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
+        );
+        const resolvedRef = refResult.stdout.trim();
+        if (input.copyChangesFrom) {
+          const sourceHead = yield* executeGit(
+            "GitCore.createDetachedWorktree.resolveCopySource",
+            input.copyChangesFrom,
+            ["rev-parse", "--verify", "HEAD^{commit}"],
+          ).pipe(Effect.map((result) => result.stdout.trim()));
+          if (sourceHead !== resolvedRef) {
+            return yield* createGitCommandError(
+              "GitCore.createDetachedWorktree",
+              input.cwd,
+              ["worktree", "add", "--detach", "<path>", input.ref],
+              "Cannot copy checkout changes because the selected ref is not that checkout's HEAD.",
+            );
+          }
+        }
         const worktreePath =
           input.path ??
-          (yield* buildGeneratedDetachedWorktreePath(input.cwd).pipe(
+          (yield* buildGeneratedDetachedWorktreePath().pipe(
             Effect.mapError((cause: unknown) =>
               createGitCommandError(
                 "GitCore.createDetachedWorktree",
@@ -2233,13 +2539,26 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           "add",
           "--detach",
           worktreePath,
-          input.ref,
+          resolvedRef,
         ]);
+
+        if (input.copyChangesFrom) {
+          yield* copyCheckoutChanges(input.copyChangesFrom, worktreePath).pipe(
+            Effect.onError(() =>
+              executeGit(
+                "GitCore.createDetachedWorktree.rollback",
+                input.cwd,
+                ["worktree", "remove", "--force", worktreePath],
+                { allowNonZeroExit: true },
+              ).pipe(Effect.ignore),
+            ),
+          );
+        }
 
         return {
           worktree: {
             path: worktreePath,
-            ref: input.ref,
+            ref: resolvedRef,
             branch: null,
           },
         };
@@ -2263,6 +2582,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           },
         );
       }).pipe(Effect.asVoid);
+
+    const fetchPullRequestCommit: GitCoreShape["fetchPullRequestCommit"] = (input) =>
+      Effect.gen(function* () {
+        const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+        if (input.expectedRepositoryNameWithOwner) {
+          const remoteUrl = yield* runGitStdout(
+            "GitCore.fetchPullRequestCommit.remoteUrl",
+            input.cwd,
+            ["remote", "get-url", remoteName],
+          );
+          const actualRepositoryNameWithOwner =
+            parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+          if (
+            actualRepositoryNameWithOwner?.toLowerCase() !==
+            input.expectedRepositoryNameWithOwner.toLowerCase()
+          ) {
+            return yield* createGitCommandError(
+              "GitCore.fetchPullRequestCommit.remoteMismatch",
+              input.cwd,
+              ["remote", "get-url", remoteName],
+              `Pull request URL targets ${input.expectedRepositoryNameWithOwner}, but remote ${remoteName} targets ${actualRepositoryNameWithOwner ?? "a non-GitHub repository"}.`,
+            );
+          }
+        }
+        yield* executeGit(
+          "GitCore.fetchPullRequestCommit",
+          input.cwd,
+          ["fetch", "--quiet", "--no-tags", remoteName, `refs/pull/${input.prNumber}/head`],
+          { fallbackErrorMessage: "git fetch pull request head failed" },
+        );
+        return yield* executeGit("GitCore.fetchPullRequestCommit.resolve", input.cwd, [
+          "rev-parse",
+          "--verify",
+          "FETCH_HEAD^{commit}",
+        ]).pipe(Effect.map((result) => result.stdout.trim()));
+      });
 
     const fetchRemoteBranch: GitCoreShape["fetchRemoteBranch"] = (input) =>
       Effect.gen(function* () {
@@ -2334,6 +2689,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ),
         );
       });
+
+    const deleteBranchIfUnchanged: GitCoreShape["deleteBranchIfUnchanged"] = (input) =>
+      executeGit("GitCore.deleteBranchIfUnchanged", input.cwd, [
+        "update-ref",
+        "-d",
+        `refs/heads/${input.branch}`,
+        input.expectedHead,
+      ]).pipe(Effect.asVoid);
 
     const renameBranch: GitCoreShape["renameBranch"] = (input) =>
       Effect.gen(function* () {
@@ -2735,13 +3098,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readConfigValue,
       listBranches,
       createWorktree,
+      recordWorktreeOwnership,
+      verifyWorktreeOwnership,
+      snapshotWorktree,
       createDetachedWorktree,
       fetchPullRequestBranch,
+      fetchPullRequestCommit,
       ensureRemote,
       fetchRemoteBranch,
       setBranchUpstream,
       removeWorktree,
       deleteBranch,
+      deleteBranchIfUnchanged,
       renameBranch,
       createBranch,
       publishBranch,

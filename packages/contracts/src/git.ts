@@ -197,6 +197,7 @@ export const GitCreateDetachedWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   ref: TrimmedNonEmptyStringSchema,
   path: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  copyChangesFrom: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type GitCreateDetachedWorktreeInput = typeof GitCreateDetachedWorktreeInput.Type;
 

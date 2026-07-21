@@ -4,34 +4,71 @@
 // Exports: question extraction and typed ACP response construction.
 
 import type { ProviderUserInputAnswers, UserInputQuestion } from "@synara/contracts";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
-type FormElicitationRequest = Extract<
-  EffectAcpSchema.ElicitationRequest,
-  { readonly mode: "form" }
->;
-type ElicitationProperty = EffectAcpSchema.ElicitationPropertySchema;
+type FormElicitationRequest = Acp.ElicitationFormMode & {
+  readonly mode: "form";
+  readonly message: string;
+  readonly _meta?: Record<string, unknown> | null;
+};
+type ElicitationProperty = Acp.ElicitationPropertySchema;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function trimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.trim() || undefined;
+}
+
+export function isFormElicitationRequest(
+  request: Acp.CreateElicitationRequest,
+): request is FormElicitationRequest {
+  return (
+    request.mode === "form" && "requestedSchema" in request && isRecord(request.requestedSchema)
+  );
+}
 
 function propertyOptions(property: ElicitationProperty): ReadonlyArray<{
   readonly label: string;
   readonly description: string;
 }> {
   if (property.type === "string") {
-    if (property.oneOf) {
-      return property.oneOf.map((option) => ({
-        label: option.const,
-        description: option.title,
-      }));
+    const oneOf = property.oneOf;
+    if (Array.isArray(oneOf)) {
+      return oneOf.flatMap((option) => {
+        if (!isRecord(option)) return [];
+        const label = trimmedString(option.const);
+        if (!label) return [];
+        return [{ label, description: trimmedString(option.title) ?? label }];
+      });
     }
-    return (property.enum ?? []).map((value) => ({ label: value, description: value }));
+    const enumValues = property.enum;
+    return Array.isArray(enumValues)
+      ? enumValues.flatMap((value) =>
+          typeof value === "string" ? [{ label: value, description: value }] : [],
+        )
+      : [];
   }
   if (property.type === "array") {
-    const entries = "enum" in property.items ? property.items.enum : property.items.anyOf;
-    return entries.map((option) =>
-      typeof option === "string"
-        ? { label: option, description: option }
-        : { label: option.const, description: option.title },
-    );
+    const items = property.items;
+    if (!isRecord(items)) return [];
+    const enumValues = items.enum;
+    if (Array.isArray(enumValues)) {
+      return enumValues.flatMap((value) =>
+        typeof value === "string" ? [{ label: value, description: value }] : [],
+      );
+    }
+    const anyOf = items.anyOf;
+    return Array.isArray(anyOf)
+      ? anyOf.flatMap((option) => {
+          if (!isRecord(option)) return [];
+          const label = trimmedString(option.const);
+          if (!label) return [];
+          return [{ label, description: trimmedString(option.title) ?? label }];
+        })
+      : [];
   }
   if (property.type === "boolean") {
     return [
@@ -49,8 +86,8 @@ export function elicitationQuestionsFromRequest(
   const properties = request.requestedSchema.properties ?? {};
   return Object.entries(properties).map(([id, property], index) => ({
     id,
-    header: property.title?.trim() || `Question ${index + 1}`,
-    question: property.description?.trim() || request.message,
+    header: trimmedString(property.title) ?? `Question ${index + 1}`,
+    question: trimmedString(property.description) ?? request.message,
     options: propertyOptions(property),
     multiSelect: property.type === "array",
   }));
@@ -63,12 +100,12 @@ function firstAnswerValue(value: ProviderUserInputAnswers[string] | undefined): 
 function coerceElicitationAnswer(
   property: ElicitationProperty,
   answer: ProviderUserInputAnswers[string] | undefined,
-): EffectAcpSchema.ElicitationContentValue | undefined {
+): Acp.ElicitationContentValue | undefined {
   if (answer === null || answer === undefined) {
     return undefined;
   }
   if (property.type === "array") {
-    return typeof answer === "string" ? [answer] : answer;
+    return typeof answer === "string" ? [answer] : [...answer];
   }
   const value = firstAnswerValue(answer);
   if (value === undefined) {
@@ -94,8 +131,8 @@ function coerceElicitationAnswer(
 export function elicitationResponseFromAnswers(
   request: FormElicitationRequest,
   answers: ProviderUserInputAnswers,
-): EffectAcpSchema.ElicitationResponse {
-  const content: Record<string, EffectAcpSchema.ElicitationContentValue> = {};
+): Acp.CreateElicitationResponse {
+  const content: Record<string, Acp.ElicitationContentValue> = {};
   for (const [id, property] of Object.entries(request.requestedSchema.properties ?? {})) {
     const value = coerceElicitationAnswer(property, answers[id]);
     if (value !== undefined) {
@@ -103,9 +140,7 @@ export function elicitationResponseFromAnswers(
     }
   }
   return {
-    action: {
-      action: "accept",
-      content,
-    },
+    action: "accept",
+    content,
   };
 }

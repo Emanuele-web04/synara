@@ -10,11 +10,13 @@ import {
   type ChatAttachment,
   type CanonicalItemType,
   type CanonicalRequestType,
+  type ModelSelection,
   type ProviderComposerCapabilities,
   type ProviderEvent,
   type ProviderListModelsResult,
   type ProviderListPluginsResult,
   type ProviderReadPluginResult,
+  type ProviderSendTurnInput,
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ServerVoiceTranscriptionResult,
@@ -28,7 +30,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, FileSystem, Layer, Queue, Schema, ServiceMap, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
 
 import {
   ProviderAdapterProcessError,
@@ -41,9 +43,12 @@ import {
 import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import {
   CodexAppServerManager,
+  type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
-import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
+import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { acquireAgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
+import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
   codexGeneratedImageArtifact,
   extractCodexGeneratedImageReference,
@@ -97,6 +102,23 @@ function composeCodexInputWithFileAttachments(input: {
     attachmentsDir: input.attachmentsDir,
     include: "all-files",
   });
+}
+
+function codexModelSelectionOverrides(
+  modelSelection: ModelSelection | undefined,
+): Pick<CodexAppServerSendTurnInput, "model" | "effort"> &
+  Pick<CodexAppServerStartSessionInput, "serviceTier"> {
+  if (modelSelection?.provider !== PROVIDER) {
+    return {};
+  }
+
+  return {
+    model: modelSelection.model,
+    ...(modelSelection.options?.reasoningEffort !== undefined
+      ? { effort: modelSelection.options.reasoningEffort }
+      : {}),
+    ...(modelSelection.options?.fastMode ? { serviceTier: "fast" } : {}),
+  };
 }
 
 function toSessionError(
@@ -1594,6 +1616,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* Effect.service(ServerConfig);
+    // Optional so adapter tests can run without the gateway layer; when
+    // present, every session gets the synara_* MCP tools.
+    const agentGatewayCredentials = Option.getOrUndefined(
+      yield* Effect.serviceOption(AgentGatewayCredentials),
+    );
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -1612,11 +1639,63 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           options?.makeManager?.(services) ??
           new CodexAppServerManager(services, {
             synaraSkillsDir: synaraSkillsDir(serverConfig.baseDir),
+            ...(agentGatewayCredentials
+              ? {
+                  agentGatewayMcp: {
+                    endpointUrl: () => agentGatewayCredentials.mcpEndpointUrl,
+                    acquireSessionLease: (threadId) =>
+                      acquireAgentGatewaySessionLease(agentGatewayCredentials, threadId, PROVIDER)!,
+                  },
+                }
+              : {}),
           })
         );
       }),
       (manager) => Effect.promise(() => manager.stopAll()),
     );
+
+    const prepareCodexManagerTurnInput = (
+      input: ProviderSendTurnInput,
+      method: "turn/start" | "turn/steer",
+    ): Effect.Effect<CodexAppServerSendTurnInput, ProviderAdapterRequestError> =>
+      Effect.gen(function* () {
+        const imageBlocks = yield* loadProviderPromptImageBlocks({
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          provider: PROVIDER,
+          method,
+          readFile: (attachmentPath) => fileSystem.readFile(attachmentPath),
+          readErrorDetail: (cause) => toMessage(cause, "Failed to read attachment file."),
+          invalidAttachmentError: (_attachment, cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method,
+              detail: toMessage(cause, `${method} failed`),
+              cause,
+            }),
+        });
+        const nativeCodexAttachments = imageBlocks.map((attachment) => ({
+          type: "image" as const,
+          url: `data:${attachment.mimeType};base64,${attachment.data}`,
+        }));
+        const composedInput = composeCodexInputWithFileAttachments({
+          input: input.input,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+        });
+
+        return {
+          threadId: input.threadId,
+          ...(composedInput !== undefined ? { input: composedInput } : {}),
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+          ...codexModelSelectionOverrides(input.modelSelection),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+          ...(nativeCodexAttachments.length > 0 ? { attachments: nativeCodexAttachments } : {}),
+        } satisfies CodexAppServerSendTurnInput;
+      });
 
     const startSession: CodexAdapterShape["startSession"] = (input) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1639,16 +1718,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         runtimeMode: input.runtimeMode,
-        ...(input.modelSelection?.provider === "codex"
-          ? { model: input.modelSelection.model }
-          : {}),
-        ...(input.modelSelection?.provider === "codex" &&
-        input.modelSelection.options?.reasoningEffort !== undefined
-          ? { effort: input.modelSelection.options.reasoningEffort }
-          : {}),
-        ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-          ? { serviceTier: "fast" }
-          : {}),
+        ...codexModelSelectionOverrides(input.modelSelection),
       };
 
       return Effect.tryPromise({
@@ -1665,70 +1735,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        const codexAttachments = yield* Effect.forEach(
-          input.attachments ?? [],
-          (attachment) =>
-            Effect.gen(function* () {
-              if (attachment.type !== "image") {
-                return null;
-              }
-              const attachmentPath = resolveProviderAttachmentPath({
-                attachmentsDir: serverConfig.attachmentsDir,
-                attachment,
-              });
-              if (!attachmentPath) {
-                return yield* toRequestError(
-                  input.threadId,
-                  "turn/start",
-                  new Error(`Invalid attachment id '${attachment.id}'.`),
-                );
-              }
-              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "turn/start",
-                      detail: toMessage(cause, "Failed to read attachment file."),
-                      cause,
-                    }),
-                ),
-              );
-              return {
-                type: "image" as const,
-                url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
-              };
-            }),
-          { concurrency: 4 },
-        );
-        const nativeCodexAttachments = codexAttachments.filter(
-          (attachment): attachment is NonNullable<typeof attachment> => attachment !== null,
-        );
-        const composedInput = composeCodexInputWithFileAttachments({
-          input: input.input,
-          attachments: input.attachments,
-          attachmentsDir: serverConfig.attachmentsDir,
-        });
-        const managerInput = {
-          threadId: input.threadId,
-          ...(composedInput !== undefined ? { input: composedInput } : {}),
-          ...(input.skills !== undefined ? { skills: input.skills } : {}),
-          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-          ...(input.modelSelection?.provider === "codex"
-            ? { model: input.modelSelection.model }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" &&
-          input.modelSelection.options?.reasoningEffort !== undefined
-            ? { effort: input.modelSelection.options.reasoningEffort }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-            ? { serviceTier: "fast" }
-            : {}),
-          ...(input.interactionMode !== undefined
-            ? { interactionMode: input.interactionMode }
-            : {}),
-          ...(nativeCodexAttachments.length > 0 ? { attachments: nativeCodexAttachments } : {}),
-        };
+        const managerInput = yield* prepareCodexManagerTurnInput(input, "turn/start");
 
         return yield* Effect.tryPromise({
           try: () => manager.sendTurn(managerInput),
@@ -1743,70 +1750,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const steerTurn: CodexAdapterShape["steerTurn"] = (input) =>
       Effect.gen(function* () {
-        const codexAttachments = yield* Effect.forEach(
-          input.attachments ?? [],
-          (attachment) =>
-            Effect.gen(function* () {
-              if (attachment.type !== "image") {
-                return null;
-              }
-              const attachmentPath = resolveProviderAttachmentPath({
-                attachmentsDir: serverConfig.attachmentsDir,
-                attachment,
-              });
-              if (!attachmentPath) {
-                return yield* toRequestError(
-                  input.threadId,
-                  "turn/steer",
-                  new Error(`Invalid attachment id '${attachment.id}'.`),
-                );
-              }
-              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "turn/steer",
-                      detail: toMessage(cause, "Failed to read attachment file."),
-                      cause,
-                    }),
-                ),
-              );
-              return {
-                type: "image" as const,
-                url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
-              };
-            }),
-          { concurrency: 4 },
-        );
-        const nativeCodexAttachments = codexAttachments.filter(
-          (attachment): attachment is NonNullable<typeof attachment> => attachment !== null,
-        );
-        const composedInput = composeCodexInputWithFileAttachments({
-          input: input.input,
-          attachments: input.attachments,
-          attachmentsDir: serverConfig.attachmentsDir,
-        });
-        const managerInput = {
-          threadId: input.threadId,
-          ...(composedInput !== undefined ? { input: composedInput } : {}),
-          ...(input.skills !== undefined ? { skills: input.skills } : {}),
-          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-          ...(input.modelSelection?.provider === "codex"
-            ? { model: input.modelSelection.model }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" &&
-          input.modelSelection.options?.reasoningEffort !== undefined
-            ? { effort: input.modelSelection.options.reasoningEffort }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-            ? { serviceTier: "fast" }
-            : {}),
-          ...(input.interactionMode !== undefined
-            ? { interactionMode: input.interactionMode }
-            : {}),
-          ...(nativeCodexAttachments.length > 0 ? { attachments: nativeCodexAttachments } : {}),
-        };
+        const managerInput = yield* prepareCodexManagerTurnInput(input, "turn/steer");
 
         return yield* Effect.tryPromise({
           try: () => manager.steerTurn(managerInput),

@@ -101,6 +101,107 @@ async function sourceWithCachedIcon(source: ComposerAppSnapSource): Promise<Comp
   return appIconDataUrl ? { ...source, appIconDataUrl } : source;
 }
 
+// Kept at module scope so its try/finally stays out of the compiled coordinator.
+// `blobHydrationInFlight` and `isDisposed` are the coordinator's mutable cells,
+// passed in so the routine can dedupe in-flight blobs and bail after unmount.
+async function hydratePersistedAppSnaps(
+  captureId: string | undefined,
+  blobHydrationInFlight: Set<string>,
+  isDisposed: () => boolean,
+): Promise<void> {
+  const draftStore = useComposerDraftStore.getState();
+  for (const [rawThreadId, draft] of Object.entries(draftStore.draftsByThreadId)) {
+    const threadId = rawThreadId as ThreadId;
+    const targets: PersistedAppSnapHydrationTarget[] = [
+      {
+        attachments: draft.persistedAttachments,
+        images: draft.images,
+        hasAttachment: (attachmentId) =>
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[threadId]?.persistedAttachments.some(
+              (attachment) => attachment.id === attachmentId,
+            ) ?? false,
+        addImage: (image) => useComposerDraftStore.getState().addImage(threadId, image),
+        removeAttachment: (attachmentId) => {
+          const latestAttachments =
+            useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [];
+          return useComposerDraftStore.getState().syncPersistedAttachments(
+            threadId,
+            latestAttachments.filter((attachment) => attachment.id !== attachmentId),
+          );
+        },
+      },
+    ];
+    if (draft.promptHistorySavedDraft) {
+      targets.push({
+        attachments: draft.promptHistorySavedDraft.persistedAttachments,
+        images: draft.promptHistorySavedDraft.images,
+        hasAttachment: (attachmentId) =>
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[threadId]?.promptHistorySavedDraft?.persistedAttachments.some(
+              (attachment) => attachment.id === attachmentId,
+            ) ?? false,
+        addImage: (image) =>
+          useComposerDraftStore.getState().addPromptHistorySavedDraftImage(threadId, image),
+        removeAttachment: (attachmentId) => {
+          const latestAttachments =
+            useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
+              ?.persistedAttachments ?? [];
+          return useComposerDraftStore.getState().syncPromptHistorySavedDraftPersistedAttachments(
+            threadId,
+            latestAttachments.filter((attachment) => attachment.id !== attachmentId),
+          );
+        },
+      });
+    }
+
+    for (const target of targets) {
+      const existingImageIds = new Set(target.images.map((image) => image.id));
+      for (const attachment of target.attachments) {
+        if (
+          !attachment.blobKey ||
+          attachment.source?.kind !== "appsnap" ||
+          (captureId !== undefined &&
+            !isComposerAppSnapCaptureSource(attachment.source, captureId)) ||
+          existingImageIds.has(attachment.id) ||
+          blobHydrationInFlight.has(attachment.blobKey)
+        ) {
+          continue;
+        }
+        blobHydrationInFlight.add(attachment.blobKey);
+        try {
+          const [file, source] = await Promise.all([
+            readComposerImageBlob(attachment.blobKey),
+            sourceWithCachedIcon(attachment.source),
+          ]);
+          if (!file) {
+            await target.removeAttachment(attachment.id);
+            continue;
+          }
+          if (isDisposed() || !target.hasAttachment(attachment.id)) continue;
+          target.addImage({
+            type: "image",
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            previewUrl: URL.createObjectURL(file),
+            file,
+            source,
+          });
+          existingImageIds.add(attachment.id);
+        } catch (error) {
+          console.warn("[appsnap] Could not restore persisted AppSnap", error);
+        } finally {
+          blobHydrationInFlight.delete(attachment.blobKey);
+        }
+      }
+    }
+  }
+}
+
 export function AppSnapCoordinator() {
   const navigate = useNavigate();
   const { settings } = useAppSettings();
@@ -120,113 +221,20 @@ export function AppSnapCoordinator() {
   // Read through a ref so toggling the sound preference doesn't resubscribe the
   // capture listener (which would re-deliver pending captures).
   const playCaptureSoundRef = useRef(settings.appSnapPlaySound);
-  playCaptureSoundRef.current = settings.appSnapPlaySound;
   const enableAppSnapRef = useRef(settings.enableAppSnap);
-  enableAppSnapRef.current = settings.enableAppSnap;
+  useEffect(() => {
+    playCaptureSoundRef.current = settings.appSnapPlaySound;
+    enableAppSnapRef.current = settings.enableAppSnap;
+  }, [settings.appSnapPlaySound, settings.enableAppSnap]);
 
   useEffect(() => {
     let disposed = false;
 
-    const hydratePersistedAppSnaps = async (captureId?: string) => {
-      const draftStore = useComposerDraftStore.getState();
-      for (const [rawThreadId, draft] of Object.entries(draftStore.draftsByThreadId)) {
-        const threadId = rawThreadId as ThreadId;
-        const targets: PersistedAppSnapHydrationTarget[] = [
-          {
-            attachments: draft.persistedAttachments,
-            images: draft.images,
-            hasAttachment: (attachmentId) =>
-              useComposerDraftStore
-                .getState()
-                .draftsByThreadId[threadId]?.persistedAttachments.some(
-                  (attachment) => attachment.id === attachmentId,
-                ) ?? false,
-            addImage: (image) => useComposerDraftStore.getState().addImage(threadId, image),
-            removeAttachment: (attachmentId) => {
-              const latestAttachments =
-                useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ??
-                [];
-              return useComposerDraftStore.getState().syncPersistedAttachments(
-                threadId,
-                latestAttachments.filter((attachment) => attachment.id !== attachmentId),
-              );
-            },
-          },
-        ];
-        if (draft.promptHistorySavedDraft) {
-          targets.push({
-            attachments: draft.promptHistorySavedDraft.persistedAttachments,
-            images: draft.promptHistorySavedDraft.images,
-            hasAttachment: (attachmentId) =>
-              useComposerDraftStore
-                .getState()
-                .draftsByThreadId[threadId]?.promptHistorySavedDraft?.persistedAttachments.some(
-                  (attachment) => attachment.id === attachmentId,
-                ) ?? false,
-            addImage: (image) =>
-              useComposerDraftStore.getState().addPromptHistorySavedDraftImage(threadId, image),
-            removeAttachment: (attachmentId) => {
-              const latestAttachments =
-                useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
-                  ?.persistedAttachments ?? [];
-              return useComposerDraftStore
-                .getState()
-                .syncPromptHistorySavedDraftPersistedAttachments(
-                  threadId,
-                  latestAttachments.filter((attachment) => attachment.id !== attachmentId),
-                );
-            },
-          });
-        }
-
-        for (const target of targets) {
-          const existingImageIds = new Set(target.images.map((image) => image.id));
-          for (const attachment of target.attachments) {
-            if (
-              !attachment.blobKey ||
-              attachment.source?.kind !== "appsnap" ||
-              (captureId !== undefined &&
-                !isComposerAppSnapCaptureSource(attachment.source, captureId)) ||
-              existingImageIds.has(attachment.id) ||
-              blobHydrationInFlightRef.current.has(attachment.blobKey)
-            ) {
-              continue;
-            }
-            blobHydrationInFlightRef.current.add(attachment.blobKey);
-            try {
-              const [file, source] = await Promise.all([
-                readComposerImageBlob(attachment.blobKey),
-                sourceWithCachedIcon(attachment.source),
-              ]);
-              if (!file) {
-                await target.removeAttachment(attachment.id);
-                continue;
-              }
-              if (disposed || !target.hasAttachment(attachment.id)) continue;
-              target.addImage({
-                type: "image",
-                id: attachment.id,
-                name: attachment.name,
-                mimeType: attachment.mimeType,
-                sizeBytes: attachment.sizeBytes,
-                previewUrl: URL.createObjectURL(file),
-                file,
-                source,
-              });
-              existingImageIds.add(attachment.id);
-            } catch (error) {
-              console.warn("[appsnap] Could not restore persisted AppSnap", error);
-            } finally {
-              blobHydrationInFlightRef.current.delete(attachment.blobKey);
-            }
-          }
-        }
-      }
-    };
-
     let hydrationQueue = Promise.resolve();
     const enqueueHydration = (captureId?: string) => {
-      const hydration = hydrationQueue.then(() => hydratePersistedAppSnaps(captureId));
+      const hydration = hydrationQueue.then(() =>
+        hydratePersistedAppSnaps(captureId, blobHydrationInFlightRef.current, () => disposed),
+      );
       hydrationQueue = hydration.catch(() => undefined);
       return hydration;
     };
@@ -450,7 +458,10 @@ export function AppSnapCoordinator() {
   );
   // Keep the native subscription stable while navigation callbacks change.
   // Pending captures can then never cross a cleanup/re-subscribe dedupe gap.
-  attachCaptureRef.current = attachCapture;
+  // (Mirrored in an effect: capture events only arrive post-commit.)
+  useEffect(() => {
+    attachCaptureRef.current = attachCapture;
+  }, [attachCapture]);
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;

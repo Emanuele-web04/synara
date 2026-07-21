@@ -4,7 +4,7 @@
 // locally and only committed on Save.
 // Layer: web profile feature (all changes persist to localStorage via the parent hooks).
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import {
@@ -52,6 +52,35 @@ export function EditProfileDialog({
   avatarImage,
   onSave,
 }: EditProfileDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup showCloseButton={false} className="sm:max-w-[500px]">
+        {/* Draft state lives below DialogPopup, which unmounts its children on
+            close — every open re-seeds from the live values with no reset
+            effect. */}
+        <EditProfileDialogContent
+          onOpenChange={onOpenChange}
+          initials={initials}
+          name={name}
+          handle={handle}
+          avatarColor={avatarColor}
+          avatarImage={avatarImage}
+          onSave={onSave}
+        />
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function EditProfileDialogContent({
+  onOpenChange,
+  initials,
+  name,
+  handle,
+  avatarColor,
+  avatarImage,
+  onSave,
+}: Omit<EditProfileDialogProps, "open">) {
   const [draftName, setDraftName] = useState(name);
   const [draftHandle, setDraftHandle] = useState(handle.replace(/^@+/, ""));
   const [draftColor, setDraftColor] = useState(avatarColor);
@@ -60,19 +89,6 @@ export function EditProfileDialog({
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Re-seed drafts from the live values whenever the dialog (re)opens.
-  useEffect(() => {
-    if (open) {
-      setDraftName(name);
-      setDraftHandle(handle.replace(/^@+/, ""));
-      setDraftColor(avatarColor);
-      setDraftImage(avatarImage);
-      setShowEditor(false);
-      setError(null);
-      setProcessing(false);
-    }
-  }, [open, name, handle, avatarColor, avatarImage]);
 
   const handlePickFile = async (file: File | undefined) => {
     if (!file) {
@@ -100,151 +116,149 @@ export function EditProfileDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" showCloseButton={false} className="sm:max-w-[500px]">
-        <DialogTitle className="px-4 pt-4 text-lg">Edit profile</DialogTitle>
+    <>
+      <DialogTitle className="px-4 pt-4 text-lg">Edit profile</DialogTitle>
 
-        <div className="flex flex-col gap-4 px-4 pt-3">
-          {/* Avatar */}
-          <div className="flex flex-col items-center gap-3">
-            <div className="relative">
-              <ProfileAvatar
-                initials={initials}
-                color={draftColor}
-                image={draftImage}
-                className="size-20"
-                textClassName="text-2xl"
-              />
-              <button
-                type="button"
-                onClick={() => setShowEditor((value) => !value)}
-                aria-label="Edit avatar"
-                className={cn(
-                  "absolute bottom-0 end-0 flex size-7 items-center justify-center rounded-full",
-                  "bg-black/45 text-white backdrop-blur-sm transition-colors hover:bg-black/60",
-                )}
-              >
-                <CentralIcon name="pencil" className="size-3 opacity-100" />
-              </button>
-            </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(event) => {
-                void handlePickFile(event.target.files?.[0]);
-                event.target.value = "";
-              }}
+      <div className="flex flex-col gap-4 px-4 pt-3">
+        {/* Avatar */}
+        <div className="flex flex-col items-center gap-3">
+          <div className="relative">
+            <ProfileAvatar
+              initials={initials}
+              color={draftColor}
+              image={draftImage}
+              className="size-20"
+              textClassName="text-2xl"
             />
+            <button
+              type="button"
+              onClick={() => setShowEditor((value) => !value)}
+              aria-label="Edit avatar"
+              className={cn(
+                "absolute bottom-0 end-0 flex size-7 items-center justify-center rounded-full",
+                "bg-black/45 text-white backdrop-blur-sm transition-colors hover:bg-black/60",
+              )}
+            >
+              <CentralIcon name="pencil" className="size-3 opacity-100" />
+            </button>
+          </div>
 
-            {showEditor && (
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex items-center justify-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(event) => {
+              void handlePickFile(event.target.files?.[0]);
+              event.target.value = "";
+            }}
+          />
+
+          {showEditor && (
+            <div className="flex flex-col items-center gap-3">
+              <div className="flex items-center justify-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  className="gap-1.5"
+                  disabled={processing}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <CentralIcon name="add-image" className="size-3.5" />
+                  {processing ? "Processing…" : draftImage ? "Replace photo" : "Upload photo"}
+                </Button>
+                {draftImage && (
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="ghost"
                     size="xs"
-                    className="gap-1.5"
-                    disabled={processing}
-                    onClick={() => fileInputRef.current?.click()}
+                    className="gap-1.5 text-muted-foreground"
+                    onClick={() => {
+                      setDraftImage(null);
+                      setError(null);
+                    }}
                   >
-                    <CentralIcon name="add-image" className="size-3.5" />
-                    {processing ? "Processing…" : draftImage ? "Replace photo" : "Upload photo"}
+                    <CentralIcon name="trash-can-simple" className="size-3.5" />
+                    Remove
                   </Button>
-                  {draftImage && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="gap-1.5 text-muted-foreground"
-                      onClick={() => {
-                        setDraftImage(null);
-                        setError(null);
-                      }}
-                    >
-                      <CentralIcon name="trash-can-simple" className="size-3.5" />
-                      Remove
-                    </Button>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-center gap-2">
-                  {PROFILE_AVATAR_COLORS.map((color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      onClick={() => setDraftColor(color)}
-                      aria-label={`Use ${color}`}
-                      className={cn(
-                        "size-5 rounded-full transition-transform hover:scale-110",
-                        !draftImage &&
-                          draftColor === color &&
-                          "ring-2 ring-foreground/70 ring-offset-2 ring-offset-popover",
-                      )}
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
-                </div>
-
-                {draftImage && (
-                  <p className="text-center text-xs text-muted-foreground">
-                    Colors apply when no photo is set.
-                  </p>
                 )}
               </div>
-            )}
 
-            {error && <p className="text-center text-xs text-destructive">{error}</p>}
-          </div>
+              <div className="flex items-center justify-center gap-2">
+                {PROFILE_AVATAR_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setDraftColor(color)}
+                    aria-label={`Use ${color}`}
+                    className={cn(
+                      "size-5 rounded-full transition-transform hover:scale-110",
+                      !draftImage &&
+                        draftColor === color &&
+                        "ring-2 ring-foreground/70 ring-offset-2 ring-offset-popover",
+                    )}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
 
-          {/* Fields */}
-          <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
-            <Field label="Display name">
-              <InputGroup className={fieldControlClassName}>
-                <InputGroupInput
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.target.value)}
-                  placeholder="Your name"
-                />
-              </InputGroup>
-            </Field>
-            <Field label="Username">
-              <InputGroup className={fieldControlClassName}>
-                <InputGroupAddon>
-                  <InputGroupText>@</InputGroupText>
-                </InputGroupAddon>
-                <InputGroupInput
-                  value={draftHandle}
-                  onChange={(event) =>
-                    setDraftHandle(event.target.value.replace(/^@+/, "").replace(/\s+/g, ""))
-                  }
-                  placeholder="username"
-                />
-              </InputGroup>
-            </Field>
-          </div>
+              {draftImage && (
+                <p className="text-center text-xs text-muted-foreground">
+                  Colors apply when no photo is set.
+                </p>
+              )}
+            </div>
+          )}
+
+          {error && <p className="text-center text-xs text-destructive">{error}</p>}
         </div>
 
-        <div className="flex flex-col-reverse gap-2 px-4 pb-4 pt-4 sm:flex-row sm:justify-end">
-          <DialogClose
-            render={<Button variant="ghost" size="default" className={dialogButtonClassName} />}
-          >
-            Cancel
-          </DialogClose>
-          <Button
-            variant="default"
-            size="default"
-            className={dialogButtonClassName}
-            onClick={handleSave}
-            disabled={processing}
-          >
-            Save
-          </Button>
+        {/* Fields */}
+        <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+          <Field label="Display name">
+            <InputGroup className={fieldControlClassName}>
+              <InputGroupInput
+                value={draftName}
+                onChange={(event) => setDraftName(event.target.value)}
+                placeholder="Your name"
+              />
+            </InputGroup>
+          </Field>
+          <Field label="Username">
+            <InputGroup className={fieldControlClassName}>
+              <InputGroupAddon>
+                <InputGroupText>@</InputGroupText>
+              </InputGroupAddon>
+              <InputGroupInput
+                value={draftHandle}
+                onChange={(event) =>
+                  setDraftHandle(event.target.value.replace(/^@+/, "").replace(/\s+/g, ""))
+                }
+                placeholder="username"
+              />
+            </InputGroup>
+          </Field>
         </div>
-      </DialogPopup>
-    </Dialog>
+      </div>
+
+      <div className="flex flex-col-reverse gap-2 px-4 pb-4 pt-4 sm:flex-row sm:justify-end">
+        <DialogClose
+          render={<Button variant="ghost" size="default" className={dialogButtonClassName} />}
+        >
+          Cancel
+        </DialogClose>
+        <Button
+          variant="default"
+          size="default"
+          className={dialogButtonClassName}
+          onClick={handleSave}
+          disabled={processing}
+        >
+          Save
+        </Button>
+      </div>
+    </>
   );
 }
 

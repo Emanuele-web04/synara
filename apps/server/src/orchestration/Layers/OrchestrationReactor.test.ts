@@ -21,6 +21,7 @@ describe("OrchestrationReactor", () => {
   it("starts runtime observers before provider command dispatch can begin", async () => {
     const started: string[] = [];
     const stopped: string[] = [];
+    let reconciledOpenTurns = 0;
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
@@ -33,6 +34,9 @@ describe("OrchestrationReactor", () => {
               () => Effect.sync(() => stopped.push("provider-runtime-ingestion")),
             ),
             drain: Effect.void,
+            reconcileSettledOpenTurns: Effect.sync(() => {
+              reconciledOpenTurns += 1;
+            }),
           }),
         ),
         Layer.provideMerge(
@@ -78,6 +82,7 @@ describe("OrchestrationReactor", () => {
     const reactor = await runtime.runPromise(Effect.service(OrchestrationReactor));
     const scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
+    await Effect.runPromise(reactor.reconcileSettledOpenTurns);
 
     expect(started).toEqual([
       "studio-output-reactor",
@@ -85,6 +90,7 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
     ]);
+    expect(reconciledOpenTurns).toBe(1);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));
     expect(stopped).toEqual([

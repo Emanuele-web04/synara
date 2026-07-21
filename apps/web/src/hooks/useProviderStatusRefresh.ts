@@ -4,7 +4,7 @@
 // Layer: Web hooks
 // Exports: useProviderStatusRefresh, useRefreshProviderStatusesNow
 
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import type { ServerConfig, ServerProviderStatus } from "@synara/contracts";
 import { toastManager } from "../components/ui/toast";
@@ -34,28 +34,25 @@ function writeProviderStatusesToConfigCache(
  */
 export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
   const queryClient = useQueryClient();
-  return useCallback(
-    async (options?: RefreshProviderStatusesOptions) => {
-      const api = readNativeApi();
-      if (!api) return null;
-      try {
-        const result = await api.server.refreshProviders();
-        writeProviderStatusesToConfigCache(queryClient, result.providers);
-        return result.providers;
-      } catch (error) {
-        if (!options?.silent) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to refresh provider status",
-            description:
-              error instanceof Error ? error.message : "Unknown error refreshing provider status.",
-          });
-        }
-        return null;
+  return async (options?: RefreshProviderStatusesOptions) => {
+    const api = readNativeApi();
+    if (!api) return null;
+    try {
+      const result = await api.server.refreshProviders();
+      writeProviderStatusesToConfigCache(queryClient, result.providers);
+      return result.providers;
+    } catch (error) {
+      if (!options?.silent) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to refresh provider status",
+          description:
+            error instanceof Error ? error.message : "Unknown error refreshing provider status.",
+        });
       }
-    },
-    [queryClient],
-  );
+      return null;
+    }
+  };
 }
 
 type ProviderStatusRefreshOptions = {

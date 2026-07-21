@@ -116,6 +116,7 @@ function KanbanColumnComponent({
       : cards;
   const hiddenCount = cards.length - cappedCards.length;
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const sortableItems = useMemo(() => cards.map((card) => card.cardId), [cards]);
 
   const dispatchTarget =

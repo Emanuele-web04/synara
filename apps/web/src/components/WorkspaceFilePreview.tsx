@@ -22,11 +22,8 @@ import {
   Suspense,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
-  memo,
   use,
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -134,22 +131,17 @@ function PlainFileContents(props: { contents: string }) {
   // counter gutter applies. Built as an HTML string to avoid per-line React
   // nodes; the trailing \n stays inside each span so selection math and
   // clipboard copies keep working.
-  const numberedHtml = useMemo(() => {
-    if (props.contents.length === 0) {
-      return null;
-    }
-    const lines = props.contents.split("\n");
-    if (lines.length > MAX_PLAIN_NUMBERED_LINES) {
-      return null;
-    }
-    return `<code>${lines
-      .map((line, index) =>
-        index === lines.length - 1
-          ? `<span class="line">${escapeHtml(line)}</span>`
-          : `<span class="line">${escapeHtml(line)}\n</span>`,
-      )
-      .join("")}</code>`;
-  }, [props.contents]);
+  const lines = props.contents.split("\n");
+  const numberedHtml =
+    props.contents.length === 0 || lines.length > MAX_PLAIN_NUMBERED_LINES
+      ? null
+      : `<code>${lines
+          .map((line, index) =>
+            index === lines.length - 1
+              ? `<span class="line">${escapeHtml(line)}</span>`
+              : `<span class="line">${escapeHtml(line)}\n</span>`,
+          )
+          .join("")}</code>`;
 
   if (numberedHtml !== null) {
     return (
@@ -173,13 +165,8 @@ function SyntaxHighlightedFileContents(props: {
   contents: string;
   themeName: DiffThemeName;
 }) {
-  const language = useMemo(() => getSyntaxLanguageForPath(props.path), [props.path]);
-  // The cache key hashes the whole file, so keep it off incidental re-renders
-  // (selection state, diff-warming churn) and only recompute when inputs change.
-  const cacheKey = useMemo(
-    () => createSyntaxHighlightCacheKey(props.contents, language, props.themeName),
-    [props.contents, language, props.themeName],
-  );
+  const language = getSyntaxLanguageForPath(props.path);
+  const cacheKey = createSyntaxHighlightCacheKey(props.contents, language, props.themeName);
   const cachedHighlightedHtml = getCachedSyntaxHighlightedHtml(cacheKey);
 
   if (cachedHighlightedHtml != null) {
@@ -211,14 +198,12 @@ function UncachedSyntaxHighlightedFileContents(props: {
   themeName: DiffThemeName;
 }) {
   const highlighter = use(getSyntaxHighlighterPromise(props.language));
-  const highlightedHtml = useMemo(() => {
-    return highlightCodeToHtmlWithFallback(
-      highlighter,
-      props.contents,
-      props.language,
-      props.themeName,
-    );
-  }, [highlighter, props.contents, props.language, props.themeName]);
+  const highlightedHtml = highlightCodeToHtmlWithFallback(
+    highlighter,
+    props.contents,
+    props.language,
+    props.themeName,
+  );
 
   useEffect(() => {
     cacheSyntaxHighlightedHtml(props.cacheKey, highlightedHtml, props.contents);
@@ -233,14 +218,10 @@ function UncachedSyntaxHighlightedFileContents(props: {
   );
 }
 
-// Memoized: its inputs (path, contents, themeName) are stable across the
-// preview re-renders triggered by selection state and diff-warming, so the
-// highlighted body (and its cache lookup) is skipped unless the file changes.
-const FileContentsView = memo(function FileContentsView(props: {
-  path: string;
-  contents: string;
-  themeName: DiffThemeName;
-}) {
+// The highlighted body (and its cache lookup) is skipped across selection and
+// diff-warming re-renders because its inputs (path, contents, themeName) are
+// stable unless the file changes — the React Compiler handles the memoization.
+function FileContentsView(props: { path: string; contents: string; themeName: DiffThemeName }) {
   const plain = <PlainFileContents contents={props.contents} />;
   if (props.contents.length === 0 || props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS) {
     return plain;
@@ -257,7 +238,7 @@ const FileContentsView = memo(function FileContentsView(props: {
       </Suspense>
     </FilePreviewHighlightErrorBoundary>
   );
-});
+}
 
 // Mimics indented code lines so the placeholder reads as a file body
 // instead of a generic spinner block.
@@ -337,7 +318,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const fileNeedsLocalPreviewGrant =
     filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
-  const [markdownPreviewEnabled, setMarkdownPreviewEnabled] = useState(markdownPreviewDefault);
+  // Per-file override of the markdown-preview default. Deriving (instead of
+  // syncing state in an effect) means switching files applies the default in
+  // the same render, with no stale-value flash, and the override dies with its
+  // file automatically.
+  const [markdownPreviewOverride, setMarkdownPreviewOverride] = useState<{
+    filePath: string | null;
+    rendered: boolean;
+  } | null>(null);
+  const markdownPreviewEnabled =
+    markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
+      ? markdownPreviewOverride.rendered
+      : markdownPreviewDefault;
   const localPreviewGrantQuery = useQuery(
     projectLocalPreviewGrantQueryOptions({
       path: filePath,
@@ -348,6 +340,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileNeedsLocalPreviewGrant && isLocalPreviewGrantUsable(localPreviewGrantQuery.data)
       ? (localPreviewGrantQuery.data?.grant ?? null)
       : null;
+  const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}`;
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
@@ -362,16 +355,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         (props.workspaceRoot !== null || localPreviewGrant !== null),
     }),
   );
-  useEffect(() => {
-    setMarkdownPreviewEnabled(markdownPreviewDefault);
-  }, [filePath, markdownPreviewDefault]);
 
   const fileContents = fileQuery.data?.contents ?? "";
   const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
-  const lineCount = useMemo(
-    () => (fileContents.length === 0 ? 0 : fileContents.split("\n").length),
-    [fileContents],
-  );
+  const lineCount = fileContents.length === 0 ? 0 : fileContents.split("\n").length;
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
   // was selected, mirroring the transcript flow. This is offered only in the
   // source view, where the DOM mirrors the file's lines/columns 1:1 so a
@@ -381,19 +368,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   // 3000-word line would pull in the whole line. The rendered view therefore
   // stays read-only for references (browsing + task-list toggles only); use the
   // Source toggle in the header to get a precise selection reference.
-  const readPreviewSelection = useCallback(
-    (container: HTMLElement): Omit<ChatFileReference, "path"> | null =>
-      showMarkdownPreview ? null : getSelectionWithin(container),
-    [showMarkdownPreview],
-  );
-  const commitPreviewSelection = useCallback(
-    (selection: Omit<ChatFileReference, "path">) => {
-      if (filePath) {
-        onReferenceInChat?.({ path: filePath, ...selection });
-      }
-    },
-    [onReferenceInChat, filePath],
-  );
+  const readPreviewSelection = (container: HTMLElement): Omit<ChatFileReference, "path"> | null =>
+    showMarkdownPreview ? null : getSelectionWithin(container);
+  const commitPreviewSelection = (selection: Omit<ChatFileReference, "path">) => {
+    if (filePath) {
+      onReferenceInChat?.({ path: filePath, ...selection });
+    }
+  };
   const previewSelectionAction = useCodeSelectionAction({
     enabled: Boolean(onReferenceInChat && filePath) && !showMarkdownPreview,
     readSelection: readPreviewSelection,
@@ -408,94 +389,87 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     enabled: lineCommentingEnabled,
     resetKey: filePath,
   });
-  const commitLineComment = useCallback(
-    (selection: Pick<FileCommentSelection, "startLine" | "endLine" | "text">) => {
-      if (filePath) {
-        onCommentInChat?.({ path: filePath, ...selection });
-      }
-    },
-    [filePath, onCommentInChat],
-  );
+  const commitLineComment = (
+    selection: Pick<FileCommentSelection, "startLine" | "endLine" | "text">,
+  ) => {
+    if (filePath) {
+      onCommentInChat?.({ path: filePath, ...selection });
+    }
+  };
   // Right-click references the selected line range in the source view,
   // otherwise the whole file. The rendered-markdown view yields no selection
   // (readPreviewSelection returns null there), so it always falls back to the
   // whole-file reference.
-  const handleContentsContextMenu = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (!filePath) {
-        return;
-      }
-      event.preventDefault();
-      const container = contentsRef.current;
-      const selection = container ? readPreviewSelection(container) : null;
-      void showFileReferenceContextMenu({
-        path: filePath,
-        position: { x: event.clientX, y: event.clientY },
-        selection,
-        onReferenceInChat,
-        onAskWhyInChat,
-      });
-    },
-    [onAskWhyInChat, onReferenceInChat, filePath, readPreviewSelection],
-  );
+  const handleContentsContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!filePath) {
+      return;
+    }
+    event.preventDefault();
+    const container = contentsRef.current;
+    const selection = container ? readPreviewSelection(container) : null;
+    void showFileReferenceContextMenu({
+      path: filePath,
+      position: { x: event.clientX, y: event.clientY },
+      selection,
+      onReferenceInChat,
+      onAskWhyInChat,
+    });
+  };
   // Clicking a task checkbox in the markdown preview persists the toggle to
   // disk: optimistic cache update first, ordered write-through after, refetch
   // on failure so the preview never drifts from the file.
-  const handleTaskToggle = useCallback(
-    ({ sourceLine, checked }: { sourceLine: number; checked: boolean }) => {
-      if (!workspaceRoot || !filePath) {
-        return;
-      }
-      const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
-      const current = queryClient.getQueryData(options.queryKey);
-      if (!current || current.truncated) {
-        return;
-      }
-      const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
-      if (nextContents === null) {
-        return;
-      }
-      // No API means no write can happen — bail before the optimistic update
-      // so the preview never shows a toggle that was silently dropped.
-      const api = readNativeApi();
-      if (!api) {
-        return;
-      }
-      queryClient.setQueryData(options.queryKey, { ...current, contents: nextContents });
-      // The read RPC may have resolved a bare/partial reference (e.g. a clicked
-      // `notes.md`) to its real nested path. Write back to that resolved path,
-      // not the opened reference, so the toggle lands on the file we read from
-      // instead of creating a stray file at the workspace root.
-      const writeRelativePath = current.relativePath;
-      // Writes carry the full file contents, so serialize them: a slower earlier
-      // checkbox write must never land after a newer toggle and erase it.
-      const fileKey = `${workspaceRoot}\0${filePath}`;
-      const writeVersion = latestTaskWriteVersionRef.current.next + 1;
-      latestTaskWriteVersionRef.current.next = writeVersion;
-      latestTaskWriteVersionRef.current.byFile.set(fileKey, writeVersion);
-      taskWriteQueueRef.current = taskWriteQueueRef.current
-        .catch(() => undefined)
-        .then(() =>
-          api.projects.writeFile({
-            cwd: workspaceRoot,
-            relativePath: writeRelativePath,
-            contents: nextContents,
-          }),
-        )
-        .then(() => undefined)
-        .catch(() => {
-          if (latestTaskWriteVersionRef.current.byFile.get(fileKey) !== writeVersion) {
-            return;
-          }
-          void queryClient.invalidateQueries({ queryKey: options.queryKey });
-        });
-      void taskWriteQueueRef.current;
-    },
-    [filePath, queryClient, workspaceRoot],
-  );
-  const handleMarkdownPreviewChange = useCallback((rendered: boolean) => {
-    setMarkdownPreviewEnabled(rendered);
-  }, []);
+  const handleTaskToggle = ({ sourceLine, checked }: { sourceLine: number; checked: boolean }) => {
+    if (!workspaceRoot || !filePath) {
+      return;
+    }
+    const options = projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath: filePath });
+    const current = queryClient.getQueryData(options.queryKey);
+    if (!current || current.truncated) {
+      return;
+    }
+    const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
+    if (nextContents === null) {
+      return;
+    }
+    // No API means no write can happen — bail before the optimistic update
+    // so the preview never shows a toggle that was silently dropped.
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+    queryClient.setQueryData(options.queryKey, { ...current, contents: nextContents });
+    // The read RPC may have resolved a bare/partial reference (e.g. a clicked
+    // `notes.md`) to its real nested path. Write back to that resolved path,
+    // not the opened reference, so the toggle lands on the file we read from
+    // instead of creating a stray file at the workspace root.
+    const writeRelativePath = current.relativePath;
+    // Writes carry the full file contents, so serialize them: a slower earlier
+    // checkbox write must never land after a newer toggle and erase it.
+    const fileKey = `${workspaceRoot}\0${filePath}`;
+    const writeVersion = latestTaskWriteVersionRef.current.next + 1;
+    latestTaskWriteVersionRef.current.next = writeVersion;
+    latestTaskWriteVersionRef.current.byFile.set(fileKey, writeVersion);
+    taskWriteQueueRef.current = taskWriteQueueRef.current
+      .catch(() => undefined)
+      .then(() =>
+        api.projects.writeFile({
+          cwd: workspaceRoot,
+          relativePath: writeRelativePath,
+          contents: nextContents,
+        }),
+      )
+      .then(() => undefined)
+      .catch(() => {
+        if (latestTaskWriteVersionRef.current.byFile.get(fileKey) !== writeVersion) {
+          return;
+        }
+        void queryClient.invalidateQueries({ queryKey: options.queryKey });
+      });
+    void taskWriteQueueRef.current;
+  };
+  const handleMarkdownPreviewChange = (rendered: boolean) => {
+    setMarkdownPreviewOverride({ filePath, rendered });
+  };
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
   const canToggleTasks =
@@ -545,6 +519,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         : filePath;
     return (
       <PdfFilePreview
+        key={binaryPreviewKey}
         filePath={filePath}
         cwd={props.workspaceRoot}
         previewGrant={localPreviewGrant}
@@ -574,6 +549,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           onContextMenu={handleContentsContextMenu}
         >
           <LocalImagePreview
+            key={binaryPreviewKey}
             src={filePath}
             cwd={props.workspaceRoot}
             previewGrant={localPreviewGrant}

@@ -5,15 +5,7 @@
 
 import type { ProjectFileSystemEntry, ProjectLocalSearchEntry } from "@synara/contracts";
 import type { Ref } from "react";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { ArrowUpIcon, FileIcon } from "~/lib/icons";
@@ -129,7 +121,7 @@ function summarizeDirectoryLoadError(error: unknown): string {
   return "Unable to load folders.";
 }
 
-export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMenu(props: {
+export function ComposerLocalDirectoryMenu(props: {
   mentionQuery: string;
   rootLabel: string;
   homeDir: string | null;
@@ -140,33 +132,29 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
   const { mentionQuery, rootLabel, homeDir, onSelectEntry, onNavigateFolder, handleRef } = props;
   const [entriesByPath, setEntriesByPath] = useState<EntriesByPath>({});
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(() => new Set());
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  // Error keyed to the directory it was produced for: navigating away derives
+  // straight back to null with no state-resetting effect.
+  const [errorState, setErrorState] = useState<{ dir: string; message: string } | null>(null);
+  const [highlightState, setHighlightState] = useState<{
+    dir: string;
+    filter: string;
+    index: number;
+  } | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  const { directory, filter } = useMemo(
-    () => deriveDirectoryAndFilter(mentionQuery),
-    [mentionQuery],
-  );
+  const { directory, filter } = deriveDirectoryAndFilter(mentionQuery);
 
-  const expandedDirectory = useMemo(
-    () => expandLocalFolderPath(directory, homeDir),
-    [directory, homeDir],
-  );
+  const expandedDirectory = expandLocalFolderPath(directory, homeDir);
 
   // `~/...` paths can't be listed before homeDir is available from the server config.
-  const isAwaitingHomeDir = useMemo(
-    () =>
-      (directory === "~" || directory.startsWith("~/") || directory.startsWith("~\\")) &&
-      (!homeDir || homeDir.trim().length === 0),
-    [directory, homeDir],
-  );
+  const isAwaitingHomeDir =
+    (directory === "~" || directory.startsWith("~/") || directory.startsWith("~\\")) &&
+    (!homeDir || homeDir.trim().length === 0);
 
-  // Reset the error whenever the active directory changes so a stale message
-  // from a non-existent path doesn't linger when the user backspaces elsewhere.
-  useEffect(() => {
-    setErrorMessage(null);
-  }, [expandedDirectory]);
+  const errorMessage =
+    errorState !== null && errorState.dir === expandedDirectory ? errorState.message : null;
+  const setErrorMessage = (message: string | null) =>
+    setErrorState(message === null ? null : { dir: expandedDirectory, message });
 
   // Cache by the expanded absolute path so `~/Documents` and `/Users/me/Documents`
   // share one entry instead of double-listing.
@@ -175,63 +163,69 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
     if (isAwaitingHomeDir) return;
     if (entriesByPath[expandedDirectory] !== undefined) return;
     if (loadingPaths.has(expandedDirectory)) return;
-    const api = readNativeApi();
-    if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
-      return;
-    }
+    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint
+    // render), which also keeps this component eligible for React Compiler.
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      const api = readNativeApi();
+      if (!api) {
+        setErrorMessage("App is still connecting. Try again in a moment.");
+        return;
+      }
 
-    setLoadingPaths((current) => new Set(current).add(expandedDirectory));
-    void api.projects
-      .listDirectories({
-        cwd: expandedDirectory,
-        includeFiles: true,
-      })
-      .then((result) => {
-        setEntriesByPath((current) => ({ ...current, [expandedDirectory]: result.entries }));
-      })
-      .catch((error) => {
-        setEntriesByPath((current) => ({ ...current, [expandedDirectory]: [] }));
-        setErrorMessage(summarizeDirectoryLoadError(error));
-      })
-      .finally(() => {
-        setLoadingPaths((current) => {
-          const next = new Set(current);
-          next.delete(expandedDirectory);
-          return next;
+      setLoadingPaths((current) => new Set(current).add(expandedDirectory));
+      void api.projects
+        .listDirectories({
+          cwd: expandedDirectory,
+          includeFiles: true,
+        })
+        .then((result) => {
+          setEntriesByPath((current) => ({ ...current, [expandedDirectory]: result.entries }));
+        })
+        .catch((error) => {
+          setEntriesByPath((current) => ({ ...current, [expandedDirectory]: [] }));
+          setErrorMessage(summarizeDirectoryLoadError(error));
+        })
+        .finally(() => {
+          setLoadingPaths((current) => {
+            const next = new Set(current);
+            next.delete(expandedDirectory);
+            return next;
+          });
         });
-      });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [entriesByPath, expandedDirectory, isAwaitingHomeDir, loadingPaths]);
 
   const rawEntries = entriesByPath[expandedDirectory];
   const isLoading = loadingPaths.has(expandedDirectory);
 
-  const { folders, files } = useMemo(() => {
-    const normalizedFilter = filter.trim();
-    const lowerFilter = normalizedFilter.toLowerCase();
-    // Dotfiles are hidden by default, but unhide them as soon as the user opts
-    // in by typing a leading `.` - devs want `.config`/`.ssh` to be reachable.
-    const includeDotfiles = normalizedFilter.startsWith(".");
-    const folderEntries: ProjectFileSystemEntry[] = [];
-    const fileEntries: ProjectFileSystemEntry[] = [];
-    for (const entry of rawEntries ?? []) {
-      if (!includeDotfiles && entry.name.startsWith(".")) continue;
-      if (lowerFilter.length > 0 && !entry.name.toLowerCase().includes(lowerFilter)) {
-        continue;
-      }
-      if (entry.kind === "directory") folderEntries.push(entry);
-      else fileEntries.push(entry);
+  const normalizedFilter = filter.trim();
+  const lowerFilter = normalizedFilter.toLowerCase();
+  // Dotfiles are hidden by default, but unhide them as soon as the user opts
+  // in by typing a leading `.` - devs want `.config`/`.ssh` to be reachable.
+  const includeDotfiles = normalizedFilter.startsWith(".");
+  const folders: ProjectFileSystemEntry[] = [];
+  const files: ProjectFileSystemEntry[] = [];
+  for (const entry of rawEntries ?? []) {
+    if (!includeDotfiles && entry.name.startsWith(".")) continue;
+    if (lowerFilter.length > 0 && !entry.name.toLowerCase().includes(lowerFilter)) {
+      continue;
     }
-    return { folders: folderEntries, files: fileEntries };
-  }, [filter, rawEntries]);
+    if (entry.kind === "directory") folders.push(entry);
+    else files.push(entry);
+  }
 
-  const currentFolderRow = useMemo<VisibleRow | null>(() => {
-    // Only offer "Use this folder" as a keyboard-accessible row when the user has
-    // navigated past the root - the root itself never makes sense as a mention.
-    if (isRootDirectory(directory)) return null;
-    if (filter.trim().length > 0) return null;
-    return { kind: "use-current", separator: detectPathSeparator(directory) };
-  }, [directory, filter]);
+  // Only offer "Use this folder" as a keyboard-accessible row when the user has
+  // navigated past the root - the root itself never makes sense as a mention.
+  const currentFolderRow: VisibleRow | null =
+    !isRootDirectory(directory) && filter.trim().length === 0
+      ? { kind: "use-current", separator: detectPathSeparator(directory) }
+      : null;
 
   // Debounce the raw filter so keystrokes don't fan out into fuzzy-search RPCs.
   // The local listing still reacts immediately because it reads from `filter`.
@@ -253,10 +247,9 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
     }),
   );
 
-  const searchRows = useMemo<ProjectLocalSearchEntry[]>(() => {
-    if (!shouldRunFuzzySearch) return [];
-    const result = searchQuery.data;
-    if (!result) return [];
+  const searchRows: ProjectLocalSearchEntry[] = [];
+  const searchResult = shouldRunFuzzySearch ? searchQuery.data : undefined;
+  if (searchResult) {
     const localPaths = new Set<string>();
     for (const entry of folders) {
       localPaths.add(joinDirectoryPath(expandedDirectory, entry.name));
@@ -264,38 +257,36 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
     for (const entry of files) {
       localPaths.add(joinDirectoryPath(expandedDirectory, entry.name));
     }
-    const deduped: ProjectLocalSearchEntry[] = [];
-    for (const entry of result.entries) {
+    for (const entry of searchResult.entries) {
       if (localPaths.has(entry.path)) continue;
-      deduped.push(entry);
+      searchRows.push(entry);
     }
-    return deduped;
-  }, [expandedDirectory, files, folders, searchQuery.data, shouldRunFuzzySearch]);
+  }
 
-  const visibleRows = useMemo<VisibleRow[]>(() => {
-    const rows: VisibleRow[] = [];
-    if (currentFolderRow) rows.push(currentFolderRow);
-    for (const entry of folders) rows.push({ kind: "entry", entry });
-    for (const entry of files) rows.push({ kind: "entry", entry });
-    for (const entry of searchRows) rows.push({ kind: "search", entry });
-    return rows;
-  }, [currentFolderRow, files, folders, searchRows]);
+  const visibleRows: VisibleRow[] = [];
+  if (currentFolderRow) visibleRows.push(currentFolderRow);
+  for (const entry of folders) visibleRows.push({ kind: "entry", entry });
+  for (const entry of files) visibleRows.push({ kind: "entry", entry });
+  for (const entry of searchRows) visibleRows.push({ kind: "search", entry });
 
-  useEffect(() => {
-    if (visibleRows.length === 0) {
-      if (highlightedIndex !== 0) setHighlightedIndex(0);
-      return;
-    }
-    if (highlightedIndex >= visibleRows.length) {
-      setHighlightedIndex(0);
-    }
-  }, [highlightedIndex, visibleRows.length]);
+  // Highlight keyed to the (directory, filter) it was set under, clamped to
+  // the row count — navigation or filtering derives back to 0 in the same
+  // render, with no state-syncing effects.
+  const rawHighlightedIndex =
+    highlightState !== null && highlightState.dir === directory && highlightState.filter === filter
+      ? highlightState.index
+      : 0;
+  const highlightedIndex = rawHighlightedIndex >= visibleRows.length ? 0 : rawHighlightedIndex;
+  const setHighlightedIndex = (next: number | ((current: number) => number)) =>
+    setHighlightState((current) => {
+      const base =
+        current !== null && current.dir === directory && current.filter === filter
+          ? current.index
+          : 0;
+      return { dir: directory, filter, index: typeof next === "function" ? next(base) : next };
+    });
 
-  useEffect(() => {
-    setHighlightedIndex(0);
-  }, [directory, filter]);
-
-  const handleSelectCurrentDirectory = useCallback(() => {
+  const handleSelectCurrentDirectory = () => {
     const absoluteDirectory = expandedDirectory;
     void onSelectEntry(absoluteDirectory, {
       kind: "directory",
@@ -303,81 +294,68 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
       name: basename(absoluteDirectory) || absoluteDirectory,
       hasChildren: folders.length > 0 || files.length > 0,
     });
-  }, [expandedDirectory, files.length, folders.length, onSelectEntry]);
+  };
 
-  const handleActivateEntry = useCallback(
-    (entry: ProjectFileSystemEntry) => {
-      if (entry.kind === "directory") {
-        // Preserve the `~` prefix while the user keeps drilling in - the typed
-        // composer text stays short until they commit a final selection.
-        const displayPath = joinDirectoryPath(directory, entry.name);
-        onNavigateFolder(displayPath);
-      } else {
-        // Commit with the fully expanded absolute path so the server receives
-        // a stable reference even if the user originally typed `~/`.
-        const absolute = joinDirectoryPath(expandedDirectory, entry.name);
-        void onSelectEntry(absolute, entry);
-      }
-    },
-    [directory, expandedDirectory, onNavigateFolder, onSelectEntry],
-  );
+  const handleActivateEntry = (entry: ProjectFileSystemEntry) => {
+    if (entry.kind === "directory") {
+      // Preserve the `~` prefix while the user keeps drilling in - the typed
+      // composer text stays short until they commit a final selection.
+      const displayPath = joinDirectoryPath(directory, entry.name);
+      onNavigateFolder(displayPath);
+    } else {
+      // Commit with the fully expanded absolute path so the server receives
+      // a stable reference even if the user originally typed `~/`.
+      const absolute = joinDirectoryPath(expandedDirectory, entry.name);
+      void onSelectEntry(absolute, entry);
+    }
+  };
 
-  const handleActivateSearchEntry = useCallback(
-    (entry: ProjectLocalSearchEntry) => {
-      if (entry.kind === "directory") {
-        onNavigateFolder(entry.path);
-        return;
-      }
-      void onSelectEntry(entry.path, {
-        kind: "file",
-        path: entry.path,
-        name: entry.name,
-      });
-    },
-    [onNavigateFolder, onSelectEntry],
-  );
+  const handleActivateSearchEntry = (entry: ProjectLocalSearchEntry) => {
+    if (entry.kind === "directory") {
+      onNavigateFolder(entry.path);
+      return;
+    }
+    void onSelectEntry(entry.path, {
+      kind: "file",
+      path: entry.path,
+      name: entry.name,
+    });
+  };
 
-  const handleActivateRow = useCallback(
-    (row: VisibleRow) => {
-      if (row.kind === "use-current") {
-        handleSelectCurrentDirectory();
-        return;
-      }
-      if (row.kind === "search") {
-        handleActivateSearchEntry(row.entry);
-        return;
-      }
-      handleActivateEntry(row.entry);
-    },
-    [handleActivateEntry, handleActivateSearchEntry, handleSelectCurrentDirectory],
-  );
+  const handleActivateRow = (row: VisibleRow) => {
+    if (row.kind === "use-current") {
+      handleSelectCurrentDirectory();
+      return;
+    }
+    if (row.kind === "search") {
+      handleActivateSearchEntry(row.entry);
+      return;
+    }
+    handleActivateEntry(row.entry);
+  };
 
   const parent = parentDirectory(directory);
-  const handleGoUp = useCallback(() => {
+  const handleGoUp = () => {
     if (parent) onNavigateFolder(parent);
-  }, [onNavigateFolder, parent]);
+  };
 
-  useImperativeHandle(
-    handleRef,
-    () => ({
-      moveHighlight: (direction) => {
-        if (visibleRows.length === 0) return;
-        setHighlightedIndex((current) => {
-          if (direction === "up") {
-            return current <= 0 ? visibleRows.length - 1 : current - 1;
-          }
-          return current >= visibleRows.length - 1 ? 0 : current + 1;
-        });
-      },
-      activateHighlighted: () => {
-        const row = visibleRows[highlightedIndex];
-        if (!row) return false;
-        handleActivateRow(row);
-        return true;
-      },
-    }),
-    [handleActivateRow, highlightedIndex, visibleRows],
-  );
+  useImperativeHandle(handleRef, () => ({
+    moveHighlight: (direction) => {
+      if (visibleRows.length === 0) return;
+      setHighlightedIndex((current) => {
+        if (direction === "up") {
+          return current <= 0 ? visibleRows.length - 1 : current - 1;
+        }
+        return current >= visibleRows.length - 1 ? 0 : current + 1;
+      });
+    },
+    activateHighlighted: () => {
+      const row = visibleRows[highlightedIndex];
+      if (!row) return false;
+      handleActivateRow(row);
+      return true;
+    },
+  }));
 
   useEffect(() => {
     const node = listRef.current?.querySelector<HTMLElement>(
@@ -533,9 +511,9 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
       </div>
     </Command>
   );
-});
+}
 
-const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
+function UseCurrentFolderRow(props: {
   directoryLabel: string;
   index: number;
   isHighlighted: boolean;
@@ -569,7 +547,7 @@ const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
       </div>
     </CommandItem>
   );
-});
+}
 
 function buildSearchRowSubtitle(entry: ProjectLocalSearchEntry, rootPath: string): string {
   const parent = entry.parentPath ?? "";
@@ -585,7 +563,7 @@ function buildSearchRowSubtitle(entry: ProjectLocalSearchEntry, rootPath: string
   return parent;
 }
 
-const LocalSearchRow = memo(function LocalSearchRow(props: {
+function LocalSearchRow(props: {
   entry: ProjectLocalSearchEntry;
   rootPath: string;
   index: number;
@@ -631,9 +609,9 @@ const LocalSearchRow = memo(function LocalSearchRow(props: {
       </div>
     </CommandItem>
   );
-});
+}
 
-const LocalEntryRow = memo(function LocalEntryRow(props: {
+function LocalEntryRow(props: {
   entry: ProjectFileSystemEntry;
   index: number;
   isHighlighted: boolean;
@@ -670,4 +648,4 @@ const LocalEntryRow = memo(function LocalEntryRow(props: {
       </div>
     </CommandItem>
   );
-});
+}

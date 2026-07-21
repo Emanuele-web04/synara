@@ -3,7 +3,7 @@
 // Exports: cached collection helpers and thread derivation for the web store hot path.
 
 import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
-import type { AppState } from "./store";
+import type { AppState } from "./storeState";
 import type {
   ChatMessage,
   ProposedPlan,

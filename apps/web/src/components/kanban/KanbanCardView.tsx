@@ -5,7 +5,6 @@
 // Exports: KanbanCardView
 
 import { GoRepoForked } from "react-icons/go";
-import { memo } from "react";
 
 import {
   PR_STATE_PRESENTATION_ICONS,
@@ -246,4 +245,4 @@ function KanbanCardViewComponent({
   );
 }
 
-export const KanbanCardView = memo(KanbanCardViewComponent);
+export const KanbanCardView = KanbanCardViewComponent;
