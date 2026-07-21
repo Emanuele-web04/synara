@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { createEffectServer, ServerLifecycleError } from "./effectServer";
+import { makeServerShutdownController } from "./serverShutdown";
 
 function failFastConfig(
   overrides: Partial<
@@ -20,7 +21,10 @@ function failFastConfig(
 }
 
 async function runInvalidConfig(config: ServerConfigShape): Promise<ServerLifecycleError> {
-  const program = createEffectServer().pipe(Effect.provideService(ServerConfig, config));
+  const program = makeServerShutdownController().pipe(
+    Effect.flatMap((shutdownController) => createEffectServer(shutdownController)),
+    Effect.provideService(ServerConfig, config),
+  );
   return Effect.runPromise(
     Effect.flip(program) as Effect.Effect<ServerLifecycleError, never, never>,
   );

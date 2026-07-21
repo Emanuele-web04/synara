@@ -453,6 +453,38 @@ describe("websocket RPC payload admission", () => {
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
+  it("closes with an established socket and finalizes its RPC work", async () => {
+    const server = await startTestServer();
+    let serverClosed = false;
+    try {
+      const connected = await connectSession(server);
+      connected.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "200",
+          tag: "test.slow",
+          payload: {},
+          headers: [],
+        }),
+      );
+      await waitForObserved(() => server.observedSlowRpc.started === 1);
+      const socketClosed = waitForClose(connected.socket);
+
+      await expect(server.close()).resolves.toBeUndefined();
+      serverClosed = true;
+      await socketClosed;
+
+      expect(server.observedSlowRpc).toEqual({
+        started: 1,
+        completed: 0,
+        finalized: 1,
+      });
+      expect(server.transportFinalizers.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      if (!serverClosed) await server.close();
+    }
+  }, 2_000);
+
   it("interrupts and finalizes cancelled request work exactly once", async () => {
     const server = await startTestServer();
     try {

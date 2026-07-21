@@ -18,6 +18,7 @@ import {
 import {
   editorIconEffectRouteLayer,
   isLegacyTokenAuthorized,
+  makeDesktopShutdownEffectRouteLayer,
   makeHealthEffectRouteLayer,
   projectFaviconEffectRouteLayer,
   staticAndDevEffectRouteLayer,
@@ -27,6 +28,11 @@ import {
   type ProjectFaviconResolverShape,
 } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
+import {
+  DESKTOP_SHUTDOWN_ROUTE_PATH,
+  makeServerShutdownController,
+  type ServerShutdownController,
+} from "./serverShutdown";
 
 const tempDirs: string[] = [];
 
@@ -105,6 +111,7 @@ const projectFaviconResolver: ProjectFaviconResolverShape = {
 
 type TestedRoute =
   | { readonly kind: "health"; readonly readiness: typeof readiness }
+  | { readonly kind: "shutdown"; readonly controller: ServerShutdownController }
   | { readonly kind: "static" }
   | { readonly kind: "favicon" }
   | { readonly kind: "editor-icon" };
@@ -129,6 +136,10 @@ async function withEffectServer(
           );
           if (route.kind === "static") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(staticAndDevEffectRouteLayer));
+          } else if (route.kind === "shutdown") {
+            yield* httpServer.serve(
+              yield* HttpRouter.toHttpEffect(makeDesktopShutdownEffectRouteLayer(route.controller)),
+            );
           } else if (route.kind === "favicon") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(projectFaviconEffectRouteLayer));
           } else if (route.kind === "editor-icon") {
@@ -192,6 +203,108 @@ describe("production Effect HTTP routes", () => {
         pushBusReady: true,
       });
     });
+  });
+
+  it("accepts and idempotently replays the dedicated desktop shutdown request", async () => {
+    const shutdownToken = "a".repeat(64);
+    const controller = await Effect.runPromise(makeServerShutdownController());
+    await withEffectServer(
+      makeConfig({
+        mode: "desktop",
+        desktopShutdownToken: shutdownToken,
+        authToken: "browser-token",
+      }),
+      { kind: "shutdown", controller },
+      async (origin) => {
+        for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
+          const response = await fetch(`${origin}${DESKTOP_SHUTDOWN_ROUTE_PATH}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${shutdownToken}` },
+          });
+          expect(response.status).toBe(202);
+          await expect(response.json()).resolves.toEqual({ accepted: true });
+        }
+      },
+    );
+
+    await Effect.runPromise(controller.stopSignal);
+    await expect(Effect.runPromise(controller.requestStop)).resolves.toBe(false);
+  });
+
+  it("rejects browser authority, query, cookie, missing, malformed, and wrong tokens", async () => {
+    const shutdownToken = "a".repeat(64);
+    const controller = await Effect.runPromise(makeServerShutdownController());
+    await withEffectServer(
+      makeConfig({
+        mode: "desktop",
+        desktopShutdownToken: shutdownToken,
+        authToken: "browser-token",
+      }),
+      { kind: "shutdown", controller },
+      async (origin) => {
+        const requests: ReadonlyArray<RequestInit | undefined> = [
+          undefined,
+          { method: "POST", headers: { Authorization: `Bearer ${"b".repeat(64)}` } },
+          { method: "POST", headers: { Authorization: "Basic browser-token" } },
+          { method: "POST", headers: { Authorization: "Bearer browser-token" } },
+          { method: "POST", headers: { Cookie: "synara_session=browser-session" } },
+        ];
+
+        for (const request of requests) {
+          const requestOptions = request ? { method: "POST", ...request } : { method: "POST" };
+          const response = await fetch(
+            `${origin}${DESKTOP_SHUTDOWN_ROUTE_PATH}?token=${shutdownToken}`,
+            requestOptions,
+          );
+          expect(response.status).toBe(401);
+          expect(response.headers.get("www-authenticate")).toContain("Bearer");
+        }
+      },
+    );
+
+    await expect(Effect.runPromise(controller.requestStop)).resolves.toBe(true);
+  });
+
+  it("keeps the route unavailable outside a private desktop loopback deployment", async () => {
+    const shutdownToken = "a".repeat(64);
+    const unsafeConfigs: ReadonlyArray<Partial<ServerConfigShape>> = [
+      { mode: "web" },
+      { mode: "desktop", host: "0.0.0.0", allowInsecureRemote: true },
+      { mode: "desktop", host: "192.168.1.50", allowInsecureRemote: true },
+      { mode: "desktop", publicUrl: new URL("https://synara.example.test/") },
+      { mode: "desktop", desktopShutdownToken: undefined },
+    ];
+
+    for (const overrides of unsafeConfigs) {
+      const controller = await Effect.runPromise(makeServerShutdownController());
+      await withEffectServer(
+        makeConfig({ desktopShutdownToken: shutdownToken, ...overrides }),
+        { kind: "shutdown", controller },
+        async (origin) => {
+          const response = await fetch(`${origin}${DESKTOP_SHUTDOWN_ROUTE_PATH}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${shutdownToken}` },
+          });
+          expect(response.status).toBe(404);
+        },
+      );
+      await expect(Effect.runPromise(controller.requestStop)).resolves.toBe(true);
+    }
+  });
+
+  it("does not register GET or OPTIONS shutdown handlers", async () => {
+    const shutdownToken = "a".repeat(64);
+    const controller = await Effect.runPromise(makeServerShutdownController());
+    await withEffectServer(
+      makeConfig({ mode: "desktop", desktopShutdownToken: shutdownToken }),
+      { kind: "shutdown", controller },
+      async (origin) => {
+        for (const method of ["GET", "OPTIONS"]) {
+          const response = await fetch(`${origin}${DESKTOP_SHUTDOWN_ROUTE_PATH}`, { method });
+          expect(response.status).toBe(404);
+        }
+      },
+    );
   });
 
   it("preserves dev redirect, static file, and SPA fallback behavior", async () => {

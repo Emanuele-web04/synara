@@ -49,6 +49,11 @@ import {
   reserveManagedAttachmentUpload,
 } from "./managedAttachmentStore";
 import { ManagedAttachmentRepository } from "./persistence/Services/ManagedAttachments";
+import {
+  authorizeDesktopShutdown,
+  DESKTOP_SHUTDOWN_ROUTE_PATH,
+  type ServerShutdownController,
+} from "./serverShutdown";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
 import {
   isTrustedAppOrigin,
@@ -171,9 +176,13 @@ function localPreviewCorsHeaders(input: {
   };
 }
 
-export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
+export function makeEffectHttpRouteLayer(
+  readiness: ServerReadiness,
+  shutdownController: ServerShutdownController,
+) {
   return Layer.mergeAll(
     makeHealthEffectRouteLayer(readiness),
+    makeDesktopShutdownEffectRouteLayer(shutdownController),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
     threadExportEffectRouteLayer,
@@ -183,6 +192,37 @@ export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
     binaryUploadEffectRouteLayer,
     attachmentsEffectRouteLayer,
     staticAndDevEffectRouteLayer,
+  );
+}
+
+export function makeDesktopShutdownEffectRouteLayer(shutdownController: ServerShutdownController) {
+  return HttpRouter.add(
+    "POST",
+    DESKTOP_SHUTDOWN_ROUTE_PATH,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const authorization = authorizeDesktopShutdown({
+        config,
+        remoteAddress: request.remoteAddress,
+        authorization: request.headers.authorization,
+      });
+
+      if (!authorization.authorized) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: authorization.reason === "unavailable" ? "Not Found" : "Unauthorized" },
+          {
+            status: authorization.status,
+            ...(authorization.status === 401
+              ? { headers: { "WWW-Authenticate": 'Bearer realm="synara-desktop-shutdown"' } }
+              : {}),
+          },
+        );
+      }
+
+      yield* shutdownController.requestStop;
+      return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
+    }),
   );
 }
 

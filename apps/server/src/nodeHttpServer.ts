@@ -55,6 +55,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
     ),
     (server) =>
       Effect.callback<void>((resume) => {
+        for (const client of server.clients) client.terminate();
         server.close(() => resume(Effect.void));
       }),
   ).pipe(Scope.provide(scope));
