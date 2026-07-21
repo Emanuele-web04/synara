@@ -1,0 +1,386 @@
+{
+  "schemaVersion": 1,
+  "fixture": {
+    "file": "synara-v0.5.5.sqlite",
+    "sizeBytes": 385024,
+    "sha256": "fe4eb795121d62dfe37e6ff15e961bf24f5fe9d6121f78dde39ab8910fdf02dc",
+    "immutable": true,
+    "sidecars": [],
+    "sqlite": {
+      "sanitizationVersion": "3.51.3",
+      "pageSizeBytes": 4096,
+      "pageCount": 94,
+      "freelistCount": 0,
+      "journalMode": "delete"
+    }
+  },
+  "source": {
+    "repository": "Emanuele-web04/synara",
+    "release": {
+      "id": 355430801,
+      "name": "Synara v0.5.5",
+      "tag": "v0.5.5",
+      "publishedAt": "2026-07-17T01:42:40Z",
+      "url": "https://github.com/Emanuele-web04/synara/releases/tag/v0.5.5"
+    },
+    "tag": {
+      "objectSha": "b33638f8c6e6a0d85ec4a7af8c7685da8ea8a247",
+      "commitSha": "9be46c3ce6a7521b64436b7334bc6fce16e3cac4",
+      "signatureStatus": "unsigned"
+    },
+    "releaseWorkflow": {
+      "id": 29547141464,
+      "name": "Release Desktop",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "headSha": "9be46c3ce6a7521b64436b7334bc6fce16e3cac4",
+      "createdAt": "2026-07-17T01:19:24Z",
+      "updatedAt": "2026-07-17T01:42:45Z",
+      "url": "https://github.com/Emanuele-web04/synara/actions/runs/29547141464"
+    },
+    "windowsAsset": {
+      "id": 479827056,
+      "name": "Synara-0.5.5-x64.exe",
+      "contentType": "application/x-msdos-program",
+      "sizeBytes": 185277552,
+      "sha256": "a61ffa7dce8babf9b04ab417a63fb788277244e23e95d19995848a4d618630d9",
+      "githubDigestMatched": true,
+      "authenticodeStatus": "NotSigned",
+      "authenticodeSignerSubject": null,
+      "authenticodeSignerThumbprint": null,
+      "createdAt": "2026-07-17T01:42:25Z",
+      "updatedAt": "2026-07-17T01:42:35Z",
+      "url": "https://github.com/Emanuele-web04/synara/releases/download/v0.5.5/Synara-0.5.5-x64.exe"
+    }
+  },
+  "capture": {
+    "capturedAt": "2026-07-18T21:21:47Z",
+    "host": {
+      "operatingSystem": "Windows 11 Pro",
+      "version": "10.0.26100",
+      "build": 26100,
+      "architecture": "x64"
+    },
+    "extraction": {
+      "packageAcquisitionCommand": "npm pack 7zip-bin@5.2.0 --pack-destination '<capture-root>\\tools'",
+      "packageArchive": "tools/7zip-bin-5.2.0.tgz",
+      "packageVersion": "5.2.0",
+      "tool": "7-Zip command-line executable from 7zip-bin",
+      "toolVersion": "21.07 x64",
+      "installerCommand": "& '<capture-root>\\tools\\package\\win\\x64\\7za.exe' x '<capture-root>\\download\\Synara-0.5.5-x64.exe' '-o<capture-root>\\unpacked' -y",
+      "installerWarnings": [
+        "7-Zip reported six unsupported ARM64 node-pty entries; every x64 runtime file used for capture was present and independently hashed."
+      ],
+      "asarMethod": "The ASAR was not expanded. The packaged Electron runtime's ASAR-aware filesystem read the backend entry in place.",
+      "asarVerificationCommand": "$env:ELECTRON_RUN_AS_NODE='1'; & '<capture-root>\\unpacked\\Synara.exe' -e \"const {createHash}=require('node:crypto');const {readFileSync}=require('node:fs');const bytes=readFileSync(process.argv[1]);console.log(JSON.stringify({sizeBytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')}));\" '<capture-root>\\unpacked\\resources\\app.asar\\apps\\server\\dist\\index.mjs'",
+      "asarVerificationResult": {
+        "sizeBytes": 3347891,
+        "sha256": "89430f76bf0c808be9233c282065cc0129449cc69cd992c8e2637119d2250802"
+      }
+    },
+    "packagedRuntime": {
+      "productVersion": "0.5.5.0",
+      "fileVersion": "0.5.5",
+      "electronVersion": "40.6.0",
+      "nodeVersion": "24.13.1",
+      "sqliteVersion": "3.51.2",
+      "files": [
+        {
+          "path": "Synara.exe",
+          "sizeBytes": 213647360,
+          "sha256": "a91407fc77a347e3023436e55148cd41fa700286faf55ce75bbb68657e4dc636"
+        },
+        {
+          "path": "resources/app.asar",
+          "sizeBytes": 198655201,
+          "sha256": "0622fd4fa301cbfd75e90a7d51c8a964946daf08307b17ea2a5e0bef5fb8fc73"
+        },
+        {
+          "path": "resources/app.asar/apps/server/dist/index.mjs",
+          "sizeBytes": 3347891,
+          "sha256": "89430f76bf0c808be9233c282065cc0129449cc69cd992c8e2637119d2250802"
+        }
+      ]
+    },
+    "invocation": {
+      "command": "<capture-root>\\unpacked\\Synara.exe --max-old-space-size=8192 <capture-root>\\unpacked\\resources\\app.asar\\apps\\server\\dist\\index.mjs",
+      "workingDirectory": "<capture-root>",
+      "backendEntry": "resources/app.asar/apps/server/dist/index.mjs",
+      "environmentPolicy": "clear inherited environment, then set only the recorded allowlist",
+      "removedInheritedVariables": "all inherited variables; the capture environment was rebuilt from an empty map using only environmentVariableNames",
+      "environmentVariableNames": [
+        "ALLUSERSPROFILE",
+        "APPDATA",
+        "CommonProgramFiles",
+        "CommonProgramFiles(x86)",
+        "CommonProgramW6432",
+        "COMPUTERNAME",
+        "COMSPEC",
+        "DriverData",
+        "ELECTRON_RUN_AS_NODE",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LANG",
+        "LOCALAPPDATA",
+        "NUMBER_OF_PROCESSORS",
+        "OS",
+        "PATH",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_IDENTIFIER",
+        "PROCESSOR_LEVEL",
+        "PROCESSOR_REVISION",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "PUBLIC",
+        "SESSIONNAME",
+        "SYNARA_AUTH_TOKEN",
+        "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+        "SYNARA_CLAUDE_KEEPALIVE",
+        "SYNARA_HOME",
+        "SYNARA_MODE",
+        "SYNARA_NO_BROWSER",
+        "SYNARA_PORT",
+        "SYNARA_TELEMETRY_ENABLED",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "USERDOMAIN",
+        "USERDOMAIN_ROAMINGPROFILE",
+        "USERNAME",
+        "USERPROFILE",
+        "windir"
+      ],
+      "profileRedirections": {
+        "USERPROFILE": "<capture-root>\\profile",
+        "HOME": "<capture-root>\\profile",
+        "APPDATA": "<capture-root>\\profile\\AppData\\Roaming",
+        "LOCALAPPDATA": "<capture-root>\\profile\\AppData\\Local",
+        "TEMP": "<capture-root>\\profile\\Temp",
+        "TMP": "<capture-root>\\profile\\Temp",
+        "SYNARA_HOME": "<capture-root>\\synara-home"
+      },
+      "controls": {
+        "osHomedirWithinCaptureRoot": true,
+        "syntheticWindowsIdentity": true,
+        "syntheticLocalAuthToken": true,
+        "pathContainsOnlyWindowsSystemDirectories": true,
+        "autoBootstrapProjectFromCwd": false,
+        "browserLaunch": false,
+        "claudeKeepalive": false,
+        "telemetry": false,
+        "providerCredentialsInherited": false,
+        "preExistingSynaraOrAgentStateRead": false,
+        "codingAgentsLaunched": false,
+        "projectsImported": false,
+        "hostNetworkDisabled": false,
+        "proxyVariablesInherited": false,
+        "observedNetworkUse": "local loopback server only"
+      }
+    },
+    "shutdown": {
+      "method": "Ctrl+C delivered to the packaged backend PTY",
+      "exitCode": 1,
+      "processTreeExited": true,
+      "remainingListenerCount": 0
+    }
+  },
+  "rawCapture": {
+    "committedToRepository": false,
+    "relativeDatabasePath": "synara-home/userdata/state.sqlite",
+    "captureRootDisposition": "The exact disposable capture root, including raw database, profile, downloaded installer, extraction tools, and unpacked package, was permanently deleted outside the repository after independent verification at 2026-07-18T21:48:52Z; no copy is retained.",
+    "compoundFiles": [
+      {
+        "name": "state.sqlite",
+        "sizeBytes": 4096,
+        "sha256": "2fb9e76bc8b8bb820a77e21342abe7b079f687749503315e13c0cf95106675e0"
+      },
+      {
+        "name": "state.sqlite-wal",
+        "sizeBytes": 403792,
+        "sha256": "673ac5166aa779180bc5745f9322079628ccc421fe12ab13ebdead707e8997e1"
+      },
+      {
+        "name": "state.sqlite-shm",
+        "sizeBytes": 32768,
+        "sha256": "4fa6a7cc2b2432b3c3860d097c83f2caa0f0518bf7314fffc2d2aa2341ec836c"
+      }
+    ],
+    "sidecars": ["state.sqlite-wal", "state.sqlite-shm"],
+    "journalMode": "wal",
+    "checkpointStatus": "no in-place checkpoint; the offline backup API incorporated the committed WAL",
+    "logicalSnapshotMethod": "node:sqlite backup API after the packaged process tree exited, while the raw WAL and SHM remained beside the main database",
+    "integrityCheck": "ok",
+    "foreignKeyCheckRows": 0,
+    "migrationTracker": {
+      "count": 54,
+      "distinctCount": 54,
+      "minimumId": 1,
+      "maximumId": 54,
+      "contiguous": true,
+      "migration54Name": "ProjectPullRequestPins",
+      "trackerTimestamp": "2026-07-18 21:21:47"
+    },
+    "schemaObjects": {
+      "tablesIncludingSqliteSequence": 26,
+      "indexesIncludingAutoindexes": 61,
+      "triggers": 1,
+      "views": 1
+    }
+  },
+  "sanitization": {
+    "completedAt": "2026-07-18T21:24:28Z",
+    "runtime": {
+      "tool": "Node.js built-in node:sqlite API",
+      "nodeVersion": "24.15.0",
+      "sqliteVersion": "3.51.3"
+    },
+    "input": "offline logical backup of the released compound database",
+    "transactionCommitted": true,
+    "vacuumCompleted": true,
+    "sqliteSequenceCleared": true,
+    "clearedTables": [
+      "auth_pairing_links",
+      "auth_sessions",
+      "automation_definitions",
+      "automation_runs",
+      "automation_scheduler_leases",
+      "checkpoint_diff_blobs",
+      "orchestration_command_receipts",
+      "orchestration_events",
+      "profile_stats_deleted_prompts",
+      "profile_stats_deleted_skills",
+      "profile_stats_deleted_threads",
+      "profile_stats_deleted_tokens",
+      "profile_stats_deleted_turns",
+      "project_pull_request_pins",
+      "projection_pending_approvals",
+      "projection_projects",
+      "projection_state",
+      "projection_thread_activities",
+      "projection_thread_messages",
+      "projection_thread_proposed_plans",
+      "projection_thread_sessions",
+      "projection_threads",
+      "projection_turns",
+      "provider_session_runtime"
+    ],
+    "preservedTables": ["effect_sql_migrations"],
+    "steps": [
+      "Open only the offline logical backup, never the raw capture or repository fixture.",
+      "Set journal_mode=DELETE, foreign_keys=OFF, and secure_delete=ON.",
+      "Delete every application row while preserving effect_sql_migrations.",
+      "Clear sqlite_sequence.",
+      "Insert only the documented synthetic project pull-request pin.",
+      "VACUUM the database.",
+      "Reopen read-only and run integrity, foreign-key, schema, census, sidecar, and privacy checks."
+    ],
+    "syntheticRows": {
+      "project_pull_request_pins": [
+        {
+          "project_id": "fixture-project",
+          "repository_key": "example.invalid/fixture/repository",
+          "pull_request_number": 55
+        }
+      ]
+    },
+    "rowCensus": {
+      "auth_pairing_links": 0,
+      "auth_sessions": 0,
+      "automation_definitions": 0,
+      "automation_runs": 0,
+      "automation_scheduler_leases": 0,
+      "checkpoint_diff_blobs": 0,
+      "effect_sql_migrations": 54,
+      "orchestration_command_receipts": 0,
+      "orchestration_events": 0,
+      "profile_stats_deleted_prompts": 0,
+      "profile_stats_deleted_skills": 0,
+      "profile_stats_deleted_threads": 0,
+      "profile_stats_deleted_tokens": 0,
+      "profile_stats_deleted_turns": 0,
+      "project_pull_request_pins": 1,
+      "projection_pending_approvals": 0,
+      "projection_projects": 0,
+      "projection_state": 0,
+      "projection_thread_activities": 0,
+      "projection_thread_messages": 0,
+      "projection_thread_proposed_plans": 0,
+      "projection_thread_sessions": 0,
+      "projection_threads": 0,
+      "projection_turns": 0,
+      "provider_session_runtime": 0
+    }
+  },
+  "validation": {
+    "integrityCheck": "ok",
+    "foreignKeyCheckRows": 0,
+    "freelistCount": 0,
+    "sidecars": [],
+    "schemaObjects": {
+      "tablesIncludingSqliteSequence": 26,
+      "indexesIncludingAutoindexes": 61,
+      "triggers": 1,
+      "views": 1,
+      "viewNames": ["automation_pending_completion_evaluations"]
+    },
+    "migrationTracker": {
+      "count": 54,
+      "minimumId": 1,
+      "maximumId": 54,
+      "contiguous": true,
+      "migration54Name": "ProjectPullRequestPins"
+    },
+    "trackerMatchesReleaseCommit": "9be46c3ce6a7521b64436b7334bc6fce16e3cac4",
+    "projectPullRequestPinsSchema": {
+      "columns": ["project_id", "repository_key", "pull_request_number"],
+      "compositePrimaryKeyOrder": ["project_id", "repository_key", "pull_request_number"],
+      "positivePullRequestNumberCheck": true,
+      "limitTrigger": "trg_project_pull_request_pins_limit",
+      "limitPerProject": 20
+    }
+  },
+  "privacyScan": {
+    "scope": "final fixture bytes after VACUUM",
+    "tool": "Node.js 24.15.0 byte and decoded-text scan",
+    "encodings": ["raw Latin-1 byte projection", "UTF-8", "UTF-16LE"],
+    "patterns": [
+      "Windows absolute path",
+      "UNC path",
+      "macOS user-home path",
+      "Linux user-home path",
+      "root user-home path",
+      "email address",
+      "private-key header",
+      "GitHub classic token",
+      "GitHub fine-grained token",
+      "OpenAI secret key",
+      "AWS access-key ID",
+      "JSON web token",
+      "Bearer credential",
+      "capture username",
+      "capture computer name",
+      "capture root fragment"
+    ],
+    "knownIdentifiers": ["capture username", "capture computer name", "capture root fragment"],
+    "hitCount": 0,
+    "hits": []
+  },
+  "redistribution": {
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Emanuele Di Pietro",
+    "repositoryLicense": "../../../../../../LICENSE",
+    "sourceCommit": "9be46c3ce6a7521b64436b7334bc6fce16e3cac4",
+    "containsOnlyReleasedSchemaMigrationOutputAndSyntheticData": true,
+    "containsInstallerOrApplicationExecutable": false,
+    "containsThirdPartyDatabaseContent": false,
+    "containsRealUserState": false,
+    "containsCredentials": false,
+    "rawCaptureIncluded": false
+  }
+}
