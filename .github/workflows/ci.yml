@@ -123,6 +123,12 @@ jobs:
       - name: Test Effect Windows process spawn
         run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
 
+      - name: Test Windows migration backup and recovery
+        run: bun run --cwd apps/server test src/persistence/MigrationBackup.test.ts
+
+      - name: Test Codex SQLite overlay and initialization recovery
+        run: bun run --cwd apps/server test src/codexProcessEnv.test.ts src/codexAppServerManager.test.ts
+
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04

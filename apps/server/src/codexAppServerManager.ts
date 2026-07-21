@@ -71,6 +71,8 @@ import {
 } from "./provider/codexDiscoveryCatalog.ts";
 
 const log = createLogger("codex");
+const CODEX_DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_INITIALIZE_TIMEOUT_MS = 45_000;
 
 type PendingRequestKey = string;
 
@@ -573,6 +575,24 @@ function resolveCodexTurnOverrides(context: CodexSessionContext): {
   );
 }
 
+function encodeCodexTomlBasicStringForCommand(value: string): string {
+  return JSON.stringify(value).replace(/[&|<>^%]/g, (character) =>
+    `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`,
+  );
+}
+
+export function buildCodexAppServerArgs(env: NodeJS.ProcessEnv): string[] {
+  const sqliteHome = env.CODEX_SQLITE_HOME?.trim();
+  if (!sqliteHome) {
+    return ["app-server"];
+  }
+
+  // Keep this as a root CLI override. Codex session flags outrank project,
+  // user, and system config, any of which can otherwise redirect sqlite_home
+  // away from Synara's process-owned overlay.
+  return ["-c", `sqlite_home=${encodeCodexTomlBasicStringForCommand(sqliteHome)}`, "app-server"];
+}
+
 export function resolveCodexModelForAccount(
   model: string | undefined,
   account: CodexAccountSnapshot,
@@ -589,7 +609,7 @@ function spawnCodexAppServer(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, buildCodexAppServerArgs(input.env), {
     cwd: input.cwd,
     env: input.env,
   });
@@ -2651,7 +2671,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs =
+      method === "initialize" ? CODEX_INITIALIZE_TIMEOUT_MS : CODEX_DEFAULT_REQUEST_TIMEOUT_MS,
   ): Promise<TResponse> {
     const id = context.nextRequestId;
     context.nextRequestId += 1;

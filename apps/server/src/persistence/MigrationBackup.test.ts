@@ -20,6 +20,7 @@ import {
   runWithPreMigrationBackup,
 } from "./MigrationBackup.ts";
 import { migrationEntries, runMigrations } from "./Migrations.ts";
+import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
 
@@ -222,6 +223,31 @@ describe("migration backups", () => {
     }
   });
 
+  it("removes the current partial when backup publication fails", async () => {
+    const dbPath = await makeDbPath();
+
+    await expect(
+      runWithDatabase(
+        dbPath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`CREATE TABLE publication_probe(value TEXT NOT NULL)`;
+          yield* createMigrationBackup(
+            dbPath,
+            { sourceVersion: "v52", targetVersion: 53 },
+            {
+              open: async () => {
+                throw new Error("injected backup publication failure");
+              },
+            },
+          );
+        }),
+      ),
+    ).rejects.toThrow("injected backup publication failure");
+
+    expect(await fs.readdir(migrationBackupDirectory(dbPath))).toEqual([]);
+  });
+
   it("rejects symlinked markers and non-generated nested backup paths", async () => {
     const dbPath = await makeDbPath();
     const markerPath = migrationRecoveryMarkerPath(dbPath);
@@ -335,6 +361,74 @@ describe("migration backups", () => {
     } finally {
       backup.close();
     }
+  });
+
+  it("backs up and upgrades the published v0.5.5 lineage without losing user data", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 53 });
+        yield* ProjectPullRequestPinsMigration;
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES (54, 'ProjectPullRequestPins')
+        `;
+        yield* sql`
+          INSERT INTO project_pull_request_pins (
+            project_id,
+            repository_key,
+            pull_request_number
+          ) VALUES ('project-v055', 'owner/repository', 393)
+        `;
+
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+
+        const pins = yield* sql<{
+          readonly projectId: string;
+          readonly pullRequestNumber: number;
+        }>`
+          SELECT
+            project_id AS "projectId",
+            pull_request_number AS "pullRequestNumber"
+          FROM project_pull_request_pins
+        `;
+        expect(pins).toEqual([{ projectId: "project-v055", pullRequestNumber: 393 }]);
+
+        const tracker = yield* sql<{ readonly migrationId: number; readonly name: string }>`
+          SELECT migration_id AS "migrationId", name
+          FROM effect_sql_migrations
+          WHERE migration_id IN (54, 69)
+          ORDER BY migration_id
+        `;
+        expect(tracker).toEqual([
+          { migrationId: 54, name: "DurableProviderCommandDelivery" },
+          { migrationId: 69, name: "ProjectPullRequestPins" },
+        ]);
+      }),
+    );
+
+    const backups = await backupPaths(dbPath);
+    expect(backups).toHaveLength(1);
+    const backup = new DatabaseSync(backups[0]!, { readOnly: true });
+    try {
+      expect(
+        backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 54").get(),
+      ).toMatchObject({ name: "ProjectPullRequestPins" });
+      expect(
+        backup.prepare("SELECT pull_request_number FROM project_pull_request_pins").get(),
+      ).toMatchObject({ pull_request_number: 393 });
+    } finally {
+      backup.close();
+    }
+
+    const backupEntries = await fs.readdir(migrationBackupDirectory(dbPath));
+    expect(backupEntries.some((name) => name.endsWith(".partial"))).toBe(false);
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("prunes versioned snapshots to the bounded retention count", async () => {
