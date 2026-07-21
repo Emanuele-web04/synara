@@ -43,6 +43,11 @@ import {
 } from "@synara/shared/threadSummary";
 import { Effect, Option } from "effect";
 
+import {
+  CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
+  threadHasCheckpointRevertInProgress,
+  threadHasInFlightTurn,
+} from "./commandInvariants.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -70,20 +75,11 @@ export interface ReconcilableThread {
 
 /**
  * True when a thread's persisted state implies a turn that only a now-dead
- * in-process runtime could ever advance:
- *  - the session still points at an active turn,
- *  - the session itself is mid-lifecycle ("starting"/"running"), or
- *  - the latest turn projection is still open ("running").
- *
- * A clean session (idle/ready/interrupted/stopped/error with no active turn and
- * no open turn) is left untouched — it is not showing "Working".
+ * in-process runtime could ever advance. A clean session (idle/ready/interrupted/
+ * stopped/error with no active turn and no open turn) is left untouched.
  */
 function needsRestartReconciliation(thread: ReconcilableThread): boolean {
-  const session = thread.session;
-  const hasActiveTurn = session?.activeTurnId != null;
-  const sessionInFlight = session?.status === "running" || session?.status === "starting";
-  const latestTurnRunning = thread.latestTurn?.state === "running";
-  return hasActiveTurn || sessionInFlight || latestTurnRunning;
+  return threadHasInFlightTurn(thread);
 }
 
 function planStalePendingRequestCommands(input: {
@@ -117,6 +113,31 @@ function planStalePendingRequestCommands(input: {
   }
 
   return commands;
+}
+
+function planStaleCheckpointRevertCommand(input: {
+  readonly thread: ReconcilableThread;
+  readonly now: string;
+}): ThreadActivityAppendCommand | null {
+  if (!threadHasCheckpointRevertInProgress({ activities: input.thread.activities ?? [] })) {
+    return null;
+  }
+  const commandKey = `restart-reconcile-checkpoint-revert:${input.thread.id}:${input.now}`;
+  return {
+    type: "thread.activity.append",
+    commandId: CommandId.makeUnsafe(commandKey),
+    threadId: input.thread.id,
+    activity: {
+      id: EventId.makeUnsafe(commandKey),
+      tone: "error",
+      kind: CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
+      summary: "Checkpoint revert failed",
+      payload: { detail: "Checkpoint revert was interrupted by a server restart." },
+      turnId: null,
+      createdAt: input.now,
+    },
+    createdAt: input.now,
+  };
 }
 
 function buildStalePendingRequestCommand(input: {
@@ -171,10 +192,18 @@ export function planRestartTurnReconciliation(input: {
 }): ReadonlyArray<RestartReconciliationCommand> {
   const commands: RestartReconciliationCommand[] = [];
   for (const thread of input.threads) {
-    if (!needsRestartReconciliation(thread)) {
+    const hasInFlightTurn = threadHasInFlightTurn(thread);
+    commands.push(...planStalePendingRequestCommands({ thread, now: input.now }));
+    const staleCheckpointRevertCommand = planStaleCheckpointRevertCommand({
+      thread,
+      now: input.now,
+    });
+    if (staleCheckpointRevertCommand !== null) {
+      commands.push(staleCheckpointRevertCommand);
+    }
+    if (!hasInFlightTurn) {
       continue;
     }
-    commands.push(...planStalePendingRequestCommands({ thread, now: input.now }));
     commands.push({
       type: "thread.session.set",
       commandId: CommandId.makeUnsafe(`restart-reconcile:${thread.id}:${input.now}`),
@@ -226,13 +255,19 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   }
 
   const now = new Date().toISOString();
-  const stuckThreads = readModel.threads.filter(needsRestartReconciliation);
-  if (stuckThreads.length === 0) {
+  const threadsNeedingRestartCleanup = readModel.threads.filter(
+    (thread) =>
+      needsRestartReconciliation(thread) ||
+      threadHasCheckpointRevertInProgress(thread) ||
+      thread.hasPendingApprovals ||
+      thread.hasPendingUserInput,
+  );
+  if (threadsNeedingRestartCleanup.length === 0) {
     return;
   }
 
   const reconcilableThreads = yield* Effect.forEach(
-    stuckThreads,
+    threadsNeedingRestartCleanup,
     (thread) =>
       snapshotQuery.getThreadDetailById(thread.id).pipe(
         Effect.map((detail) => Option.getOrElse(detail, () => thread)),
@@ -253,8 +288,8 @@ export const reconcileRestartStuckTurns: Effect.Effect<
 
   yield* Effect.logInfo("reconciling restart-stuck turns", {
     commandCount: commands.length,
-    threadCount: stuckThreads.length,
-    threadIds: stuckThreads.map((thread) => thread.id),
+    threadCount: threadsNeedingRestartCleanup.length,
+    threadIds: threadsNeedingRestartCleanup.map((thread) => thread.id),
   });
 
   yield* Effect.forEach(

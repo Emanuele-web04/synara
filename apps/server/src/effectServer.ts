@@ -38,6 +38,7 @@ import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
+import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
 import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
@@ -105,7 +106,9 @@ export function closeServerRuntimePipeline(input: {
   );
 }
 
-export const createEffectServer = Effect.fn(function* () {
+export const createEffectServer = Effect.fn(function* (
+  shutdownController: ServerShutdownController,
+) {
   const config = yield* ServerConfig;
   const remotePolicyError = remoteAccessPolicyError(config);
   if (remotePolicyError) {
@@ -155,7 +158,7 @@ export const createEffectServer = Effect.fn(function* () {
   );
 
   const routesLayer = Layer.mergeAll(
-    makeEffectHttpRouteLayer(readiness),
+    makeEffectHttpRouteLayer(readiness, shutdownController),
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
@@ -239,7 +242,13 @@ export const createEffectServer = Effect.fn(function* () {
   return nodeServer as http.Server;
 });
 
-export const ServerLive = Layer.succeed(Server, {
-  start: createEffectServer() as ServerShape["start"],
-  stopSignal: Effect.never,
-} satisfies ServerShape);
+export const ServerLive = Layer.effect(
+  Server,
+  Effect.gen(function* () {
+    const shutdownController = yield* makeServerShutdownController();
+    return {
+      start: createEffectServer(shutdownController) as ServerShape["start"],
+      stopSignal: shutdownController.stopSignal,
+    } satisfies ServerShape;
+  }),
+);

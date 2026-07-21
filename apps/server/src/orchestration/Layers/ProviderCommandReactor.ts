@@ -108,6 +108,9 @@ import {
   isReplaySafeClaimedProviderIntent,
   type ProviderIntentEvent,
 } from "../providerIntentClassification.ts";
+import { deriveTurnStartSession } from "../turnStartSession.ts";
+import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
+import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 
 type ProviderQueueDrainEvent = Extract<
   ProviderRuntimeEvent,
@@ -328,6 +331,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
+  const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
@@ -589,31 +593,15 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
-  // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
-  const inferParentThreadFromSyntheticSubagentId = Effect.fnUntraced(function* (
-    threadId: ThreadId,
-  ) {
-    const rawThreadId = threadId as string;
-    if (!rawThreadId.startsWith("subagent:")) {
-      return null;
-    }
+  const resolveProviderSessionThread = (threadId: ThreadId) =>
+    resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
 
-    return Option.getOrNull(
-      yield* projectionSnapshotQuery.findSyntheticSubagentParentThread(threadId),
+  const withProviderSessionLease = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+    resolveProviderSessionThread(threadId).pipe(
+      Effect.flatMap((providerThread) =>
+        turnCheckpointCoordinator.withThreadLease(providerThread?.id ?? threadId, effect),
+      ),
     );
-  });
-
-  const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const thread = yield* resolveThread(threadId);
-    if (!thread) {
-      return null;
-    }
-    if (!thread.parentThreadId) {
-      return (yield* inferParentThreadFromSyntheticSubagentId(thread.id)) ?? thread;
-    }
-    const parentThread = yield* resolveThread(thread.parentThreadId);
-    return parentThread ?? thread;
-  });
 
   const resolveSubagentProviderThreadId = (
     threadId: ThreadId,
@@ -1823,7 +1811,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const processTurnStartRequested = Effect.fnUntraced(function* (
+  const processTurnStartRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
     const sessionThreadId =
@@ -1917,19 +1905,17 @@ const make = Effect.gen(function* () {
       // session's runtimeMode: ensureSessionForThread detects mode changes by
       // comparing against it, and adopting the requested mode here would mask
       // the restart.
-      if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
+      const turnStartSession = deriveTurnStartSession({
+        threadId: event.payload.threadId,
+        currentSession: thread.session,
+        providerName,
+        requestedRuntimeMode: event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        requestedAt: event.payload.createdAt,
+      });
+      if (turnStartSession !== null) {
         yield* setThreadSession({
           threadId: event.payload.threadId,
-          session: {
-            threadId: event.payload.threadId,
-            status: "starting",
-            providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-            runtimeMode:
-              thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: event.payload.createdAt,
-          },
+          session: turnStartSession,
           createdAt: event.payload.createdAt,
         });
       }
@@ -2051,6 +2037,11 @@ const make = Effect.gen(function* () {
       }
     }
   });
+
+  const processTurnStartRequested = (
+    event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+  ) =>
+    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event));
 
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
@@ -2514,10 +2505,23 @@ const make = Effect.gen(function* () {
       );
   });
 
-  const processConversationRollbackRequested = Effect.fnUntraced(function* (
+  const processConversationRollbackRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.conversation-rollback-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
+    const removedTurnIds = thread
+      ? collectTailTurnIds<TurnId>({
+          messages: thread.messages,
+          messageId: event.payload.messageId,
+        })
+      : [];
+    if (!thread || removedTurnIds.length !== event.payload.numTurns) {
+      return yield* Effect.fail(
+        new Error(
+          `Conversation rollback target '${event.payload.messageId}' is no longer valid for ${event.payload.numTurns} turn(s).`,
+        ),
+      );
+    }
     if (event.payload.numTurns > 0) {
       const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
       if (
@@ -2544,15 +2548,18 @@ const make = Effect.gen(function* () {
       threadId: event.payload.threadId,
       messageId: event.payload.messageId,
       numTurns: event.payload.numTurns,
-      removedTurnIds: thread
-        ? collectTailTurnIds<TurnId>({
-            messages: thread.messages,
-            messageId: event.payload.messageId,
-          })
-        : [],
+      removedTurnIds,
       createdAt: event.payload.createdAt,
     });
   });
+
+  const processConversationRollbackRequested = (
+    event: Extract<ProviderIntentEvent, { type: "thread.conversation-rollback-requested" }>,
+  ) =>
+    withProviderSessionLease(
+      event.payload.threadId,
+      processConversationRollbackRequestedWithoutLease(event),
+    );
 
   const processMessageEditResendPayload = Effect.fnUntraced(function* (
     payload: Extract<
@@ -2705,7 +2712,7 @@ const make = Effect.gen(function* () {
     yield* providerService.stopSession({ threadId: input.threadId });
   });
 
-  const processMessageEditResendRequested = Effect.fnUntraced(function* (
+  const processMessageEditResendRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.message-edit-resend-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
@@ -2756,6 +2763,14 @@ const make = Effect.gen(function* () {
       activeTurnId,
     });
   });
+
+  const processMessageEditResendRequested = (
+    event: Extract<ProviderIntentEvent, { type: "thread.message-edit-resend-requested" }>,
+  ) =>
+    withProviderSessionLease(
+      event.payload.threadId,
+      processMessageEditResendRequestedWithoutLease(event),
+    );
 
   const processSessionStopRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,

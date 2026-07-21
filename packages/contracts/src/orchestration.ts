@@ -1399,6 +1399,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   assistantMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
   preserveLatestTurn: Schema.optional(Schema.Boolean),
+  checkpointRevertTurnCount: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 

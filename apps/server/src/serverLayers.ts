@@ -16,6 +16,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
+import { TurnCheckpointCoordinatorLive } from "./orchestration/Layers/TurnCheckpointCoordinator";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
 import { DevServerManagerLive } from "./devServerManager";
@@ -73,6 +74,7 @@ export function makeServerRuntimeServicesLayer(
     checkpointStoreLayer,
     checkpointDiffQueryLayer,
     RuntimeReceiptBusLive,
+    TurnCheckpointCoordinatorLive,
   );
   const managedAttachmentCleanupLayer = ManagedAttachmentCleanupLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
