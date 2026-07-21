@@ -6,9 +6,12 @@ export default Effect.gen(function* () {
 
   // Capacity is derived entirely from durable state so admission survives a
   // server restart and does not depend on an in-memory semaphore. A creation
-  // saga owns one slot until dispatch fails or enters compensation. Once a task
-  // is planned, missing thread/turn projections are treated as pending: projectors
-  // may lag the committed creation result and must never briefly free capacity.
+  // saga owns one slot until dispatch fails or compensation becomes terminal.
+  // Compensating operations remain claims even when task registration failed,
+  // so cleanup can never briefly release capacity before a task row exists.
+  // Once a task is planned, missing thread/turn projections are treated as
+  // pending: projectors may lag the committed creation result and must never
+  // briefly free capacity.
   // Failed task rows also retain capacity while compensation is non-terminal or
   // a projected turn is still live. UNION (rather than UNION ALL) prevents the
   // hand-off between durable operation and task records from consuming two slots.
@@ -19,7 +22,7 @@ export default Effect.gen(function* () {
     CREATE VIEW external_mcp_active_capacity_claims AS
     SELECT operations.integration_id, operations.operation_id
     FROM external_mcp_operations AS operations
-    WHERE operations.status IN ('reserved', 'dispatching')
+    WHERE operations.status IN ('reserved', 'dispatching', 'compensating')
 
     UNION
 

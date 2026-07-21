@@ -396,7 +396,22 @@ layer("ExternalMcpRepository", (it) => {
         fingerprint: "after-terminal-plan",
         now: "2026-07-20T00:02:01.000Z",
       });
-      assert.equal(admitted.kind, "reserved");
+      assert.equal(admitted.kind, "concurrency_limited");
+      yield* restartedRepository.failOperation({
+        operationId: first.operationId,
+        errorJson: JSON.stringify({ code: "compensated" }),
+        now: "2026-07-20T00:02:02.000Z",
+      });
+      assert.equal(
+        (yield* restartedRepository.reserveOperation({
+          ...first,
+          operationId: "external-operation-after-terminal-compensation",
+          requestId: "after-terminal-compensation-request",
+          fingerprint: "after-terminal-compensation-plan",
+          now: "2026-07-20T00:02:03.000Z",
+        })).kind,
+        "reserved",
+      );
     }),
   );
 
@@ -584,6 +599,48 @@ layer("ExternalMcpRepository", (it) => {
         operationId: first.operationId,
         errorJson: JSON.stringify({ code: "compensated" }),
         now: "2026-07-20T00:01:06.000Z",
+      });
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "reserved");
+    }),
+  );
+
+  it.effect("keeps compensating capacity when task registration never committed", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      yield* createIntegration(repository, "compensating-without-task");
+      const first = {
+        operationId: "external-operation-compensating-without-task",
+        integrationId: "integration-compensating-without-task",
+        requestId: "compensating-without-task-request",
+        fingerprint: "compensating-without-task-plan",
+        requestedCount: 1 as const,
+        planJson: "[]",
+        now: "2026-07-20T00:01:00.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(first)).kind, "reserved");
+      assert.isTrue(
+        yield* repository.markOperationDispatching({
+          operationId: first.operationId,
+          now: "2026-07-20T00:01:01.000Z",
+        }),
+      );
+      // Simulate registerTask failing before it can commit a durable task row.
+      yield* repository.markOperationCompensating({
+        operationId: first.operationId,
+        now: "2026-07-20T00:01:02.000Z",
+      });
+      const retry = {
+        ...first,
+        operationId: "external-operation-after-no-task-compensation",
+        requestId: "after-no-task-compensation-request",
+        fingerprint: "after-no-task-compensation-plan",
+        now: "2026-07-20T00:01:03.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+      yield* repository.failOperation({
+        operationId: first.operationId,
+        errorJson: JSON.stringify({ code: "compensated" }),
+        now: "2026-07-20T00:01:04.000Z",
       });
       assert.equal((yield* repository.reserveOperation(retry)).kind, "reserved");
     }),

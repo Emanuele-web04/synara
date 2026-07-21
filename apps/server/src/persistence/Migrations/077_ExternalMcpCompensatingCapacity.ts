@@ -3,40 +3,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const columns = yield* sql<{ readonly exists: number }>`
-    SELECT EXISTS(
-      SELECT 1 FROM pragma_table_info('external_mcp_integrations')
-      WHERE name = 'client_kind'
-    ) AS "exists"
-  `;
-  if (columns[0]?.exists !== 1) {
-    yield* sql.unsafe(`
-      ALTER TABLE external_mcp_integrations
-      ADD COLUMN client_kind TEXT NOT NULL DEFAULT 'other'
-      CHECK (client_kind IN ('codex', 'claudeCode', 'claudeDesktop', 'other'))
-    `);
-  }
 
-  yield* sql`
-    CREATE TABLE IF NOT EXISTS external_mcp_rate_windows (
-      integration_id TEXT PRIMARY KEY REFERENCES external_mcp_integrations(integration_id)
-        ON DELETE CASCADE,
-      window_id INTEGER NOT NULL,
-      admitted_count INTEGER NOT NULL DEFAULT 0,
-      rejected_count INTEGER NOT NULL DEFAULT 0,
-      rejection_audit_id TEXT,
-      updated_at TEXT NOT NULL
-    )
-  `;
-
-  // Reinstall the capacity view for databases that ran an earlier development
-  // version. Compensating operations are claims independently of task rows;
-  // task registration can fail before compensation starts. Missing task
-  // projections are conservatively active so projector lag cannot over-admit
-  // work. Failed task rows remain active while durable compensation is
-  // non-terminal or a projected turn is still live. The latest-turn join avoids
-  // scanning/sorting checkpoint rows and makes checkpoint-only projections
-  // incapable of masking live agent state.
+  // Reinstall the view for databases that already ran migration 76. An
+  // operation can enter compensation before its task row is registered, so
+  // durable operation state must retain capacity until compensation terminalizes.
   yield* sql`DROP VIEW IF EXISTS external_mcp_active_capacity_claims`;
   yield* sql`
     CREATE VIEW external_mcp_active_capacity_claims AS
