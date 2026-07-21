@@ -26,14 +26,6 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "xhigh",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
-
-/**
- * Anthropic models Synara always surfaces in the Pi picker when Anthropic auth is
- * already available. Older `pi-anthropic-oauth` builds replace Pi's built-in
- * Anthropic catalog and can omit these newer flagship ids.
- */
-export const PI_ANTHROPIC_ENSURED_MODEL_IDS = ["claude-fable-5", "claude-opus-4-8"] as const;
-export type PiAnthropicEnsuredModelId = (typeof PI_ANTHROPIC_ENSURED_MODEL_IDS)[number];
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [

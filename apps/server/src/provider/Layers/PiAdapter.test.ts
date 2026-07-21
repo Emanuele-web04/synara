@@ -236,7 +236,7 @@ describe("getPiDiscoverableModels", () => {
     }
   });
 
-  it("keeps Fable 5 and Opus 4.8 when Anthropic auth is configured", () => {
+  it("restores Fable 5 and Opus 4.8 after an extension replaces the Anthropic catalog", () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-anthropic-"));
     const modelsPath = path.join(agentDir, "models.json");
 
@@ -246,6 +246,30 @@ describe("getPiDiscoverableModels", () => {
         anthropic: { type: "oauth", access: "tok", refresh: "ref", expires: Date.now() + 60_000 },
       });
       const registry = ModelRegistry.create(authStorage, modelsPath);
+      registry.registerProvider("anthropic", {
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        apiKey: "test-key",
+        models: [
+          {
+            id: "claude-opus-4-7",
+            name: "Claude Opus 4.7",
+            api: "anthropic-messages",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            contextWindow: 1_000_000,
+            maxTokens: 128_000,
+          },
+        ],
+      });
+
+      expect(
+        registry
+          .getAll()
+          .filter((model) => model.provider === "anthropic")
+          .map((model) => model.id),
+      ).toEqual(["claude-opus-4-7"]);
       const models = getPiDiscoverableModels(registry);
 
       expect(
