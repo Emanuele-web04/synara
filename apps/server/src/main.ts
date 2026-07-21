@@ -511,10 +511,6 @@ const logWebSocketEventsFlag = optionalBooleanFlag("log-websocket-events", {
   aliases: ["log-ws-events"],
 });
 
-const mcpHomeDirFlag = Flag.string("home-dir").pipe(
-  Flag.withDescription("Synara data directory to discover and use."),
-  Flag.optional,
-);
 const mcpIntegrationFlag = Flag.string("integration").pipe(
   Flag.withDescription(
     "Paired integration id to serve (required only when more than one is stored).",
@@ -522,17 +518,41 @@ const mcpIntegrationFlag = Flag.string("integration").pipe(
   Flag.optional,
 );
 
+// Base `synara` command defined before the MCP subcommands so they can yield
+// its parsed input (notably `--home-dir` / `synaraHome`) via Effect's command
+// context. This avoids a duplicate `--home-dir` flag between the root command
+// and its MCP subcommands, which the Effect CLI assigns to the parent and
+// leaves the subcommand flag unset.
+const baseServerCommand = Command.make("synara", {
+  mode: modeFlag,
+  port: portFlag,
+  host: hostFlag,
+  synaraHome: synaraHomeFlag,
+  devUrl: devUrlFlag,
+  publicUrl: publicUrlFlag,
+  allowInsecureRemote: allowInsecureRemoteFlag,
+  noBrowser: noBrowserFlag,
+  authToken: authTokenFlag,
+  autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
+  logProviderEvents: logProviderEventsFlag,
+  logWebSocketEvents: logWebSocketEventsFlag,
+}).pipe(Command.withDescription("Run the Synara server."));
+
 const mcpServeCommand = Command.make(
   "serve",
-  { homeDir: mcpHomeDirFlag, integration: mcpIntegrationFlag },
-  ({ homeDir, integration }) =>
-    Effect.tryPromise({
-      try: () =>
-        serveExternalMcpStdio({
-          baseDir: resolveExternalMcpBaseDir(Option.getOrUndefined(homeDir)),
-          ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
-        }),
-      catch: (cause) => new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+  { integration: mcpIntegrationFlag },
+  ({ integration }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      yield* Effect.tryPromise({
+        try: () =>
+          serveExternalMcpStdio({
+            baseDir,
+            ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
+          }),
+        catch: (cause) => new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+      });
     }),
 ).pipe(
   Command.withDescription(
@@ -546,26 +566,27 @@ const mcpPairCommand = Command.make(
     code: Flag.string("code").pipe(
       Flag.withDescription("Short-lived pairing code issued by Synara Settings."),
     ),
-    homeDir: mcpHomeDirFlag,
   },
-  ({ code, homeDir }) =>
-    Effect.tryPromise({
-      try: async () => {
-        const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(homeDir));
-        const paired = await pairExternalMcpClient({
-          baseDir,
-          pairingCode: code,
-        });
+  ({ code }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      const paired = yield* Effect.tryPromise({
+        try: () =>
+          pairExternalMcpClient({
+            baseDir,
+            pairingCode: code,
+          }),
+        catch: (cause) => new StartupError({ message: "External MCP pairing failed.", cause }),
+      });
+      process.stdout.write(
+        `Paired Synara external MCP integration "${paired.paired.name}".\nCredential stored privately at ${paired.storePath}.\nConfigure the MCP client command as: ${externalMcpShellCommand(externalMcpLauncher(["mcp", "serve", "--integration", paired.paired.integrationId, "--home-dir", baseDir]))}\n`,
+      );
+      if (process.platform === "win32") {
         process.stdout.write(
-          `Paired Synara external MCP integration "${paired.paired.name}".\nCredential stored privately at ${paired.storePath}.\nConfigure the MCP client command as: ${externalMcpShellCommand(externalMcpLauncher(["mcp", "serve", "--integration", paired.paired.integrationId, "--home-dir", baseDir]))}\n`,
+          "Windows note: Synara stores this credential under your user profile, but Windows does not expose POSIX 0600 permission checks. Protect the profile and its Synara data directory.\n",
         );
-        if (process.platform === "win32") {
-          process.stdout.write(
-            "Windows note: Synara stores this credential under your user profile, but Windows does not expose POSIX 0600 permission checks. Protect the profile and its Synara data directory.\n",
-          );
-        }
-      },
-      catch: (cause) => new StartupError({ message: "External MCP pairing failed.", cause }),
+      }
     }),
 ).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
 
@@ -574,22 +595,9 @@ const mcpCommand = Command.make("mcp").pipe(
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
 );
 
-const serverCommand = Command.make("synara", {
-  mode: modeFlag,
-  port: portFlag,
-  host: hostFlag,
-  synaraHome: synaraHomeFlag,
-  devUrl: devUrlFlag,
-  publicUrl: publicUrlFlag,
-  allowInsecureRemote: allowInsecureRemoteFlag,
-  noBrowser: noBrowserFlag,
-  authToken: authTokenFlag,
-  autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
-  logProviderEvents: logProviderEventsFlag,
-  logWebSocketEvents: logWebSocketEventsFlag,
-}).pipe(
-  Command.withDescription("Run the Synara server."),
+const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
+  Command.withSubcommands([mcpCommand]),
 );
 
-export const synaraCli = serverCommand.pipe(Command.withSubcommands([mcpCommand]));
+export const synaraCli = serverCommand;
