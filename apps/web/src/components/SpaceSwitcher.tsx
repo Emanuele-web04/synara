@@ -94,7 +94,7 @@ const TAB_STRIP_FADE_CLASS_NAME =
   "mask-l-from-[calc(100%-min(var(--fade-size),var(--space-overflow-start)))] mask-r-from-[calc(100%-min(var(--fade-size),var(--space-overflow-end)))] [--fade-size:1.25rem] [--space-overflow-end:0px] [--space-overflow-start:0px]";
 
 const SPACE_TAB_CLASS_NAME =
-  "relative flex size-8 shrink-0 cursor-pointer touch-none items-center justify-center rounded-lg text-muted-foreground/70 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  "relative flex size-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md text-muted-foreground/70 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
 /**
  * Hover and selection share one token (`--sidebar-accent`/`--sidebar-accent-active`
@@ -111,7 +111,7 @@ function SpaceActivityDot({ tone }: { tone: SpaceActivityTone }) {
       aria-hidden="true"
       className={cn(
         // The ring punches the dot out of the tab surface beneath it.
-        "pointer-events-none absolute top-1 right-1 size-1.5 rounded-full ring-2 ring-[var(--sidebar)]",
+        "pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full ring-2 ring-[var(--sidebar)]",
         SPACE_ACTIVITY_DOT_CLASS_NAME[tone],
       )}
     />
@@ -207,7 +207,7 @@ function SpaceTab(props: {
           />
         }
       >
-        <SpaceIcon icon={props.icon} />
+        <SpaceIcon icon={props.icon} className="size-3.5" />
         {props.activityTone ? <SpaceActivityDot tone={props.activityTone} /> : null}
       </TooltipTrigger>
       <TooltipPopup side="bottom">
@@ -466,9 +466,9 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
         />
       </div>
 
-      {/* No inline padding: a 32px tab centres its 16px glyph on the same x as the
+      {/* px-1 keeps a 24px tab's 14px glyph centred on the same x (16px) as the
           leading glyph of a project row below, so the two lists share one optical margin. */}
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5 px-1">
         <div
           role="tablist"
           aria-label="Spaces"
