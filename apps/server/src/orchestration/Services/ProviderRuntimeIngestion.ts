@@ -25,6 +25,12 @@ export interface ProviderRuntimeIngestionShape {
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
   /**
+   * Drops replay-ledger rows whose durable turn projection is already terminal.
+   * Startup reconciliation calls this after it closes process-orphaned turns.
+   */
+  readonly reconcileSettledOpenTurns: Effect.Effect<void>;
+
+  /**
    * Resolves when the internal processing queue is empty and idle.
    * Intended for test use to replace timing-sensitive sleeps.
    */

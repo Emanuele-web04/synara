@@ -1901,7 +1901,7 @@ describe("sortThreadsForSidebar", () => {
     ]);
   });
 
-  it("floats live threads above unseen finished and plain threads", () => {
+  it("floats unseen finished threads above live threads, and live above plain", () => {
     const sorted = sortThreadsForSidebar(
       [
         makeThread({
@@ -1928,8 +1928,8 @@ describe("sortThreadsForSidebar", () => {
     );
 
     expect(sorted.map((thread) => thread.id)).toEqual([
-      ThreadId.makeUnsafe("thread-working"),
       ThreadId.makeUnsafe("thread-finished"),
+      ThreadId.makeUnsafe("thread-working"),
       ThreadId.makeUnsafe("thread-newest-plain"),
     ]);
   });
