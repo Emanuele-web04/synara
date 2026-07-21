@@ -3,11 +3,12 @@
 // Layer: Server Git service tests
 // Depends on: Effect test layers plus real temporary Git repositories.
 import { existsSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
 import { describe, expect, vi } from "vitest";
 
 import { GitCoreLive, makeGitCore } from "./GitCore.ts";
@@ -71,31 +72,6 @@ function git(
       timeoutMs: 10_000,
     });
     return result.stdout.trim();
-  });
-}
-
-function runShellCommand(input: {
-  command: string;
-  cwd: string;
-  timeoutMs?: number;
-  maxOutputBytes?: number;
-}): Effect.Effect<ProcessRunResult, Error> {
-  return Effect.promise(() => {
-    const shellPath =
-      process.platform === "win32"
-        ? (process.env.ComSpec ?? "cmd.exe")
-        : (process.env.SHELL ?? "/bin/sh");
-
-    const args =
-      process.platform === "win32" ? ["/d", "/s", "/c", input.command] : ["-lc", input.command];
-
-    return runProcess(shellPath, args, {
-      cwd: input.cwd,
-      timeoutMs: input.timeoutMs ?? 30_000,
-      allowNonZeroExit: true,
-      maxBufferBytes: input.maxOutputBytes ?? 1_000_000,
-      outputMode: "truncate",
-    });
   });
 }
 
@@ -1166,6 +1142,216 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("verifies a clean unchanged worktree through its Git-admin ownership marker", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-owned");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-owned",
+          path: wtPath,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: "wt-owned",
+          token: "operation-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+
+        yield* writeTextFile(path.join(wtPath, "untracked.txt"), "do not remove\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree state changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        yield* core.deleteBranchIfUnchanged({
+          cwd: tmp,
+          branch: "wt-owned",
+          expectedHead: proof.head,
+        });
+      }),
+    );
+
+    it.effect("verifies ownership of a detached worktree", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-detached-owned");
+        yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
+
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "detached-operation-token",
+        });
+
+        expect(proof.branch).toBeNull();
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath });
+      }),
+    );
+
+    it.effect("copies checkout changes and .worktreeinclude files into a detached worktree", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), ".env\n");
+        yield* writeTextFile(path.join(tmp, ".worktreeinclude"), ".env\n");
+        yield* git(tmp, ["add", ".gitignore", ".worktreeinclude"]);
+        yield* git(tmp, ["commit", "-m", "configure worktree files"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# locally edited\n");
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
+        yield* writeTextFile(path.join(tmp, ".env"), "LOCAL_ONLY=yes\n");
+
+        const core = yield* GitCore;
+        const expectedHead = yield* git(tmp, ["rev-parse", "HEAD"]);
+        const wtPath = path.join(tmp, "wt-copied-state");
+        const result = yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        expect(result.worktree).toEqual({ path: wtPath, ref: expectedHead, branch: null });
+        expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe("# locally edited\n");
+        expect(yield* readTextFile(path.join(wtPath, "notes.txt"))).toBe("untracked note\n");
+        expect(yield* readTextFile(path.join(wtPath, ".env"))).toBe("LOCAL_ONLY=yes\n");
+
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "copied-state-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+        yield* writeTextFile(path.join(wtPath, ".env"), "LOCAL_ONLY=changed\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree state changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("atomically replaces an incomplete worktree snapshot", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "README.md"), "snapshot change\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "preserve me\n");
+
+        const snapshotRoot = yield* makeTmpDir("worktree-snapshot-test-");
+        const outputPath = path.join(snapshotRoot, "thread-1");
+        yield* Effect.promise(() => fs.mkdir(outputPath, { recursive: true }));
+        yield* writeTextFile(path.join(outputPath, "partial.tmp"), "incomplete\n");
+
+        const core = yield* GitCore;
+        yield* core.snapshotWorktree({ cwd: tmp, outputPath });
+
+        expect(existsSync(path.join(outputPath, "snapshot.json"))).toBe(true);
+        expect(existsSync(path.join(outputPath, "partial.tmp"))).toBe(false);
+        expect(yield* readTextFile(path.join(outputPath, "files", "untracked.txt"))).toBe(
+          "preserve me\n",
+        );
+        expect(yield* readTextFile(path.join(outputPath, "changes.patch"))).toContain(
+          "snapshot change",
+        );
+      }),
+    );
+
+    it.effect("rejects a same-path same-branch replacement without the original marker", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-replaced");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-replaced",
+          path: wtPath,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: "wt-replaced",
+          token: "original-operation-token",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        yield* core.deleteBranchIfUnchanged({
+          cwd: tmp,
+          branch: "wt-replaced",
+          expectedHead: proof.head,
+        });
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-replaced",
+          path: wtPath,
+        });
+
+        const verification = yield* core.verifyWorktreeOwnership({ path: wtPath, proof });
+        expect(verification.verified).toBe(false);
+        expect(verification.reason).toMatch(/Git directory changed|marker is missing/);
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("rejects a moved HEAD and conditionally preserves the changed branch", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-head-moved");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "wt-head-moved",
+          path: wtPath,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: "wt-head-moved",
+          token: "head-moved-token",
+        });
+        yield* writeTextFile(path.join(wtPath, "new-commit.txt"), "preserve me\n");
+        yield* git(wtPath, ["add", "new-commit.txt"]);
+        yield* git(wtPath, ["commit", "-m", "advance owned branch"]);
+
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree HEAD changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: false });
+        const deletion = yield* Effect.exit(
+          core.deleteBranchIfUnchanged({
+            cwd: tmp,
+            branch: "wt-head-moved",
+            expectedHead: proof.head,
+          }),
+        );
+        expect(Exit.isFailure(deletion)).toBe(true);
+        expect(
+          (yield* core.listBranches({ cwd: tmp })).branches.some(
+            (branch) => branch.name === "wt-head-moved",
+          ),
+        ).toBe(true);
+        yield* core.deleteBranch({ cwd: tmp, branch: "wt-head-moved", force: true });
+      }),
+    );
+
     it.effect("creates a worktree for an existing branch when newBranch is omitted", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1379,6 +1565,31 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(localBranches).toContain("feature/pr-fetch");
         const currentBranch = yield* git(tmp, ["branch", "--show-current"]);
         expect(currentBranch).toBe(initialBranch);
+      }),
+    );
+  });
+
+  describe("fetchPullRequestCommit", () => {
+    it.effect("rejects a pull-request URL for a repository other than the fetch remote", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["remote", "add", "origin", "https://github.com/acme/current.git"]);
+
+        const exit = yield* (yield* GitCore)
+          .fetchPullRequestCommit({
+            cwd: tmp,
+            prNumber: 42,
+            expectedRepositoryNameWithOwner: "acme/other",
+          })
+          .pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          expect(String(exit.cause)).toContain(
+            "Pull request URL targets acme/other, but remote origin targets acme/current.",
+          );
+        }
       }),
     );
   });

@@ -285,6 +285,20 @@ export function warningIdsForAcknowledgedRisks(
   return ids;
 }
 
+export function updateAutomationDraftWarningAcknowledgement(
+  current: ReadonlySet<AutomationDraftWarningId>,
+  warningId: AutomationDraftWarningId,
+  acknowledged: boolean,
+): ReadonlySet<AutomationDraftWarningId> {
+  const next = new Set(current);
+  if (acknowledged) {
+    next.add(warningId);
+  } else {
+    next.delete(warningId);
+  }
+  return next;
+}
+
 export function hasBlockingAutomationDraftWarnings(
   warnings: readonly AutomationDraftWarning[],
   acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>,

@@ -8,7 +8,6 @@ import type {
   ServerGetProviderUsageSnapshotResult,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import {
   normalizeOpenUsageSnapshot,
@@ -61,26 +60,16 @@ export function useProviderUsageSummary(input: {
   const openUsageSnapshotQuery = useQuery(
     openUsageProviderSnapshotQueryOptions(provider, { enabled: shouldFetchProviderData }),
   );
-  const liveProviderSnapshot = useMemo(
-    () => (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === provider),
-    [allProviderUsageQuery.data, provider],
+  const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(
+    (snapshot) => snapshot.provider === provider,
   );
-  const authoritativeLiveSnapshot = useMemo(
-    () => liveProviderSnapshot ?? input.providerSnapshot ?? null,
-    [input.providerSnapshot, liveProviderSnapshot],
-  );
+  const authoritativeLiveSnapshot = liveProviderSnapshot ?? input.providerSnapshot ?? null;
   // Explicit live failures are authoritative; only fall back when no live snapshot exists.
   const blocksProviderUsageFallback = isProviderUsageSnapshotNonOk(authoritativeLiveSnapshot);
-  const accountRateLimits = useMemo(
-    () => input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []),
-    [input.threadRateLimits, input.threads],
-  );
+  const accountRateLimits = input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []);
 
-  const rateLimits = useMemo<ReadonlyArray<ProviderRateLimit>>(() => {
-    if (blocksProviderUsageFallback) {
-      return [];
-    }
-
+  let rateLimits: ReadonlyArray<ProviderRateLimit> = [];
+  if (!blocksProviderUsageFallback) {
     const localSnapshot = localUsageSnapshotQuery.data ?? null;
     const derivedRateLimits = accountRateLimits.filter((rateLimit) =>
       provider ? rateLimit.provider === provider : true,
@@ -88,7 +77,7 @@ export function useProviderUsageSummary(input: {
     const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(authoritativeLiveSnapshot);
     const localUsageRateLimit = normalizeServerProviderUsageRateLimit(localSnapshot);
     const openUsageSnapshot = normalizeOpenUsageSnapshot(openUsageSnapshotQuery.data, provider);
-    return mergeProviderRateLimits(
+    rateLimits = mergeProviderRateLimits(
       derivedRateLimits,
       mergeProviderRateLimits(
         liveUsageRateLimit ? [liveUsageRateLimit] : [],
@@ -98,51 +87,32 @@ export function useProviderUsageSummary(input: {
         ),
       ),
     );
-  }, [
-    accountRateLimits,
-    authoritativeLiveSnapshot,
-    blocksProviderUsageFallback,
-    localUsageSnapshotQuery.data,
-    openUsageSnapshotQuery.data,
-    provider,
-  ]);
+  }
 
-  const usageLines = useMemo(() => {
-    if (blocksProviderUsageFallback) {
-      return [];
-    }
-
+  let usageLines: ReturnType<typeof normalizeServerProviderUsageLines> = [];
+  if (!blocksProviderUsageFallback) {
     const liveUsageLines = normalizeServerProviderUsageLines(authoritativeLiveSnapshot);
     if (liveUsageLines.length > 0) {
-      return liveUsageLines;
+      usageLines = liveUsageLines;
+    } else {
+      const localUsageLines = normalizeServerProviderUsageLines(localUsageSnapshotQuery.data);
+      usageLines =
+        localUsageLines.length > 0
+          ? localUsageLines
+          : normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data);
     }
-    const localUsageLines = normalizeServerProviderUsageLines(localUsageSnapshotQuery.data);
-    if (localUsageLines.length > 0) {
-      return localUsageLines;
-    }
-    return normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data);
-  }, [
-    authoritativeLiveSnapshot,
-    blocksProviderUsageFallback,
-    localUsageSnapshotQuery.data,
-    openUsageSnapshotQuery.data,
-  ]);
+  }
 
   // A throttle/staleness note the server rides on an otherwise-ok snapshot (e.g. Claude serving the
   // last values while Anthropic rate-limits). Only surfaced when the snapshot is actually shown —
   // non-ok snapshots hide the section entirely, so their `detail` would never be seen anyway.
-  const usageNotice = useMemo(() => {
-    if (blocksProviderUsageFallback) {
-      return undefined;
-    }
-    const detail = authoritativeLiveSnapshot?.detail?.trim();
-    return detail ? detail : undefined;
-  }, [authoritativeLiveSnapshot, blocksProviderUsageFallback]);
+  const detail = blocksProviderUsageFallback
+    ? undefined
+    : authoritativeLiveSnapshot?.detail?.trim();
+  const usageNotice = detail ? detail : undefined;
 
-  const learnMoreHref = useMemo(
-    () => deriveRateLimitLearnMoreHref(rateLimits) ?? deriveProviderUsageLearnMoreHref(provider),
-    [provider, rateLimits],
-  );
+  const learnMoreHref =
+    deriveRateLimitLearnMoreHref(rateLimits) ?? deriveProviderUsageLearnMoreHref(provider);
 
   const isLoading =
     shouldFetchLiveProviderUsage &&

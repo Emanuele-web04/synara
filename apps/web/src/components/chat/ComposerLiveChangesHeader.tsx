@@ -7,7 +7,6 @@
 // Exports: ComposerLiveChangesHeader
 
 import { pluralize } from "@synara/shared/text";
-import { memo } from "react";
 
 import { ChangesIcon } from "~/lib/icons";
 import {
@@ -30,7 +29,7 @@ interface ComposerLiveChangesHeaderProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader({
+export function ComposerLiveChangesHeader({
   fileCount,
   additions,
   deletions,
@@ -59,4 +58,4 @@ export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader
       </ComposerStackedPanelRow>
     </ComposerStackedPanel>
   );
-});
+}

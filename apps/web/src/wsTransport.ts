@@ -235,6 +235,34 @@ export function shouldReconnectAfterStreamFailure(cause: Cause.Cause<unknown>): 
   });
 }
 
+const RETRYABLE_STREAM_CAPACITY_ERROR_CODES = new Set([
+  "STREAM_CAPACITY_EXCEEDED",
+  "THREAD_STREAM_CAPACITY_EXCEEDED",
+]);
+const DEFAULT_STREAM_CAPACITY_RETRY_MS = 1_000;
+const MAX_STREAM_CAPACITY_RETRY_MS = 10_000;
+
+/**
+ * Capacity rejections are admission failures the server marks retryable: the
+ * budget frees up as soon as another lease releases, so the stream must be
+ * retried in place rather than dropped or escalated to a socket reconnect.
+ */
+export function getStreamCapacityRetryDelayMs(cause: Cause.Cause<unknown>): number | null {
+  for (const reason of cause.reasons) {
+    if (!Cause.isFailReason(reason)) continue;
+    const error = reason.error;
+    if (!error || typeof error !== "object") continue;
+    const code = "code" in error ? error.code : undefined;
+    if (typeof code !== "string" || !RETRYABLE_STREAM_CAPACITY_ERROR_CODES.has(code)) continue;
+    if ("retryable" in error && error.retryable === false) continue;
+    const retryAfterMs = "retryAfterMs" in error ? error.retryAfterMs : undefined;
+    return typeof retryAfterMs === "number" && retryAfterMs > 0
+      ? retryAfterMs
+      : DEFAULT_STREAM_CAPACITY_RETRY_MS;
+  }
+  return null;
+}
+
 function omitNullUserInputAnswers(input: unknown): unknown {
   if (!input || typeof input !== "object") {
     return input;
@@ -288,6 +316,9 @@ export class WsTransport {
   private reconnectFailures = 0;
   private readonly streamCleanups = new Map<string, () => void>();
   private readonly streamSettled = new Map<string, Promise<void>>();
+  private readonly streamCapacityRetries = new Map<string, number>();
+  private readonly streamCapacityRetryTimers = new Map<string, number>();
+  private readonly activeThreadStreamInputs = new Map<string, unknown>();
   private shellSubscribed = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
@@ -311,8 +342,22 @@ export class WsTransport {
       options?.timeoutMs === undefined ? { ...options, timeoutMs: REQUEST_TIMEOUT_MS } : options;
     const abortScope = makeRequestAbortScope(requestOptions);
     try {
+      if (method === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
+        this.shellSubscribed = false;
+        await awaitWithAbort(this.stopStream("orchestration.shell"), abortScope.signal);
+        return undefined as T;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.unsubscribeThread) {
+        const threadId = (params as { threadId: string }).threadId;
+        this.threadSubscriptions.delete(threadId);
+        await awaitWithAbort(
+          this.stopStream(`orchestration.thread:${threadId}`),
+          abortScope.signal,
+        );
+        return undefined as T;
+      }
+
       const client = await awaitWithAbort(this.getClient(), abortScope.signal);
-      const clientRuntime = this.getClientRuntime(client);
 
       if (method === WS_METHODS.gitRunStackedAction) {
         return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
@@ -320,24 +365,15 @@ export class WsTransport {
 
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
         this.shellSubscribed = true;
+        this.resetStreamCapacityRetry("orchestration.shell");
         this.startShellStream(client);
-        return undefined as T;
-      }
-      if (method === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
-        this.shellSubscribed = false;
-        this.stopStream("orchestration.shell");
         return undefined as T;
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
         const threadId = (params as { threadId: string }).threadId;
+        this.resetStreamCapacityRetry(`orchestration.thread:${threadId}`);
         this.threadSubscriptions.set(threadId, params);
         await this.startThreadStream(client, threadId, params as never);
-        return undefined as T;
-      }
-      if (method === ORCHESTRATION_WS_METHODS.unsubscribeThread) {
-        const threadId = (params as { threadId: string }).threadId;
-        this.threadSubscriptions.delete(threadId);
-        this.stopStream(`orchestration.thread:${threadId}`);
         return undefined as T;
       }
 
@@ -353,6 +389,7 @@ export class WsTransport {
         >
       )[method];
       if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
+      const clientRuntime = this.getClientRuntime(client);
       return (await clientRuntime.runPromise(
         call(normalizedRpcInput),
         abortScope.signal ? { signal: abortScope.signal } : undefined,
@@ -454,8 +491,10 @@ export class WsTransport {
     if (this.disposed) return;
     this.disposed = true;
     this.setState("disposed");
+    this.resetAllStreamCapacityRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
+    this.activeThreadStreamInputs.clear();
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
     void this.clientPromise.catch(() => undefined);
@@ -557,8 +596,10 @@ export class WsTransport {
 
     const oldRuntime = this.runtime;
     const oldClientScope = this.clientScope;
+    this.resetAllStreamCapacityRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
+    this.activeThreadStreamInputs.clear();
 
     this.setState("connecting");
 
@@ -585,6 +626,26 @@ export class WsTransport {
         // Listener errors must not break reconnect or RPC state transitions.
       }
     }
+  }
+
+  private clearStreamCapacityRetryTimer(key: string): void {
+    const timeoutId = this.streamCapacityRetryTimers.get(key);
+    if (timeoutId === undefined) return;
+    window.clearTimeout(timeoutId);
+    this.streamCapacityRetryTimers.delete(key);
+  }
+
+  private resetStreamCapacityRetry(key: string): void {
+    this.clearStreamCapacityRetryTimer(key);
+    this.streamCapacityRetries.delete(key);
+  }
+
+  private resetAllStreamCapacityRetries(): void {
+    for (const timeoutId of this.streamCapacityRetryTimers.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    this.streamCapacityRetryTimers.clear();
+    this.streamCapacityRetries.clear();
   }
 
   private setCompatibilityIssue(issue: WsCompatibilityError | null): void {
@@ -800,8 +861,14 @@ export class WsTransport {
     input: unknown,
   ): Promise<void> {
     const key = `orchestration.thread:${threadId}`;
+    if (this.disposed || this.threadSubscriptions.get(threadId) !== input) {
+      return;
+    }
+    if (this.streamCleanups.has(key) && this.activeThreadStreamInputs.get(key) === input) {
+      return;
+    }
     const sessionVersion = this.sessionVersion;
-    await this.stopStream(key);
+    await this.stopStream(key, { resetCapacityRetry: false });
     if (
       this.disposed ||
       this.sessionVersion !== sessionVersion ||
@@ -816,6 +883,7 @@ export class WsTransport {
         .then((nextClient) => this.startThreadStream(nextClient, threadId, desiredInput))
         .catch((error) => console.warn("WebSocket RPC thread stream failed to restart", error));
     };
+    this.activeThreadStreamInputs.set(key, input);
     this.startStream(
       client,
       key,
@@ -834,13 +902,21 @@ export class WsTransport {
     restart?: (() => void) | undefined,
   ): void {
     if (this.streamCleanups.has(key)) return;
+    this.clearStreamCapacityRetryTimer(key);
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
     let resolveSettled: () => void = () => undefined;
     const settled = new Promise<void>((resolve) => {
       resolveSettled = resolve;
     });
     const cancel = this.getClientRuntime(client).runCallback(
-      Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
+      Stream.runForEach(runnableStream, (event) =>
+        Effect.sync(() => {
+          if (this.streamCapacityRetries.has(key)) {
+            this.streamCapacityRetries.delete(key);
+          }
+          listener(event);
+        }),
+      ),
       {
         onExit: (exit) => {
           if (this.streamSettled.get(key) === settled) {
@@ -850,9 +926,30 @@ export class WsTransport {
           const wasReplacedOrStopped = this.streamCleanups.get(key) !== cancel;
           if (!wasReplacedOrStopped) {
             this.streamCleanups.delete(key);
+            this.activeThreadStreamInputs.delete(key);
           }
           if (wasReplacedOrStopped || this.disposed) {
             return;
+          }
+          if (restart && Exit.isFailure(exit)) {
+            const capacityRetryDelayMs = getStreamCapacityRetryDelayMs(exit.cause);
+            if (capacityRetryDelayMs !== null) {
+              const attempt = (this.streamCapacityRetries.get(key) ?? 0) + 1;
+              this.streamCapacityRetries.set(key, attempt);
+              this.clearStreamCapacityRetryTimer(key);
+              const timeoutId = window.setTimeout(
+                () => {
+                  if (this.streamCapacityRetryTimers.get(key) !== timeoutId) return;
+                  this.streamCapacityRetryTimers.delete(key);
+                  if (!this.disposed && !this.streamCleanups.has(key)) {
+                    restart();
+                  }
+                },
+                Math.min(capacityRetryDelayMs * attempt, MAX_STREAM_CAPACITY_RETRY_MS),
+              );
+              this.streamCapacityRetryTimers.set(key, timeoutId);
+              return;
+            }
           }
           if (restart && Exit.isFailure(exit) && shouldReconnectAfterStreamFailure(exit.cause)) {
             window.setTimeout(
@@ -881,7 +978,15 @@ export class WsTransport {
     this.streamSettled.set(key, settled);
   }
 
-  private stopStream(key: string): Promise<void> {
+  private stopStream(
+    key: string,
+    options?: { readonly resetCapacityRetry?: boolean },
+  ): Promise<void> {
+    this.clearStreamCapacityRetryTimer(key);
+    if (options?.resetCapacityRetry !== false) {
+      this.streamCapacityRetries.delete(key);
+    }
+    this.activeThreadStreamInputs.delete(key);
     const cleanup = this.streamCleanups.get(key);
     const settled = this.streamSettled.get(key) ?? Promise.resolve();
     if (!cleanup) return settled;

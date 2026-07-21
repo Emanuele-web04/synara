@@ -1,7 +1,7 @@
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   goBackInAppHistory,
@@ -256,25 +256,14 @@ function ChatRouteGlobalShortcuts() {
   });
   const currentProjectId = resolveCurrentProjectTargetId(projects, activeProject?.id ?? null);
   const latestUsableProjectId = resolveLatestProjectTargetId(projects, latestProjectId);
-  const handleNewChatForActiveSurface = useCallback(
-    () =>
-      startFreshChatForActiveSurface({
-        activeProject,
-        isStudioRoute,
-        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot },
-        handleNewChat,
-        handleNewStudioChat,
-      }),
-    [
+  const handleNewChatForActiveSurface = () =>
+    startFreshChatForActiveSurface({
       activeProject,
-      chatWorkspaceRoot,
+      isStudioRoute,
+      paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot },
       handleNewChat,
       handleNewStudioChat,
-      homeDir,
-      isStudioRoute,
-      studioWorkspaceRoot,
-    ],
-  );
+    });
 
   useEffect(() => {
     if (!currentProjectId) {

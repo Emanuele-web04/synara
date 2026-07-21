@@ -13,7 +13,7 @@ import {
   type ServerProviderStatus,
   type ThreadId,
 } from "@synara/contracts";
-import { memo, useCallback, useState } from "react";
+import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -75,22 +75,17 @@ type ComposerModelEffortPickerProps = {
 // effort, and the optional speed/fast-mode toggle. The primary menu hosts the
 // reasoning radio group (with fast mode as an icon toggle in its Effort
 // header); the model is reachable via a sub-menu so the footer stays compact.
-export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker(
-  props: ComposerModelEffortPickerProps,
-) {
+export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps) {
   const { onOpenChange, open } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
 
-  const setMenuOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (open === undefined) {
-        setUncontrolledOpen(nextOpen);
-      }
-      onOpenChange?.(nextOpen);
-    },
-    [onOpenChange, open],
-  );
+  const setMenuOpen = (nextOpen: boolean) => {
+    if (open === undefined) {
+      setUncontrolledOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  };
 
   const activeProvider = props.lockedProvider ?? props.provider;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
@@ -134,15 +129,15 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         : null;
   const showsFastBadge = supportsFastModeControl && fastModeEnabled;
 
-  const handleAfterModelSelection = useCallback(() => {
+  const handleAfterModelSelection = () => {
     setMenuOpen(false);
     props.onSelectionCommitted?.();
-  }, [props, setMenuOpen]);
+  };
 
-  const handleAfterTraitsSelection = useCallback(() => {
+  const handleAfterTraitsSelection = () => {
     setMenuOpen(false);
     props.onSelectionCommitted?.();
-  }, [props, setMenuOpen]);
+  };
 
   const hiddenTriggerTitle = [
     props.hideModelLabel ? modelLabel : null,
@@ -170,7 +165,8 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
       <ProviderIcon
         aria-hidden="true"
         className={cn(
-          "size-3.5 shrink-0",
+          // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
+          "size-3.5 shrink-0 opacity-100",
           getProviderIconClassName(activeProvider, "text-[var(--color-text-foreground)]"),
         )}
       />
@@ -286,4 +282,4 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
       </ComposerPickerMenuPopup>
     </Menu>
   );
-});
+}

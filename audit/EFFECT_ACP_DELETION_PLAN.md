@@ -1,7 +1,8 @@
 # Effect ACP Deletion Plan
 
-**Status:** Not started — planning only  
-**Decision date:** 2026-07-18  
+**Status:** Code complete — focused verification green; heavyweight workspace verification deferred
+**Decision date:** 2026-07-18
+**Implementation date:** 2026-07-20
 **Validated with:** Fable 5 High
 
 ## Decision
@@ -32,8 +33,8 @@ Production ACP code may depend on:
 2. `effect` for Synara runtime and lifecycle ownership.
 3. Two small local modules beside the ACP runtime:
    - `AcpErrors.ts`, containing only the Effect-native errors Synara still consumes;
-   - `AcpExtensions.ts`, containing only the non-standard `session/set_model` types and the minimal
-     config-option codecs that genuinely require runtime decoding.
+   - `AcpExtensions.ts`, containing only the minimal config-option codecs that genuinely require
+     runtime decoding.
 
 The final tree must not contain:
 
@@ -51,6 +52,23 @@ The final tree must not contain:
 - Do not upgrade `@agentclientprotocol/sdk` during this migration.
 - Do not refactor unrelated provider architecture or large runtime files.
 - Do not include or prepare unmerged provider implementations as part of this migration.
+
+## Implementation result
+
+- Standard ACP types now come directly from pinned `@agentclientprotocol/sdk` 1.2.1.
+- `AcpErrors.ts` owns only Synara's three Effect-native runtime errors, and `AcpExtensions.ts` owns
+  only the two required config-option codecs.
+- The redundant `session/update` decode and official-SDK array conversion helpers are deleted;
+  elicitation handlers use the official SDK response shape directly.
+- Grok, Droid, Cursor, their shared runtime, and focused tests no longer import `effect-acp`.
+- `packages/effect-acp`, its server dependency, release-manifest entry, benchmark engine, and lockfile
+  entries are deleted. Historical audit, changelog, What's New, and benchmark-result references are
+  intentionally preserved.
+- Focused verification: 20 test files passed with 168 tests passed and 3 environment-dependent tests
+  skipped; the official SDK conformance suite passed 10/10. The server build and official-SDK-only
+  benchmark smoke passed, and `git diff --check` plus zero-import searches passed.
+- Heavyweight workspace verification (`bun fmt`, `bun lint`, `bun typecheck`, and the full test/build
+  matrix) remains deferred by instruction; no full-workspace pass is claimed for this implementation.
 
 ## Execution plan
 
@@ -90,10 +108,8 @@ phase must be behavior-neutral.
 
 Create `apps/server/src/provider/acp/AcpExtensions.ts` containing only:
 
-1. Small request/response TypeScript types for `session/set_model`, which is not part of the pinned
-   official SDK method table.
-2. A minimal Effect codec for the parts of `SessionConfigOption` Synara reads.
-3. A minimal `SetSessionConfigOptionResponse` codec built from that config-option codec.
+1. A minimal Effect codec for the parts of `SessionConfigOption` Synara reads.
+2. A minimal `SetSessionConfigOptionResponse` codec built from that config-option codec.
 
 The two retained runtime decode sites are:
 

@@ -157,6 +157,7 @@ function TerminalViewport({
   const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<TerminalRuntimeStatus>("connecting");
   const runtimeStatusMountedRef = useRef(false);
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const trimmedCwd = useMemo(() => cwd.trim(), [cwd]);
   const runtimeCwdReady = trimmedCwd.length > 0;
   const runtimeKey = useMemo(
@@ -350,7 +351,7 @@ function TerminalViewport({
     };
   }, [terminalId]);
 
-  const showSelectionAction = useCallback(async () => {
+  const showSelectionAction = useCallback(() => {
     if (selectionActionOpenRef.current) {
       return;
     }
@@ -363,20 +364,21 @@ function TerminalViewport({
     if (!api) return;
     const requestId = ++selectionActionRequestIdRef.current;
     selectionActionOpenRef.current = true;
-    try {
-      const clicked = await api.contextMenu.show(
-        [{ id: "add-to-chat", label: "Add to chat" }],
-        nextAction.position,
-      );
-      if (requestId !== selectionActionRequestIdRef.current || clicked !== "add-to-chat") {
-        return;
-      }
-      onAddTerminalContextRef.current(nextAction.selection);
-      terminalRef.current?.clearSelection();
-      terminalRuntimeRegistry.focus(runtimeKey);
-    } finally {
-      selectionActionOpenRef.current = false;
-    }
+    // Promise chain instead of async/try-finally: React Compiler does not yet
+    // support try/finally, and it would skip optimizing this whole component.
+    void api.contextMenu
+      .show([{ id: "add-to-chat", label: "Add to chat" }], nextAction.position)
+      .then((clicked) => {
+        if (requestId !== selectionActionRequestIdRef.current || clicked !== "add-to-chat") {
+          return;
+        }
+        onAddTerminalContextRef.current(nextAction.selection);
+        terminalRef.current?.clearSelection();
+        terminalRuntimeRegistry.focus(runtimeKey);
+      })
+      .finally(() => {
+        selectionActionOpenRef.current = false;
+      });
   }, [clearSelectionAction, readSelectionAction, runtimeKey]);
 
   useEffect(() => {

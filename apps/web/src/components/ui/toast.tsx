@@ -1,7 +1,7 @@
 "use client";
 
 import { Toast, type ToastObject } from "@base-ui/react/toast";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useEffect, useState, type CSSProperties } from "react";
 import { useParams } from "@tanstack/react-router";
 import { ThreadId } from "@synara/contracts";
 import {
@@ -118,11 +118,11 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
   const routeSearch = useDiffRouteSearch();
-  const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const splitView = useSplitViewStore(
+    useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
+  );
 
-  return useMemo(() => {
-    return resolveVisibleToastThreadIds({ activeThreadId, splitView });
-  }, [activeThreadId, splitView]);
+  return resolveVisibleToastThreadIds({ activeThreadId, splitView });
 }
 
 function ThreadToastVisibleAutoDismiss({

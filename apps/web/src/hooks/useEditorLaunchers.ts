@@ -7,7 +7,6 @@
 // Layer: Chat editor action hook
 
 import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
-import { useCallback, useMemo } from "react";
 
 import {
   type EditorOption,
@@ -53,38 +52,27 @@ export function useEditorLaunchers({
   // In context-default mode the primary action is pinned to `defaultEditor` and menu
   // selections are one-shot opens that must not overwrite the persisted preference.
   const effectivePreferred = defaultEditor ?? preferredEditor;
-  const options = useMemo(() => {
-    const installed = resolveAvailableEditorOptions(navigator.platform, availableEditors);
-    if (defaultEditor && !installed.some(({ value }) => value === defaultEditor)) {
-      return [resolveEditorOption(defaultEditor, navigator.platform), ...installed];
-    }
-    return installed;
-  }, [availableEditors, defaultEditor]);
+  const installedOptions = resolveAvailableEditorOptions(navigator.platform, availableEditors);
+  const options =
+    defaultEditor && !installedOptions.some(({ value }) => value === defaultEditor)
+      ? [resolveEditorOption(defaultEditor, navigator.platform), ...installedOptions]
+      : installedOptions;
   const primaryOption = options.find(({ value }) => value === effectivePreferred) ?? null;
-  const setDefaultEditor = useCallback(
-    (editorId: EditorId) => {
-      if (isContextDefault) return;
-      setPreferredEditor(editorId);
-    },
-    [isContextDefault, setPreferredEditor],
-  );
+  const setDefaultEditor = (editorId: EditorId) => {
+    if (isContextDefault) return;
+    setPreferredEditor(editorId);
+  };
 
-  const openInEditor = useCallback(
-    (editorId: EditorId | null) => {
-      const api = readNativeApi();
-      if (!api || !openInTarget) return;
-      const editor = editorId ?? effectivePreferred;
-      if (!editor) return;
-      void api.shell.openInEditor(openInTarget, editor);
-      setDefaultEditor(editor);
-    },
-    [effectivePreferred, openInTarget, setDefaultEditor],
-  );
+  const openInEditor = (editorId: EditorId | null) => {
+    const api = readNativeApi();
+    if (!api || !openInTarget) return;
+    const editor = editorId ?? effectivePreferred;
+    if (!editor) return;
+    void api.shell.openInEditor(openInTarget, editor);
+    setDefaultEditor(editor);
+  };
 
-  const openFavoriteShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "editor.openFavorite"),
-    [keybindings],
-  );
+  const openFavoriteShortcutLabel = shortcutLabelForCommand(keybindings, "editor.openFavorite");
 
   return {
     options,

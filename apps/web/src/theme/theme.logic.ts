@@ -288,10 +288,6 @@ export function isThemeVariant(value: unknown): value is ThemeVariant {
   return value === "light" || value === "dark";
 }
 
-export function getThemeSharePrefix(): string {
-  return THEME_SHARE_PREFIX;
-}
-
 export function getAvailableCodeThemes(variant: ThemeVariant): readonly CodeThemeOption[] {
   return CODE_THEME_OPTIONS.filter((option) => option.variants.includes(variant));
 }
@@ -711,7 +707,6 @@ export function buildThemeCssVariables(
   // --app-shell-background / --background). Sourcing the sidebar from the primary
   // surface keeps its pure color matching Codex in both light and dark.
   const sidebarSurface = readCodexVariable("--color-background-surface");
-  const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
   const settingsSurface = readCodexVariable("--color-background-surface");
   const composerSurface =
     variant === "dark"

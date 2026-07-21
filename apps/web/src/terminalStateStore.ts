@@ -796,7 +796,6 @@ function setThreadTerminalCliKind(
     nextCliKindsById[terminalId] = cliKind;
   }
 
-  const currentLabel = normalized.terminalLabelsById[terminalId] ?? "";
   const currentTitleOverride = normalized.terminalTitleOverridesById[terminalId]?.trim() ?? "";
   const terminalLabelsById =
     cliKind !== null && currentTitleOverride.length === 0

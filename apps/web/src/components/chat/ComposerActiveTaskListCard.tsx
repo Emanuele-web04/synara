@@ -5,8 +5,6 @@
 // Layer: Chat composer UI
 // Exports: ComposerActiveTaskListCard
 
-import { memo } from "react";
-
 import type { ActiveTaskListState } from "../../session-logic";
 import { ActiveTaskListCard } from "./ActiveTaskListCard";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
@@ -20,7 +18,7 @@ interface ComposerActiveTaskListCardProps {
   attachedToPrevious?: boolean;
 }
 
-export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCard({
+export function ComposerActiveTaskListCard({
   activeTaskList,
   backgroundTaskCount,
   compact,
@@ -43,4 +41,4 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
       />
     </ComposerStackedPanel>
   );
-});
+}

@@ -9,7 +9,7 @@
 // "ensure a terminal is open" policy is surface-specific (here: a single terminal-only page).
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
-import { useCallback, useEffect, useMemo } from "react";
+import { useMemo, useEffect } from "react";
 
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
@@ -25,7 +25,7 @@ export function DockTerminalPane(props: {
   // so the xterm runtime sleeps its visual work without detaching its DOM.
   isActive?: boolean;
 }) {
-  const scopeId = useMemo(() => dockTerminalThreadId(props.hostThreadId), [props.hostThreadId]);
+  const scopeId = dockTerminalThreadId(props.hostThreadId);
   const thread = useStore(
     useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
   );
@@ -35,10 +35,9 @@ export function DockTerminalPane(props: {
   const worktreePath = thread?.worktreePath ?? null;
   const projectCwd = project?.cwd ?? null;
   const cwd = worktreePath ?? projectCwd ?? "";
-  const runtimeEnv = useMemo(() => {
-    if (!projectCwd) return {};
-    return projectScriptRuntimeEnv({ project: { cwd: projectCwd }, worktreePath });
-  }, [projectCwd, worktreePath]);
+  const runtimeEnv = projectCwd
+    ? projectScriptRuntimeEnv({ project: { cwd: projectCwd }, worktreePath })
+    : {};
 
   const terminal = useTerminalSurfaceController(scopeId);
   const { terminalState, openTerminalThreadPage, bumpFocusRequest, newTerminalGroup } = terminal;
@@ -52,20 +51,14 @@ export function DockTerminalPane(props: {
     openTerminalThreadPage(scopeId, { terminalOnly: true });
   }, [openTerminalThreadPage, scopeId, terminalState.terminalOpen]);
 
-  const createTerminal = useCallback(() => {
+  const createTerminal = () => {
     if (!terminalState.terminalOpen) {
       openTerminalThreadPage(scopeId, { terminalOnly: true });
       bumpFocusRequest();
       return;
     }
     newTerminalGroup();
-  }, [
-    bumpFocusRequest,
-    newTerminalGroup,
-    openTerminalThreadPage,
-    scopeId,
-    terminalState.terminalOpen,
-  ]);
+  };
 
   return (
     <ThreadTerminalDrawer

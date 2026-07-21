@@ -3,7 +3,7 @@
 // Layer: Environment panel section
 // Exports: EnvironmentProjectInstructionsSection
 
-import { useCallback, useEffect, useRef, useState, type ChangeEventHandler } from "react";
+import { useEffect, useRef, useState, type ChangeEventHandler } from "react";
 import { THREAD_NOTES_MAX_CHARS, type ProjectId } from "@synara/contracts";
 
 import { Textarea } from "~/components/ui/textarea";
@@ -46,7 +46,7 @@ function useProjectInstructionsAutosave({
     onChangeRef.current = onChange;
   }, [onChange]);
 
-  const flush = useCallback(() => {
+  const flush = () => {
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -60,7 +60,7 @@ function useProjectInstructionsAutosave({
     if (projectIdRef.current === pendingSave.projectId) {
       lastCommittedRef.current = pendingSave.value;
     }
-  }, []);
+  };
 
   useEffect(() => {
     const projectChanged = projectIdRef.current !== projectId;
@@ -92,33 +92,30 @@ function useProjectInstructionsAutosave({
     };
   }, [flush]);
 
-  const handleChange = useCallback<ChangeEventHandler<HTMLTextAreaElement>>(
-    (event) => {
-      const nextValue = event.target.value;
-      valueRef.current = nextValue;
-      setValue(nextValue);
-      const currentProjectId = projectIdRef.current;
-      if (!currentProjectId) {
-        pendingSaveRef.current = null;
-        if (debounceRef.current !== null) {
-          window.clearTimeout(debounceRef.current);
-          debounceRef.current = null;
-        }
-        return;
-      }
-      // Keep the project id with the pending payload; active projects can switch before debounce fires.
-      pendingSaveRef.current = {
-        projectId: currentProjectId,
-        value: nextValue,
-        lastCommitted: lastCommittedRef.current,
-      };
+  const handleChange: ChangeEventHandler<HTMLTextAreaElement> = (event) => {
+    const nextValue = event.target.value;
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    const currentProjectId = projectIdRef.current;
+    if (!currentProjectId) {
+      pendingSaveRef.current = null;
       if (debounceRef.current !== null) {
         window.clearTimeout(debounceRef.current);
+        debounceRef.current = null;
       }
-      debounceRef.current = window.setTimeout(flush, PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS);
-    },
-    [flush],
-  );
+      return;
+    }
+    // Keep the project id with the pending payload; active projects can switch before debounce fires.
+    pendingSaveRef.current = {
+      projectId: currentProjectId,
+      value: nextValue,
+      lastCommitted: lastCommittedRef.current,
+    };
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = window.setTimeout(flush, PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS);
+  };
 
   return {
     value,

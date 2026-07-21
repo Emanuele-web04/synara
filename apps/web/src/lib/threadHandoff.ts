@@ -106,11 +106,6 @@ export function buildThreadHandoffImportedActivities(
   });
 }
 
-// Used by: ChatView fork command gating.
-export function hasTransferableThreadMessages(thread: Pick<Thread, "messages">): boolean {
-  return thread.messages.some(isImportableThreadMessage);
-}
-
 export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {
   return thread.messages.some(
     (message) => isImportableThreadMessage(message) && message.source === "native",

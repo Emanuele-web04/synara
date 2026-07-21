@@ -12,7 +12,7 @@ import type {
   PullRequestMergeMethod,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -141,9 +141,33 @@ export function PullRequestDetailPanel({
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
-  const [tab, setTab] = useState<DetailTab>(initialTab);
-  const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
-  const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
+  // Panel state keyed to the PR it belongs to: switching PRs (or landing tab)
+  // derives straight back to the defaults with no state-resetting effect.
+  const panelKey = `${input.projectId}\u0000${input.repository}\u0000${input.number}\u0000${initialTab}`;
+  const [panelState, setPanelState] = useState<{
+    key: string;
+    tab: DetailTab;
+    mergeMethod: PullRequestMergeMethod;
+    confirmAction: "merge" | "close" | null;
+  } | null>(null);
+  const isCurrentPanelState = panelState !== null && panelState.key === panelKey;
+  const tab = isCurrentPanelState ? panelState.tab : initialTab;
+  const mergeMethod = isCurrentPanelState ? panelState.mergeMethod : "merge";
+  const confirmAction = isCurrentPanelState ? panelState.confirmAction : null;
+  const patchPanelState = (patch: {
+    tab?: DetailTab;
+    mergeMethod?: PullRequestMergeMethod;
+    confirmAction?: "merge" | "close" | null;
+  }) =>
+    setPanelState((current) =>
+      current !== null && current.key === panelKey
+        ? { ...current, ...patch }
+        : { key: panelKey, tab: initialTab, mergeMethod: "merge", confirmAction: null, ...patch },
+    );
+  const setTab = (next: DetailTab) => patchPanelState({ tab: next });
+  const setMergeMethod = (next: PullRequestMergeMethod) => patchPanelState({ mergeMethod: next });
+  const setConfirmAction = (next: "merge" | "close" | null) =>
+    patchPanelState({ confirmAction: next });
   const [preparingThread, setPreparingThread] = useState<"findings" | "conflicts" | null>(null);
   const actionInFlightRef = useRef(false);
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
@@ -159,67 +183,73 @@ export function PullRequestDetailPanel({
     }),
   );
 
-  useEffect(() => {
-    setTab(initialTab);
-    setMergeMethod("merge");
-    setConfirmAction(null);
-  }, [initialTab, input.number, input.projectId, input.repository]);
-
-  const runAction = async (action: PullRequestAction, method?: PullRequestMergeMethod) => {
+  // Promise chains instead of async/try-finally in the two runners below:
+  // React Compiler does not yet support try/finally and would skip this
+  // component entirely.
+  const runAction = (action: PullRequestAction, method?: PullRequestMergeMethod) => {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
-    try {
-      await actionMutation.mutateAsync({
+    void actionMutation
+      .mutateAsync({
         ...input,
         action,
         ...(method ? { mergeMethod: method } : {}),
+      })
+      .then(() => {
+        toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
+      })
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Pull request action failed",
+          description: error instanceof Error ? error.message : "GitHub CLI action failed.",
+        });
+      })
+      .finally(() => {
+        actionInFlightRef.current = false;
       });
-      toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Pull request action failed",
-        description: error instanceof Error ? error.message : "GitHub CLI action failed.",
-      });
-    } finally {
-      actionInFlightRef.current = false;
-    }
   };
 
   // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
   // prepare a worktree on the PR branch, create the thread, and pre-fill the composer with
   // the task-specific prompt for the user to review and send.
-  const startPullRequestThread = async (
+  const startPullRequestThread = (
     kind: "findings" | "conflicts",
     prompt: string,
     errorTitle: string,
   ) => {
     if (!detail || preparingThread !== null) return;
     setPreparingThread(kind);
-    try {
-      const mode = settings.defaultThreadEnvMode;
-      const prepared = await prepareThreadMutation.mutateAsync({ reference: detail.url, mode });
-      const threadId = await handleNewThread(detail.projectId, {
-        branch: prepared.branch,
-        worktreePath: prepared.worktreePath,
-        envMode: mode,
-        // This action is an explicit handoff from the PR browser. Reusing the project's
-        // existing draft can leave the user on the PR route and insert the prompt into a
-        // hidden composer, making the button appear inert.
-        fresh: true,
+    const mode = settings.defaultThreadEnvMode;
+    void prepareThreadMutation
+      .mutateAsync({ reference: detail.url, mode })
+      .then((prepared) =>
+        Promise.resolve(
+          handleNewThread(detail.projectId, {
+            branch: prepared.branch,
+            worktreePath: prepared.worktreePath,
+            envMode: mode,
+            // This action is an explicit handoff from the PR browser. Reusing the project's
+            // existing draft can leave the user on the PR route and insert the prompt into a
+            // hidden composer, making the button appear inert.
+            fresh: true,
+          }),
+        ).then((threadId) => {
+          if (!threadId) throw new Error("Could not create a draft thread for this pull request.");
+          appendComposerPromptText(threadId, prompt);
+        }),
+      )
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: errorTitle,
+          description:
+            error instanceof Error ? error.message : "The PR thread could not be prepared.",
+        });
+      })
+      .finally(() => {
+        setPreparingThread(null);
       });
-      if (!threadId) throw new Error("Could not create a draft thread for this pull request.");
-      appendComposerPromptText(threadId, prompt);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: errorTitle,
-        description:
-          error instanceof Error ? error.message : "The PR thread could not be prepared.",
-      });
-    } finally {
-      setPreparingThread(null);
-    }
   };
 
   const fixFindings = () => {

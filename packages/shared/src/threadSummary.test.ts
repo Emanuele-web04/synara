@@ -9,7 +9,21 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { deriveThreadSummaryMetadata } from "./threadSummary";
+import { approvalRequestKindFromRequestType, deriveThreadSummaryMetadata } from "./threadSummary";
+
+describe("approvalRequestKindFromRequestType", () => {
+  it.each([
+    ["command_execution_approval", "command"],
+    ["exec_command_approval", "command"],
+    ["file_read_approval", "file-read"],
+    ["file_change_approval", "file-change"],
+    ["apply_patch_approval", "file-change"],
+    ["unknown", null],
+    [null, null],
+  ] as const)("maps %s to %s", (requestType, expected) => {
+    expect(approvalRequestKindFromRequestType(requestType)).toBe(expected);
+  });
+});
 
 describe("deriveThreadSummaryMetadata", () => {
   it("derives sidebar summary metadata from thread state", () => {

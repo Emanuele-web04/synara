@@ -97,6 +97,228 @@ export interface ReadableToolTitleInput {
   readonly isRunning?: boolean;
 }
 
+interface SynaraMcpToolPresentation {
+  readonly running: string;
+  readonly completed: string;
+  readonly failed: string;
+}
+
+const SYNARA_MCP_TOOL_PRESENTATIONS = {
+  synara_context: {
+    running: "Synara is checking its context",
+    completed: "Synara checked its context",
+    failed: "Synara couldn't check its context",
+  },
+  synara_capabilities: {
+    running: "Synara is checking available agents",
+    completed: "Synara checked available agents",
+    failed: "Synara couldn't check available agents",
+  },
+  synara_list_projects: {
+    running: "Synara is listing projects",
+    completed: "Synara listed projects",
+    failed: "Synara couldn't list projects",
+  },
+  synara_list_threads: {
+    running: "Synara is listing threads",
+    completed: "Synara listed threads",
+    failed: "Synara couldn't list threads",
+  },
+  synara_read_thread: {
+    running: "Synara is reading a thread",
+    completed: "Synara read a thread",
+    failed: "Synara couldn't read a thread",
+  },
+  synara_create_thread: {
+    running: "Synara is creating a thread",
+    completed: "Synara created a thread",
+    failed: "Synara couldn't create a thread",
+  },
+  synara_create_threads: {
+    running: "Synara is creating threads",
+    completed: "Synara created threads",
+    failed: "Synara couldn't create threads",
+  },
+  synara_wait_for_threads: {
+    running: "Synara is waiting for threads",
+    completed: "Synara finished waiting for threads",
+    failed: "Synara couldn't wait for threads",
+  },
+  synara_send_message: {
+    running: "Synara is sending a message",
+    completed: "Synara sent a message",
+    failed: "Synara couldn't send a message",
+  },
+  synara_interrupt_thread: {
+    running: "Synara is interrupting a thread",
+    completed: "Synara interrupted a thread",
+    failed: "Synara couldn't interrupt a thread",
+  },
+  synara_set_thread_title: {
+    running: "Synara is renaming a thread",
+    completed: "Synara renamed a thread",
+    failed: "Synara couldn't rename a thread",
+  },
+  synara_set_thread_archived: {
+    running: "Synara is updating a thread",
+    completed: "Synara updated a thread",
+    failed: "Synara couldn't update a thread",
+  },
+  synara_create_automation: {
+    running: "Synara is creating an automation",
+    completed: "Synara created an automation",
+    failed: "Synara couldn't create an automation",
+  },
+  synara_list_automations: {
+    running: "Synara is listing automations",
+    completed: "Synara listed automations",
+    failed: "Synara couldn't list automations",
+  },
+  synara_cancel_automation: {
+    running: "Synara is stopping an automation",
+    completed: "Synara stopped an automation",
+    failed: "Synara couldn't stop an automation",
+  },
+} as const satisfies Record<string, SynaraMcpToolPresentation>;
+
+function normalizeSynaraMcpIdentifier(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRESENTATIONS).map(
+  ([toolName, presentation]) => ({
+    toolName,
+    presentation,
+    normalizedRunning: normalizeSynaraMcpIdentifier(presentation.running),
+    normalizedCompleted: normalizeSynaraMcpIdentifier(presentation.completed),
+    normalizedFailed: normalizeSynaraMcpIdentifier(presentation.failed),
+  }),
+);
+
+function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
+  if (normalizedCandidate.startsWith("mcp_synara_synara_")) {
+    return normalizedCandidate.slice("mcp_synara_".length);
+  }
+  if (normalizedCandidate.startsWith("mcp_synara_")) {
+    return `synara_${normalizedCandidate.slice("mcp_synara_".length)}`;
+  }
+  if (normalizedCandidate.startsWith("synara_synara_")) {
+    return normalizedCandidate.slice("synara_".length);
+  }
+  if (normalizedCandidate.startsWith("synara_")) {
+    return normalizedCandidate;
+  }
+  return null;
+}
+
+function fallbackSynaraMcpToolPresentation(toolName: string): SynaraMcpToolPresentation {
+  const action =
+    toolName
+      .replace(/^synara_/, "")
+      .replace(/_+/g, " ")
+      .trim() || "an action";
+  return {
+    running: `Synara is handling ${action}`,
+    completed: `Synara handled ${action}`,
+    failed: `Synara couldn't handle ${action}`,
+  };
+}
+
+function resolveSynaraMcpToolPresentation(
+  candidates: ReadonlyArray<string | null | undefined>,
+): SynaraMcpToolPresentation | null {
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
+    for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
+      if (
+        normalizedCandidate === entry.normalizedRunning ||
+        normalizedCandidate === entry.normalizedCompleted ||
+        normalizedCandidate === entry.normalizedFailed
+      ) {
+        return entry.presentation;
+      }
+    }
+    if (normalizedCandidate.startsWith("synara_is_handling_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
+      );
+    }
+    if (normalizedCandidate.startsWith("synara_handled_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
+      );
+    }
+    if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
+      );
+    }
+    const toolName = extractSynaraMcpToolName(normalizedCandidate);
+    if (!toolName) {
+      continue;
+    }
+    const knownPresentation = SYNARA_MCP_TOOL_PRESENTATIONS[
+      toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS
+    ] as SynaraMcpToolPresentation | undefined;
+    return knownPresentation ?? fallbackSynaraMcpToolPresentation(toolName);
+  }
+  return null;
+}
+
+export type SynaraMcpToolStatus = "running" | "completed" | "failed";
+
+export interface SynaraMcpToolTitleInput {
+  readonly toolName?: string | null | undefined;
+  readonly title?: string | null | undefined;
+  readonly fallbackLabel?: string | null | undefined;
+  readonly status?: SynaraMcpToolStatus | undefined;
+}
+
+// Every provider exposes Synara's MCP tools differently: MCP, dynamic, and even
+// file-change rows can all represent the same gateway action. Normalize by tool
+// identity instead of provider item type so transport details never reach the UI.
+export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string | null {
+  const presentation = resolveSynaraMcpToolPresentation([
+    input.toolName,
+    input.title,
+    input.fallbackLabel,
+  ]);
+  if (!presentation) {
+    return null;
+  }
+  switch (input.status ?? "completed") {
+    case "running":
+      return presentation.running;
+    case "completed":
+      return presentation.completed;
+    case "failed":
+      return presentation.failed;
+  }
+}
+
+export function sanitizeSynaraMcpToolPreview(input: {
+  readonly preview?: string | null | undefined;
+  readonly heading: string;
+  readonly status?: SynaraMcpToolStatus | undefined;
+}): string | null {
+  const preview = input.preview?.trim();
+  if (!preview) return null;
+  const previewTitle = deriveSynaraMcpToolTitle({ title: preview, status: input.status });
+  if (
+    previewTitle &&
+    normalizeSynaraMcpIdentifier(previewTitle) === normalizeSynaraMcpIdentifier(input.heading)
+  ) {
+    return null;
+  }
+  return preview;
+}
+
 export function deriveReadableToolTitle(input: ReadableToolTitleInput): string | null {
   const normalizedTitle = normalizeCompactToolLabel(input.title ?? "");
   const normalizedFallback = normalizeCompactToolLabel(input.fallbackLabel);

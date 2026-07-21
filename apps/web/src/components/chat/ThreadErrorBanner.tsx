@@ -3,13 +3,12 @@
 // Layer: Chat status presentation
 // Exports: ThreadErrorBanner
 
-import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
 
-export const ThreadErrorBanner = memo(function ThreadErrorBanner({
+export function ThreadErrorBanner({
   error,
   onDismiss,
 }: {
@@ -38,4 +37,4 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
       </Alert>
     </ChatColumnBannerFrame>
   );
-});
+}

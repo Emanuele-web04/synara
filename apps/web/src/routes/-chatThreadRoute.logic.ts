@@ -3,7 +3,7 @@
 // Layer: Route UI logic helpers.
 // Exports: thread title fallback, deep-link bootstrap replay handling, and panel toggle helpers.
 
-import type { ThreadEnvironmentMode, ThreadId, TurnId } from "@synara/contracts";
+import type { ProjectId, ThreadEnvironmentMode, ThreadId, TurnId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 import type { ChatRightPanel, DiffRouteSearch } from "../diffRouteSearch";
@@ -61,6 +61,50 @@ export function resolveFilePreviewWorkspaceRoot(input: {
     envMode: input.threadEnvMode,
     worktreePath: input.threadWorktreePath,
   });
+}
+
+export function resolveSingleProjectId(input: {
+  threadProjectId: ProjectId | null;
+  draftProjectId: ProjectId | null;
+}): ProjectId | null {
+  return input.threadProjectId ?? input.draftProjectId ?? null;
+}
+
+export function normalizeSingleSearchFromPane(
+  panelState: Pick<ChatPanelStateSnapshot, "panel" | "diffTurnId" | "diffFilePath">,
+): DiffRouteSearch {
+  if (panelState.panel === "browser") {
+    return { panel: "browser" };
+  }
+  if (panelState.panel === "diff") {
+    return {
+      panel: "diff",
+      diff: "1",
+      ...(panelState.diffTurnId ? { diffTurnId: panelState.diffTurnId } : {}),
+      ...(panelState.diffFilePath ? { diffFilePath: panelState.diffFilePath } : {}),
+    };
+  }
+  return {};
+}
+
+export function stripEditorViewSearchParams<T extends Record<string, unknown>>(
+  params: T,
+): Omit<T, "view" | "editorFilePath"> {
+  const { view: _view, editorFilePath: _editorFilePath, ...rest } = params;
+  return rest as Omit<T, "view" | "editorFilePath">;
+}
+
+export function collectParentDirectoryPaths(filePath: string): string[] {
+  const segments = filePath.split("/").filter(Boolean);
+  if (segments.length <= 1) {
+    return [];
+  }
+
+  const parents: string[] = [];
+  for (let index = 1; index < segments.length; index += 1) {
+    parents.push(segments.slice(0, index).join("/"));
+  }
+  return parents;
 }
 
 function createRoutePanelSearchKey(input: {

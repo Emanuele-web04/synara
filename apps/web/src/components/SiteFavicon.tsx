@@ -6,7 +6,7 @@
 // Layer: Shared UI component
 // Used by: markdown source links (ChatMarkdown), InlineLinkChip (composer + user bubble).
 
-import { memo, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { GlobeIcon } from "~/lib/icons";
 import {
@@ -25,25 +25,33 @@ export interface SiteFaviconProps {
   readonly className?: string | undefined;
 }
 
-export const SiteFavicon = memo(function SiteFavicon({ url, size, className }: SiteFaviconProps) {
+export const SiteFavicon = function SiteFavicon({ url, size, className }: SiteFaviconProps) {
   const host = extractHostname(url) ?? (url.includes(".") ? url : null);
   const faviconSrc = host ? resolveSiteFaviconUrl(host) : null;
 
   // Seed from the shared cache so a known host renders its icon immediately.
-  const [status, setStatus] = useState<"ok" | "fail" | null>(() =>
-    faviconSrc ? (siteFaviconStatusCache.get(faviconSrc) ?? null) : "fail",
-  );
+  // Keyed by src: a host change derives back to the pending/fallback state in
+  // the same render, so the probe effect never sets state synchronously.
+  const [probe, setProbe] = useState<{ src: string; status: "ok" | "fail" } | null>(() => {
+    if (!faviconSrc) return null;
+    const cached = siteFaviconStatusCache.get(faviconSrc);
+    return cached === undefined ? null : { src: faviconSrc, status: cached };
+  });
+  const status: "ok" | "fail" | null = !faviconSrc
+    ? "fail"
+    : probe !== null && probe.src === faviconSrc
+      ? probe.status
+      : null;
 
   // Probe with Image() (via the shared, de-duped helper) so Electron/file-origin
   // behaves like the visible <img> and every consumer reuses one load per host.
   useEffect(() => {
     if (!faviconSrc) {
-      setStatus("fail");
       return;
     }
     let cancelled = false;
     void probeSiteFavicon(faviconSrc).then((result) => {
-      if (!cancelled) setStatus(result);
+      if (!cancelled) setProbe({ src: faviconSrc, status: result });
     });
     return () => {
       cancelled = true;
@@ -62,11 +70,11 @@ export const SiteFavicon = memo(function SiteFavicon({ url, size, className }: S
         style={sizeStyle}
         onError={() => {
           siteFaviconStatusCache.set(faviconSrc, "fail");
-          setStatus("fail");
+          setProbe({ src: faviconSrc, status: "fail" });
         }}
       />
     );
   }
 
   return <GlobeIcon aria-hidden="true" className={className} style={sizeStyle} />;
-});
+};

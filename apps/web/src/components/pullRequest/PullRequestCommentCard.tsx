@@ -9,7 +9,7 @@
 // Exports: PullRequestCommentCard
 
 import type { PullRequestComment } from "@synara/contracts";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
@@ -45,7 +45,7 @@ export function PullRequestCommentCard({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const finding = useMemo(() => parseFindingComment(comment.body), [comment.body]);
+  const finding = parseFindingComment(comment.body);
   const replyUrl = comment.url ?? prUrl;
 
   return (
