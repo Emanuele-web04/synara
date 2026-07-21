@@ -2604,7 +2604,7 @@ const make = Effect.gen(function* () {
   const reconcileSettledOpenTurns: ProviderRuntimeIngestionShape["reconcileSettledOpenTurns"] =
     runtimeEvents.pruneSettledOpenTurns.pipe(
       Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
         return Effect.logWarning("provider runtime open-turn cleanup failed", {
           cause: Cause.pretty(cause),
         });
