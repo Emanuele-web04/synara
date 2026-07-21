@@ -268,12 +268,38 @@ describe("provider runtime activity projection", () => {
         type: "session.configured",
         eventId: "context-configured",
         provider: "claudeAgent",
-        payload: { config: { contextWindow: "1m" } },
+        payload: { config: { autoCompactWindow: "1m" } },
       }),
     );
     expect(configured).toMatchObject({
       kind: "context-window.configured",
       payload: { maxTokens: 1_000_000, contextWindow: "1m" },
+    });
+
+    const [legacyConfigured] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "legacy-context-configured",
+        provider: "claudeAgent",
+        payload: { config: { contextWindow: "200k" } },
+      }),
+    );
+    expect(legacyConfigured).toMatchObject({
+      kind: "context-window.configured",
+      payload: { maxTokens: 200_000, contextWindow: "200k" },
+    });
+
+    const [clearedConfigured] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "cleared-context-configured",
+        provider: "claudeAgent",
+        payload: { config: { autoCompactWindow: null } },
+      }),
+    );
+    expect(clearedConfigured).toMatchObject({
+      kind: "context-window.configured",
+      payload: { cleared: true },
     });
 
     const [turn] = projectProviderRuntimeActivities(

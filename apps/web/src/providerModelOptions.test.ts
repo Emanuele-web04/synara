@@ -64,6 +64,36 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it("does not offer Pi Anthropic models when discovery only returns local models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [],
+        dynamicModels: [
+          {
+            slug: "local/glm-5.2",
+            name: "GLM 5.2",
+            upstreamProviderId: "local",
+            upstreamProviderName: "Local",
+          },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual(["local/glm-5.2"]);
+  });
+
+  it("offers Pi Fable and Opus when authenticated discovery returns them", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [],
+        dynamicModels: [
+          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual(["anthropic/claude-fable-5", "anthropic/claude-opus-4-8"]);
+  });
+
   it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
     expect(
       mergeDynamicModelOptions({

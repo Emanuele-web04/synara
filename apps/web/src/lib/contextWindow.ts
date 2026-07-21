@@ -123,9 +123,7 @@ function deriveLatestConfiguredContextWindowMaxTokens(
 
     const payload = asRecord(activity.payload);
     const maxTokens = asFiniteNumber(payload?.maxTokens);
-    if (maxTokens !== null && maxTokens > 0) {
-      return maxTokens;
-    }
+    return maxTokens !== null && maxTokens > 0 ? maxTokens : null;
   }
 
   return null;
