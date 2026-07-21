@@ -159,6 +159,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       fail: externalRepository.failOperationAndTask,
     },
     creationSource: "external_mcp",
+    retainOnMissingThreadProjection: true,
     snapshotQuery,
     orchestrationEngine,
     git,

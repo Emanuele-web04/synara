@@ -93,6 +93,7 @@ import Migration0074 from "./Migrations/074_ExternalMcpIntegrations.ts";
 import Migration0075 from "./Migrations/075_ExternalMcpActiveCapacity.ts";
 import Migration0076 from "./Migrations/076_ExternalMcpHardening.ts";
 import Migration0077 from "./Migrations/077_ExternalMcpCompensatingCapacity.ts";
+import Migration0078 from "./Migrations/078_ExternalMcpLiveTurnCapacity.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -185,6 +186,7 @@ export const migrationEntries = [
   [75, "ExternalMcpActiveCapacity", Migration0075],
   [76, "ExternalMcpHardening", Migration0076],
   [77, "ExternalMcpCompensatingCapacity", Migration0077],
+  [78, "ExternalMcpLiveTurnCapacity", Migration0078],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

@@ -271,10 +271,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [75, "ExternalMcpActiveCapacity"],
         [76, "ExternalMcpHardening"],
         [77, "ExternalMcpCompensatingCapacity"],
+        [78, "ExternalMcpLiveTurnCapacity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-24), [
+      assert.deepStrictEqual(tracker.slice(-25), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -299,6 +300,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 75, name: "ExternalMcpActiveCapacity" },
         { migration_id: 76, name: "ExternalMcpHardening" },
         { migration_id: 77, name: "ExternalMcpCompensatingCapacity" },
+        { migration_id: 78, name: "ExternalMcpLiveTurnCapacity" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -368,6 +370,7 @@ agentGatewayRetentionLegacyLayer(
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
           [77, "ExternalMcpCompensatingCapacity"],
+          [78, "ExternalMcpLiveTurnCapacity"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`

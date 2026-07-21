@@ -504,8 +504,8 @@ layer("ExternalMcpRepository", (it) => {
           checkpoint_ref, checkpoint_status, checkpoint_files_json
         ) VALUES (
           'external-projection-lag-thread', 'external-projection-lag-turn', NULL, NULL,
-          'completed', '2026-07-20T00:01:06.000Z', '2026-07-20T00:01:06.000Z',
-          '2026-07-20T00:01:07.000Z', NULL, NULL, NULL, '[]'
+          'running', '2026-07-20T00:01:06.000Z', '2026-07-20T00:01:06.000Z',
+          NULL, NULL, NULL, NULL, '[]'
         )
       `;
       yield* sql`
@@ -513,6 +513,18 @@ layer("ExternalMcpRepository", (it) => {
         SET latest_turn_id = 'external-projection-lag-turn',
             updated_at = '2026-07-20T00:01:07.000Z'
         WHERE thread_id = 'external-projection-lag-thread'
+      `;
+      yield* sql`
+        UPDATE projection_thread_sessions
+        SET status = 'error', last_error = 'Later provider startup failed.'
+        WHERE thread_id = 'external-projection-lag-thread'
+      `;
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+      yield* sql`
+        UPDATE projection_turns
+        SET state = 'completed', completed_at = '2026-07-20T00:01:08.000Z'
+        WHERE thread_id = 'external-projection-lag-thread'
+          AND turn_id = 'external-projection-lag-turn'
       `;
       assert.equal((yield* repository.reserveOperation(retry)).kind, "reserved");
     }),
