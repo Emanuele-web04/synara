@@ -1520,6 +1520,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
       const rollbackTarget = deriveConversationRollbackTarget(thread.messages, command.messageId);
       if (!rollbackTarget || rollbackTarget.role !== "user") {
         return yield* new OrchestrationCommandInvariantError({

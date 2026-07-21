@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-import type { ProviderKind, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
+import type {
+  OrchestrationEvent,
+  ProviderKind,
+  ProviderRuntimeEvent,
+  ProviderSession,
+} from "@synara/contracts";
 import {
   CheckpointRef,
   CommandId,
@@ -167,7 +172,7 @@ async function waitForThread(
 
 async function waitForEvent(
   engine: OrchestrationEngineShape,
-  predicate: (event: { type: string }) => boolean,
+  predicate: (event: OrchestrationEvent) => boolean,
   timeoutMs = 30_000,
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -1774,6 +1779,61 @@ describe("CheckpointReactor", () => {
       true,
     );
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+  });
+
+  it("rejects a child-thread revert while its parent-owned provider session is active", async () => {
+    const harness = await createHarness({
+      providerStatus: "running",
+      providerActiveTurnId: asTurnId("parent-runtime-turn"),
+    });
+    const createdAt = new Date().toISOString();
+    const childThreadId = ThreadId.makeUnsafe("subagent:thread-1:child-revert");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-child-revert-thread-create"),
+        threadId: childThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Child revert",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: harness.cwd,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-child-revert-active-parent"),
+        threadId: childThreadId,
+        turnCount: 0,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    const events = await waitForEvent(
+      harness.engine,
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.threadId === childThreadId &&
+        event.payload.activity.kind === "checkpoint.revert.failed",
+    );
+    const failure = events.find(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.threadId === childThreadId &&
+        event.payload.activity.kind === "checkpoint.revert.failed",
+    ) as Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
+
+    expect(failure.payload.activity.payload).toMatchObject({
+      detail: `Thread '${childThreadId}' has an active turn. Interrupt the current turn before reverting checkpoints.`,
+    });
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 

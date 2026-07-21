@@ -293,6 +293,43 @@ describe("checkpoint revert decider", () => {
     });
   });
 
+  it("rejects conversation rollback after checkpoint revert admission", async () => {
+    const initialReadModel = makeReadModel({
+      session: makeSession({ status: "ready" }),
+      latestTurn: makeLatestTurn("completed"),
+    });
+    const decidedRevert = await Effect.runPromise(
+      decideOrchestrationCommand({ command: checkpointRevertCommand(), readModel: initialReadModel }),
+    );
+    const startedEvent = (Array.isArray(decidedRevert) ? decidedRevert : [decidedRevert]).find(
+      (event) => event.type === "thread.activity-appended",
+    )!;
+    const readModel = await Effect.runPromise(
+      projectEvent(initialReadModel, { ...startedEvent, sequence: 2 }),
+    );
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.conversation.rollback",
+            commandId: CommandId.makeUnsafe("cmd-rollback-during-revert"),
+            threadId: THREAD_ID,
+            messageId: MessageId.makeUnsafe("message-during-revert"),
+            numTurns: 1,
+            createdAt: NOW,
+          },
+          readModel,
+        }),
+      ),
+    );
+    expect(error).toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.conversation.rollback",
+      detail: REVERT_IN_PROGRESS_ERROR,
+    });
+  });
+
   it("marks an admitted idle edit-and-resend as starting before its reactor runs", async () => {
     const initialReadModel = makeReadModel({
       session: makeSession({ status: "ready" }),
