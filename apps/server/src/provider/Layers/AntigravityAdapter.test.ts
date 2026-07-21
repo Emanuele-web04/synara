@@ -18,11 +18,7 @@ import {
   runAntigravityHelperProcess,
 } from "./AntigravityAdapter";
 
-function runCaptureCommand(
-  command: string,
-  input: string,
-  env: NodeJS.ProcessEnv,
-) {
+function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEnv) {
   const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
   const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
   return spawnSync(shell, args, {
