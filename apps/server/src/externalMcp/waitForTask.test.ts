@@ -2,7 +2,10 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { GatewayToolError } from "../agentGateway/toolRuntime.ts";
-import { waitForExternalMcpTaskState } from "./waitForTask.ts";
+import {
+  terminalExternalMcpSessionStateForRun,
+  waitForExternalMcpTaskState,
+} from "./waitForTask.ts";
 
 const inactive = () =>
   Effect.fail(new GatewayToolError("external_credential_inactive", "Integration revoked."));
@@ -52,6 +55,74 @@ describe("waitForExternalMcpTaskState", () => {
     expect(result).toMatchObject({
       runId: null,
       state: "error",
+      terminal: true,
+      timedOut: false,
+    });
+  });
+
+  it("observes a provider session failure while waiting for a pinned turn", async () => {
+    let sessionReads = 0;
+    const result = await Effect.runPromise(
+      waitForExternalMcpTaskState({
+        threadId: "thread-session-failed",
+        runId: "turn-session-failed",
+        initialState: "running",
+        timeoutMs: 1_000,
+        assertActive: () => Effect.void,
+        projectionTurns: {
+          getManyWaitSnapshot: () => Effect.die("terminal sessions must win before turn polling"),
+        } as never,
+        resolveTerminalSessionState: () => {
+          sessionReads += 1;
+          return Effect.succeed("error" as const);
+        },
+      }),
+    );
+    expect(sessionReads).toBe(1);
+    expect(result).toMatchObject({
+      runId: "turn-session-failed",
+      state: "error",
+      terminal: true,
+      timedOut: false,
+    });
+  });
+
+  it("keeps a completed pinned turn authoritative when a later session fails before a new turn", async () => {
+    const result = await Effect.runPromise(
+      waitForExternalMcpTaskState({
+        threadId: "thread-historical-run",
+        runId: "turn-historical",
+        initialState: "pending",
+        timeoutMs: 1_000,
+        assertActive: () => Effect.void,
+        projectionTurns: {
+          getManyWaitSnapshot: () =>
+            Effect.succeed({
+              existingThreadIds: ["thread-historical-run"],
+              turns: [
+                {
+                  threadId: "thread-historical-run",
+                  turnId: "turn-historical",
+                  state: "completed",
+                },
+              ],
+            }),
+        } as never,
+        resolveTerminalSessionState: (runId) =>
+          Effect.succeed(
+            terminalExternalMcpSessionStateForRun(
+              {
+                latestTurn: { turnId: "turn-historical", state: "completed" },
+                session: { status: "error" },
+              },
+              runId,
+            ),
+          ),
+      }),
+    );
+    expect(result).toMatchObject({
+      runId: "turn-historical",
+      state: "completed",
       terminal: true,
       timedOut: false,
     });

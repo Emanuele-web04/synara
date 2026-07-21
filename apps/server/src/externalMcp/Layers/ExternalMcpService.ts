@@ -506,11 +506,13 @@ export const makeExternalMcpService = Effect.gen(function* () {
         ...(input.detail ? { detail: input.detail.slice(0, 500) } : {}),
       })
       .pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Could not finish external MCP audit row", {
-            auditId: input.auditId,
-            cause: String(cause),
-          }),
+        Effect.mapError((cause) =>
+          toExternalMcpError(
+            "repository_error",
+            "Could not finish external MCP audit row.",
+            500,
+            cause,
+          ),
         ),
       );
 

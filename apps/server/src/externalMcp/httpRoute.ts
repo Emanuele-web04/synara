@@ -7,7 +7,10 @@ import {
 import { Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import { readMcpJsonBody } from "../agentGateway/httpRoute.ts";
+import {
+  readMcpJsonBody,
+  type McpBodyReadResult,
+} from "../agentGateway/httpRoute.ts";
 import { extractBearerToken } from "../agentGateway/bearerToken.ts";
 import { makeEffectAuthRequest } from "../auth/effectHttp.ts";
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
@@ -23,11 +26,30 @@ export const EXTERNAL_MCP_PATH = "/mcp/external";
 // escaping. Larger JSON-RPC batches receive 413 instead of consuming memory
 // without bound; only a small number of authenticated bodies may buffer at once.
 export const EXTERNAL_MCP_MAX_BODY_BYTES = 1024 * 1024;
+export const EXTERNAL_MCP_BODY_READ_TIMEOUT_MS = 10_000;
 const EXTERNAL_MCP_BODY_BUFFER_SLOTS = 4;
 const externalMcpBodyBufferSlots = Effect.runSync(
   Semaphore.make(EXTERNAL_MCP_BODY_BUFFER_SLOTS),
 );
 const MANAGEMENT_MAX_BODY_BYTES = 32 * 1024;
+
+type ExternalMcpBodyReadResult = McpBodyReadResult | { readonly kind: "timeout" };
+
+export const readExternalMcpBody = (
+  request: HttpServerRequest.HttpServerRequest,
+  timeoutMs = EXTERNAL_MCP_BODY_READ_TIMEOUT_MS,
+): Effect.Effect<ExternalMcpBodyReadResult> =>
+  externalMcpBodyBufferSlots
+    .withPermit(readMcpJsonBody(request, EXTERNAL_MCP_MAX_BODY_BYTES))
+    .pipe(
+      Effect.timeoutOption(timeoutMs),
+      Effect.map(
+        Option.match({
+          onNone: () => ({ kind: "timeout" as const }),
+          onSome: (result) => result,
+        }),
+      ),
+    );
 
 const decodeCreateIntegration = Schema.decodeUnknownEffect(ExternalMcpCreateIntegrationInput);
 const decodeRevokeIntegration = Schema.decodeUnknownEffect(ExternalMcpRevokeIntegrationInput);
@@ -79,34 +101,40 @@ const postExternalMcp = HttpRouter.add(
     if (Option.isNone(client)) {
       return externalUnauthorized();
     }
-    return yield* externalMcpBodyBufferSlots.withPermit(
-      Effect.gen(function* () {
-        const body = yield* readMcpJsonBody(request, EXTERNAL_MCP_MAX_BODY_BYTES);
-        if (body.kind === "too-large") {
-          return HttpServerResponse.jsonUnsafe(
-            {
-              jsonrpc: "2.0",
-              id: null,
-              error: { code: -32600, message: "Request body exceeds the 1 MiB limit." },
-            },
-            { status: 413 },
-          );
-        }
-        if (body.kind === "invalid") {
-          return HttpServerResponse.jsonUnsafe(
-            { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid JSON body." } },
-            { status: 400 },
-          );
-        }
-        const result = yield* gateway.handleVerifiedPost({
-          client: client.value,
-          body: body.body,
-        });
-        return result.body === undefined
-          ? HttpServerResponse.empty({ status: result.status })
-          : HttpServerResponse.jsonUnsafe(result.body, { status: result.status });
-      }),
-    );
+    const body = yield* readExternalMcpBody(request);
+    if (body.kind === "timeout") {
+      return HttpServerResponse.jsonUnsafe(
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: "Request body read timed out." },
+        },
+        { status: 408, headers: { Connection: "close" } },
+      );
+    }
+    if (body.kind === "too-large") {
+      return HttpServerResponse.jsonUnsafe(
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: "Request body exceeds the 1 MiB limit." },
+        },
+        { status: 413 },
+      );
+    }
+    if (body.kind === "invalid") {
+      return HttpServerResponse.jsonUnsafe(
+        { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid JSON body." } },
+        { status: 400 },
+      );
+    }
+    const result = yield* gateway.handleVerifiedPost({
+      client: client.value,
+      body: body.body,
+    });
+    return result.body === undefined
+      ? HttpServerResponse.empty({ status: result.status })
+      : HttpServerResponse.jsonUnsafe(result.body, { status: result.status });
   }),
 );
 

@@ -1,5 +1,6 @@
 import { ProjectId } from "@synara/contracts";
 import { Effect, Layer } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
@@ -27,7 +28,9 @@ const layer = ExternalMcpServiceLive.pipe(
   Layer.provide(Layer.succeed(ServerConfig, { baseDir: "/tmp/synara-test" } as never)),
 );
 
-const run = <A, E>(effect: Effect.Effect<A, E, ExternalMcpService>) =>
+const run = <A, E>(
+  effect: Effect.Effect<A, E, ExternalMcpService | SqlClient.SqlClient>,
+) =>
   Effect.runPromise(effect.pipe(Effect.provide(layer)));
 
 describe("ExternalMcpService", () => {
@@ -95,6 +98,41 @@ describe("ExternalMcpService", () => {
           })
           .pipe(Effect.exit);
         expect(result._tag).toBe("Failure");
+      }),
+    );
+  });
+
+  it("surfaces repository audit completion failures to the gateway boundary", async () => {
+    await run(
+      Effect.gen(function* () {
+        const service = yield* ExternalMcpService;
+        const sql = yield* SqlClient.SqlClient;
+        const created = yield* service.createIntegration({
+          name: "Audit failure",
+          projectIds: [ProjectId.makeUnsafe("project-allowed")],
+          capabilities: ["projects:read"],
+        });
+        const paired = yield* service.pair(
+          created.pairingCode,
+          "syn_mcp_v1_audit-failure-secret",
+        );
+        const client = yield* service.verifyCredential(paired.credential);
+        const auditId = yield* service.beginAudit(client, {
+          tool: "synara_list_allowed_projects",
+        });
+        yield* sql`
+          CREATE TRIGGER reject_external_mcp_audit_finish
+          BEFORE UPDATE ON external_mcp_audit_log
+          BEGIN
+            SELECT RAISE(FAIL, 'audit finish rejected');
+          END
+        `;
+
+        const exit = yield* service
+          .finishAudit({ auditId, outcome: "success" })
+          .pipe(Effect.exit);
+        expect(exit._tag).toBe("Failure");
+        yield* sql`DROP TRIGGER reject_external_mcp_audit_finish`;
       }),
     );
   });

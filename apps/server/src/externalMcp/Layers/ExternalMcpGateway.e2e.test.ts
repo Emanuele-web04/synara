@@ -552,6 +552,27 @@ describe("external MCP gateway stdio flow", () => {
         `;
         expect(operationPlans).toHaveLength(1);
         expect(operationPlans[0]!.planJson).not.toContain(prompt);
+
+        yield* sql`
+          CREATE TRIGGER reject_external_mcp_gateway_audit_finish
+          BEFORE UPDATE ON external_mcp_audit_log
+          BEGIN
+            SELECT RAISE(FAIL, 'gateway audit finish rejected');
+          END
+        `;
+        const successfulDespiteAuditFailure = yield* gateway.handlePost({
+          authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+          body: {
+            jsonrpc: "2.0",
+            id: "audit-failure-does-not-replace-result",
+            method: "tools/call",
+            params: { name: "synara_list_allowed_projects", arguments: {} },
+          },
+        });
+        expect(successfulDespiteAuditFailure.status).toBe(200);
+        expect(JSON.stringify(successfulDespiteAuditFailure.body)).toContain(PROJECT_ID);
+        expect(JSON.stringify(successfulDespiteAuditFailure.body)).not.toContain('"isError":true');
+        yield* sql`DROP TRIGGER reject_external_mcp_gateway_audit_finish`;
       }).pipe(Effect.provide(testLayer)),
     );
   });

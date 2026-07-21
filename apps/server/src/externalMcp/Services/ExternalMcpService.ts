@@ -70,7 +70,7 @@ export interface ExternalMcpServiceShape {
     readonly outcome: string;
     readonly createdTaskIds?: ReadonlyArray<string>;
     readonly detail?: string;
-  }) => Effect.Effect<void>;
+  }) => Effect.Effect<void, ExternalMcpError>;
 }
 
 export class ExternalMcpService extends ServiceMap.Service<

@@ -2,7 +2,7 @@ import http from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Layer, Scope } from "effect";
+import { Effect, Exit, Layer, Scope, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
@@ -10,12 +10,22 @@ import { ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { ExternalMcpGateway } from "./Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "./Services/ExternalMcpService.ts";
-import { EXTERNAL_MCP_MAX_BODY_BYTES, externalMcpRouteLayer } from "./httpRoute.ts";
+import {
+  EXTERNAL_MCP_MAX_BODY_BYTES,
+  externalMcpRouteLayer,
+  readExternalMcpBody,
+} from "./httpRoute.ts";
 
 const EXTERNAL_TOKEN = "syn_mcp_v1_external-route-test";
 
 async function withExternalMcpServer(
-  input: { readonly host?: string; readonly publicUrl?: URL },
+  input: {
+    readonly host?: string;
+    readonly publicUrl?: URL;
+    readonly handleVerifiedPost?: (
+      body: unknown,
+    ) => Effect.Effect<{ readonly status: number; readonly body?: unknown }>;
+  },
   run: (input: {
     readonly origin: string;
     readonly handledBodies: ReadonlyArray<unknown>;
@@ -66,7 +76,9 @@ async function withExternalMcpServer(
       },
       handleVerifiedPost: (request: { readonly body: unknown }) => {
         handledBodies.push(request.body);
-        return Effect.succeed({ status: 200, body: { ok: true } });
+        return input.handleVerifiedPost
+          ? input.handleVerifiedPost(request.body)
+          : Effect.succeed({ status: 200, body: { ok: true } });
       },
     } as never;
     const auth = {
@@ -119,6 +131,125 @@ async function withExternalMcpServer(
 }
 
 describe("externalMcpRouteLayer", () => {
+  it("releases every body-buffer permit before long-running tool dispatch", async () => {
+    let releaseBlocked!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseBlocked = resolve;
+    });
+    let handledCount = 0;
+    await withExternalMcpServer(
+      {
+        handleVerifiedPost: () => {
+          handledCount += 1;
+          return handledCount <= 4
+            ? Effect.promise(() => blocked).pipe(
+                Effect.as({ status: 200, body: { released: true } }),
+              )
+            : Effect.succeed({ status: 200, body: { admitted: true } });
+        },
+      },
+      async ({ origin, handledBodies }) => {
+        const post = (id: number) =>
+          fetch(`${origin}/mcp/external`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${EXTERNAL_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ jsonrpc: "2.0", id, method: "ping" }),
+          });
+        const blockedRequests = [1, 2, 3, 4].map(post);
+        try {
+          const deadline = Date.now() + 1_000;
+          while (handledBodies.length < 4 && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          expect(handledBodies).toHaveLength(4);
+          const fifth = await Promise.race([
+            post(5),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error("fifth request remained behind body permits")),
+                1_000,
+              ),
+            ),
+          ]);
+          expect(fifth.status).toBe(200);
+          expect(handledBodies).toHaveLength(5);
+        } finally {
+          releaseBlocked();
+          await Promise.allSettled(blockedRequests);
+        }
+      },
+    );
+  });
+
+  it("times out stalled body streams and releases their permits", async () => {
+    const stalledRequest = {
+      headers: {},
+      stream: Stream.never,
+    } as never;
+    const stalled = await Effect.runPromise(
+      Effect.all(
+        Array.from({ length: 4 }, () => readExternalMcpBody(stalledRequest, 10)),
+        { concurrency: "unbounded" },
+      ),
+    );
+    expect(stalled).toEqual(Array.from({ length: 4 }, () => ({ kind: "timeout" })));
+
+    const validRequest = {
+      headers: {},
+      stream: Stream.make(new TextEncoder().encode('{"ok":true}')),
+    } as never;
+    await expect(Effect.runPromise(readExternalMcpBody(validRequest, 100))).resolves.toEqual({
+      kind: "ok",
+      body: { ok: true },
+    });
+  });
+
+  it("bounds time spent queued behind occupied body-buffer permits", async () => {
+    let startedReads = 0;
+    const holdingRequest = {
+      headers: {},
+      stream: Stream.concat(
+        Stream.fromEffect(
+          Effect.sync(() => {
+            startedReads += 1;
+            return new Uint8Array();
+          }),
+        ),
+        Stream.never,
+      ),
+    } as never;
+    const holders = Array.from({ length: 4 }, () =>
+      Effect.runPromise(readExternalMcpBody(holdingRequest, 200)),
+    );
+    const deadline = Date.now() + 1_000;
+    while (startedReads < 4 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(startedReads).toBe(4);
+
+    let queuedStarted = false;
+    const queuedRequest = {
+      headers: {},
+      stream: Stream.concat(
+        Stream.fromEffect(
+          Effect.sync(() => {
+            queuedStarted = true;
+            return new Uint8Array();
+          }),
+        ),
+        Stream.never,
+      ),
+    } as never;
+    const queued = await Effect.runPromise(readExternalMcpBody(queuedRequest, 10));
+    expect(queued).toEqual({ kind: "timeout" });
+    expect(queuedStarted).toBe(false);
+    await Promise.all(holders);
+    expect(queuedStarted).toBe(false);
+  });
+
   it("rejects non-external tokens before reading the body and enforces its smaller limit", async () => {
     await withExternalMcpServer({}, async ({ origin, handledBodies }) => {
       const oversizedBody = "x".repeat(EXTERNAL_MCP_MAX_BODY_BYTES + 1);
