@@ -316,7 +316,9 @@ function buildConfiguredContextWindowPayload(
     return undefined;
   }
   const config = asObject(event.payload.config);
-  const configuredWindowValue = config?.autoCompactWindow ?? config?.contextWindow;
+  const autoCompactWindow = config?.autoCompactWindow;
+  const legacyContextWindow = config?.contextWindow;
+  const configuredWindowValue = autoCompactWindow ?? legacyContextWindow;
   const configuredWindow = asString(configuredWindowValue)?.trim().toLowerCase();
   const maxTokens =
     asPositiveFiniteNumber(configuredWindowValue) ??
@@ -326,7 +328,11 @@ function buildConfiguredContextWindowPayload(
         ? 200_000
         : undefined);
   if (maxTokens === undefined) {
-    return undefined;
+    const explicitlyCleared =
+      (autoCompactWindow === null &&
+        (legacyContextWindow === undefined || legacyContextWindow === null)) ||
+      (autoCompactWindow === undefined && legacyContextWindow === null);
+    return explicitlyCleared ? toActivityPayload({ cleared: true }) : undefined;
   }
   return toActivityPayload({
     maxTokens,

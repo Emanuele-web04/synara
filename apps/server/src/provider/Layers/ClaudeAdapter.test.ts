@@ -6484,7 +6484,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const configuredEventsFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "session.configured",
-      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+      ).pipe(Stream.take(3), Stream.runCollect, Effect.forkChild);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -6505,14 +6505,26 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
         attachments: [],
       });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "switch to a discovered model",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude/custom-opus",
+        },
+        attachments: [],
+      });
 
-      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: 200_000 }]);
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
+        { autoCompactWindow: 200_000 },
+        { autoCompactWindow: null },
+      ]);
       const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
       assert.deepEqual(
         configuredEvents.map((event) =>
           event.type === "session.configured" ? event.payload.config.autoCompactWindow : undefined,
         ),
-        ["1m", 200_000],
+        ["1m", 200_000, null],
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

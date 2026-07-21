@@ -289,6 +289,19 @@ describe("provider runtime activity projection", () => {
       payload: { maxTokens: 200_000, contextWindow: "200k" },
     });
 
+    const [clearedConfigured] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "cleared-context-configured",
+        provider: "claudeAgent",
+        payload: { config: { autoCompactWindow: null } },
+      }),
+    );
+    expect(clearedConfigured).toMatchObject({
+      kind: "context-window.configured",
+      payload: { cleared: true },
+    });
+
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "turn.completed",
