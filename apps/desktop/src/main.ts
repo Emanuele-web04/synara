@@ -59,7 +59,12 @@ import { RotatingFileSink } from "@synara/shared/logging";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
-import { requireWindowsBackendExit, stopWindowsBackendAndWait } from "./backendShutdown";
+import {
+  requireWindowsBackendExit,
+  runAfterDesktopShutdown,
+  shouldDeferDesktopWindowClose,
+  stopWindowsBackendAndWait,
+} from "./backendShutdown";
 import {
   bundleSignatureFromStats,
   isBundleStable,
@@ -69,6 +74,10 @@ import {
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import {
+  makeUpdateInstallPreparationCoordinator,
+  type UpdateInstallPreparationAttempt,
+} from "./updateInstallPreparation";
 import {
   hasPendingDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
@@ -260,6 +269,7 @@ let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
 let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
+const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
 let desktopShutdownComplete = false;
@@ -680,14 +690,21 @@ function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
   return updateState.errorContext;
 }
 
-function clearUpdaterInstallInFlightAfterError(): void {
+function clearUpdaterInstallInFlightAfterError(input?: {
+  readonly preservePendingPreparation?: boolean;
+}): boolean {
+  const preparationCancelled = updateInstallPreparation.cancel();
+  if (preparationCancelled && input?.preservePendingPreparation) {
+    return true;
+  }
   if (!isUpdaterInstallPreparing && !isUpdaterQuitAndInstallInFlight) {
-    return;
+    return preparationCancelled;
   }
   isUpdaterInstallPreparing = false;
   isUpdaterQuitAndInstallInFlight = false;
   activeUpdateInstallHandoff = null;
   isQuitting = false;
+  return preparationCancelled;
 }
 
 function clearUpdateInstallWatchdogTimer(): void {
@@ -2186,7 +2203,7 @@ function handleDesktopAppForegrounded(): void {
 }
 
 async function checkForUpdates(reason: string): Promise<void> {
-  if (isQuitting || !updaterConfigured || updateCheckInFlight) return;
+  if (isQuitting || isUpdaterInstallPreparing || !updaterConfigured || updateCheckInFlight) return;
   if (automaticUpdateActivitySuppressed) {
     if (!isExplicitUpdateCheckReason(reason)) {
       console.info(
@@ -2345,13 +2362,12 @@ function prepareAvailableUpdateInBackground(reason: string): void {
     });
 }
 
-async function installDownloadedUpdate(): Promise<{
+async function runDownloadedUpdateInstall(
+  preparationAttempt: UpdateInstallPreparationAttempt,
+): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
-  if (isQuitting || !updaterConfigured || updateState.status !== "downloaded") {
-    return { accepted: false, completed: false };
-  }
   const versionToInstall = updateState.downloadedVersion ?? updateState.availableVersion;
   if (!versionToInstall || !isKnownUpdateVersionNewer(versionToInstall)) {
     await clearPendingUpdateCache("downloaded version is not newer than current app");
@@ -2374,6 +2390,7 @@ async function installDownloadedUpdate(): Promise<{
     console.error(`[desktop-updater] Refusing install handoff: ${message}`);
     return { accepted: false, completed: false };
   }
+  updateInstallPreparation.requireActive(preparationAttempt);
 
   const markerPath = getUpdateInstallMarkerPath();
   const existingMarkerResult = readInstallMarker(markerPath);
@@ -2398,10 +2415,11 @@ async function installDownloadedUpdate(): Promise<{
   let artifactInvalidated = false;
   try {
     isQuitting = true;
-    isUpdaterInstallPreparing = true;
     clearUpdatePollTimer();
     await stopBackendAndWaitForExit();
+    updateInstallPreparation.requireActive(preparationAttempt);
     await logMacUpdateDiagnostics("before install handoff");
+    updateInstallPreparation.requireActive(preparationAttempt);
     if (!(await verifyUpdateArtifactIdentity(artifact))) {
       artifactInvalidated = true;
       downloadedUpdateArtifact = null;
@@ -2410,6 +2428,7 @@ async function installDownloadedUpdate(): Promise<{
         "The downloaded update changed during install preparation. Download it again.",
       );
     }
+    updateInstallPreparation.requireActive(preparationAttempt);
     writeInstallMarker(markerPath, marker);
     markerWritten = true;
     if (!markInstallHandoffSync(markerPath, handoffExpectation)) {
@@ -2418,6 +2437,7 @@ async function installDownloadedUpdate(): Promise<{
     activeUpdateInstallHandoff = handoffExpectation;
     isUpdaterQuitAndInstallInFlight = true;
     autoUpdater.quitAndInstall();
+    updateInstallPreparation.requireActive(preparationAttempt);
     armInstallWatchdog();
     return { accepted: true, completed: false };
   } catch (error: unknown) {
@@ -2436,6 +2456,29 @@ async function installDownloadedUpdate(): Promise<{
     });
     console.error(`[desktop-updater] Failed to install update: ${message}`);
     return { accepted: true, completed: false };
+  }
+}
+
+async function installDownloadedUpdate(): Promise<{
+  accepted: boolean;
+  completed: boolean;
+}> {
+  if (isQuitting || !updaterConfigured || updateState.status !== "downloaded") {
+    return { accepted: false, completed: false };
+  }
+  const preparationAttempt = updateInstallPreparation.begin();
+  if (preparationAttempt === null) {
+    return { accepted: false, completed: false };
+  }
+  isUpdaterInstallPreparing = true;
+
+  try {
+    return await runDownloadedUpdateInstall(preparationAttempt);
+  } finally {
+    if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {
+      clearUpdaterInstallInFlightAfterError();
+    }
+    updateInstallPreparation.release(preparationAttempt);
   }
 }
 
@@ -2584,7 +2627,9 @@ function configureAutoUpdater(): void {
       return;
     }
     const failedHandoff = activeUpdateInstallHandoff;
-    clearUpdaterInstallInFlightAfterError();
+    const installPreparationPending = clearUpdaterInstallInFlightAfterError({
+      preservePendingPreparation: true,
+    });
     if (errorContext === "download") {
       downloadedUpdateArtifact = null;
     }
@@ -2592,7 +2637,7 @@ function configureAutoUpdater(): void {
       errorContext === "install"
         ? recordInstallMarkerFailure(new Date().toISOString(), failedHandoff)
         : updateState.installFailureCount;
-    if (errorContext === "install") {
+    if (errorContext === "install" && !installPreparationPending) {
       startBackend();
       scheduleUpdatePoll();
     }
@@ -2904,26 +2949,31 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 
   isQuitting = true;
-  desktopShutdownPromise = (async () => {
-    writeDesktopLogHeader(`${reason} shutdown start`);
-    try {
-      clearUpdateBackgroundBlurTimer();
-      clearUpdateCheckTimeoutTimer();
-      clearUpdatePollTimer();
-      cancelBackendReadinessWait();
-      appSnapManager?.dispose();
-      appSnapManager = null;
-      await disposeBrowserUsePipeServerForShutdown(reason);
-      await stopBackendAndWaitForExit();
-      browserManager.dispose();
-      restoreStdIoCapture?.();
-      writeDesktopLogHeader(`${reason} shutdown complete`);
-    } finally {
-      desktopShutdownComplete = true;
-    }
-  })();
+  writeDesktopLogHeader(`${reason} shutdown start`);
+  const shutdown = runAfterDesktopShutdown(stopBackendAndWaitForExit(), async () => {
+    clearUpdateBackgroundBlurTimer();
+    clearUpdateCheckTimeoutTimer();
+    clearUpdatePollTimer();
+    cancelBackendReadinessWait();
+    appSnapManager?.dispose();
+    appSnapManager = null;
+    await disposeBrowserUsePipeServerForShutdown(reason);
+    browserManager.dispose();
+    restoreStdIoCapture?.();
+    desktopShutdownComplete = true;
+    writeDesktopLogHeader(`${reason} shutdown complete`);
+  });
+  desktopShutdownPromise = shutdown;
 
-  return desktopShutdownPromise;
+  try {
+    await shutdown;
+  } catch (error) {
+    if (desktopShutdownPromise === shutdown) {
+      desktopShutdownPromise = null;
+    }
+    isQuitting = false;
+    throw error;
+  }
 }
 
 function requestGracefulAppQuit(reason: string): void {
@@ -2932,14 +2982,11 @@ function requestGracefulAppQuit(reason: string): void {
     return;
   }
 
-  void shutdownDesktopRuntime(reason)
+  void runAfterDesktopShutdown(shutdownDesktopRuntime(reason), () => app.quit())
     .catch((error: unknown) => {
       const message = formatErrorMessage(error);
       writeDesktopLogHeader(`${reason} shutdown failed message=${message}`);
       console.warn(`[desktop] Shutdown failed during ${reason}: ${message}`);
-    })
-    .finally(() => {
-      app.quit();
     });
 }
 
@@ -3413,7 +3460,7 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
-  window.on("close", () => {
+  window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
         version: 1,
@@ -3422,6 +3469,17 @@ function createWindow(): BrowserWindow {
       });
     } catch (error) {
       console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
+    }
+
+    if (
+      shouldDeferDesktopWindowClose({
+        platform: process.platform,
+        shutdownComplete: desktopShutdownComplete,
+        updaterHandoffActive: isUpdaterQuitAndInstallInFlight,
+      })
+    ) {
+      event.preventDefault();
+      requestGracefulAppQuit("window-close");
     }
   });
 

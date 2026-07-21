@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DESKTOP_BACKEND_SHUTDOWN_PATH,
   requireWindowsBackendExit,
+  runAfterDesktopShutdown,
+  shouldDeferDesktopWindowClose,
   startDesktopBackendShutdownRequest,
   stopWindowsBackendAndWait,
   WindowsBackendShutdownTimeoutError,
@@ -449,6 +451,57 @@ describe("requireWindowsBackendExit", () => {
       expect(error).toBeInstanceOf(WindowsBackendShutdownTimeoutError);
       expect(error).toMatchObject({ forced: true });
     }
+  });
+});
+
+describe("runAfterDesktopShutdown", () => {
+  it("runs shutdown-only actions only after shutdown completes successfully", async () => {
+    const afterShutdown = vi.fn();
+
+    await expect(
+      runAfterDesktopShutdown(Promise.resolve(), afterShutdown),
+    ).resolves.toBeUndefined();
+    expect(afterShutdown).toHaveBeenCalledOnce();
+
+    const shutdownError = new Error("backend still running");
+    const afterFailedShutdown = vi.fn();
+    await expect(
+      runAfterDesktopShutdown(Promise.reject(shutdownError), afterFailedShutdown),
+    ).rejects.toBe(shutdownError);
+    expect(afterFailedShutdown).not.toHaveBeenCalled();
+  });
+});
+
+describe("shouldDeferDesktopWindowClose", () => {
+  it("keeps Windows windows alive until shutdown or updater handoff is proven", () => {
+    expect(
+      shouldDeferDesktopWindowClose({
+        platform: "win32",
+        shutdownComplete: false,
+        updaterHandoffActive: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldDeferDesktopWindowClose({
+        platform: "linux",
+        shutdownComplete: false,
+        updaterHandoffActive: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeferDesktopWindowClose({
+        platform: "win32",
+        shutdownComplete: false,
+        updaterHandoffActive: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeferDesktopWindowClose({
+        platform: "darwin",
+        shutdownComplete: false,
+        updaterHandoffActive: false,
+      }),
+    ).toBe(false);
   });
 });
 

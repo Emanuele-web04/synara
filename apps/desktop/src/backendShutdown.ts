@@ -46,6 +46,24 @@ export function requireWindowsBackendExit(result: WindowsBackendShutdownResult):
   }
 }
 
+export async function runAfterDesktopShutdown(
+  shutdown: Promise<void>,
+  afterShutdown: () => void | Promise<void>,
+): Promise<void> {
+  await shutdown;
+  await afterShutdown();
+}
+
+export function shouldDeferDesktopWindowClose(input: {
+  readonly platform: NodeJS.Platform;
+  readonly shutdownComplete: boolean;
+  readonly updaterHandoffActive: boolean;
+}): boolean {
+  return (
+    input.platform === "win32" && !input.shutdownComplete && !input.updaterHandoffActive
+  );
+}
+
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();
 
 function isLoopbackShutdownUrl(url: URL): boolean {
