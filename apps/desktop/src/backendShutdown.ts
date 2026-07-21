@@ -28,6 +28,24 @@ export type WindowsBackendShutdownResult =
   | { readonly type: "exited"; readonly forced: boolean }
   | { readonly type: "timed-out"; readonly forced: boolean };
 
+export class WindowsBackendShutdownTimeoutError extends Error {
+  readonly forced: boolean;
+
+  constructor(
+    result: Extract<WindowsBackendShutdownResult, { readonly type: "timed-out" }>,
+  ) {
+    super("Timed out waiting for the Windows desktop backend to exit.");
+    this.name = "WindowsBackendShutdownTimeoutError";
+    this.forced = result.forced;
+  }
+}
+
+export function requireWindowsBackendExit(result: WindowsBackendShutdownResult): void {
+  if (result.type === "timed-out") {
+    throw new WindowsBackendShutdownTimeoutError(result);
+  }
+}
+
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();
 
 function isLoopbackShutdownUrl(url: URL): boolean {
@@ -261,5 +279,13 @@ export function stopWindowsBackendAndWait(input: {
     forceTerminate: input.forceTerminate ?? ((child) => void child.kill("SIGTERM")),
   });
   shutdownsByProcess.set(input.child, operation);
+  void operation.then((result) => {
+    if (
+      result.type === "timed-out" &&
+      shutdownsByProcess.get(input.child) === operation
+    ) {
+      shutdownsByProcess.delete(input.child);
+    }
+  });
   return operation;
 }

@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DESKTOP_BACKEND_SHUTDOWN_PATH,
+  requireWindowsBackendExit,
   startDesktopBackendShutdownRequest,
   stopWindowsBackendAndWait,
+  WindowsBackendShutdownTimeoutError,
   type BackendShutdownProcess,
   type DesktopBackendShutdownRequestOutcome,
   type PendingDesktopBackendShutdownRequest,
@@ -199,7 +201,7 @@ describe("stopWindowsBackendAndWait", () => {
     expect(child.killSignals).toEqual(["SIGTERM"]);
   });
 
-  it("cancels a hung request at the overall deadline and never forces twice", async () => {
+  it("cancels a hung request and releases the live child for a later retry", async () => {
     const child = makeTestBackendShutdownProcess();
     const pendingRequest = makePendingRequest();
     const forceTerminate = vi.fn((processHandle: BackendShutdownProcess) => {
@@ -228,17 +230,23 @@ describe("stopWindowsBackendAndWait", () => {
     expect(forceTerminate).toHaveBeenCalledOnce();
     expect(child.killSignals).toEqual(["SIGTERM"]);
 
-    const duplicateAfterDeadline = stopWindowsBackendAndWait({
+    const retryRequest = makePendingRequest();
+    const startRetryRequest = vi.fn(() => retryRequest);
+    const retry = stopWindowsBackendAndWait({
       child,
       backendHttpUrl: "http://127.0.0.1:3773",
       shutdownToken: "desktop-only-token",
       forceKillDelayMs: 8_000,
       timeoutMs: 10_000,
-      startRequest: () => makePendingRequest(),
+      startRequest: startRetryRequest,
       forceTerminate,
     });
-    expect(duplicateAfterDeadline).toBe(shutdown);
-    await expect(duplicateAfterDeadline).resolves.toEqual({ type: "timed-out", forced: true });
+
+    expect(retry).not.toBe(shutdown);
+    expect(startRetryRequest).toHaveBeenCalledOnce();
+    child.exit(0);
+    await expect(retry).resolves.toEqual({ type: "exited", forced: false });
+    expect(retryRequest.cancel).toHaveBeenCalledOnce();
     expect(forceTerminate).toHaveBeenCalledOnce();
   });
 
@@ -424,6 +432,23 @@ describe("stopWindowsBackendAndWait", () => {
         timeoutMs: 10_000,
       }),
     ).toThrow(RangeError);
+  });
+});
+
+describe("requireWindowsBackendExit", () => {
+  it("accepts proven exit and rejects a bounded timeout with force-attempt context", () => {
+    expect(() =>
+      requireWindowsBackendExit({ type: "already-exited", forced: false }),
+    ).not.toThrow();
+    expect(() => requireWindowsBackendExit({ type: "exited", forced: true })).not.toThrow();
+
+    try {
+      requireWindowsBackendExit({ type: "timed-out", forced: true });
+      throw new Error("Expected an unproven backend exit to be rejected");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WindowsBackendShutdownTimeoutError);
+      expect(error).toMatchObject({ forced: true });
+    }
   });
 });
 

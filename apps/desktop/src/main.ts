@@ -59,7 +59,7 @@ import { RotatingFileSink } from "@synara/shared/logging";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
-import { stopWindowsBackendAndWait } from "./backendShutdown";
+import { requireWindowsBackendExit, stopWindowsBackendAndWait } from "./backendShutdown";
 import {
   bundleSignatureFromStats,
   isBundleStable,
@@ -2821,13 +2821,25 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
 
   if (process.platform === "win32") {
     const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
-    await stopWindowsBackendAndWait({
-      child: backendChild,
-      backendHttpUrl,
-      shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
-      forceKillDelayMs,
-      timeoutMs,
-    });
+    try {
+      const result = await stopWindowsBackendAndWait({
+        child: backendChild,
+        backendHttpUrl,
+        shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+        forceKillDelayMs,
+        timeoutMs,
+      });
+      requireWindowsBackendExit(result);
+    } catch (error) {
+      if (
+        backendProcess === null &&
+        backendChild.exitCode === null &&
+        backendChild.signalCode === null
+      ) {
+        backendProcess = backendChild;
+      }
+      throw error;
+    }
     return;
   }
 
