@@ -84,6 +84,99 @@ describe("planRestartTurnReconciliation", () => {
     expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([]);
   });
 
+  it("preserves a terminal error session with a retained turn id when no requests are pending", () => {
+    const threads = [
+      makeThread("errored", {
+        session: makeSession("errored", {
+          status: "error",
+          activeTurnId: TurnId.makeUnsafe("failed-turn"),
+          lastError: "runtime exploded",
+        }),
+        latestTurn: { state: "error" },
+      }),
+    ];
+
+    expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([]);
+  });
+
+  it("marks an unfinished checkpoint revert as failed after restart", () => {
+    const thread = makeThread("stale-checkpoint-revert", {
+      activities: [
+        makeActivity(
+          "checkpoint-revert-started",
+          "checkpoint.revert.started",
+          { turnCount: 1, scope: "thread" },
+          1,
+        ),
+      ],
+    });
+
+    expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([
+      expect.objectContaining({
+        type: "thread.activity.append",
+        threadId: "stale-checkpoint-revert",
+        activity: expect.objectContaining({ kind: "checkpoint.revert.failed" }),
+      }),
+    ]);
+  });
+
+  it("cleans stale requests from a terminal error without overwriting the error session", () => {
+    const threads = [
+      makeThread("errored-with-requests", {
+        session: makeSession("errored-with-requests", {
+          status: "error",
+          activeTurnId: TurnId.makeUnsafe("failed-turn"),
+          lastError: "runtime exploded",
+        }),
+        latestTurn: { state: "error" },
+        activities: [
+          makeActivity(
+            "approval-requested-after-error",
+            "approval.requested",
+            {
+              requestId: "approval-after-error",
+              requestKind: "command",
+            },
+            1,
+          ),
+          makeActivity(
+            "input-requested-after-error",
+            "user-input.requested",
+            {
+              requestId: "input-after-error",
+              questions: [
+                {
+                  id: "next_step",
+                  header: "Next",
+                  question: "How should the failed turn continue?",
+                  options: [
+                    {
+                      label: "Cancel",
+                      description: "Stop the stale request.",
+                    },
+                  ],
+                },
+              ],
+            },
+            2,
+          ),
+        ],
+      }),
+    ];
+
+    const commands = planRestartTurnReconciliation({ threads, now: NOW });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.activity.append",
+      "thread.activity.append",
+    ]);
+    expect(commands[0]).toMatchObject({
+      commandId: `restart-reconcile:errored-with-requests:approval:approval-after-error:${NOW}`,
+    });
+    expect(commands[1]).toMatchObject({
+      commandId: `restart-reconcile:errored-with-requests:user-input:input-after-error:${NOW}`,
+    });
+  });
+
   it("reconciles a thread whose session still points at an active turn", () => {
     const threads = [
       makeThread("stuck", {

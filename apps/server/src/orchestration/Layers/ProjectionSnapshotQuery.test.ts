@@ -1849,4 +1849,68 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
     }),
   );
+
+  it.effect("keeps the latest checkpoint-revert lifecycle row in the command model", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-revert-lifecycle', 'Revert lifecycle', '/tmp/revert-lifecycle',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-revert-lifecycle', 'project-revert-lifecycle', 'Revert lifecycle',
+          '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+          '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        ) VALUES (
+          'revert-started', 'thread-revert-lifecycle', NULL, 'info',
+          'checkpoint.revert.started', 'Checkpoint revert started', '{}', 10,
+          '2026-07-21T00:00:01.000Z'
+        )
+      `;
+
+      const startedModel = yield* snapshotQuery.getCommandReadModel();
+      assert.deepEqual(
+        startedModel.threads[0]?.activities.map((activity) => activity.kind),
+        ["checkpoint.revert.started"],
+      );
+
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        ) VALUES (
+          'revert-succeeded', 'thread-revert-lifecycle', NULL, 'info',
+          'checkpoint.revert.succeeded', 'Checkpoint revert completed', '{}', 11,
+          '2026-07-21T00:00:02.000Z'
+        )
+      `;
+
+      const completedModel = yield* snapshotQuery.getCommandReadModel();
+      assert.deepEqual(
+        completedModel.threads[0]?.activities.map((activity) => activity.kind),
+        ["checkpoint.revert.succeeded"],
+      );
+    }),
+  );
 });

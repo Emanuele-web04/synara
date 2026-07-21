@@ -261,6 +261,15 @@ describe("orchestration projector", () => {
     expect(next.threads[0]?.runtimeMode).toBe("approval-required");
     expect(next.threads[0]?.interactionMode).toBe("default");
     expect(next.threads[0]?.updatedAt).toBe(turnRequestedAt);
+    expect(next.threads[0]?.session).toEqual({
+      threadId: "thread-1",
+      status: "starting",
+      providerName: "pi",
+      runtimeMode: "approval-required",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: turnRequestedAt,
+    });
   });
 
   it("lets empty threads adopt the requested first-turn provider", async () => {
@@ -324,6 +333,10 @@ describe("orchestration projector", () => {
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "opencode",
       model: "openai/gpt-5",
+    });
+    expect(next.threads[0]?.session).toMatchObject({
+      status: "starting",
+      providerName: "opencode",
     });
   });
 

@@ -6,6 +6,7 @@ import type {
   ThreadMarker,
 } from "@synara/contracts";
 import {
+  EventId,
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
   THREAD_MARKERS_MAX_COUNT,
@@ -26,6 +27,11 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
+  CHECKPOINT_REVERT_STARTED_ACTIVITY_KIND,
+  CHECKPOINT_REVERT_SUCCEEDED_ACTIVITY_KIND,
+  checkpointRevertActiveTurnDetail,
+  checkpointRevertDeleteInProgressDetail,
+  checkpointRevertInProgressDetail,
   listActiveProjectsByWorkspaceRoot,
   listThreadsByProjectId,
   requireProject,
@@ -36,6 +42,8 @@ import {
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  threadHasInFlightTurn,
+  threadHasCheckpointRevertInProgress,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -73,6 +81,37 @@ function withEventBase(
     commandId: input.commandId,
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
+  };
+}
+
+function checkpointRevertSucceededEvent(input: {
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly threadId: Extract<OrchestrationCommand, { type: "thread.revert.complete" }>["threadId"];
+  readonly turnCount: number;
+  readonly createdAt: string;
+  readonly causationEventId: OrchestrationEvent["eventId"];
+}): Omit<OrchestrationEvent, "sequence"> {
+  return {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: input.threadId,
+      occurredAt: input.createdAt,
+      commandId: input.commandId,
+    }),
+    causationEventId: input.causationEventId,
+    type: "thread.activity-appended",
+    payload: {
+      threadId: input.threadId,
+      activity: {
+        id: EventId.makeUnsafe(crypto.randomUUID()),
+        tone: "info",
+        kind: CHECKPOINT_REVERT_SUCCEEDED_ACTIVITY_KIND,
+        summary: "Checkpoint revert completed",
+        payload: { turnCount: input.turnCount },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+    },
   };
 }
 
@@ -691,11 +730,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertDeleteInProgressDetail(command.threadId),
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -1120,6 +1165,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(targetThread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -1237,11 +1288,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.dispatch-queued": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1398,12 +1455,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      if (threadHasInFlightTurn(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertActiveTurnDetail(command.threadId),
+        });
+      }
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
+      const startedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.makeUnsafe(crypto.randomUUID()),
+            tone: "info",
+            kind: CHECKPOINT_REVERT_STARTED_ACTIVITY_KIND,
+            summary: "Checkpoint revert started",
+            payload: {
+              turnCount: command.turnCount,
+              scope: command.scope ?? "thread",
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      const requestedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1418,6 +1511,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      return [startedEvent, requestedEvent];
     }
 
     case "thread.conversation.rollback": {
@@ -1426,6 +1520,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
       const rollbackTarget = deriveConversationRollbackTarget(thread.messages, command.messageId);
       if (!rollbackTarget || rollbackTarget.role !== "user") {
         return yield* new OrchestrationCommandInvariantError({
@@ -1462,6 +1562,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertInProgressDetail(command.threadId),
+        });
+      }
       const editTarget = resolveTailUserMessageEditTarget({
         messages: thread.messages,
         messageId: command.messageId,
@@ -1474,7 +1580,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Only the latest rollbackable user message can be edited and resent (${editTarget.reason}).`,
         });
       }
-      return {
+      const requestedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1502,6 +1608,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      if (thread.session?.status === "starting" || thread.session?.status === "running") {
+        return requestedEvent;
+      }
+      const startingSessionEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.session-set",
+        payload: {
+          threadId: command.threadId,
+          session: {
+            threadId: command.threadId,
+            status: "starting",
+            providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+            runtimeMode: command.runtimeMode,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: command.createdAt,
+          },
+        },
+      };
+      return [
+        startingSessionEvent,
+        { ...requestedEvent, causationEventId: startingSessionEvent.eventId },
+      ];
     }
 
     case "thread.session.stop": {
@@ -1665,7 +1799,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return {
+      const diffCompletedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1685,6 +1819,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.preserveLatestTurn ? { preserveLatestTurn: true } : {}),
         },
       };
+      return command.checkpointRevertTurnCount === undefined
+        ? diffCompletedEvent
+        : [
+            diffCompletedEvent,
+            checkpointRevertSucceededEvent({
+              commandId: command.commandId,
+              threadId: command.threadId,
+              turnCount: command.checkpointRevertTurnCount,
+              createdAt: command.createdAt,
+              causationEventId: diffCompletedEvent.eventId,
+            }),
+          ];
     }
 
     case "thread.revert.complete": {
@@ -1693,7 +1839,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return {
+      const revertedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1706,6 +1852,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           turnCount: command.turnCount,
         },
       };
+      return [
+        revertedEvent,
+        checkpointRevertSucceededEvent({
+          commandId: command.commandId,
+          threadId: command.threadId,
+          turnCount: command.turnCount,
+          createdAt: command.createdAt,
+          causationEventId: revertedEvent.eventId,
+        }),
+      ];
     }
 
     case "thread.conversation.rollback.complete": {
