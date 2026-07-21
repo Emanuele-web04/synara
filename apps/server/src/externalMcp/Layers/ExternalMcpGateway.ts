@@ -479,12 +479,6 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           timeoutMs: input.timeoutMs ?? EXTERNAL_MCP_DEFAULT_WAIT_MS,
           assertActive: context.assertActive,
           projectionTurns,
-          resolveTerminalSessionState: (waitRunId) =>
-            requireThreadShell(input.threadId).pipe(
-              Effect.map((thread) =>
-                terminalExternalMcpSessionStateForRun(thread, waitRunId),
-              ),
-            ),
           resolveLatestTurn: () =>
             requireThreadShell(input.threadId).pipe(
               Effect.map((thread) =>

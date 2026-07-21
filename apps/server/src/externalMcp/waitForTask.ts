@@ -25,10 +25,9 @@ export const terminalExternalMcpSessionStateForRun = (
   },
   runId: string | null,
 ): Extract<ExternalMcpWaitState, "error" | "interrupted"> | null => {
-  if (runId !== null) {
-    if (thread.latestTurn?.turnId !== runId) return null;
-    if (isTerminalWaitState(thread.latestTurn.state)) return null;
-  }
+  // Session state has no durable run id. Once a run is pinned, its projected
+  // turn is authoritative; a session failure can belong to a later startup.
+  if (runId !== null) return null;
   if (thread.session?.status === "error") return "error";
   return thread.session?.status === "interrupted" || thread.session?.status === "stopped"
     ? "interrupted"
@@ -53,10 +52,6 @@ export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
     { readonly runId: string | null; readonly state: ExternalMcpWaitState } | null,
     unknown
   >;
-  readonly resolveTerminalSessionState?: (runId: string) => Effect.Effect<
-    Extract<ExternalMcpWaitState, "error" | "interrupted"> | null,
-    unknown
-  >;
 }) {
   const deadline = Date.now() + input.timeoutMs;
   const threadId = ThreadId.makeUnsafe(input.threadId);
@@ -66,12 +61,7 @@ export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
   while (!isTerminalWaitState(state) && Date.now() < deadline) {
     yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
     yield* input.assertActive();
-    const terminalSessionState = runId !== null && input.resolveTerminalSessionState
-      ? yield* input.resolveTerminalSessionState(runId)
-      : null;
-    if (terminalSessionState !== null) {
-      state = terminalSessionState;
-    } else if (runId === null && input.resolveLatestTurn) {
+    if (runId === null && input.resolveLatestTurn) {
       const latest = yield* input.resolveLatestTurn();
       if (latest !== null) {
         runId = latest.runId === null ? null : TurnId.makeUnsafe(latest.runId);

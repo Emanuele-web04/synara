@@ -60,31 +60,18 @@ describe("waitForExternalMcpTaskState", () => {
     });
   });
 
-  it("observes a provider session failure while waiting for a pinned turn", async () => {
-    let sessionReads = 0;
-    const result = await Effect.runPromise(
-      waitForExternalMcpTaskState({
-        threadId: "thread-session-failed",
-        runId: "turn-session-failed",
-        initialState: "running",
-        timeoutMs: 1_000,
-        assertActive: () => Effect.void,
-        projectionTurns: {
-          getManyWaitSnapshot: () => Effect.die("terminal sessions must win before turn polling"),
-        } as never,
-        resolveTerminalSessionState: () => {
-          sessionReads += 1;
-          return Effect.succeed("error" as const);
-        },
-      }),
-    );
-    expect(sessionReads).toBe(1);
-    expect(result).toMatchObject({
-      runId: "turn-session-failed",
-      state: "error",
-      terminal: true,
-      timedOut: false,
-    });
+  it("uses session terminal state only before a run is projected", () => {
+    const thread = {
+      latestTurn: { turnId: "turn-live", state: "running" as const },
+      session: { status: "error" },
+    };
+    expect(terminalExternalMcpSessionStateForRun(thread, "turn-live")).toBeNull();
+    expect(
+      terminalExternalMcpSessionStateForRun(
+        { latestTurn: null, session: { status: "error" } },
+        null,
+      ),
+    ).toBe("error");
   });
 
   it("keeps a completed pinned turn authoritative when a later session fails before a new turn", async () => {
@@ -108,16 +95,6 @@ describe("waitForExternalMcpTaskState", () => {
               ],
             }),
         } as never,
-        resolveTerminalSessionState: (runId) =>
-          Effect.succeed(
-            terminalExternalMcpSessionStateForRun(
-              {
-                latestTurn: { turnId: "turn-historical", state: "completed" },
-                session: { status: "error" },
-              },
-              runId,
-            ),
-          ),
       }),
     );
     expect(result).toMatchObject({
