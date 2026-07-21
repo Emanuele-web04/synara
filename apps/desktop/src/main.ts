@@ -140,9 +140,9 @@ import {
 import {
   clearInstallMarker,
   createUpdateInstallMarker,
-  installMarkerMatchesHandoffExpectation,
   markInstallHandoffSync,
   readInstallMarker,
+  recordInstallMarkerFailureSync,
   resolveInstallMarkerOutcome,
   writeInstallMarker,
   type UpdateInstallHandoffExpectation,
@@ -728,36 +728,29 @@ function recordInstallMarkerFailure(
     );
     return Math.max(1, updateState.installFailureCount + 1);
   }
-  const result = readInstallMarker(getUpdateInstallMarkerPath());
-  if (result.status !== "valid") {
+  const result = recordInstallMarkerFailureSync(
+    getUpdateInstallMarkerPath(),
+    expected,
+    nowIso,
+  );
+  if (result.status === "missing" || result.status === "invalid") {
     console.error(
       `[desktop-updater] Could not record durable install failure: marker is ${result.status}${result.status === "invalid" ? ` (${result.error})` : ""}.`,
     );
     return Math.max(1, updateState.installFailureCount + 1);
   }
-  if (!installMarkerMatchesHandoffExpectation(result.marker, expected)) {
+  if (result.status === "mismatch") {
     console.error(
       "[desktop-updater] Refusing to record install failure against a different durable attempt.",
     );
     return Math.max(1, updateState.installFailureCount + 1);
   }
-  if (result.marker.phase === "failed") {
-    return result.marker.consecutiveFailures;
-  }
-  const failedMarker: UpdateInstallMarker = {
-    ...result.marker,
-    phase: "failed",
-    consecutiveFailures: result.marker.consecutiveFailures + 1,
-    lastFailureAt: nowIso,
-  };
-  try {
-    writeInstallMarker(getUpdateInstallMarkerPath(), failedMarker);
-  } catch (error) {
+  if (result.status === "write-failed") {
     console.error(
-      `[desktop-updater] Failed to persist install failure marker: ${formatErrorMessage(error)}`,
+      `[desktop-updater] Failed to persist install failure marker: ${formatErrorMessage(result.error)}`,
     );
   }
-  return failedMarker.consecutiveFailures;
+  return result.marker.consecutiveFailures;
 }
 
 async function logMacUpdateDiagnostics(context: string): Promise<void> {
