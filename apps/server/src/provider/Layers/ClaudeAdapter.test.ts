@@ -6477,6 +6477,49 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("emits the configured window when the auto-compact budget changes live", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const configuredEventsFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.configured",
+      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: { autoCompactWindow: "1m" },
+        },
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "use the default auto-compact budget",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+        },
+        attachments: [],
+      });
+
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: 200_000 }]);
+      const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
+      assert.deepEqual(
+        configuredEvents.map((event) =>
+          event.type === "session.configured" ? event.payload.config.autoCompactWindow : undefined,
+        ),
+        ["1m", 200_000],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("updates the thinking toggle live instead of restarting the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
