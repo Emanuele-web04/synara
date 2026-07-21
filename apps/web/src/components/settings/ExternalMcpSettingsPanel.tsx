@@ -20,6 +20,7 @@ import {
   buildExternalMcpExamplePrompt,
   describeExternalMcpPermissions,
   EXTERNAL_MCP_CLIENTS,
+  externalMcpSetupAction,
   type ExternalMcpClientKind,
 } from "./externalMcpSetup";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
@@ -206,6 +207,12 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
     : false;
   const pairingExpired = setup ? dateMillis(setup.pairingExpiresAt) <= nowMs : false;
   const setupUnavailable = revoked || integrationExpired || (!paired && pairingExpired);
+  const setupAction = externalMcpSetupAction({
+    revoked,
+    integrationExpired,
+    paired,
+    pairingExpired,
+  });
   const setupStatus = revoked
     ? "Revoked"
     : integrationExpired
@@ -398,7 +405,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     : paired
                       ? "The private credential is stored locally. Add Synara to your app, then try the prompt below."
                       : pairingExpired
-                        ? "The one-time pairing code was not used in time. Revoke this connection and create a new one."
+                        ? "The one-time pairing code was not used in time. Resume pairing to issue a fresh code without replacing this connection."
                         : "Run the first command below. This page updates automatically when pairing succeeds."
             }
             status={
@@ -407,7 +414,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 : `Integration expires ${formatDate(setupIntegration.expiresAt)}.`
             }
             control={
-              setupUnavailable ? (
+              setupAction === "revoke" ? (
                 <Button
                   size="xs"
                   variant="destructive-outline"
@@ -416,7 +423,23 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 >
                   Revoke and start over
                 </Button>
-              ) : paired ? (
+              ) : setupAction === "resume-pairing" ? (
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={refreshPairingMutation.isPending}
+                    onClick={() =>
+                      refreshPairingMutation.mutate(setupIntegration.integrationId)
+                    }
+                  >
+                    {refreshPairingMutation.isPending ? "Resuming..." : "Resume pairing"}
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setSetup(null)}>
+                    Back
+                  </Button>
+                </div>
+              ) : setupAction === "done" ? (
                 <Button size="xs" variant="ghost" onClick={() => setSetup(null)}>
                   Done
                 </Button>

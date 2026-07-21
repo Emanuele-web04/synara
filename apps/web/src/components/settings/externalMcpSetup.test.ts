@@ -4,6 +4,7 @@ import {
   buildExternalMcpClientConfiguration,
   buildExternalMcpExamplePrompt,
   describeExternalMcpPermissions,
+  externalMcpSetupAction,
 } from "./externalMcpSetup";
 
 const stdio = {
@@ -74,5 +75,24 @@ describe("external MCP guided setup", () => {
 
     expect(description).toBe("Create and follow its own tasks · Use the shared local checkout");
     expect(description).not.toContain("runtime:local");
+  });
+
+  it("offers a non-destructive resume path when only the pairing code expired", () => {
+    expect(
+      externalMcpSetupAction({
+        revoked: false,
+        integrationExpired: false,
+        paired: false,
+        pairingExpired: true,
+      }),
+    ).toBe("resume-pairing");
+    expect(
+      externalMcpSetupAction({
+        revoked: false,
+        integrationExpired: true,
+        paired: false,
+        pairingExpired: true,
+      }),
+    ).toBe("revoke");
   });
 });

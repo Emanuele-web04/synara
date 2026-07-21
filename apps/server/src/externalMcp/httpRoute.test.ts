@@ -14,9 +14,11 @@ import {
   EXTERNAL_MCP_MAX_BODY_BYTES,
   externalMcpRouteLayer,
   readExternalMcpBody,
+  readExternalMcpManagementBody,
 } from "./httpRoute.ts";
 
 const EXTERNAL_TOKEN = "syn_mcp_v1_external-route-test";
+const OTHER_EXTERNAL_TOKEN = `${EXTERNAL_TOKEN}-other`;
 
 async function withExternalMcpServer(
   input: {
@@ -35,9 +37,9 @@ async function withExternalMcpServer(
   const handledBodies: unknown[] = [];
   let nodeServer: http.Server | null = null;
   try {
-    const verified = {
+    const verified = (integrationId: string) => ({
       integration: {
-        integrationId: "integration-route-test",
+        integrationId,
         name: "Route test",
         audience: "synara.external-mcp",
         credentialHash: "hash-only",
@@ -53,11 +55,17 @@ async function withExternalMcpServer(
       },
       capabilities: new Set(["projects:read"]),
       allowedProjectIds: new Set(["project-route-test"]),
-    } as never;
+    }) as never;
     const service = {
       verifyCredential: (credential: string) =>
-        credential === EXTERNAL_TOKEN
-          ? Effect.succeed(verified)
+        credential === EXTERNAL_TOKEN || credential === OTHER_EXTERNAL_TOKEN
+          ? Effect.succeed(
+              verified(
+                credential === EXTERNAL_TOKEN
+                  ? "integration-route-test"
+                  : "integration-route-test-other",
+              ),
+            )
           : Effect.fail({ code: "external_credential_invalid", message: "invalid", status: 401 }),
       listIntegrations: () => Effect.succeed([]),
       createIntegration: () => Effect.die("not used"),
@@ -75,10 +83,12 @@ async function withExternalMcpServer(
         return Effect.succeed({ status: 200, body: { ok: true } });
       },
       handleVerifiedPost: (request: { readonly body: unknown }) => {
-        handledBodies.push(request.body);
-        return input.handleVerifiedPost
-          ? input.handleVerifiedPost(request.body)
-          : Effect.succeed({ status: 200, body: { ok: true } });
+        return Effect.suspend(() => {
+          handledBodies.push(request.body);
+          return input.handleVerifiedPost
+            ? input.handleVerifiedPost(request.body)
+            : Effect.succeed({ status: 200, body: { ok: true } });
+        });
       },
     } as never;
     const auth = {
@@ -131,7 +141,7 @@ async function withExternalMcpServer(
 }
 
 describe("externalMcpRouteLayer", () => {
-  it("releases every body-buffer permit before long-running tool dispatch", async () => {
+  it("bounds execution per integration without letting long waits starve another integration", async () => {
     let releaseBlocked!: () => void;
     const blocked = new Promise<void>((resolve) => {
       releaseBlocked = resolve;
@@ -141,7 +151,7 @@ describe("externalMcpRouteLayer", () => {
       {
         handleVerifiedPost: () => {
           handledCount += 1;
-          return handledCount <= 4
+          return handledCount <= 8
             ? Effect.promise(() => blocked).pipe(
                 Effect.as({ status: 200, body: { released: true } }),
               )
@@ -149,37 +159,43 @@ describe("externalMcpRouteLayer", () => {
         },
       },
       async ({ origin, handledBodies }) => {
-        const post = (id: number) =>
+        const post = (id: number, token = EXTERNAL_TOKEN) =>
           fetch(`${origin}/mcp/external`, {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${EXTERNAL_TOKEN}`,
+              Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({ jsonrpc: "2.0", id, method: "ping" }),
           });
-        const blockedRequests = [1, 2, 3, 4].map(post);
+        const blockedRequests = Array.from({ length: 8 }, (_, index) => post(index + 1));
         try {
           const deadline = Date.now() + 1_000;
-          while (handledBodies.length < 4 && Date.now() < deadline) {
+          while (handledBodies.length < 8 && Date.now() < deadline) {
             await new Promise((resolve) => setTimeout(resolve, 5));
           }
-          expect(handledBodies).toHaveLength(4);
-          const fifth = await Promise.race([
-            post(5),
+          expect(handledBodies).toHaveLength(8);
+          const saturated = await post(9);
+          expect(saturated.status).toBe(429);
+          expect(handledBodies).toHaveLength(8);
+
+          const otherIntegration = await Promise.race([
+            post(10, OTHER_EXTERNAL_TOKEN),
             new Promise<never>((_, reject) =>
               setTimeout(
-                () => reject(new Error("fifth request remained behind body permits")),
+                () => reject(new Error("another integration remained behind occupied permits")),
                 1_000,
               ),
             ),
           ]);
-          expect(fifth.status).toBe(200);
-          expect(handledBodies).toHaveLength(5);
+          expect(otherIntegration.status).toBe(200);
+          expect(handledBodies).toHaveLength(9);
         } finally {
           releaseBlocked();
           await Promise.allSettled(blockedRequests);
         }
+        const recovered = await post(11);
+        expect(recovered.status).toBe(200);
       },
     );
   });
@@ -248,6 +264,51 @@ describe("externalMcpRouteLayer", () => {
     expect(queuedStarted).toBe(false);
     await Promise.all(holders);
     expect(queuedStarted).toBe(false);
+  });
+
+  it("times out management bodies while queued or stalled and releases shared permits", async () => {
+    const stalledRequest = {
+      headers: {},
+      stream: Stream.never,
+    } as never;
+    const stalled = await Effect.runPromise(
+      Effect.all(
+        Array.from({ length: 4 }, () => readExternalMcpManagementBody(stalledRequest, 10)),
+        { concurrency: "unbounded" },
+      ),
+    );
+    expect(stalled).toEqual(Array.from({ length: 4 }, () => ({ kind: "timeout" })));
+
+    const validRequest = {
+      headers: {},
+      stream: Stream.make(new TextEncoder().encode('{"nonce":"abcdefghijklmnopqrstuvwxyz"}')),
+    } as never;
+    await expect(
+      Effect.runPromise(readExternalMcpManagementBody(validRequest, 100)),
+    ).resolves.toEqual({
+      kind: "ok",
+      body: { nonce: "abcdefghijklmnopqrstuvwxyz" },
+    });
+  });
+
+  it("isolates authenticated external body reads from stalled management traffic", async () => {
+    const stalledRequest = {
+      headers: {},
+      stream: Stream.never,
+    } as never;
+    const stalledManagementReads = Array.from({ length: 2 }, () =>
+      Effect.runPromise(readExternalMcpManagementBody(stalledRequest, 100)),
+    );
+
+    const validExternalRequest = {
+      headers: {},
+      stream: Stream.make(new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"ping"}')),
+    } as never;
+    await expect(Effect.runPromise(readExternalMcpBody(validExternalRequest, 50))).resolves.toEqual({
+      kind: "ok",
+      body: { jsonrpc: "2.0", id: 1, method: "ping" },
+    });
+    await Promise.all(stalledManagementReads);
   });
 
   it("rejects non-external tokens before reading the body and enforces its smaller limit", async () => {

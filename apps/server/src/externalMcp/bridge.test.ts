@@ -9,6 +9,8 @@ import {
   discoverExternalMcpRuntime,
   externalMcpClientStorePath,
   fetchExternalMcpWithTimeout,
+  isOwnerPrivateWindowsRuntimeAcl,
+  makeWindowsRuntimeAclPowerShellInvocation,
   pairExternalMcpClient,
   readExternalMcpResponseText,
   readExternalMcpClientCredential,
@@ -29,9 +31,11 @@ function makeBaseDir() {
 
 function writeRuntime(baseDir: string, kind: "userdata" | "dev", port: number) {
   const directory = path.join(baseDir, kind);
-  fs.mkdirSync(directory, { recursive: true });
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+  const runtimePath = path.join(directory, "server-runtime.json");
   fs.writeFileSync(
-    path.join(directory, "server-runtime.json"),
+    runtimePath,
     JSON.stringify({
       version: 1,
       pid: process.pid,
@@ -41,7 +45,9 @@ function writeRuntime(baseDir: string, kind: "userdata" | "dev", port: number) {
       startedAt: new Date().toISOString(),
       externalMcpRuntimeSecret: RUNTIME_SECRET,
     }),
+    { mode: 0o600 },
   );
+  if (process.platform !== "win32") fs.chmodSync(runtimePath, 0o600);
 }
 
 function runtimeChallenge(url: string | URL | Request, init?: RequestInit): Response | null {
@@ -57,6 +63,42 @@ afterEach(() => {
 });
 
 describe("external MCP stdio bridge", () => {
+  it("accepts only current-user private Windows runtime ACL snapshots", () => {
+    const privateAcl = {
+      currentSid: "S-1-5-21-current",
+      ownerSid: "S-1-5-21-current",
+      hasDacl: true,
+      isReparsePoint: false,
+      rules: [
+        { sid: "S-1-5-21-current", type: "Allow" },
+        { sid: "S-1-5-18", type: "Allow" },
+        { sid: "S-1-5-32-544", type: "Allow" },
+      ],
+    };
+    expect(isOwnerPrivateWindowsRuntimeAcl(privateAcl)).toBe(true);
+    expect(
+      isOwnerPrivateWindowsRuntimeAcl({
+        ...privateAcl,
+        rules: [...privateAcl.rules, { sid: "S-1-5-32-545", type: "Allow" }],
+      }),
+    ).toBe(false);
+    expect(isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, isReparsePoint: true })).toBe(false);
+    expect(isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, hasDacl: false })).toBe(false);
+    expect(
+      isOwnerPrivateWindowsRuntimeAcl({ ...privateAcl, ownerSid: "S-1-5-21-other" }),
+    ).toBe(false);
+  });
+
+  it("passes hostile Windows runtime paths outside the encoded PowerShell program", () => {
+    const targetPath = "C:\\shared dir\\'; Write-Output injected; #\\server-runtime.json";
+    const invocation = makeWindowsRuntimeAclPowerShellInvocation(targetPath);
+
+    expect(invocation.args).toContain("-EncodedCommand");
+    expect(invocation.args.join(" ")).not.toContain(targetPath);
+    expect(invocation.options.env.SYNARA_RUNTIME_ACL_TARGET).toBe(targetPath);
+    expect(invocation.options.timeout).toBe(5_000);
+  });
+
   it("allows the server's default wait duration when timeoutMs is omitted", () => {
     expect(
       requestTimeoutForBody(
@@ -118,6 +160,43 @@ describe("external MCP stdio bridge", () => {
     writeRuntime(baseDir, "dev", 4773);
     expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/Multiple running Synara instances/);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects runtime state or its directory when other users can modify them",
+    () => {
+      const baseDir = makeBaseDir();
+      writeRuntime(baseDir, "userdata", 3773);
+      const directory = path.join(baseDir, "userdata");
+      const runtimePath = path.join(directory, "server-runtime.json");
+
+      fs.chmodSync(runtimePath, 0o644);
+      expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/accessible by other users/);
+      fs.chmodSync(runtimePath, 0o600);
+      fs.chmodSync(directory, 0o755);
+      expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/accessible by other users/);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a symlinked runtime-state file and parent directory",
+    () => {
+      const baseDir = makeBaseDir();
+      const redirected = makeBaseDir();
+      writeRuntime(redirected, "userdata", 3773);
+      const runtimeDirectory = path.join(baseDir, "userdata");
+      fs.mkdirSync(runtimeDirectory, { mode: 0o700 });
+      fs.symlinkSync(
+        path.join(redirected, "userdata", "server-runtime.json"),
+        path.join(runtimeDirectory, "server-runtime.json"),
+        "file",
+      );
+      expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/unsafe runtime-state file/);
+
+      fs.rmSync(runtimeDirectory, { recursive: true });
+      fs.symlinkSync(path.join(redirected, "userdata"), runtimeDirectory, "dir");
+      expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/unsafe runtime-state directory/);
+    },
+  );
 
   it("stores credentials with private POSIX permissions and rejects widened permissions", () => {
     const baseDir = makeBaseDir();

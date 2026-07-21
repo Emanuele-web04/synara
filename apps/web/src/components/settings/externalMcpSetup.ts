@@ -32,6 +32,19 @@ export interface ExternalMcpClientConfiguration {
   readonly instruction: string;
 }
 
+export type ExternalMcpSetupAction = "resume-pairing" | "revoke" | "done" | null;
+
+export function externalMcpSetupAction(input: {
+  readonly revoked: boolean;
+  readonly integrationExpired: boolean;
+  readonly paired: boolean;
+  readonly pairingExpired: boolean;
+}): ExternalMcpSetupAction {
+  if (input.revoked || input.integrationExpired) return "revoke";
+  if (!input.paired && input.pairingExpired) return "resume-pairing";
+  return input.paired ? "done" : null;
+}
+
 function quoteShellArgument(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", `'"'"'`)}'`;

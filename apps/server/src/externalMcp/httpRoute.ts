@@ -19,6 +19,7 @@ import { isLoopbackHost } from "../startupAccess.ts";
 import { shouldRejectAuthMutationOrigin } from "../trustedOrigins.ts";
 import { ExternalMcpGateway } from "./Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "./Services/ExternalMcpService.ts";
+import { makeExternalMcpExecutionAdmission } from "./executionAdmission.ts";
 import { computeExternalMcpRuntimeProof, externalMcpRuntimeSecret } from "./runtimeProof.ts";
 
 export const EXTERNAL_MCP_PATH = "/mcp/external";
@@ -32,15 +33,23 @@ const externalMcpBodyBufferSlots = Effect.runSync(
   Semaphore.make(EXTERNAL_MCP_BODY_BUFFER_SLOTS),
 );
 const MANAGEMENT_MAX_BODY_BYTES = 32 * 1024;
+const MANAGEMENT_BODY_BUFFER_SLOTS = 2;
+const managementBodyBufferSlots = Effect.runSync(Semaphore.make(MANAGEMENT_BODY_BUFFER_SLOTS));
+const EXTERNAL_MCP_EXECUTION_SLOTS_PER_INTEGRATION = 8;
+const externalMcpExecutionAdmission = makeExternalMcpExecutionAdmission(
+  EXTERNAL_MCP_EXECUTION_SLOTS_PER_INTEGRATION,
+);
 
 type ExternalMcpBodyReadResult = McpBodyReadResult | { readonly kind: "timeout" };
 
-export const readExternalMcpBody = (
+const readBoundedExternalMcpBody = (
   request: HttpServerRequest.HttpServerRequest,
-  timeoutMs = EXTERNAL_MCP_BODY_READ_TIMEOUT_MS,
+  maxBytes: number,
+  timeoutMs: number,
+  slots: Semaphore.Semaphore,
 ): Effect.Effect<ExternalMcpBodyReadResult> =>
-  externalMcpBodyBufferSlots
-    .withPermit(readMcpJsonBody(request, EXTERNAL_MCP_MAX_BODY_BYTES))
+  slots
+    .withPermit(readMcpJsonBody(request, maxBytes))
     .pipe(
       Effect.timeoutOption(timeoutMs),
       Effect.map(
@@ -50,6 +59,28 @@ export const readExternalMcpBody = (
         }),
       ),
     );
+
+export const readExternalMcpBody = (
+  request: HttpServerRequest.HttpServerRequest,
+  timeoutMs = EXTERNAL_MCP_BODY_READ_TIMEOUT_MS,
+): Effect.Effect<ExternalMcpBodyReadResult> =>
+  readBoundedExternalMcpBody(
+    request,
+    EXTERNAL_MCP_MAX_BODY_BYTES,
+    timeoutMs,
+    externalMcpBodyBufferSlots,
+  );
+
+export const readExternalMcpManagementBody = (
+  request: HttpServerRequest.HttpServerRequest,
+  timeoutMs = EXTERNAL_MCP_BODY_READ_TIMEOUT_MS,
+): Effect.Effect<ExternalMcpBodyReadResult> =>
+  readBoundedExternalMcpBody(
+    request,
+    MANAGEMENT_MAX_BODY_BYTES,
+    timeoutMs,
+    managementBodyBufferSlots,
+  );
 
 const decodeCreateIntegration = Schema.decodeUnknownEffect(ExternalMcpCreateIntegrationInput);
 const decodeRevokeIntegration = Schema.decodeUnknownEffect(ExternalMcpRevokeIntegrationInput);
@@ -128,10 +159,27 @@ const postExternalMcp = HttpRouter.add(
         { status: 400 },
       );
     }
-    const result = yield* gateway.handleVerifiedPost({
-      client: client.value,
-      body: body.body,
-    });
+    const admitted = yield* externalMcpExecutionAdmission.run(
+      client.value.integration.integrationId,
+      gateway.handleVerifiedPost({
+        client: client.value,
+        body: body.body,
+      }),
+    );
+    if (Option.isNone(admitted)) {
+      return HttpServerResponse.jsonUnsafe(
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32000,
+            message: "external_concurrency_limit: Too many requests are already running for this integration.",
+          },
+        },
+        { status: 429 },
+      );
+    }
+    const result = admitted.value;
     return result.body === undefined
       ? HttpServerResponse.empty({ status: result.status })
       : HttpServerResponse.jsonUnsafe(result.body, { status: result.status });
@@ -183,13 +231,19 @@ const managementError = (error: unknown) => {
   const value = error as { readonly message?: string; readonly status?: number };
   return HttpServerResponse.jsonUnsafe(
     { error: value.message ?? "External MCP management request failed." },
-    { status: value.status ?? 500 },
+    {
+      status: value.status ?? 500,
+      ...(value.status === 408 ? { headers: { Connection: "close" } } : {}),
+    },
   );
 };
 
 const readManagementBody = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  const body = yield* readMcpJsonBody(request, MANAGEMENT_MAX_BODY_BYTES);
+  const body = yield* readExternalMcpManagementBody(request);
+  if (body.kind === "timeout") {
+    return yield* Effect.fail({ message: "Request body read timed out.", status: 408 as const });
+  }
   if (body.kind === "too-large") {
     return yield* Effect.fail({ message: "Request body too large.", status: 413 as const });
   }

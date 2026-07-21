@@ -73,9 +73,11 @@ function toolPayload(response: Record<string, unknown>): Record<string, unknown>
 
 function writeRuntimeState(baseDir: string): void {
   const runtimeDirectory = path.join(baseDir, "userdata");
-  fs.mkdirSync(runtimeDirectory, { recursive: true });
+  fs.mkdirSync(runtimeDirectory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(runtimeDirectory, 0o700);
+  const runtimePath = path.join(runtimeDirectory, "server-runtime.json");
   fs.writeFileSync(
-    path.join(runtimeDirectory, "server-runtime.json"),
+    runtimePath,
     JSON.stringify({
       version: 1,
       pid: process.pid,
@@ -85,7 +87,9 @@ function writeRuntimeState(baseDir: string): void {
       startedAt: NOW,
       externalMcpRuntimeSecret: RUNTIME_SECRET,
     }),
+    { mode: 0o600 },
   );
+  if (process.platform !== "win32") fs.chmodSync(runtimePath, 0o600);
 }
 
 async function waitForOutput(

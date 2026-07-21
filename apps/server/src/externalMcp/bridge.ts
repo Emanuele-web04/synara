@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,6 +27,69 @@ const RUNTIME_STATE_RELATIVE_PATHS = [
   path.join("userdata", "server-runtime.json"),
   path.join("dev", "server-runtime.json"),
 ] as const;
+const WINDOWS_TRUSTED_RUNTIME_ACL_SIDS = new Set([
+  "S-1-5-18", // LocalSystem
+  "S-1-5-32-544", // Builtin Administrators
+]);
+const WINDOWS_RUNTIME_ACL_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  "$target = $env:SYNARA_RUNTIME_ACL_TARGET",
+  "$item = Get-Item -LiteralPath $target -Force",
+  "$acl = Get-Acl -LiteralPath $target",
+  "$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+  "$ownerAccount = New-Object System.Security.Principal.NTAccount($acl.Owner)",
+  "$ownerSid = $ownerAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value",
+  "$sddl = $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::All)",
+  "$rawDescriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)",
+  "$hasDacl = $null -ne $rawDescriptor.DiscretionaryAcl",
+  "$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object { [pscustomobject]@{ sid = $_.IdentityReference.Value; type = $_.AccessControlType.ToString() } })",
+  "[pscustomobject]@{ currentSid = $currentSid; ownerSid = $ownerSid; hasDacl = $hasDacl; isReparsePoint = [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint); rules = $rules } | ConvertTo-Json -Compress -Depth 4",
+].join("; ");
+const WINDOWS_RUNTIME_ACL_ENCODED_COMMAND = Buffer.from(
+  WINDOWS_RUNTIME_ACL_SCRIPT,
+  "utf16le",
+).toString("base64");
+
+export function makeWindowsRuntimeAclPowerShellInvocation(targetPath: string) {
+  return {
+    args: [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      WINDOWS_RUNTIME_ACL_ENCODED_COMMAND,
+    ],
+    options: {
+      encoding: "utf8" as const,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+      timeout: 5_000,
+      env: { ...process.env, SYNARA_RUNTIME_ACL_TARGET: targetPath },
+    },
+  };
+}
+
+export interface WindowsRuntimeAclSnapshot {
+  readonly currentSid: string;
+  readonly ownerSid: string;
+  readonly hasDacl: boolean;
+  readonly isReparsePoint: boolean;
+  readonly rules: ReadonlyArray<{
+    readonly sid: string;
+    readonly type: string;
+  }>;
+}
+
+export function isOwnerPrivateWindowsRuntimeAcl(snapshot: WindowsRuntimeAclSnapshot): boolean {
+  if (!snapshot.hasDacl || snapshot.isReparsePoint || snapshot.ownerSid !== snapshot.currentSid) {
+    return false;
+  }
+  return snapshot.rules.every(
+    (rule) =>
+      rule.type !== "Allow" ||
+      rule.sid === snapshot.currentSid ||
+      WINDOWS_TRUSTED_RUNTIME_ACL_SIDS.has(rule.sid),
+  );
+}
 
 export class ExternalMcpBridgeError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -125,6 +189,109 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+function assertPrivateRuntimeStat(
+  stat: fs.Stats,
+  targetPath: string,
+  kind: "file" | "directory",
+): void {
+  const expectedType = kind === "file" ? stat.isFile() : stat.isDirectory();
+  if (!expectedType || stat.isSymbolicLink()) {
+    throw new ExternalMcpBridgeError(`Refusing unsafe runtime-state ${kind}: ${targetPath}`);
+  }
+  if (process.platform === "win32") return;
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (currentUid !== undefined && stat.uid !== currentUid) {
+    throw new ExternalMcpBridgeError(
+      `Runtime-state ${kind} ${targetPath} is not owned by the current user.`,
+    );
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    throw new ExternalMcpBridgeError(
+      `Runtime-state ${kind} ${targetPath} is accessible by other users.`,
+    );
+  }
+}
+
+function sameFile(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function assertPrivateWindowsRuntimePath(targetPath: string, kind: "file" | "directory"): void {
+  let snapshot: WindowsRuntimeAclSnapshot;
+  try {
+    const invocation = makeWindowsRuntimeAclPowerShellInvocation(targetPath);
+    const raw = execFileSync("powershell.exe", invocation.args, invocation.options);
+    const parsed = JSON.parse(raw) as Partial<WindowsRuntimeAclSnapshot>;
+    if (
+      typeof parsed.currentSid !== "string" ||
+      typeof parsed.ownerSid !== "string" ||
+      typeof parsed.hasDacl !== "boolean" ||
+      typeof parsed.isReparsePoint !== "boolean" ||
+      !Array.isArray(parsed.rules) ||
+      parsed.rules.some(
+        (rule) =>
+          typeof rule !== "object" ||
+          rule === null ||
+          typeof rule.sid !== "string" ||
+          typeof rule.type !== "string",
+      )
+    ) {
+      throw new Error("invalid Windows ACL response");
+    }
+    snapshot = parsed as WindowsRuntimeAclSnapshot;
+  } catch (cause) {
+    throw new ExternalMcpBridgeError(
+      `Could not verify private Windows runtime-state ${kind}: ${targetPath}`,
+      { cause },
+    );
+  }
+  if (!isOwnerPrivateWindowsRuntimeAcl(snapshot)) {
+    throw new ExternalMcpBridgeError(
+      `Runtime-state ${kind} ${targetPath} is not owned by the current user, is accessible by other users, or is a reparse point.`,
+    );
+  }
+}
+
+function readPrivateRuntimeState(sourcePath: string): string {
+  const directoryPath = path.dirname(sourcePath);
+  const directoryStat = fs.lstatSync(directoryPath);
+  assertPrivateRuntimeStat(directoryStat, directoryPath, "directory");
+  if (process.platform === "win32") {
+    assertPrivateWindowsRuntimePath(directoryPath, "directory");
+  }
+
+  const pathStat = fs.lstatSync(sourcePath);
+  assertPrivateRuntimeStat(pathStat, sourcePath, "file");
+  if (process.platform === "win32") {
+    assertPrivateWindowsRuntimePath(sourcePath, "file");
+  }
+  const flags =
+    process.platform === "win32"
+      ? fs.constants.O_RDONLY
+      : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+  const descriptor = fs.openSync(sourcePath, flags);
+  try {
+    const descriptorStat = fs.fstatSync(descriptor);
+    assertPrivateRuntimeStat(descriptorStat, sourcePath, "file");
+    if (!sameFile(pathStat, descriptorStat)) {
+      throw new ExternalMcpBridgeError(
+        `Runtime-state file changed while it was being validated: ${sourcePath}`,
+      );
+    }
+    const raw = fs.readFileSync(descriptor, "utf8");
+    const directoryAfterRead = fs.lstatSync(directoryPath);
+    assertPrivateRuntimeStat(directoryAfterRead, directoryPath, "directory");
+    if (!sameFile(directoryStat, directoryAfterRead)) {
+      throw new ExternalMcpBridgeError(
+        `Runtime-state directory changed while it was being validated: ${directoryPath}`,
+      );
+    }
+    return raw;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 export function discoverExternalMcpRuntime(baseDir: string): {
   readonly state: PersistedServerRuntimeState;
   readonly sourcePath: string;
@@ -132,7 +299,7 @@ export function discoverExternalMcpRuntime(baseDir: string): {
   const candidates = RUNTIME_STATE_RELATIVE_PATHS.flatMap((relativePath) => {
     const sourcePath = path.join(baseDir, relativePath);
     if (!fs.existsSync(sourcePath)) return [];
-    const state = parseRuntimeState(fs.readFileSync(sourcePath, "utf8"), sourcePath);
+    const state = parseRuntimeState(readPrivateRuntimeState(sourcePath), sourcePath);
     return processIsAlive(state.pid) ? [{ state, sourcePath }] : [];
   });
   if (candidates.length === 0) {
