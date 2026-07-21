@@ -757,6 +757,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
   cursor: [
     {

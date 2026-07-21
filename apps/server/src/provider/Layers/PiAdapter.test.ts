@@ -14,6 +14,7 @@ import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
   getPiSupportedThinkingOptions,
   buildPiAgentGatewayCustomTools,
@@ -233,6 +234,106 @@ describe("getPiDiscoverableModels", () => {
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("restores Fable 5 and Opus 4.8 after an extension replaces the Anthropic catalog", () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-anthropic-"));
+    const modelsPath = path.join(agentDir, "models.json");
+
+    try {
+      writeFileSync(modelsPath, "{}");
+      const authStorage = AuthStorage.inMemory({
+        anthropic: { type: "oauth", access: "tok", refresh: "ref", expires: Date.now() + 60_000 },
+      });
+      const registry = ModelRegistry.create(authStorage, modelsPath);
+      registry.registerProvider("anthropic", {
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        apiKey: "test-key",
+        models: [
+          {
+            id: "claude-opus-4-7",
+            name: "Claude Opus 4.7",
+            api: "anthropic-messages",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+            contextWindow: 1_000_000,
+            maxTokens: 128_000,
+          },
+        ],
+      });
+
+      expect(
+        registry
+          .getAll()
+          .filter((model) => model.provider === "anthropic")
+          .map((model) => model.id),
+      ).toEqual(["claude-opus-4-7"]);
+      const models = getPiDiscoverableModels(registry);
+
+      expect(
+        models.some((model) => model.provider === "anthropic" && model.id === "claude-fable-5"),
+      ).toBe(true);
+      expect(
+        models.some((model) => model.provider === "anthropic" && model.id === "claude-opus-4-8"),
+      ).toBe(true);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ensurePiAnthropicCatalogModels", () => {
+  it("does not invent Anthropic models when Anthropic is unauthenticated", () => {
+    const models = ensurePiAnthropicCatalogModels([
+      {
+        id: "glm-5.2",
+        name: "GLM 5.2",
+        api: "openai-completions",
+        provider: "local",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+      },
+    ]);
+
+    expect(models.every((model) => model.provider !== "anthropic")).toBe(true);
+  });
+
+  it("restores Fable 5 and Opus 4.8 when an oauth catalog omitted them", () => {
+    const peer = {
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      api: "anthropic-messages" as const,
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"] as Array<"text" | "image">,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+    const models = ensurePiAnthropicCatalogModels([peer], [peer]);
+
+    expect(models.map((model) => model.id)).toEqual([
+      "claude-opus-4-7",
+      "claude-fable-5",
+      "claude-opus-4-8",
+    ]);
+    expect(models.find((model) => model.id === "claude-fable-5")).toMatchObject({
+      provider: "anthropic",
+      name: "Claude Fable 5",
+      reasoning: true,
+    });
+    expect(models.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
+      provider: "anthropic",
+      name: "Claude Opus 4.8",
+      reasoning: true,
+    });
   });
 });
 
