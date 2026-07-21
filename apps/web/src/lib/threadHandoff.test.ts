@@ -1,12 +1,39 @@
-import { type ModelSelection } from "@synara/contracts";
+import {
+  EventId,
+  type ModelSelection,
+  type OrchestrationThreadActivity,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  buildThreadHandoffImportedActivities,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 
 describe("threadHandoff", () => {
+  it("does not import a source provider's configured context window", () => {
+    const activity = (kind: string): OrchestrationThreadActivity => ({
+      id: EventId.makeUnsafe(`activity-${kind}`),
+      createdAt: "2026-07-21T00:00:00.000Z",
+      tone: "info",
+      kind,
+      summary: kind,
+      payload: {},
+      turnId: null,
+    });
+
+    const imported = buildThreadHandoffImportedActivities({
+      activities: [
+        activity("context-window.configured"),
+        activity("context-window.updated"),
+        activity("tool.started"),
+      ],
+    });
+
+    expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
+  });
+
   it("lists all supported handoff targets except the active provider", () => {
     const providers = [
       "codex",

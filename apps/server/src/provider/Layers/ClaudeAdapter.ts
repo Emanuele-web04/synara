@@ -4723,9 +4723,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 config: {
                   ...(modelSelection?.model ? { model: modelSelection.model } : {}),
                   ...(apiModelId ? { apiModelId } : {}),
-                  ...(requestedAutoCompactWindow
-                    ? { autoCompactWindow: requestedAutoCompactWindow }
-                    : {}),
+                  autoCompactWindow: requestedAutoCompactWindowTokens ?? null,
                   ...(input.cwd ? { cwd: input.cwd } : {}),
                   ...(effectiveEffort ? { effort: effectiveEffort } : {}),
                   ...(permissionMode ? { permissionMode } : {}),
@@ -4856,6 +4854,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.lastKnownAutoCompactThreshold = requestedAutoCompactWindow;
           context.emittedContextUsageWarnings.delete("near-window");
           context.emittedContextUsageWarnings.delete("large-prompt");
+
+          const configuredWindow =
+            requestedAutoCompactWindow !== undefined
+              ? { autoCompactWindow: requestedAutoCompactWindow }
+              : context.lastKnownContextWindow !== undefined
+                ? { contextWindow: context.lastKnownContextWindow }
+                : { autoCompactWindow: null };
+          const configuredStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "session.configured",
+            eventId: configuredStamp.eventId,
+            provider: PROVIDER,
+            createdAt: configuredStamp.createdAt,
+            threadId: input.threadId,
+            payload: { config: configuredWindow },
+            providerRefs: nativeProviderRefs(context),
+          });
         }
 
         // The thinking toggle mirrors the spawn-time `alwaysThinkingEnabled`
