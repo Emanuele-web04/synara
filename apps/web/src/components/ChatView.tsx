@@ -37,7 +37,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
 } from "@synara/contracts";
-import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
+import { getDefaultModel, getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
@@ -130,6 +130,7 @@ import {
   buildComposerFileAttachmentsFromFiles,
   IMAGE_SIZE_LIMIT_LABEL,
   buildComposerImageAttachmentsFromFiles,
+  providerSupportsGenericFileAttachments,
   stageUploadComposerAttachments,
   cloneComposerImageAttachment,
   effectiveComposerAttachmentCount,
@@ -513,6 +514,7 @@ import {
   shouldStartActiveTurnLayoutGrace,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  resolveDraftFallbackModelSelection,
   DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
   DismissedProviderHealthBannersSchema,
   collectUserMessageBlobPreviewUrls,
@@ -869,6 +871,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
     case "cursor":
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
+    case "devin":
+      return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
   }
@@ -1248,6 +1252,14 @@ export default function ChatView({
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
+  );
+  const draftFallbackModelSelection = useMemo<ModelSelection>(
+    () =>
+      resolveDraftFallbackModelSelection({
+        projectDefault: fallbackDraftProject?.defaultModelSelection,
+        settingsDefaultProvider: settings.defaultProvider,
+      }),
+    [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider],
   );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -1643,17 +1655,9 @@ export default function ChatView({
   const localDraftThread = useMemo(
     () =>
       draftThread
-        ? buildLocalDraftThread(
-            threadId,
-            draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? {
-              provider: "codex",
-              model: DEFAULT_MODEL_BY_PROVIDER.codex,
-            },
-            localDraftError,
-          )
+        ? buildLocalDraftThread(threadId, draftThread, draftFallbackModelSelection, localDraftError)
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
+    [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
   useEffect(() => {
@@ -2032,6 +2036,7 @@ export default function ChatView({
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
+      devin: resolveHint("devin"),
       antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
@@ -2131,6 +2136,7 @@ export default function ChatView({
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "devin" ||
     selectedProvider === "antigravity" ||
     selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
@@ -5883,6 +5889,20 @@ export default function ChatView({
     [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
   );
 
+  const composerAcceptsGenericFiles = providerSupportsGenericFileAttachments(selectedProvider);
+
+  // Picker/paste intake for providers whose adapters accept non-image files:
+  // images keep the preview path while other files stage as file attachments.
+  const addComposerAttachments = useCallback(
+    (files: readonly File[]) => {
+      const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+      const genericFiles = files.filter((file) => !file.type.startsWith("image/"));
+      if (imageFiles.length > 0) addComposerImages(imageFiles);
+      if (genericFiles.length > 0) addComposerFiles(genericFiles);
+    },
+    [addComposerFiles, addComposerImages],
+  );
+
   const removeComposerFile = (fileId: string) => {
     discardPromptHistoryNavigationForComposerMutation();
     removeComposerDraftFile(threadId, fileId);
@@ -6955,10 +6975,19 @@ export default function ChatView({
     }
     // Keep the optimistic label short while the server asks Codex for a better summary.
     const title = buildPromptThreadTitleFallback(titleSeed);
+    const firstSendDefaultModelSelection = buildModelSelection(
+      selectedModelSelectionForSend.provider,
+      selectedModelSelectionForSend.model ||
+        selectedModelForSend ||
+        getDefaultModel(selectedModelSelectionForSend.provider) ||
+        DEFAULT_MODEL_BY_PROVIDER.codex,
+      selectedModelSelectionForSend.options,
+    );
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
       chatWorkspaceRoot,
       createdAt: firstSendCreatedAt,
+      defaultModelSelection: firstSendDefaultModelSelection,
       isFirstMessage,
       isHomeChatContainer,
       isStudioContainer,
@@ -7284,6 +7313,7 @@ export default function ChatView({
         selectedModelSelectionForSend.model ||
           selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
+          getDefaultModel(selectedModelSelectionForSend.provider) ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
@@ -9740,8 +9770,10 @@ export default function ChatView({
       <ComposerExtrasMenu
         interactionMode={interactionMode}
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+        supportsFileAttachments={composerAcceptsGenericFiles}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddPhotos={addComposerImages}
+        onAddFiles={addComposerFiles}
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />

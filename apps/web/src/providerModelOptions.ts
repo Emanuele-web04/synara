@@ -12,6 +12,8 @@ import type {
   CodexModelSelection,
   CursorModelOptions,
   CursorModelSelection,
+  DevinModelOptions,
+  DevinModelSelection,
   DroidModelOptions,
   DroidModelSelection,
   GrokModelOptions,
@@ -399,6 +401,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as CursorModelOptions,
+          }
+        : { provider, model };
+    case "devin":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DevinModelOptions,
           }
         : { provider, model };
     case "grok":

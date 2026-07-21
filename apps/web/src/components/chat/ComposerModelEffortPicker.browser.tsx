@@ -21,6 +21,7 @@ describe("ComposerModelEffortPicker", () => {
           claudeAgent: [],
           codex: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [{ slug: GROK_4_5, name: "Grok 4.5" }],
           droid: [],

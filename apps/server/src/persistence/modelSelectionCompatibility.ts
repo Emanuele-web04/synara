@@ -14,7 +14,8 @@ type ModelProviderKind =
   | "droid"
   | "kilo"
   | "opencode"
-  | "pi";
+  | "pi"
+  | "devin";
 
 const NON_DROID_MODEL_SLUGS = new Set(
   Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>
@@ -51,6 +52,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "pi";
   }
+  if (lowerLabel.includes("devin")) {
+    return "devin";
+  }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
   }
@@ -75,6 +79,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
     return "droid";
   }
+  if (lowerLabel.includes("devin") || lowerLabel.includes("cognition")) {
+    return "devin";
+  }
   if (lowerLabel.includes("codex")) {
     return "codex";
   }
@@ -91,12 +98,16 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "droid" ||
     provider === "kilo" ||
     provider === "opencode" ||
-    provider === "pi"
+    provider === "pi" ||
+    provider === "devin"
   ) {
     return provider;
   }
   if (provider === "gemini") {
     return "antigravity";
+  }
+  if (typeof provider === "string" && provider.toLowerCase() === "devin") {
+    return "devin";
   }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
@@ -118,6 +129,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   }
   if (lowerModel.includes("grok")) {
     return "grok";
+  }
+  if (lowerModel.includes("devin")) {
+    return "devin";
   }
   return "codex";
 }

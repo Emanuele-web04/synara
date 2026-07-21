@@ -20,6 +20,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "defaultProvider"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
+  | "devinBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
@@ -78,6 +79,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "cursor",
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
+      });
+    case "devin":
+      return providerModelsQueryOptions({
+        provider: "devin",
+        binaryPath: settings.devinBinaryPath || null,
+        cwd,
       });
     case "antigravity":
       return providerModelsQueryOptions({

@@ -89,6 +89,11 @@ function collectComposerAttachmentFiles(input: {
   return { files, error };
 }
 
+// Providers whose adapters project non-image file attachments into the prompt.
+export function providerSupportsGenericFileAttachments(provider: ProviderKind): boolean {
+  return provider === "devin";
+}
+
 // Converts File objects into the exact attachment draft shape used by the chat composer.
 export function buildComposerImageAttachmentsFromFiles(input: {
   files: readonly File[];
@@ -199,6 +204,8 @@ export function resolvePromptEffortFromModelSelection(
     case "claudeAgent":
       return modelSelection.options?.effort ?? null;
     case "cursor":
+      return modelSelection.options?.reasoningEffort ?? null;
+    case "devin":
       return modelSelection.options?.reasoningEffort ?? null;
     case "grok":
     case "droid":

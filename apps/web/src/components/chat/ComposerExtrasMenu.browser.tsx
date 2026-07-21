@@ -1,5 +1,5 @@
 // FILE: ComposerExtrasMenu.browser.tsx
-// Purpose: Verifies the composer `+` menu exposes image-only uploads and quick mode toggles.
+// Purpose: Verifies the composer `+` menu exposes attachment uploads and quick mode toggles.
 // Layer: Browser UI test
 // Depends on: vitest browser rendering helpers and the ComposerExtrasMenu component.
 
@@ -15,8 +15,10 @@ async function mountMenu(props?: {
   fastModeEnabled?: boolean;
   interactionMode?: "default" | "plan";
   supportsFastMode?: boolean;
+  supportsFileAttachments?: boolean;
 }) {
   const onAddPhotos = vi.fn();
+  const onAddFiles = vi.fn();
   const onToggleFastMode = vi.fn();
   const onSetPlanMode = vi.fn();
   const host = document.createElement("div");
@@ -25,8 +27,10 @@ async function mountMenu(props?: {
     <ComposerExtrasMenu
       interactionMode={props?.interactionMode ?? "default"}
       supportsFastMode={props?.supportsFastMode ?? true}
+      supportsFileAttachments={props?.supportsFileAttachments ?? false}
       fastModeEnabled={props?.fastModeEnabled ?? false}
       onAddPhotos={onAddPhotos}
+      onAddFiles={onAddFiles}
       onToggleFastMode={onToggleFastMode}
       onSetPlanMode={onSetPlanMode}
     />,
@@ -42,6 +46,7 @@ async function mountMenu(props?: {
     [Symbol.asyncDispose]: cleanup,
     cleanup,
     onAddPhotos,
+    onAddFiles,
     onToggleFastMode,
     onSetPlanMode,
   };
@@ -52,15 +57,16 @@ describe("ComposerExtrasMenu", () => {
     document.body.innerHTML = "";
   });
 
-  it("uses an image-only file picker and forwards selected images", async () => {
-    await using menu = await mountMenu();
+  it("routes picked images and generic files to their composer callbacks when supported", async () => {
+    await using menu = await mountMenu({ supportsFileAttachments: true });
 
     const input = document.querySelector<HTMLInputElement>("[data-testid='composer-photo-input']");
     expect(input).not.toBeNull();
-    expect(input?.accept).toBe("image/*");
+    expect(input?.accept).toBe("");
 
     const files = new DataTransfer();
     files.items.add(new File(["photo"], "photo.png", { type: "image/png" }));
+    files.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
     Object.defineProperty(input, "files", {
       configurable: true,
       value: files.files,
@@ -69,16 +75,22 @@ describe("ComposerExtrasMenu", () => {
 
     expect(menu.onAddPhotos).toHaveBeenCalledTimes(1);
     expect(menu.onAddPhotos.mock.calls[0]?.[0]?.[0]?.name).toBe("photo.png");
+    expect(menu.onAddFiles).toHaveBeenCalledTimes(1);
+    expect(menu.onAddFiles.mock.calls[0]?.[0]?.[0]?.name).toBe("notes.txt");
   });
 
-  it("shows the attachment action in the menu", async () => {
-    await using _ = await mountMenu({ interactionMode: "plan", fastModeEnabled: true });
+  it("shows the attachment action in the menu when supported", async () => {
+    await using _ = await mountMenu({
+      interactionMode: "plan",
+      fastModeEnabled: true,
+      supportsFileAttachments: true,
+    });
 
     await page.getByLabelText("Composer extras").click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Add image");
+      expect(text).toContain("Add attachment");
       expect(text).toContain("Plan mode");
       expect(text).toContain("Fast");
       expect(text).not.toContain("Plugins");
@@ -86,7 +98,7 @@ describe("ComposerExtrasMenu", () => {
   });
 
   it("wires the plan and speed controls", async () => {
-    await using menu = await mountMenu();
+    await using menu = await mountMenu({ supportsFileAttachments: true });
 
     await page.getByLabelText("Composer extras").click();
     await page.getByText("Plan mode").click();
@@ -95,5 +107,31 @@ describe("ComposerExtrasMenu", () => {
 
     expect(menu.onSetPlanMode).toHaveBeenCalledWith(true);
     expect(menu.onToggleFastMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("restricts image-only providers to images and ignores generic files", async () => {
+    await using menu = await mountMenu({ supportsFileAttachments: false });
+
+    const input = document.querySelector<HTMLInputElement>("[data-testid='composer-photo-input']");
+    expect(input).not.toBeNull();
+    expect(input?.accept).toBe("image/*");
+
+    await page.getByLabelText("Composer extras").click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Add image");
+    });
+
+    const files = new DataTransfer();
+    files.items.add(new File(["photo"], "photo.png", { type: "image/png" }));
+    files.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: files.files,
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(menu.onAddPhotos).toHaveBeenCalledTimes(1);
+    expect(menu.onAddPhotos.mock.calls[0]?.[0]?.[0]?.name).toBe("photo.png");
+    expect(menu.onAddFiles).not.toHaveBeenCalled();
   });
 });

@@ -65,6 +65,7 @@ type ProviderInstallTextKey =
   | "codexHomePath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
+  | "devinBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
@@ -193,6 +194,26 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "Cursor API endpoint",
         placeholder: "https://api2.cursor.sh",
         description: "Optional Cursor API endpoint override passed to `cursor-agent -e`.",
+      },
+    ],
+  },
+  {
+    provider: "devin",
+    docs: [
+      { label: "Install", href: "https://docs.devin.ai" },
+      { label: "Config", href: "https://docs.devin.ai" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "devinBinaryPath",
+        label: "Devin binary path",
+        placeholder: "devin",
+        description: (
+          <>
+            Leave blank to use <code>devin</code> from your PATH.
+          </>
+        ),
       },
     ],
   },

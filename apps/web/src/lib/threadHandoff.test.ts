@@ -12,6 +12,7 @@ describe("threadHandoff", () => {
       "codex",
       "claudeAgent",
       "cursor",
+      "devin",
       "antigravity",
       "grok",
       "droid",

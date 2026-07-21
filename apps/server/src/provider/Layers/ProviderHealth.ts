@@ -63,6 +63,7 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import { hasDevinApiKeyEnv, resolveDevinBinaryPath } from "../acp/DevinAcpSupport";
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
@@ -74,6 +75,7 @@ import {
   detailFromResult,
   extractAuthBoolean,
   extractAuthMethod,
+  isCommandMissingCause,
   nonEmptyTrimmed,
   PROVIDER_COMMAND_TIMEOUT_DETAIL,
   toTitleCaseWords,
@@ -112,6 +114,7 @@ const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
+const DEVIN_PROVIDER = "devin" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -126,6 +129,7 @@ const PROVIDERS = [
   ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
+  DEVIN_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -1875,6 +1879,78 @@ export const makeCheckCursorProviderStatus = (
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
+// ── Devin health check ───────────────────────────────────────────────
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDevinBinaryPath(binaryPath);
+    const env = buildProviderChildEnvironment({ provider: DEVIN_PROVIDER });
+
+    const probe = yield* runProviderCommand(executable, ["--version"], env).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(probe)) {
+      const error = probe.failure;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Devin CLI (`devin`) is not installed or not on PATH."
+          : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(probe.success)) {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but `devin --version` timed out.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const versionResult = probe.success.value;
+    if (versionResult.code !== 0) {
+      const detail = detailFromResult(versionResult);
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const parsedVersion = parseGenericCliVersion(
+      `${versionResult.stdout}\n${versionResult.stderr}`,
+    );
+    const authStatus: ServerProviderAuthStatus = hasDevinApiKeyEnv() ? "authenticated" : "unknown";
+
+    return {
+      provider: DEVIN_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus,
+      version: parsedVersion,
+      checkedAt,
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -2191,7 +2267,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
@@ -2331,6 +2407,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   CURSOR_PROVIDER,
                   makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DEVIN_PROVIDER,
+                  makeCheckDevinProviderStatus(settings.providers.devin?.binaryPath),
                 ),
                 checkProviderWhenEnabled(
                   settings,
