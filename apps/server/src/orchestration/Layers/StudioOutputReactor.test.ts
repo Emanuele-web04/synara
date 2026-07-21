@@ -97,6 +97,7 @@ describe("StudioOutputReactor", () => {
             workspaceRoot,
           } as never),
         ),
+      getSpaceShellById: () => Effect.succeed(Option.none()),
     } as unknown as ProjectionSnapshotQueryShape;
 
     const layer = StudioOutputReactorLive.pipe(

@@ -7,6 +7,7 @@ import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import type {
   ChatMessage,
   Project,
+  Space,
   SidebarThreadSummary,
   Thread,
   ThreadSession,
@@ -15,6 +16,9 @@ import type {
 } from "./types";
 
 export interface AppState {
+  /** Highest authoritative snapshot integrated by this store instance. */
+  shellSnapshotSequence?: number;
+  spaces: Space[];
   projects: Project[];
   sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
   threadsHydrated: boolean;
@@ -60,6 +64,8 @@ export const EMPTY_TURN_DIFF_BY_THREAD: Record<
 > = {};
 
 export const initialState: AppState = {
+  shellSnapshotSequence: 0,
+  spaces: [],
   projects: [],
   sidebarThreadSummaryById: {},
   threadsHydrated: false,

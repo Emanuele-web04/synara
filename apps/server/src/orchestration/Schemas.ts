@@ -1,4 +1,8 @@
 import {
+  SpaceCreatedPayload as ContractsSpaceCreatedPayloadSchema,
+  SpaceMetaUpdatedPayload as ContractsSpaceMetaUpdatedPayloadSchema,
+  SpaceOrderUpdatedPayload as ContractsSpaceOrderUpdatedPayloadSchema,
+  SpaceDeletedPayload as ContractsSpaceDeletedPayloadSchema,
   ProjectCreatedPayload as ContractsProjectCreatedPayloadSchema,
   ProjectMetaUpdatedPayload as ContractsProjectMetaUpdatedPayloadSchema,
   ProjectDeletedPayload as ContractsProjectDeletedPayloadSchema,
@@ -34,6 +38,10 @@ import {
 } from "@synara/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
+export const SpaceCreatedPayload = ContractsSpaceCreatedPayloadSchema;
+export const SpaceMetaUpdatedPayload = ContractsSpaceMetaUpdatedPayloadSchema;
+export const SpaceOrderUpdatedPayload = ContractsSpaceOrderUpdatedPayloadSchema;
+export const SpaceDeletedPayload = ContractsSpaceDeletedPayloadSchema;
 export const ProjectCreatedPayload = ContractsProjectCreatedPayloadSchema;
 export const ProjectMetaUpdatedPayload = ContractsProjectMetaUpdatedPayloadSchema;
 export const ProjectDeletedPayload = ContractsProjectDeletedPayloadSchema;

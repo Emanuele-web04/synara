@@ -353,6 +353,7 @@ const orchestrationEngine = {
   getReadModel: () =>
     Effect.succeed({
       snapshotSequence: 0,
+      spaces: [],
       projects: [],
       threads: [],
       updatedAt: now,
@@ -360,6 +361,7 @@ const orchestrationEngine = {
   refreshCommandReadModel: () =>
     Effect.succeed({
       snapshotSequence: 0,
+      spaces: [],
       projects: [],
       threads: [],
       updatedAt: now,
@@ -383,6 +385,7 @@ const orchestrationEngine = {
   repairState: () =>
     Effect.succeed({
       snapshotSequence: 0,
+      spaces: [],
       projects: [],
       threads: [],
       updatedAt: now,
@@ -394,6 +397,7 @@ const projectionSnapshotQuery = {
   getCommandReadModel: () =>
     Effect.succeed({
       snapshotSequence: 0,
+      spaces: [],
       projects: [],
       threads: [],
       updatedAt: now,
@@ -401,6 +405,7 @@ const projectionSnapshotQuery = {
   getSnapshot: () =>
     Effect.succeed({
       snapshotSequence: 0,
+      spaces: [],
       projects: [],
       threads: [],
       updatedAt: now,
@@ -410,12 +415,14 @@ const projectionSnapshotQuery = {
   getShellSnapshot: () =>
     Effect.succeed({
       snapshotSequence: 0,
+      spaces: [],
       projects: [project],
       threads: [],
       updatedAt: now,
     }),
   getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.some(project as never)),
   getProjectShellById: () => Effect.succeed(Option.some(project)),
+  getSpaceShellById: () => Effect.succeed(Option.none()),
   getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
   getThreadCheckpointContext: () => Effect.succeed(Option.none()),
   getFullThreadDiffContext: () => Effect.succeed(Option.none()),

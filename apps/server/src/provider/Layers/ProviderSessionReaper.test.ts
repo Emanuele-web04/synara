@@ -55,6 +55,7 @@ function makeLayer(input: {
         getShellSnapshot: () => unsupported(),
         getActiveProjectByWorkspaceRoot: () => unsupported(),
         getProjectShellById: () => unsupported(),
+        getSpaceShellById: () => unsupported(),
         getFirstActiveThreadIdByProjectId: () => unsupported(),
         getThreadCheckpointContext: () => unsupported(),
         listGeneratedImageActivitiesByTurn: () => unsupported(),

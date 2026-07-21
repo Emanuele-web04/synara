@@ -195,6 +195,7 @@ describe("projectCreateRecovery", () => {
       workspaceRoot: "/Users/tester/Code/one",
       loadSnapshot: async () => ({
         snapshotSequence: 1,
+        spaces: [],
         updatedAt: "2026-04-21T00:00:00.000Z",
         projects: [],
         threads: [],
@@ -203,6 +204,7 @@ describe("projectCreateRecovery", () => {
         repairCalls += 1;
         return {
           snapshotSequence: 2,
+          spaces: [],
           updatedAt: "2026-04-21T00:00:01.000Z",
           projects: [
             {

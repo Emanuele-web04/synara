@@ -63,7 +63,7 @@ function makeBatch(
 }
 
 function makeSnapshot(projects: OrchestrationProject[]): OrchestrationReadModel {
-  return { snapshotSequence: 1, projects, threads: [], updatedAt: now };
+  return { snapshotSequence: 1, spaces: [], projects, threads: [], updatedAt: now };
 }
 
 function makePins(

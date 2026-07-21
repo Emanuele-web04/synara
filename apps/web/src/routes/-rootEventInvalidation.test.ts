@@ -139,6 +139,7 @@ describe("root event invalidation", () => {
       worktreePath: "/repo/worktree",
     });
     const state: AppState = {
+      spaces: [],
       projects: [{ id: projectId, cwd: "/repo/main" }] as AppState["projects"],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,

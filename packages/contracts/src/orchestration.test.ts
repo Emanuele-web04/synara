@@ -91,6 +91,7 @@ it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
     const codec = Schema.toCodecJson(OrchestrationReadModel);
     const readModel = {
       snapshotSequence: 1,
+      spaces: [],
       updatedAt: "2026-01-01T00:00:00.000Z",
       projects: [],
       threads: [

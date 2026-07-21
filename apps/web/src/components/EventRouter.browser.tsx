@@ -69,6 +69,7 @@ function createBaseServerConfig(): ServerConfig {
 function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][number]>) {
   return {
     snapshotSequence: 1,
+    spaces: [],
     projects: [
       {
         id: PROJECT_ID,

@@ -3,6 +3,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
+  SpaceId,
   ThreadId,
 } from "@synara/contracts";
 import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
@@ -23,6 +24,7 @@ import {
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { ServerConfig } from "../../config.ts";
 import { toPersistenceSqlError, type PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import {
@@ -57,10 +59,12 @@ import {
   usesReservedCommandAdmission,
 } from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
-import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
-import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
+import {
+  OrchestrationProjectionPipeline,
+  type ShellMetadataOrchestrationEvent,
+} from "../Services/ProjectionPipeline.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -97,10 +101,19 @@ type CommittedCommandResult = {
 };
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "space" | "project" | "thread";
+  readonly aggregateId: SpaceId | ProjectId | ThreadId;
 } {
   switch (command.type) {
+    case "space.create":
+    case "space.meta.update":
+    case "space.reorder":
+    case "space.delete":
+    case "space.projects.assign":
+      return {
+        aggregateKind: "space",
+        aggregateId: command.spaceId,
+      };
     case "project.create":
     case "project.meta.update":
     case "project.delete":
@@ -116,10 +129,14 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   }
 }
 
-function isProjectMetadataEvent(
-  event: OrchestrationEvent,
-): event is ProjectMetadataOrchestrationEvent {
+// Space and project metadata events share the synchronous "shell" projection path: they
+// are cheap, sidebar-visible rows that must be queryable the moment the command commits.
+function isShellMetadataEvent(event: OrchestrationEvent): event is ShellMetadataOrchestrationEvent {
   return (
+    event.type === "space.created" ||
+    event.type === "space.meta-updated" ||
+    event.type === "space.order-updated" ||
+    event.type === "space.deleted" ||
     event.type === "project.created" ||
     event.type === "project.meta-updated" ||
     event.type === "project.deleted"
@@ -133,6 +150,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const managedAttachments = yield* ManagedAttachmentRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const serverConfig = yield* ServerConfig;
+  const deciderWorkspacePaths = {
+    homeDir: serverConfig.homeDir,
+    chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+  } as const;
 
   let commandReadModel = createEmptyReadModel(new Date().toISOString());
 
@@ -437,11 +459,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     }
   };
 
-  // Rebuild only the project projection rows and snapshot cursors.
+  // Rebuild only the project/space projection rows and snapshot cursors.
   // Existing thread/chat projection rows stay in place so older installs do not
   // lose history that is no longer fully represented in orchestration_events.
   const resetDerivedProjectionState = sql.withTransaction(
     Effect.gen(function* () {
+      yield* sql`DELETE FROM projection_spaces`;
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`
         DELETE FROM projection_state
@@ -452,8 +475,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const backupDerivedProjectionState = sql.withTransaction(
     Effect.gen(function* () {
+      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_spaces`;
       yield* sql`DROP TABLE IF EXISTS temp_repair_projection_projects`;
       yield* sql`DROP TABLE IF EXISTS temp_repair_projection_state`;
+      yield* sql`CREATE TEMP TABLE temp_repair_projection_spaces AS SELECT * FROM projection_spaces`;
       yield* sql`CREATE TEMP TABLE temp_repair_projection_projects AS SELECT * FROM projection_projects`;
       yield* sql`CREATE TEMP TABLE temp_repair_projection_state AS SELECT * FROM projection_state`;
     }),
@@ -461,6 +486,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const restoreDerivedProjectionState = sql.withTransaction(
     Effect.gen(function* () {
+      yield* sql`DELETE FROM projection_spaces`;
+      yield* sql`INSERT INTO projection_spaces SELECT * FROM temp_repair_projection_spaces`;
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`INSERT INTO projection_projects SELECT * FROM temp_repair_projection_projects`;
       yield* sql`DELETE FROM projection_state`;
@@ -470,6 +497,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const dropProjectionRepairBackup = sql.withTransaction(
     Effect.gen(function* () {
+      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_spaces`;
       yield* sql`DROP TABLE IF EXISTS temp_repair_projection_projects`;
       yield* sql`DROP TABLE IF EXISTS temp_repair_projection_state`;
     }),
@@ -643,6 +671,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const eventBase = yield* decideOrchestrationCommand({
         command,
         readModel: deciderReadModel,
+        workspacePaths: deciderWorkspacePaths,
       });
       const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
       const transactionalCommitEffect: Effect.Effect<
@@ -677,7 +706,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         for (const nextEvent of eventBases) {
           const savedEvent = yield* eventStore.append(nextEvent);
           nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
-          if (isProjectMetadataEvent(savedEvent)) {
+          if (isShellMetadataEvent(savedEvent)) {
             yield* projectionPipeline.projectMetadataEvent(savedEvent);
           } else {
             yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);

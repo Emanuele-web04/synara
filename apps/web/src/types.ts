@@ -19,6 +19,8 @@ import type {
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
+  SpaceId,
+  SpaceIconName,
   TurnId,
   MessageId,
   ProviderMentionReference,
@@ -175,9 +177,20 @@ export interface Project {
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;
+  /** Missing on renderer state written before Spaces; normalized snapshots always set it. */
+  spaceId?: SpaceId | null;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+}
+
+export interface Space {
+  id: SpaceId;
+  name: string;
+  icon: SpaceIconName;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ThreadWorkspaceState {

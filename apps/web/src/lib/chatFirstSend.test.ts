@@ -18,6 +18,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     cwd: "/Users/tester",
     defaultModelSelection: null,
     expanded: false,
+    spaceId: null,
     scripts: [],
     ...overrides,
   };

@@ -21,6 +21,7 @@ import {
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
   isLatestPinnedProjectMutation,
+  isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
@@ -78,6 +79,39 @@ describe("resolvePendingSidebarViewSelection", () => {
 
   it("clears the optimistic segment when the user returns to the active view", () => {
     expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
+  });
+});
+
+describe("isProjectsSidebarSurface", () => {
+  it("enables Space shortcuts only where the Space switcher is visible", () => {
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: false,
+        isOnStudio: false,
+        isOnWorkspace: false,
+      }),
+    ).toBe(true);
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: false,
+        isOnStudio: true,
+        isOnWorkspace: false,
+      }),
+    ).toBe(false);
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: false,
+        isOnStudio: false,
+        isOnWorkspace: true,
+      }),
+    ).toBe(false);
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: true,
+        isOnStudio: false,
+        isOnWorkspace: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -588,6 +622,7 @@ describe("pin helpers", () => {
       cwd: `/tmp/${id}`,
       defaultModelSelection: null,
       expanded: true,
+      spaceId: null,
       createdAt: "2026-03-09T10:00:00.000Z",
       updatedAt: "2026-03-09T10:00:00.000Z",
       scripts: [],
@@ -1453,6 +1488,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
       ...defaultModelSelection,
     },
     expanded: true,
+    spaceId: null,
     createdAt: "2026-03-09T10:00:00.000Z",
     updatedAt: "2026-03-09T10:00:00.000Z",
     scripts: [],

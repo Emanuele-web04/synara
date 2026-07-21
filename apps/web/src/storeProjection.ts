@@ -7,6 +7,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationSpaceShell,
   type ThreadId,
   type TurnId,
 } from "@synara/contracts";
@@ -14,12 +15,15 @@ import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import {
+  arraysShallowEqual,
   capThreadActivities,
   dedupeActivitiesById,
   deepEqualJson,
   mapProjects,
+  mapSpaces,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeProject,
+  normalizeSpace,
   normalizeThreadFromReadModel,
   normalizeThreadShellSnapshot,
   recordsShallowEqual,
@@ -52,6 +56,7 @@ import {
 import type {
   ChatMessage,
   Project,
+  Space,
   SidebarThreadSummary,
   Thread,
   ThreadSession,
@@ -205,6 +210,68 @@ export function upsertProject(
     ...state,
     projects: [...state.projects, nextProject],
   };
+}
+
+export function upsertSpace(
+  state: AppState,
+  incoming: OrchestrationReadModel["spaces"][number] | OrchestrationSpaceShell,
+): AppState {
+  const existing = state.spaces.find((space) => space.id === incoming.id);
+  const nextSpace = normalizeSpace(incoming, existing);
+  if (existing === nextSpace) return state;
+  const spaces = existing
+    ? state.spaces.map((space) => (space.id === incoming.id ? nextSpace : space))
+    : [...state.spaces, nextSpace];
+  return {
+    ...state,
+    spaces: spaces.toSorted(
+      (left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id),
+    ),
+  };
+}
+
+export function removeSpace(
+  state: AppState,
+  spaceId: Space["id"],
+  assignmentUpdatedAt?: string,
+): AppState {
+  const spaces = state.spaces.filter((space) => space.id !== spaceId);
+  let projectsChanged = false;
+  const projects = state.projects.map((project) => {
+    if ((project.spaceId ?? null) !== spaceId) return project;
+    projectsChanged = true;
+    return {
+      ...project,
+      spaceId: null,
+      ...(assignmentUpdatedAt !== undefined
+        ? {
+            updatedAt:
+              project.updatedAt && project.updatedAt > assignmentUpdatedAt
+                ? project.updatedAt
+                : assignmentUpdatedAt,
+          }
+        : {}),
+    };
+  });
+  if (spaces.length === state.spaces.length && !projectsChanged) return state;
+  return { ...state, spaces, projects: projectsChanged ? projects : state.projects };
+}
+
+export function applySpaceOrder(
+  state: AppState,
+  orderedSpaceIds: ReadonlyArray<Space["id"]>,
+  updatedAt?: string,
+): AppState {
+  const orderById = new Map(orderedSpaceIds.map((spaceId, index) => [spaceId, index] as const));
+  const spaces = state.spaces
+    .map((space) => {
+      const sortOrder = orderById.get(space.id);
+      return sortOrder === undefined || sortOrder === space.sortOrder
+        ? space
+        : { ...space, sortOrder, ...(updatedAt !== undefined ? { updatedAt } : {}) };
+    })
+    .toSorted((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+  return arraysShallowEqual(spaces, state.spaces) ? state : { ...state, spaces };
 }
 
 function sidebarThreadSummariesEqual(
@@ -762,6 +829,7 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] !== true,
   );
+  const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const projects = mapProjects(snapshotProjects, state.projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
 
@@ -811,6 +879,11 @@ export function syncServerShellSnapshot(
 
   return {
     ...normalizedState,
+    shellSnapshotSequence: Math.max(
+      state.shellSnapshotSequence ?? 0,
+      snapshot.snapshotSequence,
+    ),
+    spaces,
     projects,
     sidebarThreadSummaryById,
     threadsHydrated: true,
@@ -863,6 +936,12 @@ export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModel
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
   switch (event.kind) {
+    case "space-upserted":
+      return upsertSpace(state, event.space);
+    case "space-removed":
+      return removeSpace(state, event.spaceId, event.updatedAt);
+    case "space-order-updated":
+      return applySpaceOrder(state, event.orderedSpaceIds);
     case "project-upserted":
       return upsertProject(state, event.project, "id-or-cwd");
     case "project-removed":
@@ -891,6 +970,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   rememberProjectLocalNames(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
+  const spaces = mapSpaces(
+    (readModel.spaces ?? []).filter((space) => space.deletedAt === null),
+    state.spaces ?? [],
+  );
   const projects = mapProjects(
     readModel.projects.filter(
       (project) => project.deletedAt === null && deletedProjectIdsById[project.id] !== true,
@@ -947,6 +1030,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ? state.sidebarThreadSummaryById
     : nextSidebarThreadSummaryById;
   if (
+    spaces === state.spaces &&
     projects === state.projects &&
     sidebarThreadSummaryById === state.sidebarThreadSummaryById &&
     normalizedState.threadIds === state.threadIds &&
@@ -967,6 +1051,11 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   }
   return {
     ...normalizedState,
+    shellSnapshotSequence: Math.max(
+      state.shellSnapshotSequence ?? 0,
+      readModel.snapshotSequence,
+    ),
+    spaces,
     projects,
     sidebarThreadSummaryById,
     threadsHydrated: true,

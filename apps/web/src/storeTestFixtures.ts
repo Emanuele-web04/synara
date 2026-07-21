@@ -56,13 +56,22 @@ export function makeDomainEvent<TType extends OrchestrationEvent["type"]>(
   payload: Extract<OrchestrationEvent, { type: TType }>["payload"],
   overrides: Partial<Omit<Extract<OrchestrationEvent, { type: TType }>, "type" | "payload">> = {},
 ): Extract<OrchestrationEvent, { type: TType }> {
-  const aggregateId = "threadId" in payload ? payload.threadId : ProjectId.makeUnsafe("project-1");
+  const aggregateId =
+    "threadId" in payload
+      ? payload.threadId
+      : "spaceId" in payload
+        ? payload.spaceId
+        : "projectId" in payload
+          ? payload.projectId
+          : ProjectId.makeUnsafe("project-1");
+  const aggregateKind =
+    "threadId" in payload ? "thread" : "spaceId" in payload ? "space" : "project";
   return {
     type,
     payload,
     sequence: overrides.sequence ?? 1,
     eventId: overrides.eventId ?? EventId.makeUnsafe(`event-${crypto.randomUUID()}`),
-    aggregateKind: overrides.aggregateKind ?? "thread",
+    aggregateKind: overrides.aggregateKind ?? aggregateKind,
     aggregateId,
     occurredAt: overrides.occurredAt ?? "2026-02-27T00:00:00.000Z",
     commandId: overrides.commandId ?? null,
@@ -107,6 +116,7 @@ export function makeState(thread: Thread): AppState {
     ...shell
   } = thread;
   return {
+    spaces: [],
     projects: [makeProject()],
     sidebarThreadSummaryById: {},
     threadsHydrated: true,
@@ -151,6 +161,7 @@ export function makeProject(
       model: "gpt-5-codex",
     },
     expanded: true,
+    spaceId: null,
     scripts: [],
     ...overrides,
   };
@@ -192,6 +203,7 @@ export function makeReadModel(
   return {
     snapshotSequence: 1,
     updatedAt: "2026-02-27T00:00:00.000Z",
+    spaces: [],
     projects: [
       {
         id: ProjectId.makeUnsafe("project-1"),
@@ -206,6 +218,7 @@ export function makeReadModel(
         updatedAt: "2026-02-27T00:00:00.000Z",
         deletedAt: null,
         scripts: [],
+        spaceId: null,
       },
     ],
     threads: [thread],
@@ -216,6 +229,7 @@ export function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][
   return {
     snapshotSequence: 2,
     updatedAt: "2026-02-27T00:01:00.000Z",
+    spaces: [],
     projects: [
       {
         id: ProjectId.makeUnsafe("project-1"),
@@ -228,6 +242,7 @@ export function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][
         createdAt: "2026-02-27T00:00:00.000Z",
         updatedAt: "2026-02-27T00:00:00.000Z",
         scripts: [],
+        spaceId: null,
       },
     ],
     threads: [thread],
@@ -250,6 +265,7 @@ export function makeReadModelProject(
     updatedAt: "2026-02-27T00:00:00.000Z",
     deletedAt: null,
     scripts: [],
+    spaceId: null,
     ...overrides,
   };
 }

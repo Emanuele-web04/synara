@@ -3,9 +3,15 @@
 // Layer: Web helper tests
 // Depends on: projectCreation helper plus mocked NativeApi orchestration calls.
 
-import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
-import { describe, expect, it, vi } from "vitest";
+import {
+  type NativeApi,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
+  SpaceId,
+} from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useSpacesUiStore } from "../spacesUiStore";
 import { createOrRecoverProjectFromPath } from "./projectCreation";
 
 const NOW_ISO = "2026-06-26T20:00:00.000Z";
@@ -32,6 +38,7 @@ function makeSnapshot(
 ): OrchestrationShellSnapshot {
   return {
     snapshotSequence: 2,
+    spaces: [],
     projects,
     threads: [],
     updatedAt: NOW_ISO,
@@ -47,6 +54,10 @@ function makeApi(dispatchCommand: ReturnType<typeof vi.fn>): NativeApi {
 }
 
 describe("createOrRecoverProjectFromPath", () => {
+  afterEach(() => {
+    useSpacesUiStore.getState().setActiveSpaceId(null);
+  });
+
   it("dispatches project.create and returns the synced project", async () => {
     let createdProjectId: ProjectId | null = null;
     const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
@@ -100,5 +111,29 @@ describe("createOrRecoverProjectFromPath", () => {
       project: existingProject,
       created: false,
     });
+  });
+
+  it("preserves an optimistically selected space before the shell snapshot catches up", async () => {
+    const activeSpaceId = SpaceId.makeUnsafe("space-new");
+    useSpacesUiStore.getState().setActiveSpaceId(activeSpaceId);
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        spaceId: activeSpaceId,
+      }),
+    );
   });
 });

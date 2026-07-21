@@ -32,6 +32,7 @@ function makeShellSnapshot(
 ): OrchestrationShellSnapshot {
   return {
     snapshotSequence: 1,
+    spaces: [],
     projects,
     threads: [],
     updatedAt: NOW,

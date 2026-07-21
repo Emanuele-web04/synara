@@ -5,6 +5,7 @@ import type { Project } from "../types";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
+  resolveLatestProjectTargetIdWithFallback,
   resolveNewThreadTarget,
 } from "./projectShortcutTargets";
 
@@ -80,6 +81,18 @@ describe("project shortcut targets", () => {
         ),
       }),
     ).toBeNull();
+  });
+
+  it("falls back to the most recently updated project in the supplied space", () => {
+    const older = { ...makeProject(CURRENT_PROJECT_ID), updatedAt: "2026-07-15T10:00:00.000Z" };
+    const newer = { ...makeProject(LATEST_PROJECT_ID), updatedAt: "2026-07-15T10:00:01.000Z" };
+
+    expect(
+      resolveLatestProjectTargetIdWithFallback(
+        [older, newer],
+        "project-from-another-space" as ProjectId,
+      ),
+    ).toBe(LATEST_PROJECT_ID);
   });
 
   it("returns no target when no projects exist", () => {
