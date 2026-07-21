@@ -6524,7 +6524,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         configuredEvents.map((event) =>
           event.type === "session.configured" ? event.payload.config.autoCompactWindow : undefined,
         ),
-        ["1m", 200_000, null],
+        [1_000_000, 200_000, null],
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -6750,6 +6750,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      const configuredEventFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.configured",
+      ).pipe(Stream.runHead, Effect.forkChild);
 
       yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -6761,6 +6765,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.ok(settings && typeof settings === "object");
       assert.equal((settings as { autoCompactEnabled?: boolean }).autoCompactEnabled, true);
       assert.equal((settings as { autoCompactWindow?: number }).autoCompactWindow, 200_000);
+
+      const configuredEvent = yield* Fiber.join(configuredEventFiber);
+      assert.equal(configuredEvent._tag, "Some");
+      if (
+        configuredEvent._tag === "Some" &&
+        configuredEvent.value.type === "session.configured"
+      ) {
+        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, 200_000);
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

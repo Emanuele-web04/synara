@@ -4723,9 +4723,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 config: {
                   ...(modelSelection?.model ? { model: modelSelection.model } : {}),
                   ...(apiModelId ? { apiModelId } : {}),
-                  ...(requestedAutoCompactWindow
-                    ? { autoCompactWindow: requestedAutoCompactWindow }
-                    : {}),
+                  autoCompactWindow: requestedAutoCompactWindowTokens ?? null,
                   ...(input.cwd ? { cwd: input.cwd } : {}),
                   ...(effectiveEffort ? { effort: effectiveEffort } : {}),
                   ...(permissionMode ? { permissionMode } : {}),
