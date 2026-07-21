@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { GatewayToolError } from "../agentGateway/toolRuntime.ts";
 import {
+  latestExternalMcpWaitState,
+  requestedExternalMcpRunId,
   terminalExternalMcpSessionStateForRun,
   waitForExternalMcpTaskState,
 } from "./waitForTask.ts";
@@ -11,6 +13,32 @@ const inactive = () =>
   Effect.fail(new GatewayToolError("external_credential_inactive", "Integration revoked."));
 
 describe("waitForExternalMcpTaskState", () => {
+  it("keeps an explicit null run id unpinned while omission selects the latest turn", () => {
+    expect(requestedExternalMcpRunId({}, "turn-latest")).toBe("turn-latest");
+    expect(requestedExternalMcpRunId({ runId: null }, "turn-latest")).toBeNull();
+    expect(requestedExternalMcpRunId({ runId: "turn-explicit" }, "turn-latest")).toBe(
+      "turn-explicit",
+    );
+  });
+
+  it("prefers a durable latest turn over uncorrelated terminal session state", () => {
+    const thread = {
+      latestTurn: { turnId: "turn-live", state: "running" as const },
+      session: { status: "error" },
+    };
+    expect(latestExternalMcpWaitState(thread)).toEqual({
+      runId: "turn-live",
+      state: "running",
+    });
+    expect(terminalExternalMcpSessionStateForRun(thread, null)).toBeNull();
+    expect(
+      latestExternalMcpWaitState({
+        latestTurn: { turnId: "turn-old", state: "completed" },
+        session: { status: "error" },
+      }),
+    ).toEqual({ runId: null, state: "error" });
+  });
+
   it("waits for a latest turn that appears after the thread projection", async () => {
     let latestReads = 0;
     const result = await Effect.runPromise(

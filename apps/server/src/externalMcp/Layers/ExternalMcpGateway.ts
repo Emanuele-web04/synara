@@ -62,6 +62,8 @@ import {
   summarizeWaitThreadText,
 } from "../../agentGateway/threadSummary.ts";
 import {
+  latestExternalMcpWaitState,
+  requestedExternalMcpRunId,
   terminalExternalMcpSessionStateForRun,
   waitForExternalMcpTaskState,
 } from "../waitForTask.ts";
@@ -72,6 +74,7 @@ import {
   type ExternalMcpVerifiedClient,
 } from "../Services/ExternalMcpService.ts";
 import { makeExternalMcpAuditCompletion } from "../auditCompletion.ts";
+import { verifyExternalMcpTransportCredential } from "../credentialVerification.ts";
 import {
   ExternalMcpGateway,
   type ExternalMcpGatewayShape,
@@ -462,7 +465,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         );
         yield* externalMcp.assertTaskRead(context.client, input.threadId);
         const initial = yield* requireThreadShell(input.threadId);
-        const runId = input.runId ?? initial.latestTurn?.turnId ?? null;
+        const runId = requestedExternalMcpRunId(input, initial.latestTurn?.turnId ?? null);
         const terminalSessionState = terminalExternalMcpSessionStateForRun(initial, runId);
         const initialState: "idle" | "pending" | "running" | "completed" | "error" | "interrupted" =
           terminalSessionState !== null
@@ -481,16 +484,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           projectionTurns,
           resolveLatestTurn: () =>
             requireThreadShell(input.threadId).pipe(
-              Effect.map((thread) =>
-                thread.session?.status === "error"
-                  ? { runId: null, state: "error" as const }
-                  : thread.session?.status === "interrupted" ||
-                      thread.session?.status === "stopped"
-                    ? { runId: null, state: "interrupted" as const }
-                    : thread.latestTurn === null
-                      ? null
-                      : { runId: thread.latestTurn.turnId, state: thread.latestTurn.state },
-              ),
+              Effect.map(latestExternalMcpWaitState),
             ),
         });
         let summary: string | null = null;
@@ -721,8 +715,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           ),
         };
       }
-      const client = yield* externalMcp.verifyCredential(token).pipe(Effect.option);
-      if (Option.isNone(client)) {
+      const verification = yield* verifyExternalMcpTransportCredential(externalMcp, token);
+      if (verification.kind === "invalid") {
         return {
           status: 401,
           body: jsonRpcError(
@@ -732,7 +726,20 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           ),
         };
       }
-      return yield* handleVerifiedPost({ client: client.value, body: requestInput.body });
+      if (verification.kind === "unavailable") {
+        return {
+          status: 503,
+          body: jsonRpcError(
+            null,
+            -32603,
+            "external_service_unavailable: External MCP credential verification is temporarily unavailable.",
+          ),
+        };
+      }
+      return yield* handleVerifiedPost({
+        client: verification.client,
+        body: requestInput.body,
+      });
     });
 
   return { handlePost, handleVerifiedPost } satisfies ExternalMcpGatewayShape;

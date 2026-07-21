@@ -24,6 +24,11 @@ async function withExternalMcpServer(
   input: {
     readonly host?: string;
     readonly publicUrl?: URL;
+    readonly verifyCredentialFailure?: {
+      readonly code: string;
+      readonly message: string;
+      readonly status: 401 | 500;
+    };
     readonly handleVerifiedPost?: (
       body: unknown,
     ) => Effect.Effect<{ readonly status: number; readonly body?: unknown }>;
@@ -58,7 +63,9 @@ async function withExternalMcpServer(
     }) as never;
     const service = {
       verifyCredential: (credential: string) =>
-        credential === EXTERNAL_TOKEN || credential === OTHER_EXTERNAL_TOKEN
+        input.verifyCredentialFailure
+          ? Effect.fail(input.verifyCredentialFailure)
+          : credential === EXTERNAL_TOKEN || credential === OTHER_EXTERNAL_TOKEN
           ? Effect.succeed(
               verified(
                 credential === EXTERNAL_TOKEN
@@ -361,6 +368,28 @@ describe("externalMcpRouteLayer", () => {
       expect(escapedPrompt.status).toBe(200);
       expect(handledBodies.at(-1)).toEqual(escapedPromptBody);
     });
+  });
+
+  it("reports credential repository failures as unavailable instead of invalid auth", async () => {
+    await withExternalMcpServer(
+      {
+        verifyCredentialFailure: {
+          code: "repository_error",
+          message: "database unavailable",
+          status: 500,
+        },
+      },
+      async ({ origin, handledBodies }) => {
+        const response = await fetch(`${origin}/mcp/external`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${EXTERNAL_TOKEN}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+        });
+        expect(response.status).toBe(503);
+        expect(await response.text()).toContain("external_service_unavailable");
+        expect(handledBodies).toHaveLength(0);
+      },
+    );
   });
 
   it("does not expose the external endpoint from a remotely bound instance", async () => {

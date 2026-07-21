@@ -15,6 +15,33 @@ export type ExternalMcpWaitState =
 const isTerminalWaitState = (state: ExternalMcpWaitState) =>
   state === "completed" || state === "error" || state === "interrupted";
 
+const isLiveWaitState = (state: ExternalMcpWaitState) =>
+  state === "pending" || state === "running";
+
+export const requestedExternalMcpRunId = (
+  input: { readonly runId?: string | null },
+  latestTurnId: string | null,
+): string | null => (Object.hasOwn(input, "runId") ? (input.runId ?? null) : latestTurnId);
+
+export const latestExternalMcpWaitState = (thread: {
+  readonly latestTurn: {
+    readonly turnId: string;
+    readonly state: ExternalMcpWaitState;
+  } | null;
+  readonly session: { readonly status: string } | null;
+}): { readonly runId: string | null; readonly state: ExternalMcpWaitState } | null => {
+  if (thread.latestTurn !== null && isLiveWaitState(thread.latestTurn.state)) {
+    return { runId: thread.latestTurn.turnId, state: thread.latestTurn.state };
+  }
+  if (thread.session?.status === "error") return { runId: null, state: "error" };
+  if (thread.session?.status === "interrupted" || thread.session?.status === "stopped") {
+    return { runId: null, state: "interrupted" };
+  }
+  return thread.latestTurn === null
+    ? null
+    : { runId: thread.latestTurn.turnId, state: thread.latestTurn.state };
+};
+
 export const terminalExternalMcpSessionStateForRun = (
   thread: {
     readonly latestTurn: {
@@ -27,7 +54,13 @@ export const terminalExternalMcpSessionStateForRun = (
 ): Extract<ExternalMcpWaitState, "error" | "interrupted"> | null => {
   // Session state has no durable run id. Once a run is pinned, its projected
   // turn is authoritative; a session failure can belong to a later startup.
-  if (runId !== null) return null;
+  // A visible live turn is also more specific than uncorrelated session state.
+  if (
+    runId !== null ||
+    (thread.latestTurn !== null && isLiveWaitState(thread.latestTurn.state))
+  ) {
+    return null;
+  }
   if (thread.session?.status === "error") return "error";
   return thread.session?.status === "interrupted" || thread.session?.status === "stopped"
     ? "interrupted"

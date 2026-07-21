@@ -19,6 +19,7 @@ import { isLoopbackHost } from "../startupAccess.ts";
 import { shouldRejectAuthMutationOrigin } from "../trustedOrigins.ts";
 import { ExternalMcpGateway } from "./Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "./Services/ExternalMcpService.ts";
+import { verifyExternalMcpTransportCredential } from "./credentialVerification.ts";
 import { makeExternalMcpExecutionAdmission } from "./executionAdmission.ts";
 import { computeExternalMcpRuntimeProof, externalMcpRuntimeSecret } from "./runtimeProof.ts";
 
@@ -117,6 +118,20 @@ const externalUnauthorized = () =>
     { status: 401 },
   );
 
+const externalUnavailable = () =>
+  HttpServerResponse.jsonUnsafe(
+    {
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32603,
+        message:
+          "external_service_unavailable: External MCP credential verification is temporarily unavailable.",
+      },
+    },
+    { status: 503 },
+  );
+
 const postExternalMcp = HttpRouter.add(
   "POST",
   EXTERNAL_MCP_PATH,
@@ -126,12 +141,10 @@ const postExternalMcp = HttpRouter.add(
     const externalMcp = yield* ExternalMcpService;
     const gateway = yield* ExternalMcpGateway;
     const token = extractBearerToken(request.headers.authorization);
-    const client = token
-      ? yield* externalMcp.verifyCredential(token).pipe(Effect.option)
-      : Option.none();
-    if (Option.isNone(client)) {
-      return externalUnauthorized();
-    }
+    if (!token) return externalUnauthorized();
+    const verification = yield* verifyExternalMcpTransportCredential(externalMcp, token);
+    if (verification.kind === "invalid") return externalUnauthorized();
+    if (verification.kind === "unavailable") return externalUnavailable();
     const body = yield* readExternalMcpBody(request);
     if (body.kind === "timeout") {
       return HttpServerResponse.jsonUnsafe(
@@ -160,9 +173,9 @@ const postExternalMcp = HttpRouter.add(
       );
     }
     const admitted = yield* externalMcpExecutionAdmission.run(
-      client.value.integration.integrationId,
+      verification.client.integration.integrationId,
       gateway.handleVerifiedPost({
-        client: client.value,
+        client: verification.client,
         body: body.body,
       }),
     );
