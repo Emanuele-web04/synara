@@ -2,6 +2,7 @@ import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
+  capOpenWorkEntryRenderChunks,
   chunkCollapsedTurnItems,
   chunkWorkEntries,
   computeMessageDurationStart,
@@ -10,6 +11,7 @@ import {
   deriveTerminalAssistantMessageIds,
   findLastLiveWorkGroupId,
   normalizeCompactToolLabel,
+  planWorkEntryRenderChunks,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
   type CollapsedTurnItem,
@@ -1342,6 +1344,157 @@ describe("chunkWorkEntries", () => {
           : `item:${chunk.entry.id}`,
       ),
     ).toEqual(["group:w1+w2", "item:err", "group:w3+w4"]);
+  });
+});
+
+const planSignature = (
+  entries: ReadonlyArray<WorkLogEntry>,
+  options: { tailIsLive: boolean },
+): string[] =>
+  planWorkEntryRenderChunks(entries, options).map((chunk) => {
+    const ids = chunk.entries.map((entry) => entry.id).join("+");
+    return chunk.summary === null ? `open:${ids}` : `collapsed:${ids}`;
+  });
+
+describe("planWorkEntryRenderChunks", () => {
+  it("collapses the earlier run across a thinking boundary while the live tail stays open", () => {
+    expect(
+      planSignature(
+        [
+          toolItem("w1").entry,
+          toolItem("w2").entry,
+          toolItem("think", { tone: "thinking" }).entry,
+          toolItem("w3").entry,
+          toolItem("w4").entry,
+        ],
+        { tailIsLive: true },
+      ),
+    ).toEqual(["collapsed:w1+w2", "open:think", "open:w3+w4"]);
+  });
+
+  it("collapses every run when narration is the trailing block", () => {
+    expect(
+      planSignature(
+        [toolItem("w1").entry, toolItem("w2").entry, toolItem("think", { tone: "thinking" }).entry],
+        { tailIsLive: true },
+      ),
+    ).toEqual(["collapsed:w1+w2", "open:think"]);
+  });
+
+  it("collapses the trailing run once the tail is no longer live", () => {
+    expect(
+      planSignature([toolItem("w1").entry, toolItem("w2").entry], { tailIsLive: false }),
+    ).toEqual(["collapsed:w1+w2"]);
+  });
+
+  it("never collapses a run that still has running work", () => {
+    expect(
+      planSignature(
+        [
+          toolItem("w1", { toolStatus: "running" }).entry,
+          toolItem("w2").entry,
+          toolItem("think", { tone: "thinking" }).entry,
+          toolItem("w3").entry,
+          toolItem("w4").entry,
+        ],
+        { tailIsLive: false },
+      ),
+    ).toEqual(["open:w1+w2", "open:think", "collapsed:w3+w4"]);
+  });
+
+  it("keeps singleton runs open: nothing to summarize", () => {
+    expect(
+      planSignature(
+        [toolItem("w1").entry, toolItem("think", { tone: "thinking" }).entry, toolItem("w2").entry],
+        { tailIsLive: false },
+      ),
+    ).toEqual(["open:w1", "open:think", "open:w2"]);
+  });
+});
+
+describe("capOpenWorkEntryRenderChunks", () => {
+  it("preserves collapsed summaries while limiting later open entries", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [
+        toolItem("w1").entry,
+        toolItem("w2").entry,
+        toolItem("think", { tone: "thinking" }).entry,
+        toolItem("w3").entry,
+        toolItem("w4").entry,
+        toolItem("w5").entry,
+        toolItem("w6").entry,
+        toolItem("w7").entry,
+      ],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: false,
+      maxVisibleEntries: 3,
+      keep: "last",
+    });
+
+    expect(
+      result.chunks.map((chunk) => ({
+        ids: chunk.entries.map((entry) => entry.id),
+        collapsed: chunk.summary !== null,
+      })),
+    ).toEqual([
+      { ids: ["w1", "w2"], collapsed: true },
+      { ids: [], collapsed: false },
+      { ids: ["w5", "w6", "w7"], collapsed: false },
+    ]);
+    expect(result.hasOverflow).toBe(true);
+    expect(result.hiddenEntryCount).toBe(3);
+  });
+
+  it("does not count separately rendered status boundaries against the tool cap", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [
+        toolItem("w1").entry,
+        toolItem("w2").entry,
+        toolItem("think", { tone: "thinking" }).entry,
+        toolItem("w3").entry,
+        toolItem("w4").entry,
+        toolItem("w5").entry,
+      ],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: false,
+      maxVisibleEntries: 2,
+      keep: "first",
+      shouldCapEntry: (entry) => entry.tone === "tool",
+    });
+
+    expect(result.chunks.map((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
+      ["w1", "w2"],
+      ["think"],
+      ["w3", "w4"],
+    ]);
+    expect(result.hiddenEntryCount).toBe(1);
+  });
+
+  it("restores every open entry when expanded while retaining overflow state", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: true,
+      maxVisibleEntries: 2,
+      keep: "last",
+    });
+
+    expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
+      "w1",
+      "w2",
+      "w3",
+    ]);
+    expect(result.hasOverflow).toBe(true);
+    expect(result.hiddenEntryCount).toBe(0);
   });
 });
 

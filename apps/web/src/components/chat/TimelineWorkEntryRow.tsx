@@ -278,8 +278,18 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
 // Dynamic icon selection is data, not a component declaration. Keeping the
 // createElement call in this module helper avoids presenting a render-local
 // component binding to React Compiler.
-function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactElement {
+export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactElement {
   return createElement(Icon, { className });
+}
+
+// The leading glyph for a tool row: provider-brand marks (GitHub, Synara, MCP)
+// win over the kind-derived entry icon. Shared with the collapsed tool-group
+// summary row, which borrows its first entry's icon.
+export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
+  if (isSynaraToolCall(workEntry)) return SynaraToolIcon;
+  if (workEntry.itemType === "mcp_tool_call") return McpIcon;
+  return workEntryIcon(workEntry);
 }
 
 function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -532,13 +542,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
   const isMcpToolRow =
     workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
-  const LeftIcon = isGitHubToolRow
-    ? GitHubIcon
-    : isSynaraToolRow
-      ? SynaraToolIcon
-      : isMcpToolRow
-        ? McpIcon
-        : EntryIcon;
+  const LeftIcon = workEntryLeftIcon(workEntry);
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon

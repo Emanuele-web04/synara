@@ -1,4 +1,4 @@
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 import type {
   RuntimeContentStreamKind,
   ThreadTokenUsageSnapshot,
@@ -88,17 +88,17 @@ export type AcpParsedSessionEvent =
   | {
       readonly _tag: "UsageUpdated";
       readonly usage: ThreadTokenUsageSnapshot;
-      readonly cost?: EffectAcpSchema.Cost | null | undefined;
+      readonly cost?: Acp.Cost | null | undefined;
       readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
-  | EffectAcpSchema.LoadSessionResponse
-  | EffectAcpSchema.NewSessionResponse
-  | EffectAcpSchema.ResumeSessionResponse;
+  | Acp.LoadSessionResponse
+  | Acp.NewSessionResponse
+  | Acp.ResumeSessionResponse;
 
 type AcpToolCallUpdate = Extract<
-  EffectAcpSchema.SessionNotification["update"],
+  Acp.SessionNotification["update"],
   { readonly sessionUpdate: "tool_call" | "tool_call_update" }
 >;
 
@@ -114,9 +114,9 @@ export function extractModelConfigId(sessionResponse: AcpSessionSetupResponse): 
 }
 
 export function findSessionConfigOption(
-  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | null | undefined,
   configId: string,
-): EffectAcpSchema.SessionConfigOption | undefined {
+): Acp.SessionConfigOption | undefined {
   if (!configOptions) {
     return undefined;
   }
@@ -128,7 +128,7 @@ export function findSessionConfigOption(
 }
 
 export function collectSessionConfigOptionValues(
-  configOption: EffectAcpSchema.SessionConfigOption,
+  configOption: Acp.SessionConfigOption,
 ): ReadonlyArray<string> {
   if (configOption.type !== "select") {
     return [];
@@ -259,7 +259,7 @@ function extractToolCallCommand(rawInput: unknown, title: string | undefined): s
 }
 
 function extractTextContentFromToolCallContent(
-  content: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined,
+  content: ReadonlyArray<Acp.ToolCallContent> | null | undefined,
 ): string | undefined {
   if (!content) return undefined;
   const chunks = content
@@ -278,7 +278,7 @@ function extractTextContentFromToolCallContent(
 }
 
 function summarizeToolCallLocations(
-  locations: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined,
+  locations: ReadonlyArray<Acp.ToolCallLocation> | null | undefined,
 ): string | undefined {
   const paths = (locations ?? [])
     .map((location) =>
@@ -294,7 +294,7 @@ function summarizeToolCallLocations(
 }
 
 function summarizeToolCallContent(
-  content: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined,
+  content: ReadonlyArray<Acp.ToolCallContent> | null | undefined,
 ): string | undefined {
   for (const entry of content ?? []) {
     if (entry.type === "diff") {
@@ -393,12 +393,12 @@ function makeToolCallState(
   input: {
     readonly toolCallId: string;
     readonly title?: string | null | undefined;
-    readonly kind?: EffectAcpSchema.ToolKind | null | undefined;
-    readonly status?: EffectAcpSchema.ToolCallStatus | null | undefined;
+    readonly kind?: Acp.ToolKind | null | undefined;
+    readonly status?: Acp.ToolCallStatus | null | undefined;
     readonly rawInput?: unknown;
     readonly rawOutput?: unknown;
-    readonly content?: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined;
-    readonly locations?: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined;
+    readonly content?: ReadonlyArray<Acp.ToolCallContent> | null | undefined;
+    readonly locations?: ReadonlyArray<Acp.ToolCallLocation> | null | undefined;
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
@@ -531,9 +531,7 @@ export function mergeToolCallState(
   };
 }
 
-export function parsePermissionRequest(
-  params: EffectAcpSchema.RequestPermissionRequest,
-): AcpPermissionRequest {
+export function parsePermissionRequest(params: Acp.RequestPermissionRequest): AcpPermissionRequest {
   const toolCall = makeToolCallState(
     {
       toolCallId: params.toolCall.toolCallId,
@@ -560,7 +558,7 @@ export function parsePermissionRequest(
   };
 }
 
-export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotification): {
+export function parseSessionUpdateEvent(params: Acp.SessionNotification): {
   readonly modeId?: string;
   readonly events: ReadonlyArray<AcpParsedSessionEvent>;
 } {

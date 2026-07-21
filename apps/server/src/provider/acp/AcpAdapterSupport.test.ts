@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as EffectAcpErrors from "effect-acp/errors";
+import * as AcpErrors from "./AcpErrors.ts";
 
 import {
   acpPermissionOutcome,
@@ -102,7 +102,7 @@ describe("AcpAdapterSupport", () => {
       "cursor",
       "thread-1" as never,
       "session/prompt",
-      new EffectAcpErrors.AcpRequestError({
+      new AcpErrors.AcpRequestError({
         code: -32602,
         errorMessage: "Invalid params",
       }),
@@ -117,7 +117,7 @@ describe("AcpAdapterSupport", () => {
       "droid",
       "thread-1" as never,
       "session/prompt",
-      new EffectAcpErrors.AcpRequestError({
+      new AcpErrors.AcpRequestError({
         code: -32603,
         errorMessage: "Internal error: Agent error",
         data: '402 {"title":"Payment Required"}',

@@ -232,7 +232,7 @@ export function SidebarThreadRowContent({
       >
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]",
+            "min-w-0 flex-1 truncate-fade text-[length:var(--app-font-size-ui,12px)]",
             isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
             variant === "standard" && isSubagentThread
               ? "leading-[18px] text-foreground/80"

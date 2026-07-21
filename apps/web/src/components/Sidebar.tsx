@@ -360,6 +360,11 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
 // Each "Show more" click reveals this many extra rows; "Show less" hides them again page by page.
 const THREAD_PREVIEW_PAGE_SIZE = 5;
+// Mouse clicks must not focus the paging buttons, or the focus ring lingers as a solid block
+// after the click; they should only light up on hover/press. Keyboard focus is unaffected.
+const preventFocusOnMouseDown = (event: React.MouseEvent) => {
+  event.preventDefault();
+};
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -1109,8 +1114,16 @@ export function SidebarSegmentedPicker({
           )}
           style={{ left: chipLeft, width: chipWidth }}
         />
-        {views.map((view) => {
+        {views.map((view, index) => {
           const active = displayedView === view;
+          // The end-segment chip grows outward by 0.125rem + 1px + OVERHANG, so its visual
+          // center sits half that off the cell center. Follow it with the label (same motion
+          // as the thumb) so the text stays centered inside the chip.
+          const isOuterSegment = index === 0 || index === segmentCount - 1;
+          const labelShift =
+            active && isOuterSegment
+              ? `calc(${index === 0 ? "-1 * " : ""}(0.125rem + 1px + ${OVERHANG}) / 2)`
+              : "0px";
           return (
             <button
               key={view}
@@ -1128,7 +1141,12 @@ export function SidebarSegmentedPicker({
               }}
               onClick={() => handleSelectView(view)}
             >
-              {SIDEBAR_VIEW_LABELS[view]}
+              <span
+                className="block transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+                style={{ transform: `translateX(${labelShift})` }}
+              >
+                {SIDEBAR_VIEW_LABELS[view]}
+              </span>
             </button>
           );
         })}
@@ -4644,6 +4662,7 @@ export default function Sidebar() {
                         data-thread-selection-safe
                         size="sm"
                         className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                        onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
                           showMoreThreadsForProject(project.cwd, threadListExtraPages);
                         }}
@@ -4661,6 +4680,7 @@ export default function Sidebar() {
                           // Keep the left indent when "Show less" is the only affordance left.
                           canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                         )}
+                        onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
                           showLessThreadsForProject(project.cwd, threadListExtraPages);
                         }}
@@ -5933,6 +5953,7 @@ export default function Sidebar() {
                             <SidebarMenuButton
                               size="sm"
                               className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                              onMouseDown={preventFocusOnMouseDown}
                               onClick={() =>
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
                               }
@@ -5950,6 +5971,7 @@ export default function Sidebar() {
                                   ? "w-auto flex-none px-2"
                                   : "flex-1 pr-2 pl-8",
                               )}
+                              onMouseDown={preventFocusOnMouseDown}
                               onClick={() =>
                                 setChatThreadListExtraPages(
                                   Math.max(0, chatThreadListEffectiveExtraPages - 1),
@@ -6207,7 +6229,7 @@ export default function Sidebar() {
           }
         }}
       >
-        <DialogPopup surface="solid" className="max-w-md">
+        <DialogPopup className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <PlayIcon className="size-4 text-emerald-500" />

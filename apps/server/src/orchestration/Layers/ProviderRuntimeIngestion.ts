@@ -2601,6 +2601,16 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  const reconcileSettledOpenTurns: ProviderRuntimeIngestionShape["reconcileSettledOpenTurns"] =
+    runtimeEvents.pruneSettledOpenTurns.pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        return Effect.logWarning("provider runtime open-turn cleanup failed", {
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
   const prepareAcceptedRuntimeEventReplay = Effect.fnUntraced(function* (
     event: ProviderRuntimeEvent,
   ) {
@@ -2685,6 +2695,12 @@ const make = Effect.gen(function* () {
           );
         }),
       );
+      // A previous startup reconciliation can leave a durable turn terminal
+      // while the runtime replay ledger still calls it open. Replaying that
+      // stale row can reuse a command id with a payload derived from the newer
+      // terminal projection, so remove settled rows before rebuilding
+      // process-local state.
+      yield* runtimeEvents.pruneSettledOpenTurns;
       yield* rebuildAcceptedOpenTurnState;
       yield* drainRuntimeJournal;
       yield* Deferred.succeed(startupRuntimeReplayComplete, undefined);
@@ -2713,6 +2729,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
+    reconcileSettledOpenTurns,
     drain: drainThroughCurrentHighWater,
   } satisfies ProviderRuntimeIngestionShape;
 });

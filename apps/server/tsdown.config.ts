@@ -15,6 +15,9 @@ export default defineConfig({
     legacyCjs: false,
   },
   outDir: "dist",
+  // Bun builtins only resolve at runtime under Bun; MigrationBackup.ts guards
+  // the import behind a `process.versions.bun` check.
+  external: [/^bun:/u],
   sourcemap: buildSourcemap,
   clean: true,
   noExternal: (id) => id.startsWith("@synara/"),

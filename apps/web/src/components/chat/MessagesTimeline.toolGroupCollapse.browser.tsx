@@ -44,6 +44,20 @@ function commandEntry(id: string, command: string): TimelineEntry {
   };
 }
 
+function thinkingEntry(id: string, label: string): TimelineEntry {
+  return {
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt: "2026-03-17T19:12:28.000Z",
+    entry: {
+      id,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label,
+      tone: "thinking",
+    },
+  };
+}
+
 const SETTLED_COMMANDS = [
   "bun run lint",
   "bun run typecheck",
@@ -53,19 +67,14 @@ const SETTLED_COMMANDS = [
 // Commands whose display text passes through verbatim (no humanized rewrite).
 const LIVE_COMMANDS = ["git status", "node scripts/tail.mjs"];
 
-function ToolGroupCollapseTimeline() {
+function ToolGroupCollapseTimeline(props: { timelineEntries: TimelineEntry[] }) {
   return (
     <MessagesTimeline
       hasMessages
       isWorking={false}
       activeTurnInProgress
       activeTurnStartedAt="2026-03-17T19:12:20.000Z"
-      timelineEntries={[
-        assistantEntry("narration-1", "Looking at the failing checks first.", false),
-        ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
-        assistantEntry("narration-2", "Now inspecting the working tree.", true),
-        ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command)),
-      ]}
+      timelineEntries={props.timelineEntries}
       turnDiffSummaryByAssistantMessageId={new Map()}
       nowIso="2026-03-17T19:12:30.000Z"
       expandedWorkGroups={{}}
@@ -114,7 +123,17 @@ describe("MessagesTimeline tool group collapse", () => {
 
   it("collapses the settled run behind a summary and keeps the live run expanded", async () => {
     const host = createTimelineHost();
-    const screen = await render(<ToolGroupCollapseTimeline />, { container: host });
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={[
+          assistantEntry("narration-1", "Looking at the failing checks first.", false),
+          ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
+          assistantEntry("narration-2", "Now inspecting the working tree.", true),
+          ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command)),
+        ]}
+      />,
+      { container: host },
+    );
 
     try {
       await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
@@ -147,6 +166,42 @@ describe("MessagesTimeline tool group collapse", () => {
       await expect
         .poll(() => (document.body.textContent ?? "").includes(SETTLED_COMMANDS[0]!))
         .toBe(false);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("collapses mid-turn as soon as a thinking block splits the live group", async () => {
+    const host = createTimelineHost();
+    // One live inline group: settled commands, then a thinking boundary, then
+    // the live tail. The run before the boundary must collapse while the turn
+    // is still in progress — not only once it finishes.
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={[
+          assistantEntry("narration-1", "Looking at the failing checks first.", true),
+          ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
+          thinkingEntry("think-1", "Weighing the next verification step"),
+          ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command)),
+        ]}
+      />,
+      { container: host },
+    );
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+      expect(findSummaryTrigger("Ran 4 commands")!.getAttribute("aria-expanded")).toBe("false");
+      for (const command of SETTLED_COMMANDS) {
+        expect(document.body.textContent ?? "").not.toContain(command);
+      }
+
+      // The run after the thinking boundary is the live tail: expanded rows,
+      // no summary trigger.
+      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+      for (const command of LIVE_COMMANDS) {
+        expect(isVisibleOutsideClosedDisclosure(command)).toBe(true);
+      }
     } finally {
       await screen.unmount();
       host.remove();

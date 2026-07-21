@@ -218,6 +218,20 @@ const make = Effect.gen(function* () {
       });
     };
 
+  const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] = sql`
+      DELETE FROM provider_runtime_open_turns
+      WHERE EXISTS (
+        SELECT 1
+        FROM projection_turns AS turn
+        WHERE turn.thread_id = provider_runtime_open_turns.thread_id
+          AND turn.turn_id = provider_runtime_open_turns.turn_id
+          AND turn.state IN ('interrupted', 'completed', 'error')
+      )
+    `.pipe(
+    Effect.asVoid,
+    Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
+  );
+
   const getConsumerCursor: ProviderRuntimeEventRepositoryShape["getConsumerCursor"] = (
     consumerName,
   ) =>
@@ -361,6 +375,7 @@ const make = Effect.gen(function* () {
     getThreadCoverage,
     readThreadEvents,
     readAcceptedOpenTurnEvents,
+    pruneSettledOpenTurns,
     getConsumerCursor,
     advanceConsumerCursor,
   } satisfies ProviderRuntimeEventRepositoryShape;

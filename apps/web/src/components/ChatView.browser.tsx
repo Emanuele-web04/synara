@@ -5647,16 +5647,22 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps the live inline-tool layout through the first settled paint, then relaxes after the grace delay", async () => {
+  it("collapses a settled leading tool run mid-turn, then folds into Worked for after the grace delay", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithInlineToolOverflow({ active: true }),
     });
 
     try {
+      // The tools already gave way to the assistant's narration block, so even
+      // while the turn is live the run compacts behind its summary row.
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Tool 6");
+          const summaryTrigger = Array.from(
+            document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+          ).find((element) => element.textContent?.includes("Used 6 tools"));
+          expect(summaryTrigger).not.toBeUndefined();
+          expect(summaryTrigger!.getAttribute("aria-expanded")).toBe("false");
           expect(document.body.textContent).not.toContain("Tool 1");
         },
         { timeout: 8_000, interval: 16 },
@@ -5666,8 +5672,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .getState()
         .syncServerReadModel(createSnapshotWithInlineToolOverflow({ active: false }));
 
-      expect(document.body.textContent).toContain("Tool 6");
-      expect(document.body.textContent).not.toContain("Tool 1");
+      // The first settled paint keeps the live layout: no "Worked for" fold yet.
+      expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+      expect(document.body.textContent).toContain("Used 6 tools");
 
       await new Promise<void>((resolve) => {
         window.setTimeout(() => resolve(), 260);
@@ -5685,7 +5692,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(transitionClone).not.toBeNull();
           expect(transitionClone?.hasAttribute("inert")).toBe(true);
           expect(transitionClone?.querySelector("[aria-hidden='true'][inert]")).not.toBeNull();
-          expect(document.body.textContent).toContain("Tool 6");
+          expect(transitionClone?.textContent).toContain("Used 6 tools");
         },
         { timeout: 8_000, interval: 16 },
       );
