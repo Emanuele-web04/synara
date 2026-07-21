@@ -44,6 +44,14 @@ describe("external MCP guided setup", () => {
     expect(parsed.mcpServers.synara).toEqual(stdio);
   });
 
+  it("builds terminal commands for PowerShell on Windows", () => {
+    const codex = buildExternalMcpClientConfiguration("codex", stdio, "Win32");
+    expect(codex.value).toBe(
+      "& 'codex' 'mcp' 'add' 'synara' '--env' 'ELECTRON_RUN_AS_NODE=1' '--' '/Applications/Synara.app/Contents/MacOS/Synara' 'server.js' 'mcp' 'serve' '--integration' 'mcp_int_example' '--home-dir' '/tmp/Synara home'",
+    );
+    expect(codex.instruction).toContain("PowerShell");
+  });
+
   it("builds a project-specific prompt without exposing implementation identifiers", () => {
     const prompt = buildExternalMcpExamplePrompt("Synara app");
 

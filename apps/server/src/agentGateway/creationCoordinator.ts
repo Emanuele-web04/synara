@@ -648,14 +648,6 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const failureMessage = interrupted
             ? "The MCP request was interrupted after thread creation dispatch began."
             : errorText(Cause.squash(cause));
-          yield* operationStore.markTaskStatus(operationId, "failed").pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("agent gateway could not mark external task failed", {
-                operationId,
-                error: errorText(error),
-              }),
-            ),
-          );
           yield* operationStore.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
             Effect.catch((error) =>
               Effect.logWarning("agent gateway could not persist compensating status", {
@@ -765,6 +757,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   ),
                 ),
             { discard: true },
+          );
+          // Do not make a task terminal before cleanup has been attempted. The
+          // durable capacity view treats planned/created tasks and non-terminal
+          // failed compensation as active, so projector lag and restart cannot
+          // briefly admit a replacement while this task may still be running.
+          yield* operationStore.markTaskStatus(operationId, "failed").pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("agent gateway could not mark external task failed", {
+                operationId,
+                error: errorText(error),
+              }),
+            ),
           );
           const failure = {
             code: interrupted ? "request_interrupted" : "dispatch_failed",

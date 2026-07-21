@@ -181,7 +181,11 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
       ) ?? setup.integration)
     : null;
   const clientConfiguration = setup
-    ? buildExternalMcpClientConfiguration(client, setup.stdio)
+    ? buildExternalMcpClientConfiguration(
+        client,
+        setup.stdio,
+        typeof navigator === "undefined" ? "" : navigator.platform,
+      )
     : null;
   const examplePrompt = setup
     ? buildExternalMcpExamplePrompt(

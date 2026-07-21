@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -12,6 +12,7 @@ import {
   pairExternalMcpClient,
   readExternalMcpResponseText,
   readExternalMcpClientCredential,
+  requestTimeoutForBody,
   serveExternalMcpStdio,
   writeExternalMcpClientCredential,
 } from "./bridge.ts";
@@ -56,6 +57,60 @@ afterEach(() => {
 });
 
 describe("external MCP stdio bridge", () => {
+  it("allows the server's default wait duration when timeoutMs is omitted", () => {
+    expect(
+      requestTimeoutForBody(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "synara_wait_for_task", arguments: { threadId: "thread-1" } },
+        }),
+      ),
+    ).toBe(35_000);
+    expect(
+      requestTimeoutForBody(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "synara_wait_for_task",
+            arguments: { threadId: "thread-1", timeoutMs: 60_000 },
+          },
+        }),
+      ),
+    ).toBe(65_000);
+    expect(
+      requestTimeoutForBody(
+        JSON.stringify([
+          {
+            jsonrpc: "2.0",
+            id: 3,
+            method: "tools/call",
+            params: { name: "synara_wait_for_task", arguments: { threadId: "thread-1" } },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 4,
+            method: "tools/call",
+            params: { name: "synara_wait_for_task", arguments: { threadId: "thread-2" } },
+          },
+        ]),
+      ),
+    ).toBe(65_000);
+    expect(
+      requestTimeoutForBody(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 5,
+          method: "tools/call",
+          params: { name: "synara_create_task", arguments: {} },
+        }),
+      ),
+    ).toBe(605_000);
+  });
+
   it("fails clearly for missing and multiple running instances", () => {
     const baseDir = makeBaseDir();
     expect(() => discoverExternalMcpRuntime(baseDir)).toThrow(/No running Synara instance/);
@@ -80,6 +135,24 @@ describe("external MCP stdio bridge", () => {
       expect(() => readExternalMcpClientCredential(baseDir)).toThrow(/accessible by other users/);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a symlinked MCP secret directory",
+    () => {
+      const baseDir = makeBaseDir();
+      const redirected = makeBaseDir();
+      fs.symlinkSync(redirected, path.join(baseDir, "mcp"), "dir");
+      expect(() =>
+        writeExternalMcpClientCredential(baseDir, {
+          integrationId: "integration-symlink",
+          name: "Symlink",
+          credential: "syn_mcp_v1_must-not-escape",
+          expiresAt: "2026-08-20T00:00:00.000Z" as never,
+        }),
+      ).toThrow(/private path|symlink/i);
+      expect(fs.readdirSync(redirected)).toEqual([]);
+    },
+  );
 
   it("selects one stored integration explicitly and rejects an ambiguous default", () => {
     const baseDir = makeBaseDir();
@@ -271,6 +344,106 @@ describe("external MCP stdio bridge", () => {
         .split("\n")
         .map((line) => JSON.parse(line).id),
     ).toEqual(["fast", "slow"]);
+  });
+
+  it("aborts an active HTTP request when the MCP client cancels its request id", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-cancellation",
+      name: "Cancellation",
+      credential: "syn_mcp_v1_cancellation",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const stdin = new PassThrough();
+    const output: string[] = [];
+    const errors: string[] = [];
+    let requestStarted = false;
+    let aborted = false;
+    const serving = serveExternalMcpStdio({
+      baseDir,
+      stdin,
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({
+        write: (chunk, _encoding, done) => (errors.push(String(chunk)), done()),
+      }),
+      fetchImpl: async (url, init) => {
+        const challenge = runtimeChallenge(url, init);
+        if (challenge) return challenge;
+        requestStarted = true;
+        init?.signal?.addEventListener("abort", () => {
+          aborted = true;
+        });
+        return await new Promise<Response>(() => {});
+      },
+    });
+    stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: "slow", method: "tools/call", params: { name: "synara_wait_for_task", arguments: { threadId: "thread-1" } } })}\n`,
+    );
+    while (!requestStarted) await new Promise((resolve) => setTimeout(resolve, 1));
+    stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "slow" } })}\n`,
+    );
+    stdin.end();
+    await serving;
+    expect(aborted).toBe(true);
+    expect(output).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("cancels one batched request without aborting its siblings", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntime(baseDir, "userdata", 3773);
+    writeExternalMcpClientCredential(baseDir, {
+      integrationId: "integration-batch-cancellation",
+      name: "Batch cancellation",
+      credential: "syn_mcp_v1_batch-cancellation",
+      expiresAt: "2026-08-20T00:00:00.000Z" as never,
+    });
+    const stdin = new PassThrough();
+    const output: string[] = [];
+    let slowStarted = false;
+    let slowAborted = false;
+    const serving = serveExternalMcpStdio({
+      baseDir,
+      stdin,
+      stdout: new Writable({
+        write: (chunk, _encoding, done) => (output.push(String(chunk)), done()),
+      }),
+      stderr: new Writable({ write: (_chunk, _encoding, done) => done() }),
+      fetchImpl: async (url, init) => {
+        const challenge = runtimeChallenge(url, init);
+        if (challenge) return challenge;
+        const request = JSON.parse(String(init?.body)) as { id: string };
+        if (request.id === "slow") {
+          slowStarted = true;
+          init?.signal?.addEventListener("abort", () => {
+            slowAborted = true;
+          });
+          return await new Promise<Response>(() => {});
+        }
+        return Response.json({ jsonrpc: "2.0", id: request.id, result: { ok: true } });
+      },
+    });
+    stdin.write(
+      `${JSON.stringify([
+        { jsonrpc: "2.0", id: "slow", method: "tools/call", params: { name: "synara_wait_for_task", arguments: { threadId: "thread-1" } } },
+        { jsonrpc: "2.0", id: "fast", method: "ping" },
+      ])}\n`,
+    );
+    while (!slowStarted) await new Promise((resolve) => setTimeout(resolve, 1));
+    stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "slow" } })}\n`,
+    );
+    stdin.end();
+    await serving;
+
+    expect(slowAborted).toBe(true);
+    expect(JSON.parse(output.join(""))).toEqual([
+      { jsonrpc: "2.0", id: "fast", result: { ok: true } },
+    ]);
   });
 
   it("aborts and rejects a hung fetch at its deadline", async () => {

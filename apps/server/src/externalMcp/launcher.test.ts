@@ -32,4 +32,19 @@ describe("external MCP launcher", () => {
     expect(externalMcpShellCommand(launcher)).toContain("ELECTRON_RUN_AS_NODE='1'");
     expect(externalMcpShellCommand(launcher)).not.toContain("synara mcp serve");
   });
+
+  it("renders a valid PowerShell command on Windows", () => {
+    expect(
+      externalMcpShellCommand(
+        {
+          command: "C:\\Program Files\\Synara\\Synara.exe",
+          args: ["mcp", "serve", "--home-dir", "C:\\Synara home"],
+          env: { ELECTRON_RUN_AS_NODE: "1" },
+        },
+        "win32",
+      ),
+    ).toBe(
+      "$env:ELECTRON_RUN_AS_NODE = '1'; & 'C:\\Program Files\\Synara\\Synara.exe' 'mcp' 'serve' '--home-dir' 'C:\\Synara home'",
+    );
+  });
 });

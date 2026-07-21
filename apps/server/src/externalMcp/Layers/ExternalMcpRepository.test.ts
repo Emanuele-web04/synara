@@ -400,6 +400,109 @@ layer("ExternalMcpRepository", (it) => {
     }),
   );
 
+  it.effect("keeps completed creation capacity while task projections lag", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* createIntegration(repository, "projection-lag-capacity");
+      const first = {
+        operationId: "external-operation-projection-lag",
+        integrationId: "integration-projection-lag-capacity",
+        requestId: "projection-lag-request",
+        fingerprint: "projection-lag-plan",
+        requestedCount: 1 as const,
+        planJson: "[]",
+        now: "2026-07-20T00:01:00.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(first)).kind, "reserved");
+      assert.isTrue(
+        yield* repository.markOperationDispatching({
+          operationId: first.operationId,
+          now: "2026-07-20T00:01:01.000Z",
+        }),
+      );
+      yield* repository.registerTask({
+        integrationId: first.integrationId,
+        operationId: first.operationId,
+        requestId: first.requestId,
+        threadId: "external-projection-lag-thread",
+        projectId: "project-projection-lag-capacity",
+        now: "2026-07-20T00:01:02.000Z",
+      });
+      yield* repository.markTaskStatus({
+        operationId: first.operationId,
+        status: "created",
+        now: "2026-07-20T00:01:03.000Z",
+      });
+      yield* repository.completeOperation({
+        operationId: first.operationId,
+        resultJson: "{}",
+        now: "2026-07-20T00:01:04.000Z",
+      });
+      const retry = {
+        ...first,
+        operationId: "external-operation-after-projection-lag",
+        requestId: "after-projection-lag-request",
+        fingerprint: "after-projection-lag-plan",
+        now: "2026-07-20T00:01:05.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, latest_turn_id,
+          created_at, updated_at, deleted_at
+        ) VALUES (
+          'external-projection-lag-thread', 'project-projection-lag-capacity',
+          'Projection lag task', '{"provider":"codex","model":"gpt-5.5"}', NULL,
+          '2026-07-20T00:01:02.000Z', '2026-07-20T00:01:05.000Z', NULL
+        )
+      `;
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, active_turn_id, last_error, updated_at
+        ) VALUES (
+          'external-projection-lag-thread', 'error', 'codex', NULL,
+          'Provider startup failed.', '2026-07-20T00:01:05.000Z'
+        )
+      `;
+      expect(
+        yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM external_mcp_active_capacity_claims
+          WHERE integration_id = ${first.integrationId}
+        `,
+      ).toEqual([{ count: 0 }]);
+      yield* sql`
+        UPDATE projection_thread_sessions
+        SET status = 'starting', last_error = NULL
+        WHERE thread_id = 'external-projection-lag-thread'
+      `;
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, pending_message_id, assistant_message_id, state,
+          requested_at, started_at, completed_at, checkpoint_turn_count,
+          checkpoint_ref, checkpoint_status, checkpoint_files_json
+        ) VALUES (
+          'external-projection-lag-thread', 'external-projection-lag-turn', NULL, NULL,
+          'completed', '2026-07-20T00:01:06.000Z', '2026-07-20T00:01:06.000Z',
+          '2026-07-20T00:01:07.000Z', NULL, NULL, NULL, '[]'
+        )
+      `;
+      yield* sql`
+        UPDATE projection_threads
+        SET latest_turn_id = 'external-projection-lag-turn',
+            updated_at = '2026-07-20T00:01:07.000Z'
+        WHERE thread_id = 'external-projection-lag-thread'
+      `;
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "reserved");
+    }),
+  );
+
   it.effect("releases a failed creation slot", () =>
     Effect.gen(function* () {
       const repository = yield* ExternalMcpRepository;
@@ -431,7 +534,7 @@ layer("ExternalMcpRepository", (it) => {
     }),
   );
 
-  it.effect("releases a compensating creation slot with a stranded planned task", () =>
+  it.effect("keeps a compensating creation slot until cleanup becomes terminal", () =>
     Effect.gen(function* () {
       const repository = yield* ExternalMcpRepository;
       yield* createIntegration(repository, "compensating-capacity");
@@ -463,16 +566,26 @@ layer("ExternalMcpRepository", (it) => {
         operationId: first.operationId,
         now: "2026-07-20T00:01:03.000Z",
       });
-      assert.equal(
-        (yield* repository.reserveOperation({
-          ...first,
-          operationId: "external-operation-after-compensation",
-          requestId: "after-compensation-request",
-          fingerprint: "after-compensation-plan",
-          now: "2026-07-20T00:01:04.000Z",
-        })).kind,
-        "reserved",
-      );
+      const retry = {
+        ...first,
+        operationId: "external-operation-after-compensation",
+        requestId: "after-compensation-request",
+        fingerprint: "after-compensation-plan",
+        now: "2026-07-20T00:01:04.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+      yield* repository.markTaskStatus({
+        operationId: first.operationId,
+        status: "failed",
+        now: "2026-07-20T00:01:05.000Z",
+      });
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "concurrency_limited");
+      yield* repository.failOperation({
+        operationId: first.operationId,
+        errorJson: JSON.stringify({ code: "compensated" }),
+        now: "2026-07-20T00:01:06.000Z",
+      });
+      assert.equal((yield* repository.reserveOperation(retry)).kind, "reserved");
     }),
   );
 
@@ -536,13 +649,91 @@ layer("ExternalMcpRepository", (it) => {
           integrationId: operation.integrationId,
           threadId: "external-revoked-thread",
         }))?.status,
-      ).toBe("failed");
+      ).toBe("created");
       const activeClaims = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
         FROM external_mcp_active_capacity_claims
         WHERE integration_id = ${operation.integrationId}
       `;
-      expect(activeClaims).toEqual([{ count: 0 }]);
+      expect(activeClaims).toEqual([{ count: 1 }]);
+      yield* repository.markTaskStatus({
+        operationId: operation.operationId,
+        status: "failed",
+        now: "2026-07-20T00:01:04.000Z",
+      });
+      expect(
+        yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM external_mcp_active_capacity_claims
+          WHERE integration_id = ${operation.integrationId}
+        `,
+      ).toEqual([{ count: 1 }]);
+      yield* repository.failOperation({
+        operationId: operation.operationId,
+        errorJson: JSON.stringify({ code: "compensated" }),
+        now: "2026-07-20T00:01:05.000Z",
+      });
+      expect(
+        yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM external_mcp_active_capacity_claims
+          WHERE integration_id = ${operation.integrationId}
+        `,
+      ).toEqual([{ count: 0 }]);
+    }),
+  );
+
+  it.effect("terminalizes an interrupted startup operation and its task atomically", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      yield* createIntegration(repository, "startup-terminalization");
+      const operation = {
+        operationId: "external-operation-startup-terminalization",
+        integrationId: "integration-startup-terminalization",
+        requestId: "startup-terminalization-request",
+        fingerprint: "startup-terminalization-plan",
+        requestedCount: 1 as const,
+        planJson: "[]",
+        now: "2026-07-20T00:01:00.000Z",
+      };
+      assert.equal((yield* repository.reserveOperation(operation)).kind, "reserved");
+      assert.isTrue(
+        yield* repository.markOperationDispatching({
+          operationId: operation.operationId,
+          now: "2026-07-20T00:01:01.000Z",
+        }),
+      );
+      yield* repository.registerTask({
+        integrationId: operation.integrationId,
+        operationId: operation.operationId,
+        requestId: operation.requestId,
+        threadId: "external-startup-terminalization-thread",
+        projectId: "project-startup-terminalization",
+        now: "2026-07-20T00:01:02.000Z",
+      });
+
+      yield* repository.failOperationAndTask({
+        operationId: operation.operationId,
+        errorJson: JSON.stringify({ code: "startup_recovery" }),
+        now: "2026-07-20T00:01:03.000Z",
+      });
+
+      expect((yield* repository.getOperationById(operation.operationId))?.status).toBe("failed");
+      expect(
+        (yield* repository.getTask({
+          integrationId: operation.integrationId,
+          threadId: "external-startup-terminalization-thread",
+        }))?.status,
+      ).toBe("failed");
+      expect(
+        (yield* repository.reserveOperation({
+          ...operation,
+          operationId: "external-operation-after-startup-terminalization",
+          requestId: "after-startup-terminalization-request",
+          fingerprint: "after-startup-terminalization-plan",
+          now: "2026-07-20T00:01:04.000Z",
+        })).kind,
+      ).toBe("reserved");
     }),
   );
 

@@ -4,9 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
-import type { ExternalMcpPairResult } from "@synara/contracts";
+import {
+  EXTERNAL_MCP_CREATE_TIMEOUT_MS,
+  EXTERNAL_MCP_DEFAULT_WAIT_MS,
+  EXTERNAL_MCP_MAX_WAIT_MS,
+  type ExternalMcpPairResult,
+} from "@synara/contracts";
 
 import type { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { ensurePrivateDirectorySync } from "../privatePathPermissions.ts";
 import { computeExternalMcpRuntimeProof, runtimeProofsMatch } from "./runtimeProof.ts";
 
 const CLIENT_STORE_VERSION = 1;
@@ -25,6 +31,20 @@ export class ExternalMcpBridgeError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "ExternalMcpBridgeError";
+  }
+}
+
+class ExternalMcpRequestCancelledError extends Error {
+  constructor() {
+    super("External MCP request cancelled by the client.");
+    this.name = "ExternalMcpRequestCancelledError";
+  }
+}
+
+class ExternalMcpRequestTimeoutError extends ExternalMcpBridgeError {
+  constructor(timeoutMs: number) {
+    super(`Synara did not respond within ${timeoutMs} ms.`);
+    this.name = "ExternalMcpRequestTimeoutError";
   }
 }
 
@@ -142,17 +162,45 @@ function assertPrivateFile(filePath: string): void {
 
 function writePrivateJson(filePath: string, value: unknown): void {
   const directory = path.dirname(filePath);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+  // Validate both private directory levels with O_NOFOLLOW before writing.
+  // A pre-existing baseDir/mcp or leaf symlink must never redirect secrets.
+  ensurePrivateDirectorySync(path.dirname(directory));
+  ensurePrivateDirectorySync(directory);
   const tempPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
-  if (process.platform !== "win32") fs.chmodSync(tempPath, 0o600);
-  fs.renameSync(tempPath, filePath);
-  if (process.platform !== "win32") fs.chmodSync(filePath, 0o600);
+  let descriptor: number | null = null;
+  try {
+    descriptor = fs.openSync(
+      tempPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+      0o600,
+    );
+    fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    if (process.platform !== "win32") fs.fchmodSync(descriptor, 0o600);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+    fs.renameSync(tempPath, filePath);
+    if (process.platform !== "win32") fs.chmodSync(filePath, 0o600);
+    if (process.platform !== "win32") {
+      const directoryDescriptor = fs.openSync(
+        directory,
+        fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
+      );
+      try {
+        fs.fsyncSync(directoryDescriptor);
+      } finally {
+        fs.closeSync(directoryDescriptor);
+      }
+    }
+  } catch (cause) {
+    if (descriptor !== null) fs.closeSync(descriptor);
+    try {
+      fs.unlinkSync(tempPath);
+    } catch (cleanupCause) {
+      if ((cleanupCause as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupCause;
+    }
+    throw cause;
+  }
 }
 
 export function writeExternalMcpClientCredential(
@@ -270,19 +318,38 @@ export async function fetchExternalMcpWithTimeout(
   url: URL,
   init: RequestInit,
   timeoutMs: number,
+  cancellationSignal?: AbortSignal,
 ): Promise<Response> {
   const controller = new AbortController();
+  if (cancellationSignal?.aborted) throw new ExternalMcpRequestCancelledError();
+  let rejectCancellation: ((cause: ExternalMcpRequestCancelledError) => void) | null = null;
+  const cancellation = new Promise<never>((_resolve, reject) => {
+    rejectCancellation = reject;
+  });
+  const cancel = () => {
+    controller.abort();
+    rejectCancellation?.(new ExternalMcpRequestCancelledError());
+  };
+  cancellationSignal?.addEventListener("abort", cancel, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       controller.abort();
-      reject(new ExternalMcpBridgeError(`Synara did not respond within ${timeoutMs} ms.`));
+      reject(new ExternalMcpRequestTimeoutError(timeoutMs));
     }, timeoutMs);
   });
   try {
-    return await Promise.race([fetchImpl(url, { ...init, signal: controller.signal }), timeout]);
+    return await Promise.race([
+      fetchImpl(url, { ...init, signal: controller.signal }),
+      timeout,
+      cancellation,
+    ]);
+  } catch (cause) {
+    if (cancellationSignal?.aborted) throw new ExternalMcpRequestCancelledError();
+    throw cause;
   } finally {
     if (timer) clearTimeout(timer);
+    cancellationSignal?.removeEventListener("abort", cancel);
   }
 }
 
@@ -351,25 +418,33 @@ export async function verifyExternalMcpRuntime(
   }
 }
 
-function requestTimeoutForBody(body: string): number {
+export function requestTimeoutForBody(body: string): number {
   try {
     const parsed = JSON.parse(body) as unknown;
     const messages = Array.isArray(parsed) ? parsed : [parsed];
-    let timeout = REQUEST_TIMEOUT_MS;
+    let serverWorkMs = 0;
     for (const value of messages) {
       if (!value || typeof value !== "object") continue;
       const request = value as {
         method?: unknown;
         params?: { name?: unknown; arguments?: { timeoutMs?: unknown } };
       };
-      if (request.method !== "tools/call" || request.params?.name !== "synara_wait_for_task")
+      if (request.method !== "tools/call") continue;
+      if (request.params?.name === "synara_create_task") {
+        serverWorkMs += EXTERNAL_MCP_CREATE_TIMEOUT_MS;
         continue;
-      const waitMs = request.params.arguments?.timeoutMs;
-      if (typeof waitMs === "number" && Number.isFinite(waitMs)) {
-        timeout = Math.max(timeout, Math.min(60_000, Math.max(0, waitMs)) + 5_000);
       }
+      if (request.params?.name !== "synara_wait_for_task") continue;
+      const requestedWaitMs = request.params.arguments?.timeoutMs;
+      const waitMs =
+        typeof requestedWaitMs === "number" && Number.isFinite(requestedWaitMs)
+          ? Math.min(EXTERNAL_MCP_MAX_WAIT_MS, Math.max(0, requestedWaitMs))
+          : EXTERNAL_MCP_DEFAULT_WAIT_MS;
+      // The HTTP gateway processes batch entries sequentially, so each wait
+      // contributes to the request's total server-side duration.
+      serverWorkMs += waitMs;
     }
-    return timeout;
+    return Math.max(REQUEST_TIMEOUT_MS, serverWorkMs + 5_000);
   } catch {
     return REQUEST_TIMEOUT_MS;
   }
@@ -381,6 +456,7 @@ async function fetchWithRestartRecovery(input: {
   readonly body: string;
   readonly fetchImpl?: ExternalMcpFetch;
   readonly recoveryTimeoutMs?: number;
+  readonly cancellationSignal?: AbortSignal;
 }): Promise<Response> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const deadline = Date.now() + (input.recoveryTimeoutMs ?? RECONNECT_TIMEOUT_MS);
@@ -402,8 +478,11 @@ async function fetchWithRestartRecovery(input: {
           body: input.body,
         },
         requestTimeoutForBody(input.body),
+        input.cancellationSignal,
       );
     } catch (cause) {
+      if (input.cancellationSignal?.aborted) throw new ExternalMcpRequestCancelledError();
+      if (cause instanceof ExternalMcpRequestTimeoutError) throw cause;
       lastCause = cause;
       if (Date.now() >= deadline) break;
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -510,6 +589,50 @@ function localErrorResponse(line: string, code: number, message: string): string
   }
 }
 
+const jsonRpcRequestKey = (id: string | number) => `${typeof id}:${String(id)}`;
+
+function requestKeysForLine(line: string): ReadonlyArray<string> {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    const values = Array.isArray(parsed) ? parsed : [parsed];
+    return values.flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const record = value as Record<string, unknown>;
+      return record.jsonrpc === "2.0" &&
+        typeof record.method === "string" &&
+        (typeof record.id === "string" || typeof record.id === "number")
+        ? [jsonRpcRequestKey(record.id)]
+        : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function cancelledRequestKeyForLine(line: string): string | null {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    if (
+      record.jsonrpc !== "2.0" ||
+      "id" in record ||
+      record.method !== "notifications/cancelled" ||
+      !record.params ||
+      typeof record.params !== "object" ||
+      Array.isArray(record.params)
+    ) {
+      return null;
+    }
+    const requestId = (record.params as Record<string, unknown>).requestId;
+    return typeof requestId === "string" || typeof requestId === "number"
+      ? jsonRpcRequestKey(requestId)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeStream(stream: NodeJS.WritableStream, value: string): Promise<void> {
   return new Promise((resolve, reject) => {
     stream.write(value, (error?: Error | null) => (error ? reject(error) : resolve()));
@@ -530,71 +653,132 @@ export async function serveExternalMcpStdio(input: {
   const credential = readExternalMcpClientCredential(input.baseDir, input.integrationId);
   const lines = readline.createInterface({ input: stdin, crlfDelay: Infinity });
   const inFlight = new Set<Promise<void>>();
+  const activeRequests = new Map<string, AbortController>();
   let outputQueue = Promise.resolve();
   const emit = (stream: NodeJS.WritableStream, value: string) => {
     outputQueue = outputQueue.then(() => writeStream(stream, value));
     return outputQueue;
   };
-  const handleLine = async (line: string) => {
+  const handleMessage = async (
+    line: string,
+    cancellationSignal: AbortSignal,
+  ): Promise<string | null> => {
     let response: Response;
     try {
       response = await fetchWithRestartRecovery({
         baseDir: input.baseDir,
         credential: credential.credential,
         body: line,
+        cancellationSignal,
         ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
       });
     } catch (cause) {
+      if (cause instanceof ExternalMcpRequestCancelledError) return null;
       const message = cause instanceof Error ? cause.message : String(cause);
       await emit(stderr, `[synara mcp] ${message}\n`);
-      const body = localErrorResponse(line, -32603, message);
-      if (body) await emit(stdout, `${body}\n`);
-      return;
+      return localErrorResponse(line, -32603, message);
     }
-    if (response.status === 202 || response.status === 204) return;
+    if (response.status === 202 || response.status === 204) return null;
     let responseText: string;
     try {
       responseText = await readExternalMcpResponseText(response);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       await emit(stderr, `[synara mcp] ${message}\n`);
-      const body = localErrorResponse(line, -32603, message);
-      if (body) await emit(stdout, `${body}\n`);
-      return;
+      return localErrorResponse(line, -32603, message);
     }
     if (response.status === 401) {
       const message =
         "Synara rejected the stored external MCP credential because it was revoked, expired, or replaced. Pair the integration again from Settings.";
       await emit(stderr, `[synara mcp] ${message}\n`);
-      const body = localErrorResponse(line, -32001, message);
-      if (body) await emit(stdout, `${body}\n`);
-      return;
+      return localErrorResponse(line, -32001, message);
     }
     if (!response.ok) {
       if (responseText.trim()) {
         try {
           JSON.parse(responseText);
-          await emit(stdout, `${responseText.trim()}\n`);
-          return;
+          return responseText.trim();
         } catch {
           // Fall through to a transport error that preserves request ids.
         }
       }
       const message = `Synara external MCP request failed with HTTP ${response.status}.`;
       await emit(stderr, `[synara mcp] ${message}\n`);
-      const body = localErrorResponse(line, -32603, message);
-      if (body) await emit(stdout, `${body}\n`);
+      return localErrorResponse(line, -32603, message);
+    }
+    return responseText.trim() || null;
+  };
+
+  const executeMessage = async (
+    line: string,
+    cancellation = new AbortController(),
+  ): Promise<string | null> => {
+    const requestKey = requestKeysForLine(line)[0] ?? null;
+    if (requestKey) activeRequests.set(requestKey, cancellation);
+    try {
+      return await handleMessage(line, cancellation.signal);
+    } finally {
+      if (requestKey && activeRequests.get(requestKey) === cancellation) {
+        activeRequests.delete(requestKey);
+      }
+    }
+  };
+
+  const handleLine = async (line: string): Promise<void> => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      const response = await executeMessage(line);
+      if (response) await emit(stdout, `${response}\n`);
       return;
     }
-    if (responseText.trim()) await emit(stdout, `${responseText.trim()}\n`);
+    if (!Array.isArray(parsed)) {
+      const response = await executeMessage(line);
+      if (response) await emit(stdout, `${response}\n`);
+      return;
+    }
+    if (parsed.length === 0) {
+      const response = localErrorResponse(line, -32600, "Invalid Request");
+      if (response) await emit(stdout, `${response}\n`);
+      return;
+    }
+    const entries = parsed.map((message) => {
+      const line = JSON.stringify(message);
+      const requestKey = requestKeysForLine(line)[0] ?? null;
+      const cancellation = new AbortController();
+      if (requestKey) activeRequests.set(requestKey, cancellation);
+      return { line, requestKey, cancellation };
+    });
+    const responses: Array<unknown> = [];
+    for (const entry of entries) {
+      const response = await executeMessage(entry.line, entry.cancellation);
+      if (!response) continue;
+      try {
+        const decoded = JSON.parse(response) as unknown;
+        if (Array.isArray(decoded)) responses.push(...decoded);
+        else responses.push(decoded);
+      } catch {
+        const fallback = localErrorResponse(entry.line, -32603, "Invalid Synara response");
+        if (fallback) responses.push(JSON.parse(fallback) as unknown);
+      }
+    }
+    if (responses.length > 0) await emit(stdout, `${JSON.stringify(responses)}\n`);
   };
 
   for await (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
+    const cancelledRequestKey = cancelledRequestKeyForLine(line);
+    if (cancelledRequestKey !== null) {
+      activeRequests.get(cancelledRequestKey)?.abort();
+      continue;
+    }
     while (inFlight.size >= MAX_IN_FLIGHT) await Promise.race(inFlight);
     let task: Promise<void>;
-    task = handleLine(line).finally(() => inFlight.delete(task));
+    task = handleLine(line).finally(() => {
+      inFlight.delete(task);
+    });
     inFlight.add(task);
   }
   await Promise.all(inFlight);

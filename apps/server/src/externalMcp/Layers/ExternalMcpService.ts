@@ -412,7 +412,10 @@ export const makeExternalMcpService = Effect.gen(function* () {
         toExternalMcpError("repository_error", "Could not verify task ownership.", 500, cause),
       ),
       Effect.flatMap((task) => {
-        if (task?.status === "created") return Effect.void;
+        // Ownership does not disappear merely because compensation marked the
+        // durable task failed. If cleanup is incomplete, the issuing integration
+        // must retain read/wait authority over its stranded thread.
+        if (task !== null) return Effect.void;
         if (client.capabilities.has("tasks:read-project")) {
           return snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
             Effect.mapError((cause) =>

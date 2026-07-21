@@ -13,7 +13,7 @@ export type ExternalMcpWaitState =
   | "interrupted";
 
 const isTerminalWaitState = (state: ExternalMcpWaitState) =>
-  state === "idle" || state === "completed" || state === "error" || state === "interrupted";
+  state === "completed" || state === "error" || state === "interrupted";
 
 /**
  * Long-poll durable turn state while preserving an immediate revocation boundary.
@@ -29,29 +29,46 @@ export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
   readonly timeoutMs: number;
   readonly assertActive: () => Effect.Effect<void, GatewayToolError>;
   readonly projectionTurns: Pick<ProjectionTurnRepositoryShape, "getManyWaitSnapshot">;
+  readonly resolveLatestTurn?: () => Effect.Effect<
+    { readonly runId: string | null; readonly state: ExternalMcpWaitState } | null,
+    unknown
+  >;
 }) {
   const deadline = Date.now() + input.timeoutMs;
   const threadId = ThreadId.makeUnsafe(input.threadId);
-  const runId = input.runId === null ? null : TurnId.makeUnsafe(input.runId);
-  let state = input.initialState;
+  let runId = input.runId === null ? null : TurnId.makeUnsafe(input.runId);
+  let state = runId === null && input.initialState === "idle" ? "pending" : input.initialState;
   let pollDelayMs = 200;
   while (!isTerminalWaitState(state) && Date.now() < deadline) {
     yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
     yield* input.assertActive();
-    const snapshot = yield* input.projectionTurns.getManyWaitSnapshot({
-      threadIds: [threadId],
-      turns: runId ? [{ threadId, turnId: runId }] : [],
-    });
-    if (!snapshot.existingThreadIds.includes(threadId)) {
-      return yield* Effect.fail(
-        new GatewayToolError("thread_not_found", `Thread "${input.threadId}" was not found.`),
-      );
+    if (runId === null && input.resolveLatestTurn) {
+      const latest = yield* input.resolveLatestTurn();
+      if (latest !== null) {
+        runId = latest.runId === null ? null : TurnId.makeUnsafe(latest.runId);
+        state = latest.state;
+      } else {
+        state = "pending";
+      }
+    } else {
+      const snapshot = yield* input.projectionTurns.getManyWaitSnapshot({
+        threadIds: [threadId],
+        turns: runId ? [{ threadId, turnId: runId }] : [],
+      });
+      if (!snapshot.existingThreadIds.includes(threadId)) {
+        return yield* Effect.fail(
+          new GatewayToolError("thread_not_found", `Thread "${input.threadId}" was not found.`),
+        );
+      }
+      state = runId
+        ? (snapshot.turns.find((turn) => turn.turnId === runId)?.state ?? state)
+        : "pending";
     }
-    state = runId ? (snapshot.turns.find((turn) => turn.turnId === runId)?.state ?? state) : "idle";
     pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
   }
   yield* input.assertActive();
   return {
+    runId,
     state,
     terminal: isTerminalWaitState(state),
     timedOut: !isTerminalWaitState(state),

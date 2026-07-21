@@ -8,6 +8,55 @@ const inactive = () =>
   Effect.fail(new GatewayToolError("external_credential_inactive", "Integration revoked."));
 
 describe("waitForExternalMcpTaskState", () => {
+  it("waits for a latest turn that appears after the thread projection", async () => {
+    let latestReads = 0;
+    const result = await Effect.runPromise(
+      waitForExternalMcpTaskState({
+        threadId: "thread-projection-lag",
+        runId: null,
+        initialState: "pending",
+        timeoutMs: 1_000,
+        assertActive: () => Effect.void,
+        projectionTurns: {
+          getManyWaitSnapshot: () => Effect.die("resolved terminal turns must not poll again"),
+        } as never,
+        resolveLatestTurn: () => {
+          latestReads += 1;
+          return Effect.succeed({ runId: "turn-projected-later", state: "completed" as const });
+        },
+      }),
+    );
+    expect(latestReads).toBe(1);
+    expect(result).toMatchObject({
+      runId: "turn-projected-later",
+      state: "completed",
+      terminal: true,
+      timedOut: false,
+    });
+  });
+
+  it("returns a terminal startup failure even when no turn id was projected", async () => {
+    const result = await Effect.runPromise(
+      waitForExternalMcpTaskState({
+        threadId: "thread-startup-failed",
+        runId: null,
+        initialState: "pending",
+        timeoutMs: 1_000,
+        assertActive: () => Effect.void,
+        projectionTurns: {
+          getManyWaitSnapshot: () => Effect.die("a terminal session must not poll turns"),
+        } as never,
+        resolveLatestTurn: () => Effect.succeed({ runId: null, state: "error" as const }),
+      }),
+    );
+    expect(result).toMatchObject({
+      runId: null,
+      state: "error",
+      terminal: true,
+      timedOut: false,
+    });
+  });
+
   it("rejects revocation that occurs while a running wait is asleep", async () => {
     let snapshotReads = 0;
     const exit = await Effect.runPromiseExit(

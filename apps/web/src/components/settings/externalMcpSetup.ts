@@ -37,7 +37,10 @@ function quoteShellArgument(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function shellCommand(parts: ReadonlyArray<string>): string {
+function shellCommand(parts: ReadonlyArray<string>, platform: string): string {
+  if (/win/i.test(platform)) {
+    return `& ${parts.map((part) => `'${part.replaceAll("'", "''")}'`).join(" ")}`;
+  }
   return parts.map(quoteShellArgument).join(" ");
 }
 
@@ -60,6 +63,7 @@ function jsonConfiguration(stdio: ExternalMcpStdioConfiguration): string {
 export function buildExternalMcpClientConfiguration(
   client: ExternalMcpClientKind,
   stdio: ExternalMcpStdioConfiguration,
+  platform = "",
 ): ExternalMcpClientConfiguration {
   if (client === "codex") {
     const environment = Object.entries(stdio.env ?? {}).flatMap(([key, value]) => [
@@ -68,19 +72,24 @@ export function buildExternalMcpClientConfiguration(
     ]);
     return {
       format: "command",
-      value: shellCommand([
-        "codex",
-        "mcp",
-        "add",
-        "synara",
-        ...environment,
-        "--",
-        stdio.command,
-        ...stdio.args,
-      ]),
+      value: shellCommand(
+        [
+          "codex",
+          "mcp",
+          "add",
+          "synara",
+          ...environment,
+          "--",
+          stdio.command,
+          ...stdio.args,
+        ],
+        platform,
+      ),
       copyLabel: "Copy Codex command",
       instruction:
-        "Run this command in Terminal. Codex will save Synara as a local MCP server; then open a new Codex task.",
+        /win/i.test(platform)
+          ? "Run this command in PowerShell. Codex will save Synara as a local MCP server; then open a new Codex task."
+          : "Run this command in Terminal. Codex will save Synara as a local MCP server; then open a new Codex task.",
     };
   }
 
@@ -91,21 +100,25 @@ export function buildExternalMcpClientConfiguration(
     ]);
     return {
       format: "command",
-      value: shellCommand([
-        "claude",
-        "mcp",
-        "add",
-        "--scope",
-        "user",
-        "synara",
-        ...environment,
-        "--",
-        stdio.command,
-        ...stdio.args,
-      ]),
+      value: shellCommand(
+        [
+          "claude",
+          "mcp",
+          "add",
+          "--scope",
+          "user",
+          "synara",
+          ...environment,
+          "--",
+          stdio.command,
+          ...stdio.args,
+        ],
+        platform,
+      ),
       copyLabel: "Copy Claude command",
-      instruction:
-        "Run this command in Terminal. Claude Code will make Synara available in all your projects.",
+      instruction: /win/i.test(platform)
+        ? "Run this command in PowerShell. Claude Code will make Synara available in all your projects."
+        : "Run this command in Terminal. Claude Code will make Synara available in all your projects.",
     };
   }
 

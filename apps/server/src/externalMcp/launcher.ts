@@ -23,13 +23,23 @@ export function externalMcpLauncher(args: ReadonlyArray<string>): ExternalMcpStd
   };
 }
 
-export function externalMcpShellCommand(config: ExternalMcpStdioConfiguration): string {
-  const command = [config.command, ...config.args].map(quoteExternalMcpShellArgument).join(" ");
+const quotePowerShellArgument = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+export function externalMcpShellCommand(
+  config: ExternalMcpStdioConfiguration,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const parts = [config.command, ...config.args];
   const entries = Object.entries(config.env ?? {});
-  if (entries.length === 0) return command;
-  if (process.platform === "win32") {
-    return `${entries.map(([key, value]) => `set ${quoteExternalMcpShellArgument(`${key}=${value}`)}`).join(" && ")} && ${command}`;
+  if (platform === "win32") {
+    const environment = entries
+      .map(([key, value]) => `$env:${key} = ${quotePowerShellArgument(value)}`)
+      .join("; ");
+    const command = `& ${parts.map(quotePowerShellArgument).join(" ")}`;
+    return environment ? `${environment}; ${command}` : command;
   }
+  const command = parts.map(quoteExternalMcpShellArgument).join(" ");
+  if (entries.length === 0) return command;
   return `${entries
     .map(([key, value]) => `${key}=${quoteExternalMcpShellArgument(value)}`)
     .join(" ")} ${command}`;

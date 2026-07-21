@@ -1,4 +1,5 @@
 import {
+  EXTERNAL_MCP_DEFAULT_WAIT_MS,
   EXTERNAL_MCP_MAX_PROMPT_CHARS,
   EXTERNAL_MCP_MAX_WAIT_MS,
   ExternalMcpCreateTaskInput,
@@ -151,16 +152,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       listNonTerminal: externalRepository.listNonTerminalOperations,
       markCompensating: externalRepository.markOperationCompensating,
       recordCompensationFailure: externalRepository.recordOperationCompensationFailure,
-      fail: (input) =>
-        externalRepository.failOperation(input).pipe(
-          Effect.andThen(
-            externalRepository.markTaskStatus({
-              operationId: input.operationId,
-              status: "failed",
-              now: input.now,
-            }),
-          ),
-        ),
+      fail: externalRepository.failOperationAndTask,
     },
     creationSource: "external_mcp",
     snapshotQuery,
@@ -466,24 +458,45 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         yield* externalMcp.assertTaskRead(context.client, input.threadId);
         const initial = yield* requireThreadShell(input.threadId);
         const runId = input.runId ?? initial.latestTurn?.turnId ?? null;
+        const terminalSessionState =
+          initial.session?.status === "error"
+            ? ("error" as const)
+            : initial.session?.status === "interrupted" || initial.session?.status === "stopped"
+              ? ("interrupted" as const)
+              : null;
         const initialState: "idle" | "pending" | "running" | "completed" | "error" | "interrupted" =
-          runId === null
-            ? "idle"
-            : initial.latestTurn?.turnId === runId
-              ? initial.latestTurn.state
-              : "pending";
+          terminalSessionState !== null
+            ? terminalSessionState
+            : runId === null
+              ? "pending"
+              : initial.latestTurn?.turnId === runId
+                ? initial.latestTurn.state
+                : "pending";
         const waited = yield* waitForExternalMcpTaskState({
           threadId: input.threadId,
           runId,
           initialState,
-          timeoutMs: input.timeoutMs ?? 30_000,
+          timeoutMs: input.timeoutMs ?? EXTERNAL_MCP_DEFAULT_WAIT_MS,
           assertActive: context.assertActive,
           projectionTurns,
+          resolveLatestTurn: () =>
+            requireThreadShell(input.threadId).pipe(
+              Effect.map((thread) =>
+                thread.session?.status === "error"
+                  ? { runId: null, state: "error" as const }
+                  : thread.session?.status === "interrupted" ||
+                      thread.session?.status === "stopped"
+                    ? { runId: null, state: "interrupted" as const }
+                    : thread.latestTurn === null
+                      ? null
+                      : { runId: thread.latestTurn.turnId, state: thread.latestTurn.state },
+              ),
+            ),
         });
         let summary: string | null = null;
         let summaryTruncated = false;
         let failure: string | null = null;
-        if (waited.terminal && runId) {
+        if (waited.terminal) {
           const detail = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
             Effect.flatMap(
               Option.match({
@@ -493,9 +506,11 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
               }),
             ),
           );
-          const assistant = detail.messages.findLast(
-            (message) => message.role === "assistant" && message.turnId === runId,
-          );
+          const assistant = waited.runId
+            ? detail.messages.findLast(
+                (message) => message.role === "assistant" && message.turnId === waited.runId,
+              )
+            : undefined;
           const summarized = summarizeWaitThreadText(assistant?.text);
           summary = summarized.summary;
           summaryTruncated = summarized.truncated;
@@ -504,7 +519,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         yield* context.assertActive();
         return mcpToolResultJson({
           threadId: input.threadId,
-          runId,
+          runId: waited.runId,
           state: waited.state,
           terminal: waited.terminal,
           timedOut: waited.timedOut,
@@ -528,8 +543,27 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   const handleRequest = (
     request: JsonRpcRequest,
     client: ExternalMcpVerifiedClient,
-  ): Effect.Effect<Record<string, unknown>> =>
-    Effect.gen(function* () {
+  ): Effect.Effect<Record<string, unknown>> => {
+    let pendingAuditId: string | null = null;
+    const finishAuditSafely = (input: {
+      readonly auditId: string;
+      readonly outcome: string;
+      readonly createdTaskIds?: ReadonlyArray<string>;
+      readonly detail?: string;
+    }) =>
+      Effect.sync(() => {
+        pendingAuditId = null;
+      }).pipe(
+        Effect.andThen(externalMcp.finishAudit(input)),
+        Effect.catchDefect((defect) =>
+          Effect.logWarning("external MCP audit completion failed", {
+            auditId: input.auditId,
+            error: errorText(defect),
+          }),
+        ),
+      );
+
+    return Effect.gen(function* () {
       yield* externalMcp.assertActive(client.integration.integrationId);
       if (request.method === "initialize") {
         return jsonRpcResult(
@@ -580,9 +614,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             ),
           ),
         );
+      pendingAuditId = auditId;
       const tool = toolsByName.get(toolName);
       if (!tool) {
-        yield* externalMcp.finishAudit({
+        yield* finishAuditSafely({
           auditId,
           outcome: "error",
           detail: "Unknown external MCP tool.",
@@ -590,7 +625,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, `Unknown tool "${toolName}".`);
       }
       if (!client.capabilities.has(tool.requiredCapability)) {
-        yield* externalMcp.finishAudit({
+        yield* finishAuditSafely({
           auditId,
           outcome: "error",
           detail: `Capability denied: ${tool.requiredCapability}.`,
@@ -623,7 +658,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       const result = yield* Effect.suspend(() => tool.handler(args, context)).pipe(
         Effect.catchDefect((defect) => Effect.succeed(mcpToolResultError(errorText(defect)))),
       );
-      yield* externalMcp.finishAudit({
+      yield* finishAuditSafely({
         auditId,
         outcome: result.isError ? "error" : "success",
         createdTaskIds: toolName === "synara_create_task" ? createdThreadIds(result) : [],
@@ -631,10 +666,20 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       });
       return jsonRpcResult(request.id, result);
     }).pipe(
+      Effect.onExit(() =>
+        pendingAuditId === null
+          ? Effect.void
+          : finishAuditSafely({
+              auditId: pendingAuditId,
+              outcome: "error",
+              detail: "Tool call ended before audit completion.",
+            }),
+      ),
       Effect.catch((error) =>
         Effect.succeed(jsonRpcResult(request.id, externalErrorResult(error))),
       ),
     );
+  };
 
   const handleVerifiedPost: ExternalMcpGatewayShape["handleVerifiedPost"] = (requestInput) =>
     Effect.gen(function* () {

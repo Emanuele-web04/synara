@@ -148,6 +148,26 @@ describe("externalMcpRouteLayer", () => {
       });
       expect(valid.status).toBe(200);
       expect(handledBodies).toEqual([body]);
+
+      const escapedPromptBody = {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "synara_create_task",
+          arguments: { prompt: "\u0000".repeat(100_000) },
+        },
+      };
+      const escapedPrompt = await fetch(`${origin}/mcp/external`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${EXTERNAL_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(escapedPromptBody),
+      });
+      expect(escapedPrompt.status).toBe(200);
+      expect(handledBodies.at(-1)).toEqual(escapedPromptBody);
     });
   });
 
@@ -160,6 +180,25 @@ describe("externalMcpRouteLayer", () => {
       });
       expect(response.status).toBe(404);
       expect(handledBodies).toHaveLength(0);
+    });
+  });
+
+  it("requires a trusted origin for cookie-authenticated owner mutations", async () => {
+    await withExternalMcpServer({}, async ({ origin }) => {
+      const body = JSON.stringify({ integrationId: "integration-route-test" });
+      const missingOrigin = await fetch(`${origin}/api/mcp/external/integrations/revoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      expect(missingOrigin.status).toBe(403);
+
+      const trustedOrigin = await fetch(`${origin}/api/mcp/external/integrations/revoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: origin },
+        body,
+      });
+      expect(trustedOrigin.status).toBe(200);
     });
   });
 });

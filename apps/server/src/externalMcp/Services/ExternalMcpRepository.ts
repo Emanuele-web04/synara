@@ -154,6 +154,11 @@ export interface ExternalMcpRepositoryShape {
     readonly errorJson: string;
     readonly now: string;
   }) => Effect.Effect<void, Error>;
+  readonly failOperationAndTask: (input: {
+    readonly operationId: string;
+    readonly errorJson: string;
+    readonly now: string;
+  }) => Effect.Effect<void, Error>;
   readonly getOperationById: (
     operationId: string,
   ) => Effect.Effect<ExternalMcpOperationRecord | null, Error>;

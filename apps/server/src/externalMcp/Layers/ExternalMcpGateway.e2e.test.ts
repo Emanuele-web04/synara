@@ -11,7 +11,7 @@ import type {
   ServerProviderStatus,
 } from "@synara/contracts";
 import { MessageId, ProjectId, TurnId } from "@synara/contracts";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Effect, Fiber, Layer, Option, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -484,6 +484,23 @@ describe("external MCP gateway stdio flow", () => {
           "Finished from external MCP.",
         );
 
+        const interruptedWait = yield* gateway
+          .handlePost({
+            authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+            body: {
+              jsonrpc: "2.0",
+              id: "interrupted-wait",
+              method: "tools/call",
+              params: {
+                name: "synara_wait_for_task",
+                arguments: { threadId, runId: "turn-not-projected", timeoutMs: 60_000 },
+              },
+            },
+          })
+          .pipe(Effect.forkChild);
+        yield* Effect.sleep(20);
+        yield* Fiber.interrupt(interruptedWait);
+
         const restricted = yield* service.createIntegration({
           name: "Restricted audit",
           projectIds: [PROJECT_ID],
@@ -510,14 +527,15 @@ describe("external MCP gateway stdio flow", () => {
           readonly environment: string | null;
           readonly createdTaskIdsJson: string;
           readonly detail: string | null;
+          readonly outcome: string;
         }>`
           SELECT request_id AS "requestId", project_id AS "projectId",
             runtime_mode AS "runtimeMode", environment,
-            created_task_ids_json AS "createdTaskIdsJson", detail
+            created_task_ids_json AS "createdTaskIdsJson", detail, outcome
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(4);
+        expect(auditRows).toHaveLength(5);
         expect(auditRows.find((row) => row.requestId === "external-e2e-request")).toMatchObject({
           projectId: PROJECT_ID,
           runtimeMode: "approval-required",
@@ -527,6 +545,7 @@ describe("external MCP gateway stdio flow", () => {
         });
         expect(JSON.stringify(auditRows)).not.toContain(prompt);
         expect(auditRows.some((row) => row.detail?.includes("Capability denied"))).toBe(true);
+        expect(auditRows.some((row) => row.outcome === "started")).toBe(false);
         const operationPlans = yield* sql<{ readonly planJson: string }>`
           SELECT plan_json AS "planJson" FROM external_mcp_operations
           WHERE integration_id = ${issued.integration.integrationId}

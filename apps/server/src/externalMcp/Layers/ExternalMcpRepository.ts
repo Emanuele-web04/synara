@@ -517,10 +517,11 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
           `;
           if (completed.length > 0) return "completed" as const;
 
-          // Revocation or expiry must still reject the final commit, but the
-          // operation and its task must leave active-capacity state together.
+          // Revocation or expiry must still reject the final commit. Keep the
+          // task non-terminal until the coordinator has attempted cleanup; the
+          // capacity view conservatively owns its slot throughout compensation.
           // Returning the failure after the transaction commits lets the
-          // coordinator continue compensating already-created resources.
+          // coordinator compensate already-created resources.
           const compensating = yield* sql<{ readonly operationId: string }>`
             UPDATE external_mcp_operations
             SET status = 'compensating', result_json = NULL,
@@ -541,11 +542,6 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
             RETURNING operation_id AS "operationId"
           `;
           if (compensating.length === 0) return "not_dispatching" as const;
-          yield* sql`
-            UPDATE external_mcp_tasks
-            SET status = 'failed', updated_at = ${input.now}
-            WHERE operation_id = ${input.operationId}
-          `;
           return "integration_inactive" as const;
         }),
       )
@@ -566,6 +562,25 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
 
   const failOperation: ExternalMcpRepositoryShape["failOperation"] = (input) =>
     updateOperationStatus("failOperation", input, "failed", input.errorJson);
+
+  const failOperationAndTask: ExternalMcpRepositoryShape["failOperationAndTask"] = (input) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
+            UPDATE external_mcp_tasks
+            SET status = 'failed', updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+              AND status IN ('planned', 'created')
+          `;
+          yield* sql`
+            UPDATE external_mcp_operations
+            SET status = 'failed', error_json = ${input.errorJson}, updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+          `;
+        }),
+      )
+      .pipe(Effect.mapError(repositoryError("failOperationAndTask")));
 
   const getOperationById: ExternalMcpRepositoryShape["getOperationById"] = (operationId) =>
     selectOperationBy(sql`operation_id = ${operationId}`).pipe(
@@ -635,6 +650,7 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
     recordOperationCompensationFailure,
     completeOperation,
     failOperation,
+    failOperationAndTask,
     getOperationById,
     getOperationByRequest,
     listNonTerminalOperations,

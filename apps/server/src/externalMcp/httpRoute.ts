@@ -4,7 +4,7 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { readMcpJsonBody } from "../agentGateway/httpRoute.ts";
@@ -13,12 +13,20 @@ import { makeEffectAuthRequest } from "../auth/effectHttp.ts";
 import { ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { isLoopbackHost } from "../startupAccess.ts";
+import { shouldRejectAuthMutationOrigin } from "../trustedOrigins.ts";
 import { ExternalMcpGateway } from "./Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "./Services/ExternalMcpService.ts";
 import { computeExternalMcpRuntimeProof, externalMcpRuntimeSecret } from "./runtimeProof.ts";
 
 export const EXTERNAL_MCP_PATH = "/mcp/external";
-export const EXTERNAL_MCP_MAX_BODY_BYTES = 256 * 1024;
+// A maximal 100k-character prompt still fits when every character needs JSON
+// escaping. Larger JSON-RPC batches receive 413 instead of consuming memory
+// without bound; only a small number of authenticated bodies may buffer at once.
+export const EXTERNAL_MCP_MAX_BODY_BYTES = 1024 * 1024;
+const EXTERNAL_MCP_BODY_BUFFER_SLOTS = 4;
+const externalMcpBodyBufferSlots = Effect.runSync(
+  Semaphore.make(EXTERNAL_MCP_BODY_BUFFER_SLOTS),
+);
 const MANAGEMENT_MAX_BODY_BYTES = 32 * 1024;
 
 const decodeCreateIntegration = Schema.decodeUnknownEffect(ExternalMcpCreateIntegrationInput);
@@ -71,30 +79,34 @@ const postExternalMcp = HttpRouter.add(
     if (Option.isNone(client)) {
       return externalUnauthorized();
     }
-    const body = yield* readMcpJsonBody(request, EXTERNAL_MCP_MAX_BODY_BYTES);
-    if (body.kind === "too-large") {
-      return HttpServerResponse.jsonUnsafe(
-        {
-          jsonrpc: "2.0",
-          id: null,
-          error: { code: -32600, message: "Request body exceeds the 256 KiB limit." },
-        },
-        { status: 413 },
-      );
-    }
-    if (body.kind === "invalid") {
-      return HttpServerResponse.jsonUnsafe(
-        { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid JSON body." } },
-        { status: 400 },
-      );
-    }
-    const result = yield* gateway.handleVerifiedPost({
-      client: client.value,
-      body: body.body,
-    });
-    return result.body === undefined
-      ? HttpServerResponse.empty({ status: result.status })
-      : HttpServerResponse.jsonUnsafe(result.body, { status: result.status });
+    return yield* externalMcpBodyBufferSlots.withPermit(
+      Effect.gen(function* () {
+        const body = yield* readMcpJsonBody(request, EXTERNAL_MCP_MAX_BODY_BYTES);
+        if (body.kind === "too-large") {
+          return HttpServerResponse.jsonUnsafe(
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32600, message: "Request body exceeds the 1 MiB limit." },
+            },
+            { status: 413 },
+          );
+        }
+        if (body.kind === "invalid") {
+          return HttpServerResponse.jsonUnsafe(
+            { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid JSON body." } },
+            { status: 400 },
+          );
+        }
+        const result = yield* gateway.handleVerifiedPost({
+          client: client.value,
+          body: body.body,
+        });
+        return result.body === undefined
+          ? HttpServerResponse.empty({ status: result.status })
+          : HttpServerResponse.jsonUnsafe(result.body, { status: result.status });
+      }),
+    );
   }),
 );
 
@@ -111,14 +123,33 @@ const externalMethodNotAllowed = (method: "GET" | "DELETE") =>
     }),
   );
 
-const requireOwner = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const serverAuth = yield* ServerAuth;
-  const session = yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
-  if (session.role !== "owner") {
-    return yield* Effect.fail({ message: "Owner session required.", status: 403 as const });
-  }
-});
+const requireOwner = (mutation: boolean) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+    if (session.role !== "owner") {
+      return yield* Effect.fail({ message: "Owner session required.", status: 403 as const });
+    }
+    if (mutation) {
+      const url = HttpServerRequest.toURL(request);
+      if (!url) return yield* Effect.fail({ message: "Bad Request", status: 400 as const });
+      const config = yield* ServerConfig;
+      if (
+        shouldRejectAuthMutationOrigin({
+          rawOrigin: request.headers.origin,
+          requestOrigin: url.origin,
+          config,
+          credentialSource: session.credentialSource,
+        })
+      ) {
+        return yield* Effect.fail({
+          message: "Trusted request origin required.",
+          status: 403 as const,
+        });
+      }
+    }
+  });
 
 const managementError = (error: unknown) => {
   const value = error as { readonly message?: string; readonly status?: number };
@@ -145,7 +176,7 @@ const listIntegrations = HttpRouter.add(
   "/api/mcp/external/integrations",
   Effect.gen(function* () {
     if (!(yield* localExternalMcpEnabled)) return disabledResponse();
-    yield* requireOwner;
+    yield* requireOwner(false);
     const externalMcp = yield* ExternalMcpService;
     return HttpServerResponse.jsonUnsafe(yield* externalMcp.listIntegrations());
   }).pipe(Effect.catch((error) => Effect.succeed(managementError(error)))),
@@ -156,7 +187,7 @@ const createIntegration = HttpRouter.add(
   "/api/mcp/external/integrations",
   Effect.gen(function* () {
     if (!(yield* localExternalMcpEnabled)) return disabledResponse();
-    yield* requireOwner;
+    yield* requireOwner(true);
     const externalMcp = yield* ExternalMcpService;
     const input = yield* decodeCreateIntegration(yield* readManagementBody).pipe(
       Effect.mapError(() => ({ message: "Invalid integration request.", status: 400 as const })),
@@ -170,7 +201,7 @@ const revokeIntegration = HttpRouter.add(
   "/api/mcp/external/integrations/revoke",
   Effect.gen(function* () {
     if (!(yield* localExternalMcpEnabled)) return disabledResponse();
-    yield* requireOwner;
+    yield* requireOwner(true);
     const externalMcp = yield* ExternalMcpService;
     const input = yield* decodeRevokeIntegration(yield* readManagementBody).pipe(
       Effect.mapError(() => ({ message: "Invalid revoke request.", status: 400 as const })),
@@ -186,7 +217,7 @@ const refreshPairing = HttpRouter.add(
   "/api/mcp/external/integrations/pairing",
   Effect.gen(function* () {
     if (!(yield* localExternalMcpEnabled)) return disabledResponse();
-    yield* requireOwner;
+    yield* requireOwner(true);
     const externalMcp = yield* ExternalMcpService;
     const input = yield* decodeRefreshPairing(yield* readManagementBody).pipe(
       Effect.mapError(() => ({

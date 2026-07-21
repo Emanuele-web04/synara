@@ -6,7 +6,9 @@ import { ProviderKind, RuntimeMode } from "./orchestration";
 export const EXTERNAL_MCP_AUDIENCE = "synara.external-mcp" as const;
 export const EXTERNAL_MCP_MAX_PROMPT_CHARS = 100_000;
 export const EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH = 256;
+export const EXTERNAL_MCP_DEFAULT_WAIT_MS = 30_000;
 export const EXTERNAL_MCP_MAX_WAIT_MS = 60_000;
+export const EXTERNAL_MCP_CREATE_TIMEOUT_MS = 10 * 60_000;
 
 export const ExternalMcpCapability = Schema.Literals([
   "projects:read",
