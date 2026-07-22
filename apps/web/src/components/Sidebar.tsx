@@ -107,6 +107,8 @@ import {
   shortcutLabelForCommand,
   splitShortcutLabel,
   shouldShowThreadJumpHints,
+  spaceJumpCommandForIndex,
+  spaceJumpIndexFromCommand,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
 } from "../keybindings";
@@ -3233,6 +3235,16 @@ export default function Sidebar() {
     activateThreadFromSidebarIntent,
     onCloseProjectContextMenu: handleCloseProjectContextMenu,
   });
+  // Tab index 0 is Void, then spaces in strip order — the same mapping the
+  // space.jump.N dispatch below uses, surfaced in each tab's tooltip.
+  const jumpShortcutLabelForSpaceTab = useCallback(
+    (tabIndex: number) => {
+      const command = spaceJumpCommandForIndex(tabIndex);
+      if (!command) return null;
+      return shortcutLabelForCommand(keybindings, command, { platform: navigator.platform });
+    },
+    [keybindings],
+  );
   const handleProjectContextMenuAction = useCallback(
     async (projectId: ProjectId, clicked: ProjectContextMenuId) => {
       setProjectContextMenuState(null);
@@ -4984,6 +4996,23 @@ export default function Sidebar() {
         handleSelectSpace(orderedSpaceIds[nextIndex] ?? null);
         return;
       }
+      const spaceJumpIndex = spaceJumpIndexFromCommand(command ?? "");
+      if (spaceJumpIndex !== null) {
+        if (!isProjectsSidebarSurface({ isOnSettings, isOnStudio, isOnWorkspace })) return;
+        // Index 0 is Void, then spaces in strip order — the chord addresses what you see.
+        const orderedSpaceIds: ReadonlyArray<SpaceId | null> = [
+          null,
+          ...spaces.map((space) => space.id),
+        ];
+        if (spaceJumpIndex >= orderedSpaceIds.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const targetSpaceId = orderedSpaceIds[spaceJumpIndex] ?? null;
+        if (targetSpaceId !== activeSpaceId) {
+          handleSelectSpace(targetSpaceId);
+        }
+        return;
+      }
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
       if (jumpIndex !== null) {
         event.preventDefault();
@@ -5916,6 +5945,7 @@ export default function Sidebar() {
                     onDropProject={(projectId, spaceId) =>
                       void handleMoveProjectToSpace(projectId, spaceId)
                     }
+                    jumpShortcutLabelForTab={jumpShortcutLabelForSpaceTab}
                   />
                   {renderPinnedThreadsSection()}
                   {renderListSectionHeader(

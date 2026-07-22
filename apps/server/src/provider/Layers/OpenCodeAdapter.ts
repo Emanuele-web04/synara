@@ -1871,35 +1871,35 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
-      const refreshRelatedOpenCodeSessions = Effect.fn("refreshRelatedOpenCodeSessions")(
-        function* (context: OpenCodeSessionContext) {
-          const discovered = new Set<string>();
-          const pending = [context.openCodeSessionId];
-          while (pending.length > 0 && discovered.size < OPENCODE_MAX_RELATED_SESSIONS) {
-            const parentSessionId = pending.shift();
-            if (!parentSessionId) {
-              break;
-            }
-            const response = yield* runOpenCodeSdk("session.children", () =>
-              context.client.session.children({ sessionID: parentSessionId }),
-            );
-            for (const child of response.data ?? []) {
-              if (
-                child.id === context.openCodeSessionId ||
-                discovered.has(child.id) ||
-                discovered.size >= OPENCODE_MAX_RELATED_SESSIONS
-              ) {
-                continue;
-              }
-              discovered.add(child.id);
-              pending.push(child.id);
-            }
+      const refreshRelatedOpenCodeSessions = Effect.fn("refreshRelatedOpenCodeSessions")(function* (
+        context: OpenCodeSessionContext,
+      ) {
+        const discovered = new Set<string>();
+        const pending = [context.openCodeSessionId];
+        while (pending.length > 0 && discovered.size < OPENCODE_MAX_RELATED_SESSIONS) {
+          const parentSessionId = pending.shift();
+          if (!parentSessionId) {
+            break;
           }
-          for (const sessionId of discovered) {
-            context.relatedSessionIds.add(sessionId);
+          const response = yield* runOpenCodeSdk("session.children", () =>
+            context.client.session.children({ sessionID: parentSessionId }),
+          );
+          for (const child of response.data ?? []) {
+            if (
+              child.id === context.openCodeSessionId ||
+              discovered.has(child.id) ||
+              discovered.size >= OPENCODE_MAX_RELATED_SESSIONS
+            ) {
+              continue;
+            }
+            discovered.add(child.id);
+            pending.push(child.id);
           }
-        },
-      );
+        }
+        for (const sessionId of discovered) {
+          context.relatedSessionIds.add(sessionId);
+        }
+      });
 
       const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
         context: OpenCodeSessionContext,
@@ -2250,9 +2250,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }),
               type: "request.resolved",
               payload: {
-                requestType: request
-                  ? mapPermissionToRequestType(request.permission)
-                  : "unknown",
+                requestType: request ? mapPermissionToRequestType(request.permission) : "unknown",
                 decision: mapPermissionDecision(event.properties.reply),
               },
             });
@@ -3077,10 +3075,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
         yield* Effect.gen(function* () {
           let reconnectAttempt = 0;
-          while (
-            !eventsAbortController.signal.aborted &&
-            !(yield* Ref.get(context.stopped))
-          ) {
+          while (!eventsAbortController.signal.aborted && !(yield* Ref.get(context.stopped))) {
             const subscriptionExit = yield* Effect.exit(
               Effect.gen(function* () {
                 const subscription = yield* runOpenCodeSdk("event.subscribe", () =>
@@ -3152,23 +3147,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
-      const applyPermissionInteractionMode = Effect.fn("applyPermissionInteractionMode")(
-        function* (context: OpenCodeSessionContext, interactionMode: "default" | "plan") {
-          if (context.appliedPermissionInteractionMode === interactionMode) {
-            return;
-          }
-          yield* runOpenCodeSdk("session.update", () =>
-            context.client.session.update({
-              sessionID: context.openCodeSessionId,
-              permission: buildOpenCodePermissionRules(
-                context.session.runtimeMode,
-                interactionMode,
-              ),
-            }),
-          ).pipe(Effect.mapError(toAdapterRequestError));
-          context.appliedPermissionInteractionMode = interactionMode;
-        },
-      );
+      const applyPermissionInteractionMode = Effect.fn("applyPermissionInteractionMode")(function* (
+        context: OpenCodeSessionContext,
+        interactionMode: "default" | "plan",
+      ) {
+        if (context.appliedPermissionInteractionMode === interactionMode) {
+          return;
+        }
+        yield* runOpenCodeSdk("session.update", () =>
+          context.client.session.update({
+            sessionID: context.openCodeSessionId,
+            permission: buildOpenCodePermissionRules(context.session.runtimeMode, interactionMode),
+          }),
+        ).pipe(Effect.mapError(toAdapterRequestError));
+        context.appliedPermissionInteractionMode = interactionMode;
+      });
 
       const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
         function* (input) {

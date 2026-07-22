@@ -79,6 +79,19 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+i", command: "sidebar.importThread", when: "!terminalFocus" },
   { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },
   { key: "mod+alt+arrowright", command: "space.next", when: "!terminalFocus" },
+  // Numbered space jumps address tabs in the switcher's visual order, so mod+alt+1 is
+  // always Void. Same `|| isMac` escape hatch as the new-surface chords below: Cmd
+  // chords never reach the PTY on macOS, while Ctrl+Alt+digit is AltGr territory on
+  // Linux/Windows layouts and must keep yielding to focused terminals there.
+  { key: "mod+alt+1", command: "space.jump.1", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+2", command: "space.jump.2", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+3", command: "space.jump.3", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+4", command: "space.jump.4", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+5", command: "space.jump.5", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+6", command: "space.jump.6", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+7", command: "space.jump.7", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+8", command: "space.jump.8", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+9", command: "space.jump.9", when: "!terminalFocus || isMac" },
   { key: "mod+j", command: "terminal.toggle" },
   { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
   { key: "mod+shift+arrowright", command: "terminal.splitRight", when: "terminalFocus" },

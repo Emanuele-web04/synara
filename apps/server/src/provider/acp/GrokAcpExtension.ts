@@ -76,10 +76,7 @@ export function makeGrokQuestionResponse(
  * client. Grok currently prefixes xAI extension methods with `_` on the wire,
  * while older builds used the bare method name, so the adapter accepts both.
  */
-export const GROK_EXIT_PLAN_MODE_METHODS = [
-  "_x.ai/exit_plan_mode",
-  "x.ai/exit_plan_mode",
-] as const;
+export const GROK_EXIT_PLAN_MODE_METHODS = ["_x.ai/exit_plan_mode", "x.ai/exit_plan_mode"] as const;
 
 export const GrokExitPlanModeRequest = Schema.Struct({
   sessionId: Schema.String,

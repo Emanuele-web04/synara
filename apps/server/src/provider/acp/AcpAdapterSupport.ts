@@ -129,9 +129,7 @@ export function resolveAcpFullAccessPermissionOutcome(
   options: ReadonlyArray<AcpPermissionOptionLike>,
 ): AcpPermissionPolicyOutcome {
   const optionId = selectAcpFullAccessPermissionOptionId(options);
-  return optionId === undefined
-    ? { outcome: "cancelled" }
-    : { outcome: "selected", optionId };
+  return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
 }
 
 /**
@@ -149,9 +147,7 @@ export function resolveAcpPermissionPolicy(input: {
 }): AcpPermissionPolicyOutcome | undefined {
   if (input.interactionMode === "plan") {
     const optionId = selectAcpPermissionOptionId("decline", input.options);
-    return optionId === undefined
-      ? { outcome: "cancelled" }
-      : { outcome: "selected", optionId };
+    return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
   }
 
   if (input.interactionMode === undefined) {

@@ -100,10 +100,11 @@ const SPACE_TAB_CLASS_NAME =
  * Hover and selection share one token (`--sidebar-accent`/`--sidebar-accent-active`
  * resolve to the same 4% wash), so an icon-only tab cannot lean on background alone
  * the way a labelled sidebar row does. Selection is carried by the hairline ring and
- * full-strength glyph on top of that wash.
+ * full-strength glyph on top of that wash. The ring is inset: drawn outside it would
+ * make the active tab render 26px next to a 24px hovered neighbour.
  */
 const SPACE_TAB_ACTIVE_CLASS_NAME =
-  "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)] ring-1 ring-border/70";
+  "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)] ring-1 ring-border/70 ring-inset";
 
 function SpaceActivityDot({ tone }: { tone: SpaceActivityTone }) {
   return (
@@ -136,6 +137,8 @@ function SpaceTab(props: {
   name: string;
   /** Extra tooltip/spoken context that the icon alone cannot carry (Void). */
   hint?: string;
+  /** Rendered jump-chord label (e.g. "⌘⌥2") appended to the tooltip. */
+  shortcutLabel?: string | null;
   active: boolean;
   activityTone: SpaceActivityTone | null;
   onSelect: () => void;
@@ -202,7 +205,7 @@ function SpaceTab(props: {
               SPACE_TAB_CLASS_NAME,
               props.active && SPACE_TAB_ACTIVE_CLASS_NAME,
               props.sortable?.isDragging && "z-20 opacity-70",
-              dropActive && "bg-[var(--sidebar-accent)] ring-1 ring-ring",
+              dropActive && "bg-[var(--sidebar-accent)] ring-1 ring-ring ring-inset",
             )}
           />
         }
@@ -213,6 +216,9 @@ function SpaceTab(props: {
       <TooltipPopup side="bottom">
         {props.name}
         {detail ? <span className="text-muted-foreground/70"> · {detail}</span> : null}
+        {props.shortcutLabel ? (
+          <span className="text-muted-foreground/70"> · {props.shortcutLabel}</span>
+        ) : null}
       </TooltipPopup>
     </Tooltip>
   );
@@ -220,6 +226,7 @@ function SpaceTab(props: {
 
 function SortableSpaceTab(props: {
   space: Space;
+  shortcutLabel: string | null;
   active: boolean;
   activityTone: SpaceActivityTone | null;
   onSelect: () => void;
@@ -237,6 +244,7 @@ function SortableSpaceTab(props: {
     <SpaceTab
       icon={props.space.icon}
       name={props.space.name}
+      shortcutLabel={props.shortcutLabel}
       active={props.active}
       activityTone={props.activityTone}
       onSelect={props.onSelect}
@@ -373,6 +381,8 @@ interface SpaceSwitcherProps {
   onReorder: (orderedSpaceIds: ReadonlyArray<SpaceId>, movedSpaceId: SpaceId) => void;
   onRenameSpace: (space: Space, name: string) => void;
   onDropProject: (projectId: ProjectId, spaceId: SpaceId | null) => void;
+  /** Jump-chord label for a tab position (0 = Void), shown in the tab tooltip. */
+  jumpShortcutLabelForTab?: (tabIndex: number) => string | null;
 }
 
 export function SpaceSwitcher(props: SpaceSwitcherProps) {
@@ -467,19 +477,21 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
       </div>
 
       {/* px-1 keeps a 24px tab's 14px glyph centred on the same x (16px) as the
-          leading glyph of a project row below, so the two lists share one optical margin. */}
-      <div className="flex items-center gap-0.5 px-1">
+          leading glyph of a project row below, so the two lists share one optical margin.
+          gap-1: adjacent washed tabs (active next to hovered) read as one blob at 2px. */}
+      <div className="flex items-center gap-1 px-1">
         <div
           role="tablist"
           aria-label="Spaces"
           aria-orientation="horizontal"
-          className="flex min-w-0 flex-1 items-center gap-0.5"
+          className="flex min-w-0 flex-1 items-center gap-1"
           onKeyDown={handleTabStripKeyDown}
         >
           <SpaceTab
             icon={VOID_SPACE_ICON}
             name={VOID_SPACE_NAME}
             hint="Unassigned projects"
+            shortcutLabel={props.jumpShortcutLabelForTab?.(0) ?? null}
             active={activeSpaceId === null}
             activityTone={props.activityBySpaceId.get(null) ?? null}
             onSelect={() => props.onSelect(null)}
@@ -505,7 +517,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
             <div
               ref={scrollerRef}
               className={cn(
-                "flex min-w-0 flex-1 gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                "flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                 TAB_STRIP_FADE_CLASS_NAME,
               )}
             >
@@ -513,10 +525,11 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                 items={props.spaces.map((space) => space.id)}
                 strategy={horizontalListSortingStrategy}
               >
-                {props.spaces.map((space) => (
+                {props.spaces.map((space, index) => (
                   <SortableSpaceTab
                     key={space.id}
                     space={space}
+                    shortcutLabel={props.jumpShortcutLabelForTab?.(index + 1) ?? null}
                     active={activeSpaceId === space.id}
                     activityTone={props.activityBySpaceId.get(space.id) ?? null}
                     onSelect={() => props.onSelect(space.id)}

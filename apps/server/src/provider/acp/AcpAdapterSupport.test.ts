@@ -65,14 +65,10 @@ describe("AcpAdapterSupport", () => {
 
   it("never falls back to a human prompt in full-access mode", () => {
     expect(
-      resolveAcpFullAccessPermissionOutcome([
-        { kind: "allow_always", optionId: "allow-session" },
-      ]),
+      resolveAcpFullAccessPermissionOutcome([{ kind: "allow_always", optionId: "allow-session" }]),
     ).toEqual({ outcome: "selected", optionId: "allow-session" });
     expect(
-      resolveAcpFullAccessPermissionOutcome([
-        { kind: "reject_once", optionId: "deny-now" },
-      ]),
+      resolveAcpFullAccessPermissionOutcome([{ kind: "reject_once", optionId: "deny-now" }]),
     ).toEqual({ outcome: "cancelled" });
   });
 

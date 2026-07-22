@@ -40,10 +40,7 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     assert.equal(merged.releaseDate, "2026-03-07T10:36:07.540Z");
     assert.deepStrictEqual(
       merged.files.map((file) => file.url),
-      [
-        "Synara-0.0.4-arm64.zip",
-        "Synara-0.0.4-x64.zip",
-      ],
+      ["Synara-0.0.4-arm64.zip", "Synara-0.0.4-x64.zip"],
     );
 
     const serialized = serializeMacUpdateManifest(merged);

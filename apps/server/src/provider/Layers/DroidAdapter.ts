@@ -1128,10 +1128,7 @@ export function makeDroidAdapter(
                       ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       const approveSpecPlan = extractDroidApproveSpecPlanMarkdown(event.toolCall);
-                      if (
-                        ctx.activeInteractionMode === "plan" &&
-                        approveSpecPlan !== undefined
-                      ) {
+                      if (ctx.activeInteractionMode === "plan" && approveSpecPlan !== undefined) {
                         if (ctx.lastPlanFingerprint !== approveSpecPlan) {
                           ctx.lastPlanFingerprint = approveSpecPlan;
                           yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
