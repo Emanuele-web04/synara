@@ -534,6 +534,14 @@ export function shortcutLabelForCommand(
   const contextProvided = resolvedOptions?.context !== undefined;
 
   if (!contextProvided) {
+    // Honor platform-gated `when` clauses (e.g. `isMac` / `!isMac`) using default
+    // focus flags so labels stay correct without a full UI context.
+    const platformAware = findEffectiveShortcutForCommand(keybindings, command, { platform });
+    if (platformAware) {
+      return formatShortcutLabel(platformAware, platform);
+    }
+    // Fall back to the last binding ignoring `when` so focus-gated chords
+    // (e.g. terminal-only) still surface a label in chrome affordances.
     for (let index = keybindings.length - 1; index >= 0; index -= 1) {
       const binding = keybindings[index];
       if (!binding || binding.command !== command) continue;

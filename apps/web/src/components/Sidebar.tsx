@@ -4907,20 +4907,6 @@ export default function Sidebar() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
 
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key === "k" &&
-        !event.shiftKey &&
-        !event.altKey
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(null);
-        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
-        return;
-      }
-
       const shortcutContext = getCurrentSidebarShortcutContext();
       if (!shouldIgnoreThreadJumpHintUpdate(event)) {
         const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {

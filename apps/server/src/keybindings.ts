@@ -65,9 +65,16 @@ type WhenToken =
   | { type: "lparen" }
   | { type: "rparen" };
 
+const SIDEBAR_SEARCH_DEFAULT_KEYBINDINGS = [
+  // Cmd-only on macOS so Ctrl+K stays available for kill-to-end-of-line.
+  // Keep Ctrl+K on Windows/Linux (where `mod` would otherwise be Ctrl).
+  { key: "cmd+k", command: "sidebar.search" },
+  { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
+] as const satisfies ReadonlyArray<KeybindingRule>;
+
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle", when: "!terminalFocus" },
-  { key: "mod+k", command: "sidebar.search" },
+  ...SIDEBAR_SEARCH_DEFAULT_KEYBINDINGS,
   { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
   { key: "mod+i", command: "sidebar.importThread", when: "!terminalFocus" },
   { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },
@@ -576,6 +583,7 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
 const RETIRED_LEGACY_KEYBINDING_COMMANDS = new Set(["chat.newGemini"]);
 const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
 const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
+const OUTDATED_SIDEBAR_SEARCH_SHORTCUT = "mod+k";
 const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"], string>> = {
   "view.recent.next": "ctrl+tab",
   "view.recent.previous": "ctrl+shift+tab",
@@ -664,6 +672,29 @@ function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
     },
     migrated: true,
   };
+}
+
+// The original sidebar search default used `mod+k`, which resolves to Ctrl+K on
+// Windows/Linux but also captures the native kill-to-end-of-line chord on macOS.
+// Expand only that exact shipped default so other user-defined search chords remain intact.
+function migrateOutdatedSidebarSearchDefault(rules: readonly KeybindingRule[]): {
+  readonly rules: KeybindingRule[];
+  readonly migratedCount: number;
+} {
+  let migratedCount = 0;
+  const next = rules.flatMap((rule) => {
+    if (
+      rule.command !== "sidebar.search" ||
+      rule.key !== OUTDATED_SIDEBAR_SEARCH_SHORTCUT ||
+      rule.when !== undefined
+    ) {
+      return [rule];
+    }
+
+    migratedCount += 1;
+    return SIDEBAR_SEARCH_DEFAULT_KEYBINDINGS.map((binding) => ({ ...binding }));
+  });
+  return { rules: next, migratedCount };
 }
 
 // Add the `|| isMac` escape hatch to new-surface creation commands still pinned to the
@@ -936,7 +967,9 @@ const makeKeybindings = Effect.gen(function* () {
       keybindings.push(migratedDefaultRule.rule);
     }
 
-    const relaxed = relaxCreationCommandTerminalGuards(keybindings);
+    const sidebarSearchMigration = migrateOutdatedSidebarSearchDefault(keybindings);
+    migratedDefaultRuleCount += sidebarSearchMigration.migratedCount;
+    const relaxed = relaxCreationCommandTerminalGuards(sidebarSearchMigration.rules);
     migratedDefaultRuleCount += relaxed.migratedCount;
 
     return {

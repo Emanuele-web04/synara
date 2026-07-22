@@ -114,7 +114,13 @@ const DEFAULT_BINDINGS = compile([
     command: "sidebar.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
-  { shortcut: modShortcut("k"), command: "sidebar.search" },
+  // Mirror server defaults: Cmd+K everywhere; Ctrl+K only off macOS.
+  { shortcut: modShortcut("k", { metaKey: true, modKey: false }), command: "sidebar.search" },
+  {
+    shortcut: ctrlShortcut("k"),
+    command: "sidebar.search",
+    whenAst: whenNot(whenIdentifier("isMac")),
+  },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
@@ -1128,6 +1134,44 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: true },
       }),
       "sidebar.search",
+    );
+  });
+
+  it("keeps Cmd+K for sidebar.search on macOS and releases Ctrl+K", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+      }),
+      null,
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.search", "MacIntel"),
+      "⌘K",
+    );
+  });
+
+  it("keeps Ctrl+K for sidebar.search on Windows and Linux", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux x86_64",
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.search", "Win32"),
+      "Ctrl+K",
     );
   });
 
