@@ -155,6 +155,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedThreadJump.command, "thread.jump.3");
 
+    const parsedSpaceJump = yield* decode(KeybindingRule, {
+      key: "mod+alt+5",
+      command: "space.jump.5",
+    });
+    assert.strictEqual(parsedSpaceJump.command, "space.jump.5");
+
     const parsedVisibleNext = yield* decode(KeybindingRule, {
       key: "mod+shift+]",
       command: "chat.visible.next",

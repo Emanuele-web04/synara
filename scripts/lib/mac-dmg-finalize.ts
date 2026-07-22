@@ -120,9 +120,7 @@ function runCommand(command: MacDmgCommand, verbose: boolean): void {
   }
 }
 
-export function finalizeSignedMacDmg(
-  options: FinalizeSignedMacDmgOptions,
-): FinalizedSignedMacDmg {
+export function finalizeSignedMacDmg(options: FinalizeSignedMacDmgOptions): FinalizedSignedMacDmg {
   if (process.platform !== "darwin") {
     throw new Error("Signed macOS DMG finalization must run on macOS.");
   }

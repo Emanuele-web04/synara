@@ -63,9 +63,7 @@ describe("DroidAdapter runtime event scoping", () => {
         },
       },
     };
-    expect(extractDroidApproveSpecPlanMarkdown(pending)).toBe(
-      "# Plan\n\n- Add a focused test",
-    );
+    expect(extractDroidApproveSpecPlanMarkdown(pending)).toBe("# Plan\n\n- Add a focused test");
     expect(
       isExpectedDroidPlanRejection({
         ...pending,

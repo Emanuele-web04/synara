@@ -22,6 +22,7 @@ import {
   resolveShortcutCommand,
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
+  spaceJumpIndexFromCommand,
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
@@ -249,6 +250,11 @@ const DEFAULT_BINDINGS = compile([
     shortcut: ctrlShortcut("tab", { shiftKey: true }),
     command: "view.recent.previous",
   },
+  ...Array.from({ length: 9 }, (_, index) => ({
+    shortcut: modShortcut(String(index + 1), { altKey: true }),
+    command: `space.jump.${index + 1}` as KeybindingCommand,
+    whenAst: whenCreationAllowed,
+  })),
   {
     shortcut: modShortcut("1"),
     command: "thread.jump.1",
@@ -627,6 +633,66 @@ describe("thread jump shortcuts", () => {
         platform: "MacIntel",
         context: { terminalWorkspaceOpen: true },
       }),
+    );
+  });
+});
+
+describe("space jump shortcuts", () => {
+  it("maps space jump commands to strip indices", () => {
+    assert.strictEqual(spaceJumpIndexFromCommand("space.jump.1"), 0);
+    assert.strictEqual(spaceJumpIndexFromCommand("space.jump.9"), 8);
+    assert.isNull(spaceJumpIndexFromCommand("thread.jump.1"));
+  });
+
+  it("resolves Cmd+Alt+digit even when Option shifts event.key on macOS", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "Digit2", key: "™", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false, terminalWorkspaceOpen: false },
+        },
+      ),
+      "space.jump.2",
+    );
+  });
+
+  it("resolves space jumps from the built-in fallbacks when no config is present", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ code: "Digit1", key: "1", metaKey: true, altKey: true }), [], {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "space.jump.1",
+    );
+  });
+
+  it("does not shadow plain numbered thread jumps", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "2", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: false },
+      }),
+      "thread.jump.2",
+    );
+  });
+
+  it("fires from a focused terminal on macOS but yields to it elsewhere", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "Digit3", key: "3", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "MacIntel", context: { terminalFocus: true } },
+      ),
+      "space.jump.3",
+    );
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ code: "Digit3", key: "3", ctrlKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "Linux", context: { terminalFocus: true } },
+      ),
     );
   });
 });

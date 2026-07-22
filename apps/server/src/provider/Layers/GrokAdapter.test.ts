@@ -58,10 +58,7 @@ describe("Grok native plan approval", () => {
   });
 
   it("accepts current and legacy ACP method names", () => {
-    expect(GROK_EXIT_PLAN_MODE_METHODS).toEqual([
-      "_x.ai/exit_plan_mode",
-      "x.ai/exit_plan_mode",
-    ]);
+    expect(GROK_EXIT_PLAN_MODE_METHODS).toEqual(["_x.ai/exit_plan_mode", "x.ai/exit_plan_mode"]);
   });
 
   it("extracts the proposed plan from Grok's reverse request", () => {
