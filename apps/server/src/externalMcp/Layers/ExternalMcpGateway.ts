@@ -76,12 +76,16 @@ import {
 import { makeExternalMcpAuditCompletion } from "../auditCompletion.ts";
 import { verifyExternalMcpTransportCredential } from "../credentialVerification.ts";
 import {
+  buildExternalMcpOverviewNextSteps,
+  buildExternalMcpOverviewProjects,
+} from "../overview.ts";
+import {
   ExternalMcpGateway,
   type ExternalMcpGatewayShape,
 } from "../Services/ExternalMcpGateway.ts";
 
 const EXTERNAL_MCP_INSTRUCTIONS =
-  "This is Synara's loopback-only external integration. Tools are restricted to the integration's explicit projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
+  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
 const MCP_MAX_BATCH_MESSAGES = 50;
 
 interface ExternalToolContext {
@@ -309,6 +313,55 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       ),
   };
 
+  const overviewTool: ExternalTool = {
+    requiredCapability: "projects:read",
+    definition: {
+      name: "synara_overview",
+      description:
+        "Discover everything this integration can use in one call: every allowed Synara project with its on-disk path and activity, provider availability, granted scopes, and safe defaults. Call this first to orient yourself.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { title: "Synara overview", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (_args, context) =>
+      Effect.gen(function* () {
+        const snapshot = yield* snapshotQuery.getShellSnapshot();
+        const availabilities = yield* loadProviderAvailabilities;
+        // Thread titles are metadata about tasks the integration did not
+        // create, so they stay behind the explicit tasks:read-project scope;
+        // counts alone are safe under projects:read.
+        const includeThreadMetadata = context.client.capabilities.has("tasks:read-project");
+        const projects = buildExternalMcpOverviewProjects({
+          projects: snapshot.projects,
+          threads: snapshot.threads,
+          allowedProjectIds: context.client.allowedProjectIds,
+          includeThreadMetadata,
+        });
+        const nextSteps = buildExternalMcpOverviewNextSteps(context.client.capabilities);
+        return mcpToolResultJson({
+          integration: {
+            integrationId: context.client.integration.integrationId,
+            name: context.client.integration.name,
+            projectScope: context.client.integration.projectScope,
+            capabilities: [...context.client.capabilities],
+          },
+          projects,
+          providers: [...availabilities].map(([provider, availability]) => ({
+            provider,
+            ...availability,
+          })),
+          defaults: { environment: "worktree", runtimeMode: "approval-required" },
+          limits: {
+            oneTaskPerRequest: true,
+            maxPromptChars: EXTERNAL_MCP_MAX_PROMPT_CHARS,
+            maxWaitMs: EXTERNAL_MCP_MAX_WAIT_MS,
+            callsPerMinute: context.client.integration.rateLimitPerMinute,
+            concurrentAgentTasks: context.client.integration.concurrencyLimit,
+          },
+          nextSteps,
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
   const createTaskTool: ExternalTool = {
     requiredCapability: "tasks:create",
     definition: {
@@ -524,6 +577,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   };
 
   const tools: ReadonlyArray<ExternalTool> = [
+    overviewTool,
     capabilitiesTool,
     projectsTool,
     createTaskTool,
@@ -621,7 +675,6 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       }
       const assertActive = () =>
         externalMcp.assertActive(client.integration.integrationId).pipe(
-          Effect.asVoid,
           Effect.mapError((error) => new GatewayToolError(error.code, error.message)),
         );
       const context: ExternalToolContext = {

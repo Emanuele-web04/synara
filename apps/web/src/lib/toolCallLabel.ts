@@ -114,6 +114,31 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara checked available agents",
     failed: "Synara couldn't check available agents",
   },
+  synara_overview: {
+    running: "Synara is gathering an overview",
+    completed: "Synara gathered an overview",
+    failed: "Synara couldn't gather an overview",
+  },
+  synara_list_allowed_projects: {
+    running: "Synara is listing allowed projects",
+    completed: "Synara listed allowed projects",
+    failed: "Synara couldn't list allowed projects",
+  },
+  synara_create_task: {
+    running: "Synara is creating a task",
+    completed: "Synara created a task",
+    failed: "Synara couldn't create a task",
+  },
+  synara_wait_for_task: {
+    running: "Synara is waiting for a task",
+    completed: "Synara finished waiting for a task",
+    failed: "Synara couldn't wait for a task",
+  },
+  synara_read_task: {
+    running: "Synara is reading a task",
+    completed: "Synara read a task",
+    failed: "Synara couldn't read a task",
+  },
   synara_list_projects: {
     running: "Synara is listing projects",
     completed: "Synara listed projects",

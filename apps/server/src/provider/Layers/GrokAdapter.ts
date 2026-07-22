@@ -1138,7 +1138,7 @@ export function makeGrokAdapter(
                       yield* Effect.gen(function* () {
                         yield* Effect.sleep(GROK_EXIT_PLAN_RESPONSE_GRACE_MS);
                         yield* completeGrokPlanTurn(ctx, turnId, activePromptFiber);
-                      }).pipe(Effect.forkIn(ctx.sessionScope));
+                      }).pipe(Effect.forkIn(ctx.scope));
                     }
                   }
                   return makeGrokExitPlanModeCapturedResponse();

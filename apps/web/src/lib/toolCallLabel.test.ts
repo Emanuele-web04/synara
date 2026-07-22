@@ -93,6 +93,19 @@ describe("deriveSynaraMcpToolTitle", () => {
         "Synara is stopping an automation",
         "Synara stopped an automation",
       ],
+      ["synara_overview", "Synara is gathering an overview", "Synara gathered an overview"],
+      [
+        "synara_list_allowed_projects",
+        "Synara is listing allowed projects",
+        "Synara listed allowed projects",
+      ],
+      ["synara_create_task", "Synara is creating a task", "Synara created a task"],
+      [
+        "synara_wait_for_task",
+        "Synara is waiting for a task",
+        "Synara finished waiting for a task",
+      ],
+      ["synara_read_task", "Synara is reading a task", "Synara read a task"],
     ] as const;
 
     for (const [toolName, running, completed] of cases) {

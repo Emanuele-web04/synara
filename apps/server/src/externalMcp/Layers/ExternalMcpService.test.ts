@@ -16,12 +16,31 @@ const project = {
   workspaceRoot: "/tmp/allowed-project",
 };
 
+const insertProject = (input: typeof project) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_projects (
+        project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+      ) VALUES (
+        ${input.id}, ${input.title}, ${input.workspaceRoot}, '[]',
+        '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z', NULL
+      )
+    `;
+  });
+
+const loadServiceWithProject = Effect.gen(function* () {
+  yield* insertProject(project);
+  return yield* ExternalMcpService;
+});
+
 const layer = ExternalMcpServiceLive.pipe(
   Layer.provideMerge(ExternalMcpRepositoryLive),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provide(
     Layer.succeed(ProjectionSnapshotQuery, {
-      getShellSnapshot: () => Effect.succeed({ projects: [project], threads: [] }),
+      getShellSnapshot: () =>
+        Effect.die("project authorization must not hydrate a shell snapshot"),
       getThreadShellById: () => Effect.succeed({ _tag: "None" }),
     } as never),
   ),
@@ -35,7 +54,7 @@ describe("ExternalMcpService", () => {
   it("keeps browser, server, and provider-session tokens outside the MCP audience", async () => {
     await run(
       Effect.gen(function* () {
-        const service = yield* ExternalMcpService;
+        const service = yield* loadServiceWithProject;
         for (const token of [
           "sagw_session_provider-token",
           "eyJraW5kIjoic2Vzc2lvbiJ9.browser-session",
@@ -51,7 +70,7 @@ describe("ExternalMcpService", () => {
   it("issues one pairing exchange, verifies it, and revokes it immediately", async () => {
     await run(
       Effect.gen(function* () {
-        const service = yield* ExternalMcpService;
+        const service = yield* loadServiceWithProject;
         const created = yield* service.createIntegration({
           name: "Codex",
           projectIds: [ProjectId.makeUnsafe("project-allowed")],
@@ -84,10 +103,54 @@ describe("ExternalMcpService", () => {
     );
   });
 
+  it("grants every current and future project with the all-projects scope", async () => {
+    await run(
+      Effect.gen(function* () {
+        const service = yield* loadServiceWithProject;
+        const created = yield* service.createIntegration({
+          name: "All projects",
+          projectScope: "all",
+          capabilities: ["projects:read", "tasks:create", "tasks:read", "tasks:wait"],
+        });
+        expect(created.integration.projectScope).toBe("all");
+        expect(created.integration.allowedProjects.map((grant) => grant.projectId)).toEqual([
+          "project-allowed",
+        ]);
+        const paired = yield* service.pair(created.pairingCode, "syn_mcp_v1_all-scope-secret");
+        const client = yield* service.verifyCredential(paired.credential);
+        expect(client.allowedProjectIds.has("project-allowed")).toBe(true);
+        yield* insertProject({
+          id: "project-added-later",
+          title: "Added later",
+          workspaceRoot: "/tmp/added-later",
+        });
+        const refreshed = yield* service.verifyCredential(paired.credential);
+        expect(refreshed.allowedProjectIds.has("project-added-later")).toBe(true);
+        yield* service.assertProject(refreshed, "project-added-later");
+        yield* service.assertActive(created.integration.integrationId);
+      }),
+    );
+  });
+
+  it("requires at least one project when the scope is selected", async () => {
+    await run(
+      Effect.gen(function* () {
+        const service = yield* loadServiceWithProject;
+        const result = yield* service
+          .createIntegration({
+            name: "No projects",
+            capabilities: ["projects:read"],
+          })
+          .pipe(Effect.exit);
+        expect(result._tag).toBe("Failure");
+      }),
+    );
+  });
+
   it("rejects unknown project grants at management time", async () => {
     await run(
       Effect.gen(function* () {
-        const service = yield* ExternalMcpService;
+        const service = yield* loadServiceWithProject;
         const result = yield* service
           .createIntegration({
             name: "Unknown project",
@@ -103,7 +166,7 @@ describe("ExternalMcpService", () => {
   it("surfaces repository audit completion failures to the gateway boundary", async () => {
     await run(
       Effect.gen(function* () {
-        const service = yield* ExternalMcpService;
+        const service = yield* loadServiceWithProject;
         const sql = yield* SqlClient.SqlClient;
         const created = yield* service.createIntegration({
           name: "Audit failure",
