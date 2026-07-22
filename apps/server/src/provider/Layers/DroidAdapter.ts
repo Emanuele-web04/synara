@@ -66,7 +66,7 @@ import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
-  selectAcpFullAccessPermissionOptionId,
+  resolveAcpPermissionPolicy,
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
 import {
@@ -76,6 +76,7 @@ import {
   makeAcpThreadLock,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
+  resolveAcpTurnInteractionMode,
   scopeAcpRuntimeItemIdForTurn,
   scopeAcpToolCallStateForTurn,
   settleAcpPendingApprovalsAsCancelled,
@@ -289,28 +290,26 @@ export function shouldIgnoreDroidInterrupt(
   return requestedTurnId !== undefined && requestedTurnId !== activeTurnId;
 }
 
-type DroidPermissionPolicyOutcome =
-  | { readonly outcome: "selected"; readonly optionId: string }
-  | { readonly outcome: "cancelled" };
-
-export function resolveDroidPermissionPolicy(input: {
-  readonly runtimeMode: "approval-required" | "full-access";
-  readonly interactionMode: ProviderInteractionMode | undefined;
-  readonly options: ReadonlyArray<Pick<Acp.PermissionOption, "kind" | "optionId">>;
-}): DroidPermissionPolicyOutcome | undefined {
-  if (input.interactionMode === "plan") {
-    const rejectedOptionId = selectAcpPermissionOptionId("decline", input.options);
-    return rejectedOptionId === undefined
-      ? { outcome: "cancelled" }
-      : { outcome: "selected", optionId: rejectedOptionId };
-  }
-  if (input.runtimeMode !== "full-access") {
+export function extractDroidApproveSpecPlanMarkdown(
+  toolCall: AcpToolCallState,
+): string | undefined {
+  if (toolCall.title?.trim().toLowerCase() !== "approve spec") {
     return undefined;
   }
-  const approvedOptionId = selectAcpFullAccessPermissionOptionId(input.options);
-  return approvedOptionId === undefined
-    ? undefined
-    : { outcome: "selected", optionId: approvedOptionId };
+  const rawInput = toolCall.data.rawInput;
+  if (typeof rawInput !== "object" || rawInput === null || !("plan" in rawInput)) {
+    return undefined;
+  }
+  const plan = rawInput.plan;
+  return typeof plan === "string" && plan.trim().length > 0 ? plan.trim() : undefined;
+}
+
+export function isExpectedDroidPlanRejection(toolCall: AcpToolCallState): boolean {
+  return (
+    toolCall.title?.trim().toLowerCase() === "approve spec" &&
+    toolCall.status === "failed" &&
+    /plan not approved\s*-\s*remaining in spec mode/iu.test(toolCall.detail ?? "")
+  );
 }
 
 // Droid may reuse ACP item ids across resumed history; DP runtime ids must stay turn-local.
@@ -790,7 +789,6 @@ export function makeDroidAdapter(
             resume: resumeSessionId !== undefined,
             model: effectiveDroidSettings.model,
             reasoningEffort: effectiveDroidSettings.reasoningEffort,
-            skipPermissionsUnsafe: effectiveDroidSettings.skipPermissionsUnsafe === true,
             binaryPath: effectiveDroidSettings.binaryPath ?? "droid",
           });
 
@@ -824,7 +822,7 @@ export function makeDroidAdapter(
             yield* acp.handleRequestPermission((params) =>
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
-                const policyOutcome = resolveDroidPermissionPolicy({
+                const policyOutcome = resolveAcpPermissionPolicy({
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
@@ -853,18 +851,6 @@ export function makeDroidAdapter(
                     };
                   }
                   return { outcome: { outcome: "cancelled" as const } };
-                }
-                if (input.runtimeMode === "full-access") {
-                  yield* Effect.logWarning("droid.acp.permission_auto_approve_unavailable", {
-                    threadId: input.threadId,
-                    turnId: ctx?.activeTurnId,
-                    options: params.options.map((option) => ({
-                      kind: option.kind,
-                      optionId: option.optionId,
-                    })),
-                    toolKind: params.toolCall.kind,
-                    toolTitle: params.toolCall.title,
-                  });
                 }
                 const permissionRequest = parsePermissionRequest(params);
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
@@ -1118,6 +1104,9 @@ export function makeDroidAdapter(
                           : undefined;
                       if (lateTurnId !== undefined) {
                         yield* logNative(ctx.threadId, "session/update", event.rawPayload);
+                        if (isExpectedDroidPlanRejection(event.toolCall)) {
+                          return;
+                        }
                         yield* emitNestedTaskLifecycle(ctx, event.toolCall, lateTurnId);
                         yield* offerRuntimeEvent(
                           input.lifecycleGeneration,
@@ -1138,6 +1127,43 @@ export function makeDroidAdapter(
                       }
                       ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
+                      const approveSpecPlan = extractDroidApproveSpecPlanMarkdown(event.toolCall);
+                      if (
+                        ctx.activeInteractionMode === "plan" &&
+                        approveSpecPlan !== undefined
+                      ) {
+                        if (ctx.lastPlanFingerprint !== approveSpecPlan) {
+                          ctx.lastPlanFingerprint = approveSpecPlan;
+                          yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+                            type: "turn.proposed.completed",
+                            ...(yield* makeEventStamp()),
+                            provider: PROVIDER,
+                            threadId: ctx.threadId,
+                            turnId: activeTurnId,
+                            itemId: RuntimeItemId.makeUnsafe(
+                              `droid-plan-approval:${event.toolCall.toolCallId}`,
+                            ),
+                            payload: { planMarkdown: approveSpecPlan },
+                            raw: {
+                              source: "acp.jsonrpc",
+                              method: "session/update",
+                              payload: event.rawPayload,
+                            },
+                          });
+                        }
+                        if (
+                          event.toolCall.status === "pending" ||
+                          event.toolCall.status === "inProgress"
+                        ) {
+                          return;
+                        }
+                      }
+                      if (
+                        ctx.activeInteractionMode === "plan" &&
+                        isExpectedDroidPlanRejection(event.toolCall)
+                      ) {
+                        return;
+                      }
                       yield* emitNestedTaskLifecycle(ctx, event.toolCall, activeTurnId);
                       const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
                       if (failedToolDetail !== undefined) {
@@ -1395,6 +1421,7 @@ export function makeDroidAdapter(
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
+        const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
         // Selection changes normally arrive via a session restart, but a turn
         // can still carry an explicit selection; re-assert it over ACP (the
         // shared runtime skips the RPC when the value already matches).
@@ -1410,9 +1437,7 @@ export function makeDroidAdapter(
           }
           yield* applyDroidAcpInteractionMode({
             runtime: ctx.acp,
-            ...(input.interactionMode !== undefined
-              ? { interactionMode: input.interactionMode }
-              : {}),
+            interactionMode,
             runtimeMode: ctx.session.runtimeMode,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
@@ -1438,9 +1463,7 @@ export function makeDroidAdapter(
             text: input.input?.trim()
               ? withAcpPlanModePrompt({
                   text: input.input.trim(),
-                  ...(input.interactionMode !== undefined
-                    ? { interactionMode: input.interactionMode }
-                    : {}),
+                  interactionMode,
                   promptPrefix: DROID_PLAN_MODE_PROMPT_PREFIX,
                 })
               : undefined,
@@ -1499,7 +1522,7 @@ export function makeDroidAdapter(
         ctx.turnToolCallIds.clear();
         ctx.activeNestedTaskToolCallIds.clear();
         ctx.nestedTaskLifecycleByToolCallId.clear();
-        ctx.activeInteractionMode = input.interactionMode;
+        ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;

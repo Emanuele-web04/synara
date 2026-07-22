@@ -1,6 +1,13 @@
 import { ThreadId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { Agent, OpencodeClient, Part, Provider } from "@opencode-ai/sdk/v2";
+import type {
+  Agent,
+  OpencodeClient,
+  Part,
+  PermissionRequest,
+  Provider,
+  QuestionRequest,
+} from "@opencode-ai/sdk/v2";
 import { Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
 import { describe, it, expect, vi } from "vitest";
 
@@ -33,6 +40,7 @@ function createMockOpenCodeRuntime(options?: {
   readonly cliModelsError?: OpenCodeRuntimeError;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
   readonly events?: AsyncIterable<unknown>;
+  readonly eventSubscriptions?: ReadonlyArray<AsyncIterable<unknown>>;
   readonly prompt?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly promptAsync?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly commandList?: () => Promise<{
@@ -43,6 +51,13 @@ function createMockOpenCodeRuntime(options?: {
     data: Array<{ info: Record<string, unknown>; parts: Part[] }>;
   }>;
   readonly session?: Record<string, unknown>;
+  readonly childrenBySessionId?: Readonly<Record<string, ReadonlyArray<{ id: string }>>>;
+  readonly children?: (input: { sessionID: string }) => Promise<unknown>;
+  readonly pendingPermissions?: ReadonlyArray<PermissionRequest>;
+  readonly permissionList?: () => Promise<unknown>;
+  readonly pendingQuestions?: ReadonlyArray<QuestionRequest>;
+  readonly questionList?: () => Promise<unknown>;
+  readonly permissionReply?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly mcpAdd?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly serverExit?: Effect.Effect<number>;
   readonly sessionCreateError?: Error;
@@ -59,6 +74,7 @@ function createMockOpenCodeRuntime(options?: {
   const permissionReplyCalls: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const mcpAddCalls: Array<Record<string, unknown>> = [];
+  let eventSubscribeCallCount = 0;
   const emptySubscription = {
     async *[Symbol.asyncIterator]() {
       // No provider-side events needed for these adapter lifecycle tests.
@@ -66,7 +82,16 @@ function createMockOpenCodeRuntime(options?: {
   };
   const client = {
     event: {
-      subscribe: async () => ({ stream: options?.events ?? emptySubscription }),
+      subscribe: async () => {
+        const subscriptionIndex = eventSubscribeCallCount;
+        eventSubscribeCallCount += 1;
+        return {
+          stream:
+            options?.eventSubscriptions?.[subscriptionIndex] ??
+            options?.events ??
+            emptySubscription,
+        };
+      },
     },
     session: {
       create: async (input: Record<string, unknown>) => {
@@ -97,6 +122,10 @@ function createMockOpenCodeRuntime(options?: {
         return { data: null };
       },
       messages: options?.messages ?? (async () => ({ data: [] })),
+      children: async (input: { sessionID: string }) =>
+        options?.children
+          ? options.children(input)
+          : { data: options?.childrenBySessionId?.[input.sessionID] ?? [] },
       get: async () => ({ data: { directory: process.cwd(), ...(options?.session ?? {}) } }),
       revert: async () => ({ data: null }),
       summarize: async () => ({ data: null }),
@@ -106,12 +135,18 @@ function createMockOpenCodeRuntime(options?: {
       },
     },
     permission: {
+      list: async () =>
+        options?.permissionList
+          ? options.permissionList()
+          : { data: options?.pendingPermissions ?? [] },
       reply: async (input: Record<string, unknown>) => {
         permissionReplyCalls.push(input);
-        return { data: null };
+        return options?.permissionReply ? options.permissionReply(input) : { data: null };
       },
     },
     question: {
+      list: async () =>
+        options?.questionList ? options.questionList() : { data: options?.pendingQuestions ?? [] },
       reply: async () => ({ data: null }),
     },
     command: {
@@ -206,6 +241,9 @@ function createMockOpenCodeRuntime(options?: {
     permissionReplyCalls,
     promptCalls,
     mcpAddCalls,
+    get eventSubscribeCallCount() {
+      return eventSubscribeCallCount;
+    },
     runtime,
   };
 }
@@ -1096,17 +1134,25 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("re-applies the runtime-mode permission ruleset when resuming OpenCode sessions", async () => {
+  it("applies fail-closed resume permissions and restores Full Access for a new turn", async () => {
     const runtime = createMockOpenCodeRuntime();
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-resume-permissions");
         yield* adapter.startSession({
           provider: "opencode",
-          threadId: asThreadId("thread-resume-permissions"),
+          threadId,
           runtimeMode: "full-access",
           resumeCursor: { openCodeSessionId: "existing-session-1", cwd: "/repo/resume" },
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Implement the change",
+          attachments: [],
+          interactionMode: "default",
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
         });
       }).pipe(
         Effect.provide(
@@ -1122,6 +1168,15 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.createCalls).toEqual([]);
     expect(runtime.updateCalls).toEqual([
+      {
+        sessionID: "existing-session-1",
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "*", action: "deny" },
+          { permission: "edit", pattern: "*", action: "deny" },
+          { permission: "task", pattern: "*", action: "deny" },
+        ],
+      },
       {
         sessionID: "existing-session-1",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -2540,6 +2595,311 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         detail: "Hello",
       },
     });
+  });
+
+  it("enforces Plan permissions under full access and restores them for the next turn", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-plan-permissions");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Plan the change",
+          attachments: [],
+          interactionMode: "plan",
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        yield* adapter.interruptTurn(threadId);
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Implement the change",
+          attachments: [],
+          interactionMode: "default",
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.updateCalls).toEqual([
+      {
+        sessionID: "opencode-session-1",
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "*", action: "deny" },
+          { permission: "edit", pattern: "*", action: "deny" },
+          { permission: "task", pattern: "*", action: "deny" },
+        ],
+      },
+      {
+        sessionID: "opencode-session-1",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      },
+    ]);
+  });
+
+  it("auto-approves a child-session permission before task metadata arrives", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      childrenBySessionId: {
+        "opencode-session-1": [{ id: "opencode-child-1" }],
+      },
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-child-permission");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Delegate a read-only check",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        eventQueue.push({
+          type: "permission.asked",
+          properties: {
+            id: "child-permission-1",
+            sessionID: "opencode-child-1",
+            permission: "external_directory",
+            patterns: ["/tmp/**"],
+            metadata: {},
+            always: [],
+          },
+        });
+        yield* Effect.sleep(20);
+        eventQueue.close();
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.permissionReplyCalls).toContainEqual({
+      requestID: "child-permission-1",
+      reply: "always",
+    });
+  });
+
+  it("rejects stale child permissions when resuming a full-access session", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      childrenBySessionId: {
+        "existing-session-1": [{ id: "existing-child-1" }],
+      },
+      pendingPermissions: [
+        {
+          id: "resumed-child-permission",
+          sessionID: "existing-child-1",
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+        },
+      ],
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-resumed-child-permission"),
+          runtimeMode: "full-access",
+          resumeCursor: { openCodeSessionId: "existing-session-1", cwd: process.cwd() },
+        });
+        yield* Effect.sleep(20);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.permissionReplyCalls).toContainEqual({
+      requestID: "resumed-child-permission",
+      reply: "reject",
+    });
+  });
+
+  it("recovers root permissions when child or question discovery fails", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      events: eventQueue.stream,
+      children: async () => {
+        throw new Error("session.children unavailable");
+      },
+      pendingPermissions: [
+        {
+          id: "resumed-root-permission",
+          sessionID: "existing-session-1",
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+        },
+      ],
+      questionList: async () => {
+        throw new Error("question.list unavailable");
+      },
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-partial-reconciliation"),
+          runtimeMode: "full-access",
+          resumeCursor: { openCodeSessionId: "existing-session-1", cwd: process.cwd() },
+        });
+        yield* Effect.sleep(20);
+        eventQueue.close();
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.permissionReplyCalls).toContainEqual({
+      requestID: "resumed-root-permission",
+      reply: "reject",
+    });
+  });
+
+  it("re-subscribes when the OpenCode event stream ends cleanly", async () => {
+    const connectedQueue = createSubscribedEventQueue();
+    const endedStream = {
+      async *[Symbol.asyncIterator]() {
+        return;
+      },
+    };
+    const runtime = createMockOpenCodeRuntime({
+      eventSubscriptions: [endedStream, connectedQueue.stream],
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-event-reconnect"),
+          runtimeMode: "full-access",
+        });
+        yield* Effect.sleep(300);
+        connectedQueue.close();
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.eventSubscribeCallCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("fails a full-access turn instead of falling back to a visible approval", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      permissionReply: async () => {
+        throw new Error("permission endpoint unavailable");
+      },
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const eventTypes = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("thread-full-access-reply-failure");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Run a command",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        eventQueue.push({
+          type: "permission.asked",
+          properties: {
+            id: "permission-failure-1",
+            sessionID: "opencode-session-1",
+            permission: "bash",
+            patterns: ["npm test"],
+            metadata: {},
+            always: [],
+          },
+        });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events.map((event) => event.type);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(eventTypes).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.completed",
+    ]);
+    expect(runtime.abortCalls).toContainEqual({ sessionID: "opencode-session-1" });
   });
 
   it("auto-approves OpenCode permission asks in full access without surfacing approvals", async () => {

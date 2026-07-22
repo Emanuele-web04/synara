@@ -44,14 +44,13 @@ describe("buildDroidAcpSpawnInput", () => {
     expect(spawn.env).toBeDefined();
   });
 
-  it("passes model, reasoning effort, full-access, and an appended system prompt", () => {
+  it("passes model, reasoning effort, and an appended system prompt without bypassing permissions", () => {
     const spawn = buildDroidAcpSpawnInput(
       {
         appendSystemPrompt: "Run heavyweight validators serially.",
         binaryPath: "/usr/local/bin/droid",
         model: "claude-opus-4-8",
         reasoningEffort: "high",
-        skipPermissionsUnsafe: true,
       },
       "/tmp/project",
     );
@@ -61,7 +60,6 @@ describe("buildDroidAcpSpawnInput", () => {
       "exec",
       "--output-format",
       "acp",
-      "--skip-permissions-unsafe",
       "--append-system-prompt",
       "Run heavyweight validators serially.",
       "-m",
@@ -138,7 +136,7 @@ describe("applyDroidAcpModelSelection", () => {
 });
 
 describe("applyDroidAcpInteractionMode", () => {
-  it("uses native spec mode for plan turns and restores normal mode", async () => {
+  it("uses native spec mode for Plan and restores Full Access on the next turn", async () => {
     const calls: string[] = [];
     const runtime = {
       setMode: (modeId: string) => {
@@ -152,6 +150,7 @@ describe("applyDroidAcpInteractionMode", () => {
       applyDroidAcpInteractionMode({
         runtime,
         interactionMode: "plan",
+        runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );
@@ -159,11 +158,12 @@ describe("applyDroidAcpInteractionMode", () => {
       applyDroidAcpInteractionMode({
         runtime,
         interactionMode: "default",
+        runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );
 
-    expect(calls).toEqual(["spec", "normal"]);
+    expect(calls).toEqual(["spec", "auto-high"]);
   });
 
   it("uses Droid's highest native autonomy outside plan mode for full-access sessions", async () => {

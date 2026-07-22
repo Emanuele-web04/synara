@@ -4,14 +4,26 @@
 // Depends on: GrokAdapter helper exports and shared contract ids.
 
 import { TurnId } from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
+import {
+  extractGrokUserInputQuestions,
+  extractGrokExitPlanMarkdown,
+  GROK_ASK_USER_QUESTION_METHODS,
+  GROK_EXIT_PLAN_MODE_METHODS,
+  GrokAskUserQuestionRequest,
+  GrokExitPlanModeRequest,
+  makeGrokExitPlanModeCapturedResponse,
+  makeGrokQuestionResponse,
+} from "../acp/GrokAcpExtension.ts";
 
 import {
   isGrokContextCompactionToolCall,
   isRenderableGrokAssistantDelta,
   mergeGrokModelDescriptors,
   parseXaiLanguageModelDescriptors,
+  resolveGrokAcpSessionModeId,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
   takeGrokSynaraHarnessPolicyTextPart,
@@ -24,6 +36,105 @@ describe("Grok Synara harness policy", () => {
       SYNARA_HARNESS_POLICY_MARKER,
     );
     expect(takeGrokSynaraHarnessPolicyTextPart(state, true)).toBeNull();
+  });
+});
+
+describe("Grok native plan approval", () => {
+  it("uses Grok's canonical mode ids when the CLI omits mode discovery", () => {
+    expect(
+      resolveGrokAcpSessionModeId({
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        modeState: undefined,
+      }),
+    ).toBe("plan");
+    expect(
+      resolveGrokAcpSessionModeId({
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        modeState: undefined,
+      }),
+    ).toBe("default");
+  });
+
+  it("accepts current and legacy ACP method names", () => {
+    expect(GROK_EXIT_PLAN_MODE_METHODS).toEqual([
+      "_x.ai/exit_plan_mode",
+      "x.ai/exit_plan_mode",
+    ]);
+  });
+
+  it("extracts the proposed plan from Grok's reverse request", () => {
+    const request = Schema.decodeUnknownSync(GrokExitPlanModeRequest)({
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      planContent: "\n# Ship it\n\n- Verify the fix\n",
+    });
+
+    expect(extractGrokExitPlanMarkdown(request)).toBe("# Ship it\n\n- Verify the fix");
+  });
+
+  it("does not invent a plan when Grok submits an empty plan file", () => {
+    const request = Schema.decodeUnknownSync(GrokExitPlanModeRequest)({
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      planContent: null,
+    });
+
+    expect(extractGrokExitPlanMarkdown(request)).toBeUndefined();
+  });
+
+  it("keeps native plan mode gated after Synara captures the plan", () => {
+    expect(makeGrokExitPlanModeCapturedResponse()).toEqual({
+      outcome: "cancelled",
+      feedback:
+        "Synara captured this plan for user review. Do not revise or implement it now. End this turn and wait for the user's next message.",
+    });
+  });
+});
+
+describe("Grok native user questions", () => {
+  const request = Schema.decodeUnknownSync(GrokAskUserQuestionRequest)({
+    sessionId: "session-1",
+    toolCallId: "tool-1",
+    mode: "plan",
+    questions: [
+      {
+        question: "Which checks?",
+        label: "Verification",
+        multiSelect: true,
+        options: [
+          { label: "Unit", description: "Focused tests" },
+          { label: "Integration", description: "End-to-end tests" },
+        ],
+      },
+    ],
+  });
+
+  it("accepts current and legacy question method names", () => {
+    expect(GROK_ASK_USER_QUESTION_METHODS).toEqual([
+      "_x.ai/ask_user_question",
+      "x.ai/ask_user_question",
+    ]);
+  });
+
+  it("maps Synara answers to Grok's question-text keyed response", () => {
+    expect(extractGrokUserInputQuestions(request)[0]).toMatchObject({
+      id: "grok-question-0",
+      header: "Verification",
+      question: "Which checks?",
+      multiSelect: true,
+    });
+    expect(
+      makeGrokQuestionResponse(request, {
+        "grok-question-0": ["Unit", "Integration"],
+      }),
+    ).toEqual({
+      outcome: "accepted",
+      answers: { "Which checks?": ["Unit", "Integration"] },
+      annotations: {},
+    });
+    expect(makeGrokQuestionResponse(request, {})).toEqual({ outcome: "cancelled" });
   });
 });
 

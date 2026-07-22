@@ -10,6 +10,7 @@ import type { ChatAttachment } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildOpenCodePermissionRules,
   buildOpenCodeServerProcessEnv,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
@@ -21,6 +22,20 @@ import {
 } from "./opencodeRuntime.ts";
 
 const encoder = new TextEncoder();
+
+describe("OpenCode permission policy", () => {
+  it("keeps full access non-interactive while enforcing read-only Plan turns", () => {
+    expect(buildOpenCodePermissionRules("full-access")).toEqual([
+      { permission: "*", pattern: "*", action: "allow" },
+    ]);
+    expect(buildOpenCodePermissionRules("full-access", "plan")).toEqual([
+      { permission: "*", pattern: "*", action: "allow" },
+      { permission: "bash", pattern: "*", action: "deny" },
+      { permission: "edit", pattern: "*", action: "deny" },
+      { permission: "task", pattern: "*", action: "deny" },
+    ]);
+  });
+});
 
 function mockOpenCodeServerHandle(input: {
   stdout: string;

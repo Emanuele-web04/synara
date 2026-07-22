@@ -251,6 +251,7 @@ function verifyMacSignatures(
       "--verbose=4",
       diskImagePath,
     ]);
+    runCommand("xcrun", ["stapler", "validate", diskImagePath]);
 
     return {
       status: "verified",
@@ -267,6 +268,7 @@ function verifyMacSignatures(
         "stapler validate app",
         "codesign --verify dmg",
         "spctl --assess dmg",
+        "stapler validate dmg",
       ],
     };
   } finally {

@@ -756,21 +756,36 @@ export function toOpenCodeFileParts(input: {
   return parts;
 }
 
-export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): PermissionRuleset {
-  if (runtimeMode === "full-access") {
-    return [{ permission: "*", pattern: "*", action: "allow" }];
+export function buildOpenCodePermissionRules(
+  runtimeMode: RuntimeMode,
+  interactionMode: "default" | "plan" = "default",
+): PermissionRuleset {
+  const runtimeRules: PermissionRuleset =
+    runtimeMode === "full-access"
+      ? [{ permission: "*", pattern: "*", action: "allow" }]
+      : [
+          { permission: "*", pattern: "*", action: "ask" },
+          { permission: "bash", pattern: "*", action: "ask" },
+          { permission: "edit", pattern: "*", action: "ask" },
+          { permission: "webfetch", pattern: "*", action: "ask" },
+          { permission: "websearch", pattern: "*", action: "ask" },
+          { permission: "codesearch", pattern: "*", action: "ask" },
+          { permission: "external_directory", pattern: "*", action: "ask" },
+          { permission: "doom_loop", pattern: "*", action: "ask" },
+          { permission: "question", pattern: "*", action: "allow" },
+        ];
+
+  if (interactionMode !== "plan") {
+    return runtimeRules;
   }
 
+  // Session rules are merged after agent rules and use last-match-wins. Keep these
+  // final denials here so the full-access wildcard cannot defeat OpenCode's plan agent.
   return [
-    { permission: "*", pattern: "*", action: "ask" },
-    { permission: "bash", pattern: "*", action: "ask" },
-    { permission: "edit", pattern: "*", action: "ask" },
-    { permission: "webfetch", pattern: "*", action: "ask" },
-    { permission: "websearch", pattern: "*", action: "ask" },
-    { permission: "codesearch", pattern: "*", action: "ask" },
-    { permission: "external_directory", pattern: "*", action: "ask" },
-    { permission: "doom_loop", pattern: "*", action: "ask" },
-    { permission: "question", pattern: "*", action: "allow" },
+    ...runtimeRules,
+    { permission: "bash", pattern: "*", action: "deny" },
+    { permission: "edit", pattern: "*", action: "deny" },
+    { permission: "task", pattern: "*", action: "deny" },
   ];
 }
 

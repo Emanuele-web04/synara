@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 
 import {
+  extractDroidApproveSpecPlanMarkdown,
   isDroidNestedTaskToolCall,
+  isExpectedDroidPlanRejection,
   isRenderableDroidAssistantDelta,
   resolveDroidSessionCwd,
-  resolveDroidPermissionPolicy,
   scopeDroidRuntimeItemIdForTurn,
   scopeDroidToolCallStateForTurn,
   shouldIgnoreDroidInterrupt,
@@ -50,34 +51,29 @@ describe("DroidAdapter runtime event scoping", () => {
     );
   });
 
-  it("rejects every permission in Plan mode even for full-access sessions", () => {
+  it("extracts Droid's current Approve Spec plan and recognizes its expected rejection", () => {
+    const pending = {
+      toolCallId: "spec-1",
+      title: "Approve Spec",
+      status: "pending" as const,
+      data: {
+        rawInput: {
+          title: "Add the probe",
+          plan: "\n# Plan\n\n- Add a focused test\n",
+        },
+      },
+    };
+    expect(extractDroidApproveSpecPlanMarkdown(pending)).toBe(
+      "# Plan\n\n- Add a focused test",
+    );
     expect(
-      resolveDroidPermissionPolicy({
-        runtimeMode: "full-access",
-        interactionMode: "plan",
-        options: [
-          { kind: "allow_always", optionId: "implement" },
-          { kind: "reject_once", optionId: "stay-in-plan" },
-        ],
+      isExpectedDroidPlanRejection({
+        ...pending,
+        status: "failed",
+        detail:
+          "Error: Plan not approved - remaining in Spec Mode. Provide feedback to refine the spec.",
       }),
-    ).toEqual({ outcome: "selected", optionId: "stay-in-plan" });
-    expect(
-      resolveDroidPermissionPolicy({
-        runtimeMode: "full-access",
-        interactionMode: "plan",
-        options: [{ kind: "allow_always", optionId: "implement" }],
-      }),
-    ).toEqual({ outcome: "cancelled" });
-  });
-
-  it("keeps full-access auto-approval outside Plan mode", () => {
-    expect(
-      resolveDroidPermissionPolicy({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        options: [{ kind: "allow_always", optionId: "allow" }],
-      }),
-    ).toEqual({ outcome: "selected", optionId: "allow" });
+    ).toBe(true);
   });
 
   it("preserves the provider tool id while scoping the runtime item id", () => {

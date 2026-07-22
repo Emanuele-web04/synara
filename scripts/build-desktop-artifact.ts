@@ -21,6 +21,7 @@ import {
 } from "./lib/desktop-platform-build-config.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
+import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import {
   RELEASE_LOCKFILE_PATH,
@@ -1071,6 +1072,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     return yield* new BuildScriptError({
       message: `Build completed but dist directory was not found at ${stageDistDir}`,
     });
+  }
+
+  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
+    yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
+    const finalizedDmg = yield* Effect.try({
+      try: () =>
+        finalizeSignedMacDmg({
+          stageDistDir,
+          appleApiKey: buildEnv.APPLE_API_KEY,
+          appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
+          appleApiIssuer: buildEnv.APPLE_API_ISSUER,
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "macOS DMG signing/notarization finalization failed.",
+          cause,
+        }),
+    });
+    yield* Effect.log(
+      `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
+    );
   }
 
   if (options.platform === "mac") {

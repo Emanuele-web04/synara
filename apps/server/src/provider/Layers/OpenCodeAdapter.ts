@@ -130,6 +130,8 @@ const KILO_ADAPTER_CONFIG: OpenCodeCompatibleAdapterConfig = {
 const OPENCODE_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS = 60_000;
 const OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000] as const;
 const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
+const OPENCODE_EVENT_RECONNECT_DELAYS_MS = [250, 1_000, 2_500, 5_000] as const;
+const OPENCODE_MAX_RELATED_SESSIONS = 256;
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -154,8 +156,8 @@ interface OpenCodeSessionContext {
   readonly directory: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
-  /** Permission request ids auto-approved server-side in full-access mode (never surfaced to the UI). */
-  readonly autoApprovedPermissionIds: Set<string>;
+  /** Permission request ids resolved by Synara policy and never surfaced to the UI. */
+  readonly policyResolvedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly pendingTextDeltasByPartId: Map<string, string>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
@@ -178,6 +180,7 @@ interface OpenCodeSessionContext {
   activeTurnSawFinalAssistant: boolean;
   activeTurnToolCallIdleWatchdogStarted: boolean;
   activeInteractionMode: "default" | "plan" | undefined;
+  appliedPermissionInteractionMode: "default" | "plan";
   activeAgent: string | undefined;
   activeVariant: string | undefined;
   readonly stopped: Ref.Ref<boolean>;
@@ -699,7 +702,7 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
   context.relatedSessionIds.clear();
-  // Deliberately NOT cleared here: a permission auto-approved at the tail of a turn can
+  // Deliberately NOT cleared here: a permission policy-resolved at the tail of a turn can
   // have its permission.replied echo arrive after turn teardown, and dropping the id first
   // would misclassify that echo as a real resolution (orphaned "Approval resolved" in the
   // UI). Ids are unique per request so stale entries are inert; the set is freed with the
@@ -1868,12 +1871,58 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
+      const refreshRelatedOpenCodeSessions = Effect.fn("refreshRelatedOpenCodeSessions")(
+        function* (context: OpenCodeSessionContext) {
+          const discovered = new Set<string>();
+          const pending = [context.openCodeSessionId];
+          while (pending.length > 0 && discovered.size < OPENCODE_MAX_RELATED_SESSIONS) {
+            const parentSessionId = pending.shift();
+            if (!parentSessionId) {
+              break;
+            }
+            const response = yield* runOpenCodeSdk("session.children", () =>
+              context.client.session.children({ sessionID: parentSessionId }),
+            );
+            for (const child of response.data ?? []) {
+              if (
+                child.id === context.openCodeSessionId ||
+                discovered.has(child.id) ||
+                discovered.size >= OPENCODE_MAX_RELATED_SESSIONS
+              ) {
+                continue;
+              }
+              discovered.add(child.id);
+              pending.push(child.id);
+            }
+          }
+          for (const sessionId of discovered) {
+            context.relatedSessionIds.add(sessionId);
+          }
+        },
+      );
+
       const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
         context: OpenCodeSessionContext,
         event: OpenCodeSubscribedEvent,
       ) {
         if (!shouldHandleSubscribedEvent(context, event)) {
-          return;
+          const sessionId = subscribedEventSessionId(event);
+          const canBelongToUndiscoveredChild =
+            sessionId !== undefined &&
+            (event.type === "permission.asked" || event.type === "question.asked");
+          if (!canBelongToUndiscoveredChild) {
+            return;
+          }
+          const refreshExit = yield* Effect.exit(refreshRelatedOpenCodeSessions(context));
+          if (Exit.isFailure(refreshExit)) {
+            yield* Effect.logWarning(
+              `${adapterConfig.displayName} failed to reconcile child sessions`,
+              Cause.squash(refreshExit.cause),
+            );
+          }
+          if (!shouldHandleSubscribedEvent(context, event)) {
+            return;
+          }
         }
 
         const turnId = context.activeTurnId;
@@ -2106,28 +2155,63 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.asked": {
-            // Full access: auto-approve instead of surfacing an approval, mirroring the
-            // Claude/Cursor/Grok adapters. Covers asks the declarative session ruleset cannot
-            // (resumed/forked sessions on older servers, subagent child sessions, user config).
-            if (context.session.runtimeMode === "full-access") {
-              context.autoApprovedPermissionIds.add(event.properties.id);
+            if (
+              context.pendingPermissions.has(event.properties.id) ||
+              context.policyResolvedPermissionIds.has(event.properties.id)
+            ) {
+              break;
+            }
+            // A permission recovered without an active turn has no trustworthy interaction
+            // mode. Fail closed so a request left by an interrupted Plan turn can never be
+            // reinterpreted as Full Access after a process restart or reconnect.
+            const policyReply =
+              context.activeInteractionMode === undefined ||
+              context.activeInteractionMode === "plan"
+                ? "reject"
+                : context.session.runtimeMode === "full-access"
+                  ? "always"
+                  : undefined;
+            if (policyReply !== undefined) {
+              context.policyResolvedPermissionIds.add(event.properties.id);
               const replyExit = yield* Effect.exit(
                 runOpenCodeSdk("permission.reply", () =>
                   context.client.permission.reply({
                     requestID: event.properties.id,
-                    reply: "always",
+                    reply: policyReply,
                   }),
                 ),
               );
               if (Exit.isSuccess(replyExit)) {
                 break;
               }
-              // Fall back to a visible approval so the turn cannot hang on a failed reply.
-              context.autoApprovedPermissionIds.delete(event.properties.id);
+              context.policyResolvedPermissionIds.delete(event.properties.id);
+              const detail = openCodeRuntimeErrorDetail(Cause.squash(replyExit.cause));
               yield* Effect.logWarning(
-                `${adapterConfig.displayName} full-access auto-approve failed; surfacing approval`,
+                `${adapterConfig.displayName} permission policy reply failed`,
                 Cause.squash(replyExit.cause),
               );
+              // A Full-access or Plan turn must never degrade into a human approval. Abort the
+              // provider turn and surface an actionable failure instead.
+              yield* runOpenCodeSdk("session.abort", () =>
+                context.client.session.abort({ sessionID: context.openCodeSessionId }),
+              ).pipe(Effect.ignore({ log: true }));
+              if (turnId !== undefined && context.activeTurnId === turnId) {
+                yield* completeOpenCodeTurn(context, {
+                  turnId,
+                  raw: event,
+                  errorMessage: `${adapterConfig.displayName} could not apply ${policyReply === "reject" ? "Plan-mode" : "Full-access"} permission policy: ${detail}`,
+                });
+              } else {
+                yield* emit(context, {
+                  ...buildEventBase({ threadId: context.session.threadId, raw: event }),
+                  type: "runtime.warning",
+                  payload: {
+                    message: `${adapterConfig.displayName} could not apply its permission policy.`,
+                    detail,
+                  },
+                });
+              }
+              break;
             }
             context.pendingPermissions.set(event.properties.id, event.properties);
             yield* emit(context, {
@@ -2151,10 +2235,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.replied": {
-            if (context.autoApprovedPermissionIds.delete(event.properties.requestID)) {
-              // Auto-approved in full access; nothing was surfaced to the UI.
+            if (context.policyResolvedPermissionIds.delete(event.properties.requestID)) {
+              // Synara policy resolved this request; nothing was surfaced to the UI.
               break;
             }
+            const request = context.pendingPermissions.get(event.properties.requestID);
             context.pendingPermissions.delete(event.properties.requestID);
             yield* emit(context, {
               ...buildEventBase({
@@ -2165,7 +2250,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }),
               type: "request.resolved",
               payload: {
-                requestType: "unknown",
+                requestType: request
+                  ? mapPermissionToRequestType(request.permission)
+                  : "unknown",
                 decision: mapPermissionDecision(event.properties.reply),
               },
             });
@@ -2173,6 +2260,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "question.asked": {
+            if (context.pendingQuestions.has(event.properties.id)) {
+              break;
+            }
             context.pendingQuestions.set(event.properties.id, event.properties);
             yield* emit(context, {
               ...buildEventBase({
@@ -2730,6 +2820,60 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
+      const reconcilePendingOpenCodeInteractions = Effect.fn(
+        "reconcilePendingOpenCodeInteractions",
+      )(function* (context: OpenCodeSessionContext) {
+        yield* refreshRelatedOpenCodeSessions(context).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `${adapterConfig.displayName} pending child-session reconciliation failed`,
+              Cause.squash(cause),
+            ),
+          ),
+        );
+        const [permissions, questions] = yield* Effect.all([
+          runOpenCodeSdk("permission.list", () => context.client.permission.list()).pipe(
+            Effect.map((response) => response.data ?? []),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `${adapterConfig.displayName} pending permission reconciliation failed`,
+                Cause.squash(cause),
+              ).pipe(Effect.as([] as ReadonlyArray<PermissionRequest>)),
+            ),
+          ),
+          runOpenCodeSdk("question.list", () => context.client.question.list()).pipe(
+            Effect.map((response) => response.data ?? []),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `${adapterConfig.displayName} pending question reconciliation failed`,
+                Cause.squash(cause),
+              ).pipe(Effect.as([] as ReadonlyArray<QuestionRequest>)),
+            ),
+          ),
+        ]);
+        const belongsToSessionTree = (sessionId: string) =>
+          sessionId === context.openCodeSessionId || context.relatedSessionIds.has(sessionId);
+
+        for (const request of permissions) {
+          if (!belongsToSessionTree(request.sessionID)) {
+            continue;
+          }
+          yield* handleSubscribedEvent(context, {
+            type: "permission.asked",
+            properties: request,
+          } as OpenCodeSubscribedEvent);
+        }
+        for (const request of questions) {
+          if (!belongsToSessionTree(request.sessionID)) {
+            continue;
+          }
+          yield* handleSubscribedEvent(context, {
+            type: "question.asked",
+            properties: request,
+          } as OpenCodeSubscribedEvent);
+        }
+      });
+
       const loadCurrentMessageSnapshots = Effect.fn("loadCurrentMessageSnapshots")(function* (
         context: OpenCodeSessionContext,
       ) {
@@ -2931,39 +3075,64 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           Effect.sync(() => eventsAbortController.abort()),
         );
 
-        yield* Effect.flatMap(
-          runOpenCodeSdk("event.subscribe", () =>
-            context.client.event.subscribe(undefined, {
-              signal: eventsAbortController.signal,
-            }),
-          ),
-          (subscription) =>
-            Stream.fromAsyncIterable(
-              subscription.stream,
-              (cause) =>
-                new OpenCodeRuntimeError({
-                  operation: "event.subscribe",
-                  detail: openCodeRuntimeErrorDetail(cause),
-                  cause,
-                }),
-            ).pipe(Stream.runForEach((event) => handleSubscribedEvent(context, event))),
-        ).pipe(
-          Effect.exit,
-          Effect.flatMap((exit) =>
-            Effect.gen(function* () {
-              if (eventsAbortController.signal.aborted || (yield* Ref.get(context.stopped))) {
-                return;
-              }
-              if (Exit.isFailure(exit)) {
-                yield* emitUnexpectedExit(
-                  context,
-                  openCodeRuntimeErrorDetail(Cause.squash(exit.cause)),
+        yield* Effect.gen(function* () {
+          let reconnectAttempt = 0;
+          while (
+            !eventsAbortController.signal.aborted &&
+            !(yield* Ref.get(context.stopped))
+          ) {
+            const subscriptionExit = yield* Effect.exit(
+              Effect.gen(function* () {
+                const subscription = yield* runOpenCodeSdk("event.subscribe", () =>
+                  context.client.event.subscribe(undefined, {
+                    signal: eventsAbortController.signal,
+                  }),
                 );
-              }
-            }),
-          ),
-          Effect.forkIn(context.sessionScope),
-        );
+                yield* reconcilePendingOpenCodeInteractions(context).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning(
+                      `${adapterConfig.displayName} pending interaction reconciliation failed`,
+                      Cause.squash(cause),
+                    ),
+                  ),
+                );
+                yield* Stream.fromAsyncIterable(
+                  subscription.stream,
+                  (cause) =>
+                    new OpenCodeRuntimeError({
+                      operation: "event.subscribe",
+                      detail: openCodeRuntimeErrorDetail(cause),
+                      cause,
+                    }),
+                ).pipe(Stream.runForEach((event) => handleSubscribedEvent(context, event)));
+              }),
+            );
+            if (eventsAbortController.signal.aborted || (yield* Ref.get(context.stopped))) {
+              return;
+            }
+
+            const delayMs =
+              OPENCODE_EVENT_RECONNECT_DELAYS_MS[
+                Math.min(reconnectAttempt, OPENCODE_EVENT_RECONNECT_DELAYS_MS.length - 1)
+              ] ?? OPENCODE_EVENT_RECONNECT_DELAYS_MS[0];
+            reconnectAttempt += 1;
+            yield* Effect.sleep(delayMs);
+            if (eventsAbortController.signal.aborted || (yield* Ref.get(context.stopped))) {
+              return;
+            }
+            const detail = Exit.isFailure(subscriptionExit)
+              ? openCodeRuntimeErrorDetail(Cause.squash(subscriptionExit.cause))
+              : `${adapterConfig.displayName} event stream ended.`;
+            yield* emit(context, {
+              ...buildEventBase({ threadId: context.session.threadId }),
+              type: "runtime.warning",
+              payload: {
+                message: `${adapterConfig.displayName} event stream disconnected; reconnecting.`,
+                detail,
+              },
+            });
+          }
+        }).pipe(Effect.forkIn(context.sessionScope));
 
         if (!context.server.external && context.server.exitCode !== null) {
           yield* context.server.exitCode.pipe(
@@ -2982,6 +3151,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           );
         }
       });
+
+      const applyPermissionInteractionMode = Effect.fn("applyPermissionInteractionMode")(
+        function* (context: OpenCodeSessionContext, interactionMode: "default" | "plan") {
+          if (context.appliedPermissionInteractionMode === interactionMode) {
+            return;
+          }
+          yield* runOpenCodeSdk("session.update", () =>
+            context.client.session.update({
+              sessionID: context.openCodeSessionId,
+              permission: buildOpenCodePermissionRules(
+                context.session.runtimeMode,
+                interactionMode,
+              ),
+            }),
+          ).pipe(Effect.mapError(toAdapterRequestError));
+          context.appliedPermissionInteractionMode = interactionMode;
+        },
+      );
 
       const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
         function* (input) {
@@ -3085,13 +3272,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                         )
                       : false;
                     const createSessionId = resumedSessionId
-                      ? // Resumed sessions skip session.create, so re-apply the runtime-mode
-                        // permission ruleset explicitly. Non-fatal: older servers may reject the
-                        // field, and full-access asks are still auto-approved in the event pump.
+                      ? // A resumed provider may still be executing an interrupted Plan turn.
+                        // Install the read-only ruleset until Synara dispatches a new turn with a
+                        // known interaction mode. Non-fatal for older compatible servers: the
+                        // event pump independently rejects recovered permission requests.
                         runOpenCodeSdk("session.update", () =>
                           client.session.update({
                             sessionID: resumedSessionId,
-                            permission: buildOpenCodePermissionRules(input.runtimeMode),
+                            permission: buildOpenCodePermissionRules(input.runtimeMode, "plan"),
                           }),
                         ).pipe(
                           Effect.catchCause((cause) =>
@@ -3210,7 +3398,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   directory,
                   openCodeSessionId: started.openCodeSessionId,
                   pendingPermissions: new Map(),
-                  autoApprovedPermissionIds: new Set(),
+                  policyResolvedPermissionIds: new Set(),
                   pendingQuestions: new Map(),
                   pendingTextDeltasByPartId: new Map(),
                   partById: new Map(),
@@ -3233,6 +3421,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   activeTurnSawFinalAssistant: false,
                   activeTurnToolCallIdleWatchdogStarted: false,
                   activeInteractionMode: undefined,
+                  appliedPermissionInteractionMode: resumedSessionId ? "plan" : "default",
                   activeAgent: undefined,
                   activeVariant: undefined,
                   stopped: yield* Ref.make(false),
@@ -3340,6 +3529,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ? input.modelSelection.options?.variant
             : undefined;
 
+        const interactionMode = input.interactionMode === "plan" ? "plan" : "default";
+        yield* applyPermissionInteractionMode(context, interactionMode);
+
         context.activeTurnId = turnId;
         context.activeTurnEventSerial = 0;
         context.activeTurnProviderActivitySerial = 0;
@@ -3347,7 +3539,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context.activeTurnSawToolCallFinish = false;
         context.activeTurnSawFinalAssistant = false;
         context.activeTurnToolCallIdleWatchdogStarted = false;
-        context.activeInteractionMode = input.interactionMode === "plan" ? "plan" : "default";
+        context.activeInteractionMode = interactionMode;
         // Always pin Synara's interaction mode to OpenCode's primary agent.
         // Otherwise a user config with default agent=plan can trap default turns in plan mode.
         context.activeAgent =

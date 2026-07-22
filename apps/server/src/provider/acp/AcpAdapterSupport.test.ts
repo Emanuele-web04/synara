@@ -7,6 +7,8 @@ import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
+  resolveAcpFullAccessPermissionOutcome,
+  resolveAcpPermissionPolicy,
   selectAcpFullAccessPermissionOptionId,
   selectAcpPermissionOptionId,
 } from "./AcpAdapterSupport.ts";
@@ -59,6 +61,67 @@ describe("AcpAdapterSupport", () => {
     expect(
       selectAcpFullAccessPermissionOptionId([{ kind: "allow_once", optionId: "allow-once" }]),
     ).toBe("allow-once");
+  });
+
+  it("never falls back to a human prompt in full-access mode", () => {
+    expect(
+      resolveAcpFullAccessPermissionOutcome([
+        { kind: "allow_always", optionId: "allow-session" },
+      ]),
+    ).toEqual({ outcome: "selected", optionId: "allow-session" });
+    expect(
+      resolveAcpFullAccessPermissionOutcome([
+        { kind: "reject_once", optionId: "deny-now" },
+      ]),
+    ).toEqual({ outcome: "cancelled" });
+  });
+
+  it("keeps Plan above Full Access and releases the gate for the next default turn", () => {
+    const options = [
+      { kind: "allow_always", optionId: "implement" },
+      { kind: "reject_once", optionId: "stay-in-plan" },
+    ] as const;
+
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "stay-in-plan" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options: [{ kind: "allow_always", optionId: "implement" }],
+      }),
+    ).toEqual({ outcome: "cancelled" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "implement" });
+  });
+
+  it("surfaces Default prompts only for active approval-required turns", () => {
+    const options = [{ kind: "allow_once", optionId: "allow" }] as const;
+
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: undefined,
+        options,
+      }),
+    ).toEqual({ outcome: "cancelled" });
   });
 
   it("reads failed ACP tool details without treating successful tools as failures", () => {

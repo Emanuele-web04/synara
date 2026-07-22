@@ -61,6 +61,13 @@ function isAcpPlanMode(mode: AcpSessionMode, planAliases: ReadonlyArray<string>)
   return findAcpModeByAliases([mode], planAliases) !== undefined;
 }
 
+/** Omitted turn modes are normal execution turns, never inherited Plan turns. */
+export function resolveAcpTurnInteractionMode(
+  interactionMode: ProviderInteractionMode | undefined,
+): ProviderInteractionMode {
+  return interactionMode ?? "default";
+}
+
 export function resolveRequestedAcpSessionModeId(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly runtimeMode: RuntimeMode;

@@ -53,9 +53,6 @@ files:
   - url: Synara-9.9.9-smoke.0-arm64.zip
     sha512: arm64zip
     size: 125621344
-  - url: Synara-9.9.9-smoke.0-arm64.dmg
-    sha512: arm64dmg
-    size: 131754935
 path: Synara-9.9.9-smoke.0-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-08T10:32:14.587Z'
@@ -69,9 +66,6 @@ files:
   - url: Synara-9.9.9-smoke.0-x64.zip
     sha512: x64zip
     size: 132000112
-  - url: Synara-9.9.9-smoke.0-x64.dmg
-    sha512: x64dmg
-    size: 138148807
 path: Synara-9.9.9-smoke.0-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-08T10:36:07.540Z'
@@ -384,6 +378,11 @@ try {
     mergedManifest,
     "Synara-9.9.9-smoke.0-x64.zip",
     "Merged manifest is missing the x64 asset.",
+  );
+  assertNotContains(
+    mergedManifest,
+    ".dmg",
+    "macOS updater manifests must describe only the finalized ZIP artifacts.",
   );
 
   console.log("Release smoke checks passed.");

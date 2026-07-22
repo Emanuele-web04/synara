@@ -30,7 +30,6 @@ export interface DroidAcpRuntimeSettings {
   readonly binaryPath?: string;
   readonly model?: string;
   readonly reasoningEffort?: DroidModelOptions["reasoningEffort"];
-  readonly skipPermissionsUnsafe?: boolean;
 }
 
 export interface DroidAcpRuntimeInput extends Omit<
@@ -106,9 +105,6 @@ export function buildDroidAcpSpawnInput(
   cwd: string,
 ): AcpSpawnInput {
   const args = ["exec", "--output-format", "acp"];
-  if (droidSettings?.skipPermissionsUnsafe === true) {
-    args.push("--skip-permissions-unsafe");
-  }
   const appendSystemPrompt = droidSettings?.appendSystemPrompt?.trim();
   if (appendSystemPrompt) {
     args.push("--append-system-prompt", appendSystemPrompt);

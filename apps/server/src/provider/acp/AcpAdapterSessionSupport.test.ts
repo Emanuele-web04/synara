@@ -7,6 +7,7 @@ import {
   recordAcpSessionCost,
   resolveAcpSessionCwd,
   resolveRequestedAcpSessionModeId,
+  resolveAcpTurnInteractionMode,
   scopeAcpRuntimeItemIdForTurn,
   scopeAcpToolCallStateForTurn,
   withAcpPlanModePrompt,
@@ -85,6 +86,32 @@ describe("ACP adapter session support", () => {
         aliases,
       }),
     ).toBeUndefined();
+  });
+
+  it("does not inherit Plan when the next turn omits its interaction mode", () => {
+    const aliases = {
+      plan: ["plan"],
+      implement: ["code"],
+      approval: ["ask"],
+    } as const;
+    const modeState = {
+      currentModeId: "plan",
+      availableModes: [
+        { id: "plan", name: "Plan" },
+        { id: "code", name: "Code" },
+      ],
+    };
+
+    const interactionMode = resolveAcpTurnInteractionMode(undefined);
+    expect(interactionMode).toBe("default");
+    expect(
+      resolveRequestedAcpSessionModeId({
+        interactionMode,
+        runtimeMode: "full-access",
+        modeState,
+        aliases,
+      }),
+    ).toBe("code");
   });
 
   it("scopes reused runtime and tool ids while preserving the provider id", () => {

@@ -5,7 +5,9 @@
  */
 import {
   type ProviderApprovalDecision,
+  type ProviderInteractionMode,
   type ProviderKind,
+  type RuntimeMode,
   type ThreadId,
   type ToolLifecycleItemType,
 } from "@synara/contracts";
@@ -88,6 +90,10 @@ type AcpPermissionOptionLike = {
   readonly optionId: string;
 };
 
+export type AcpPermissionPolicyOutcome =
+  | { readonly outcome: "selected"; readonly optionId: string }
+  | { readonly outcome: "cancelled" };
+
 export function selectAcpPermissionOptionId(
   decision: ProviderApprovalDecision,
   options: ReadonlyArray<AcpPermissionOptionLike>,
@@ -116,6 +122,45 @@ export function selectAcpFullAccessPermissionOptionId(
   options: ReadonlyArray<AcpPermissionOptionLike>,
 ): string | undefined {
   return selectAcpPermissionOptionId("acceptForSession", options);
+}
+
+/** Full access never blocks on a human prompt, even if an agent offers no allow option. */
+export function resolveAcpFullAccessPermissionOutcome(
+  options: ReadonlyArray<AcpPermissionOptionLike>,
+): AcpPermissionPolicyOutcome {
+  const optionId = selectAcpFullAccessPermissionOptionId(options);
+  return optionId === undefined
+    ? { outcome: "cancelled" }
+    : { outcome: "selected", optionId };
+}
+
+/**
+ * Applies Synara's turn-scoped permission precedence to ACP reverse requests.
+ *
+ * `interactionMode: undefined` means that no turn owns the request. Those
+ * requests are cancelled so replay or late provider activity cannot inherit a
+ * previous Plan turn or a future Full Access turn. Active adapters normalize
+ * an omitted turn mode to `default` before dispatching the prompt.
+ */
+export function resolveAcpPermissionPolicy(input: {
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly options: ReadonlyArray<AcpPermissionOptionLike>;
+}): AcpPermissionPolicyOutcome | undefined {
+  if (input.interactionMode === "plan") {
+    const optionId = selectAcpPermissionOptionId("decline", input.options);
+    return optionId === undefined
+      ? { outcome: "cancelled" }
+      : { outcome: "selected", optionId };
+  }
+
+  if (input.interactionMode === undefined) {
+    return { outcome: "cancelled" };
+  }
+
+  return input.runtimeMode === "full-access"
+    ? resolveAcpFullAccessPermissionOutcome(input.options)
+    : undefined;
 }
 
 type AcpToolCallLike = {
