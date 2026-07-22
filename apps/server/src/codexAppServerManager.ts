@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { statSync } from "node:fs";
 
 import {
   ApprovalRequestId,
@@ -3157,11 +3158,50 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   };
 }
 
+/**
+ * Missing project CWDs often surface as spawn ENOENT (Node/Effect access the
+ * working directory before the binary). Callers must distinguish that from a
+ * missing Codex installation so the UI can prompt relocate/reconnect.
+ */
+export function formatMissingCodexWorkingDirectoryError(cwd: string): string {
+  return `Project working directory no longer exists: ${cwd}. Relocate or reconnect the project in Synara.`;
+}
+
+export function assertCodexWorkingDirectoryExists(cwd: string): void {
+  try {
+    const stats = statSync(cwd);
+    if (!stats.isDirectory()) {
+      throw new Error(
+        `Project working directory is not a directory: ${cwd}. Relocate or reconnect the project in Synara.`,
+      );
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(formatMissingCodexWorkingDirectoryError(cwd));
+    }
+    throw error;
+  }
+}
+
+function isMissingExecutableSpawnError(error: Error): boolean {
+  const lower = error.message.toLowerCase();
+  return (
+    lower.includes("enoent") ||
+    lower.includes("command not found") ||
+    lower.includes("not found") ||
+    lower.includes("filesystem.access")
+  );
+}
+
 async function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
 }): Promise<void> {
+  // Prefer an explicit cwd check before spawning. A missing working directory
+  // produces ENOENT that is otherwise misreported as a missing Codex binary.
+  assertCodexWorkingDirectoryExists(input.cwd);
+
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
@@ -3182,12 +3222,9 @@ async function assertSupportedCodexCliVersion(input: {
   });
 
   if (result.error) {
-    const lower = result.error.message.toLowerCase();
-    if (
-      lower.includes("enoent") ||
-      lower.includes("command not found") ||
-      lower.includes("not found")
-    ) {
+    if (isMissingExecutableSpawnError(result.error)) {
+      // Race: cwd may have disappeared between the pre-check and spawn.
+      assertCodexWorkingDirectoryExists(input.cwd);
       throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
     }
     throw new Error(

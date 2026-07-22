@@ -50,6 +50,7 @@ function normalizeCodexError(
   operation: string,
   error: unknown,
   fallback: string,
+  cwd?: string,
 ): TextGenerationError {
   if (Schema.is(TextGenerationError)(error)) {
     return error;
@@ -57,6 +58,24 @@ function normalizeCodexError(
 
   if (error instanceof Error) {
     const lower = error.message.toLowerCase();
+    const mentionsMissingCwd =
+      cwd !== undefined &&
+      (error.message.includes(cwd) ||
+        lower.includes("filesystem.access") ||
+        lower.includes("no such file or directory"));
+    if (
+      mentionsMissingCwd &&
+      (lower.includes("enoent") ||
+        lower.includes("notfound") ||
+        lower.includes("filesystem.access") ||
+        lower.includes("no such file or directory"))
+    ) {
+      return new TextGenerationError({
+        operation,
+        detail: `Project working directory no longer exists: ${cwd}. Relocate or reconnect the project in Synara.`,
+        cause: error,
+      });
+    }
     if (
       error.message.includes(`Command not found: ${binaryPath}`) ||
       lower.includes(`spawn ${binaryPath.toLowerCase()}`) ||
@@ -302,6 +321,14 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
       const runCodexCommand = Effect.gen(function* () {
+        const cwdInfo = yield* fileSystem.stat(cwd).pipe(Effect.catch(() => Effect.succeed(null)));
+        if (!cwdInfo || cwdInfo.type !== "Directory") {
+          return yield* new TextGenerationError({
+            operation,
+            detail: `Project working directory no longer exists: ${cwd}. Relocate or reconnect the project in Synara.`,
+          });
+        }
+
         const env = yield* Effect.promise(() =>
           buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
         );
@@ -344,6 +371,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
                 operation,
                 cause,
                 "Failed to spawn Codex CLI process",
+                cwd,
               ),
             ),
           );
