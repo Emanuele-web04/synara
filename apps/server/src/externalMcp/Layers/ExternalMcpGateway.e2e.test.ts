@@ -340,6 +340,13 @@ describe("external MCP gateway stdio flow", () => {
         const service = yield* ExternalMcpService;
         const gateway = yield* ExternalMcpGateway;
         const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          ) VALUES (
+            ${PROJECT_ID}, ${project.title}, ${project.workspaceRoot}, '[]', ${NOW}, ${NOW}, NULL
+          )
+        `;
         const issued = yield* service.createIntegration({
           name: "Codex e2e",
           projectIds: [PROJECT_ID],
@@ -408,6 +415,7 @@ describe("external MCP gateway stdio flow", () => {
           outputLines[0]!.result as { tools: Array<{ name: string }> }
         ).tools.map((tool) => tool.name);
         expect(listedTools).toEqual([
+          "synara_overview",
           "synara_capabilities",
           "synara_list_allowed_projects",
           "synara_create_task",
@@ -524,6 +532,28 @@ describe("external MCP gateway stdio flow", () => {
         });
         expect(JSON.stringify(denied.body)).toContain("capability_denied");
 
+        const overview = yield* gateway.handlePost({
+          authorizationHeader: `Bearer ${restrictedCredential}`,
+          body: {
+            jsonrpc: "2.0",
+            id: "overview",
+            method: "tools/call",
+            params: { name: "synara_overview", arguments: {} },
+          },
+        });
+        const overviewJson = JSON.stringify(overview.body);
+        expect(overview.status).toBe(200);
+        expect(overviewJson).toContain(PROJECT_ID);
+        expect(overviewJson).toContain("External MCP project");
+        expect(overviewJson).toContain('\\"projectScope\\": \\"selected\\"');
+        // Thread titles stay behind tasks:read-project; projects:read alone
+        // gets counts only.
+        expect(overviewJson).not.toContain("recentThreads");
+        const overviewPayload = toolPayload(overview.body as Record<string, unknown>);
+        expect(overviewPayload.nextSteps).toEqual([
+          "Call synara_capabilities with a projectId to list the exact provider/model targets available to this integration.",
+        ]);
+
         const auditRows = yield* sql<{
           readonly requestId: string | null;
           readonly projectId: string | null;
@@ -539,7 +569,7 @@ describe("external MCP gateway stdio flow", () => {
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(5);
+        expect(auditRows).toHaveLength(6);
         expect(auditRows.find((row) => row.requestId === "external-e2e-request")).toMatchObject({
           projectId: PROJECT_ID,
           runtimeMode: "approval-required",

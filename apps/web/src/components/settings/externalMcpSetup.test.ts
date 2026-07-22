@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildExternalMcpClientConfiguration,
   buildExternalMcpExamplePrompt,
+  buildExternalMcpSetupPrompt,
   describeExternalMcpPermissions,
+  describeExternalMcpProjects,
   externalMcpSetupAction,
 } from "./externalMcpSetup";
 
@@ -62,6 +64,47 @@ describe("external MCP guided setup", () => {
     expect(prompt).not.toContain("projectId");
     expect(prompt).not.toContain("request ID");
     expect(prompt).not.toContain("mcp_int_");
+  });
+
+  it("builds one agent-facing setup prompt covering pairing, registration, and verification", () => {
+    const prompt = buildExternalMcpSetupPrompt({
+      setupCommand: "synara mcp pair --code syn_pair_v1_example --home-dir /tmp/home",
+      stdio,
+    });
+
+    expect(prompt).toContain("syn_pair_v1_example");
+    expect(prompt).toContain("codex mcp add synara");
+    expect(prompt).toContain("claude mcp add --scope user synara");
+    expect(prompt).toContain('"mcpServers"');
+    expect(prompt).toContain("synara_overview");
+    expect(prompt).not.toContain("syn_mcp_v1_");
+  });
+
+  it("omits the pairing step once the computer is already paired", () => {
+    const prompt = buildExternalMcpSetupPrompt({ setupCommand: null, stdio });
+
+    expect(prompt).toContain("already completed");
+    expect(prompt).not.toContain("syn_pair_v1_");
+    expect(prompt).toContain("synara_overview");
+  });
+
+  it("builds a discovery-first example prompt for all-projects connections", () => {
+    const prompt = buildExternalMcpExamplePrompt(null);
+
+    expect(prompt).toContain("synara_overview");
+    expect(prompt).toContain("managed worktree");
+  });
+
+  it("describes project access for both scopes", () => {
+    expect(
+      describeExternalMcpProjects({ projectScope: "all", allowedProjects: [{ title: "One" }] }),
+    ).toBe("All projects, including future ones");
+    expect(
+      describeExternalMcpProjects({
+        projectScope: "selected",
+        allowedProjects: [{ title: "One" }, { title: "Two" }],
+      }),
+    ).toBe("One, Two");
   });
 
   it("describes scopes without exposing capability identifiers", () => {

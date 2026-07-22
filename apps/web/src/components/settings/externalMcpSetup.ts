@@ -1,29 +1,9 @@
-import type { ExternalMcpCapability, ExternalMcpStdioConfiguration } from "@synara/contracts";
-
-export const EXTERNAL_MCP_CLIENTS = {
-  codex: {
-    label: "Codex",
-    description: "Add Synara to Codex with one terminal command.",
-    suggestedName: "Codex",
-  },
-  claudeCode: {
-    label: "Claude Code",
-    description: "Add Synara to Claude Code for your user account.",
-    suggestedName: "Claude Code",
-  },
-  claudeDesktop: {
-    label: "Claude Desktop",
-    description: "Copy a ready-to-paste local MCP configuration.",
-    suggestedName: "Claude Desktop",
-  },
-  other: {
-    label: "Other MCP app",
-    description: "Use the standard stdio MCP configuration.",
-    suggestedName: "MCP app",
-  },
-} as const;
-
-export type ExternalMcpClientKind = keyof typeof EXTERNAL_MCP_CLIENTS;
+import type {
+  ExternalMcpCapability,
+  ExternalMcpClientKind,
+  ExternalMcpProjectScope,
+  ExternalMcpStdioConfiguration,
+} from "@synara/contracts";
 
 export interface ExternalMcpClientConfiguration {
   readonly format: "command" | "json";
@@ -136,14 +116,65 @@ export function buildExternalMcpClientConfiguration(
   };
 }
 
-export function buildExternalMcpExamplePrompt(projectTitle: string): string {
+export function buildExternalMcpExamplePrompt(projectTitle: string | null): string {
   return [
-    `Use Synara to create a new task in the project named ${JSON.stringify(projectTitle)}.`,
+    projectTitle === null
+      ? "Use Synara to create a new task: call synara_overview first, pick the most relevant project, and tell me which one you chose."
+      : `Use Synara to create a new task in the project named ${JSON.stringify(projectTitle)}.`,
     "First inspect Synara's capabilities and choose an exact available provider and model; do not guess model names.",
     "Use an isolated managed worktree and approval-required execution.",
     "Goal: [DESCRIBE THE WORK].",
     "Wait for the task to finish, then read the result and summarize it for me.",
   ].join(" ");
+}
+
+// The one block a user pastes into any coding agent (Codex, Claude Code, or
+// another MCP-capable app). The agent pairs the machine, registers Synara in
+// its own MCP configuration, and verifies the connection — no per-client
+// artifacts to juggle. `setupCommand` is null once pairing already happened.
+export function buildExternalMcpSetupPrompt(input: {
+  readonly setupCommand: string | null;
+  readonly stdio: ExternalMcpStdioConfiguration;
+  readonly platform?: string;
+}): string {
+  const platform = input.platform ?? "";
+  const codex = buildExternalMcpClientConfiguration("codex", input.stdio, platform);
+  const claude = buildExternalMcpClientConfiguration("claudeCode", input.stdio, platform);
+  const sections: string[] = [
+    "Connect this coding agent to Synara via MCP. Complete every step yourself, in order, and report what happened.",
+  ];
+  if (input.setupCommand !== null) {
+    sections.push(
+      [
+        "Step 1 — Pair this computer. Run this exact command in a shell. It exchanges a one-time code (valid for about 10 minutes) for a private credential stored on this computer; no secret ever goes into your MCP configuration:",
+        "",
+        input.setupCommand,
+      ].join("\n"),
+    );
+  } else {
+    sections.push("Step 1 — Pairing is already completed on this computer. Skip it.");
+  }
+  sections.push(
+    [
+      'Step 2 — Register Synara as a stdio MCP server named "synara" in your own configuration, using whichever mechanism your app supports:',
+      "",
+      `If you are Codex, run: ${codex.value}`,
+      `If you are Claude Code, run: ${claude.value}`,
+      "For any other MCP app, merge this into its MCP configuration:",
+      jsonConfiguration(input.stdio),
+    ].join("\n"),
+    'Step 3 — Verify. Reload your MCP servers if needed, then call the "synara_overview" tool and summarize the projects, providers, and permissions it returns.',
+  );
+  return sections.join("\n\n");
+}
+
+export function describeExternalMcpProjects(input: {
+  readonly projectScope?: ExternalMcpProjectScope | undefined;
+  readonly allowedProjects: ReadonlyArray<{ readonly title: string }>;
+}): string {
+  if (input.projectScope === "all") return "All projects, including future ones";
+  const titles = input.allowedProjects.map((project) => project.title);
+  return titles.length > 0 ? titles.join(", ") : "No projects";
 }
 
 export function describeExternalMcpPermissions(

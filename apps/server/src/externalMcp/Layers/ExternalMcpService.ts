@@ -43,14 +43,6 @@ function randomOpaque(prefix: string): string {
   return `${prefix}${randomBytes(32).toString("base64url")}`;
 }
 
-function toVerified(integration: ExternalMcpIntegrationRecord): ExternalMcpVerifiedClient {
-  return {
-    integration,
-    capabilities: new Set(integration.capabilities),
-    allowedProjectIds: new Set(integration.projectIds),
-  };
-}
-
 function toExternalMcpError(
   code: string,
   message: string,
@@ -66,12 +58,30 @@ export const makeExternalMcpService = Effect.gen(function* () {
   const config = yield* ServerConfig;
 
   const loadProjectsById = () =>
-    snapshotQuery.getShellSnapshot().pipe(
-      Effect.map((snapshot) => new Map(snapshot.projects.map((project) => [project.id, project]))),
+    repository.listActiveProjects().pipe(
+      Effect.map((projects) => new Map(projects.map((project) => [project.id, project]))),
       Effect.mapError((cause) =>
         toExternalMcpError("repository_error", "Could not load Synara projects.", 500, cause),
       ),
     );
+
+  // Scope "all" resolves the allowed set from the live project projection on
+  // every verification, so projects added after the integration was created
+  // are granted automatically.
+  const toVerified = (
+    integration: ExternalMcpIntegrationRecord,
+  ): Effect.Effect<ExternalMcpVerifiedClient, ExternalMcpError> =>
+    Effect.gen(function* () {
+      const allowedProjectIds: ReadonlySet<string> =
+        integration.projectScope === "all"
+          ? new Set((yield* loadProjectsById()).keys())
+          : new Set(integration.projectIds);
+      return {
+        integration,
+        capabilities: new Set(integration.capabilities),
+        allowedProjectIds,
+      };
+    });
 
   const toView = (
     record: ExternalMcpIntegrationRecord,
@@ -81,10 +91,19 @@ export const makeExternalMcpService = Effect.gen(function* () {
     name: record.name,
     audience: record.audience,
     capabilities: [...record.capabilities],
-    allowedProjects: record.projectIds.flatMap((projectId) => {
-      const project = projectsById.get(projectId);
-      return project ? [{ projectId: ProjectId.makeUnsafe(project.id), title: project.title }] : [];
-    }),
+    projectScope: record.projectScope,
+    allowedProjects:
+      record.projectScope === "all"
+        ? [...projectsById.values()].map((project) => ({
+            projectId: ProjectId.makeUnsafe(project.id),
+            title: project.title,
+          }))
+        : record.projectIds.flatMap((projectId) => {
+            const project = projectsById.get(projectId);
+            return project
+              ? [{ projectId: ProjectId.makeUnsafe(project.id), title: project.title }]
+              : [];
+          }),
     createdAt: record.createdAt,
     expiresAt: record.expiresAt,
     lastUsedAt: record.lastUsedAt,
@@ -136,16 +155,26 @@ export const makeExternalMcpService = Effect.gen(function* () {
 
   const createIntegration: ExternalMcpServiceShape["createIntegration"] = (input) =>
     Effect.gen(function* () {
-      const projectIds = [...new Set(input.projectIds)];
+      const projectScope = input.projectScope ?? "selected";
+      const projectIds = projectScope === "all" ? [] : [...new Set(input.projectIds ?? [])];
       const capabilities = [...new Set(input.capabilities)] as ReadonlyArray<ExternalMcpCapability>;
       const projectsById = yield* loadProjectsById();
-      const missingProject = projectIds.find((projectId) => !projectsById.has(projectId));
-      if (missingProject) {
-        return yield* toExternalMcpError(
-          "project_not_found",
-          `Project "${missingProject}" was not found.`,
-          400,
-        );
+      if (projectScope === "selected") {
+        if (projectIds.length === 0) {
+          return yield* toExternalMcpError(
+            "invalid_scope",
+            "Select at least one project or grant access to all projects.",
+            400,
+          );
+        }
+        const missingProject = projectIds.find((projectId) => !projectsById.has(projectId));
+        if (missingProject) {
+          return yield* toExternalMcpError(
+            "project_not_found",
+            `Project "${missingProject}" was not found.`,
+            400,
+          );
+        }
       }
       if (capabilities.includes("tasks:create") && !capabilities.includes("projects:read")) {
         return yield* toExternalMcpError(
@@ -169,6 +198,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
           clientKind: input.clientKind ?? "other",
           audience: EXTERNAL_MCP_AUDIENCE,
           capabilities,
+          projectScope,
           projectIds,
           pairingHash: hashExternalMcpSecret(pairingCode),
           createdAt,
@@ -368,7 +398,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
             ),
           ),
         );
-      return toVerified(integration);
+      return yield* toVerified(integration);
     });
 
   const assertActive: ExternalMcpServiceShape["assertActive"] = (integrationId) =>
@@ -384,7 +414,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
           integration.revokedAt === null &&
           integration.expiresAt > new Date().toISOString();
         return active
-          ? Effect.succeed(toVerified(integration))
+          ? Effect.void
           : Effect.fail(
               toExternalMcpError(
                 "external_credential_inactive",

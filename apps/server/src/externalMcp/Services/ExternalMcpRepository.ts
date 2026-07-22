@@ -1,4 +1,8 @@
-import type { ExternalMcpCapability, ExternalMcpClientKind } from "@synara/contracts";
+import type {
+  ExternalMcpCapability,
+  ExternalMcpClientKind,
+  ExternalMcpProjectScope,
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -11,6 +15,7 @@ export interface ExternalMcpIntegrationRecord {
   readonly audience: "synara.external-mcp";
   readonly credentialHash: string | null;
   readonly capabilities: ReadonlyArray<ExternalMcpCapability>;
+  readonly projectScope: ExternalMcpProjectScope;
   readonly projectIds: ReadonlyArray<string>;
   readonly createdAt: string;
   readonly expiresAt: string;
@@ -19,6 +24,11 @@ export interface ExternalMcpIntegrationRecord {
   readonly revokedAt: string | null;
   readonly rateLimitPerMinute: number;
   readonly concurrencyLimit: number;
+}
+
+export interface ExternalMcpProjectRecord {
+  readonly id: string;
+  readonly title: string;
 }
 
 export interface ExternalMcpOperationRecord extends Omit<
@@ -46,12 +56,17 @@ export interface ExternalMcpTaskRecord {
 }
 
 export interface ExternalMcpRepositoryShape {
+  readonly listActiveProjects: () => Effect.Effect<
+    ReadonlyArray<ExternalMcpProjectRecord>,
+    Error
+  >;
   readonly createIntegration: (input: {
     readonly integrationId: string;
     readonly name: string;
     readonly clientKind?: ExternalMcpClientKind;
     readonly audience: "synara.external-mcp";
     readonly capabilities: ReadonlyArray<ExternalMcpCapability>;
+    readonly projectScope: ExternalMcpProjectScope;
     readonly projectIds: ReadonlyArray<string>;
     readonly pairingHash: string;
     readonly createdAt: string;

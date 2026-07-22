@@ -14,6 +14,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
+  RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
   ThreadId,

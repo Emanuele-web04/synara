@@ -52,7 +52,7 @@ export interface ExternalMcpServiceShape {
   ) => Effect.Effect<ExternalMcpVerifiedClient, ExternalMcpError>;
   readonly assertActive: (
     integrationId: string,
-  ) => Effect.Effect<ExternalMcpVerifiedClient, ExternalMcpError>;
+  ) => Effect.Effect<void, ExternalMcpError>;
   readonly assertProject: (
     client: ExternalMcpVerifiedClient,
     projectId: string,

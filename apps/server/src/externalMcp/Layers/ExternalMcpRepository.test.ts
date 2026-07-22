@@ -22,6 +22,7 @@ const createIntegration = (
     clientKind,
     audience: "synara.external-mcp",
     capabilities: ["projects:read", "tasks:create", "tasks:read", "tasks:wait"],
+    projectScope: "selected",
     projectIds: [`project-${suffix}`],
     pairingHash: hashExternalMcpSecret(`pair-${suffix}`),
     createdAt: "2026-07-20T00:00:00.000Z",
@@ -79,6 +80,27 @@ layer("ExternalMcpRepository", (it) => {
           (integration) => integration.integrationId === "integration-listed-client-kind",
         )?.clientKind,
       ).toBe("claudeDesktop");
+    }),
+  );
+
+  it.effect("lists only active project identities for authorization", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+        ) VALUES
+          ('project-active', 'Active', '/tmp/active', '[]',
+            '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z', NULL),
+          ('project-deleted', 'Deleted', '/tmp/deleted', '[]',
+            '2026-07-20T00:01:00.000Z', '2026-07-20T00:01:00.000Z',
+            '2026-07-20T00:02:00.000Z')
+      `;
+
+      expect(yield* repository.listActiveProjects()).toEqual([
+        { id: "project-active", title: "Active" },
+      ]);
     }),
   );
 
