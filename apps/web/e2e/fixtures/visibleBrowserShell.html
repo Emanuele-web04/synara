@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'" />
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #111827;
+        color: #f9fafb;
+      }
+      body {
+        display: grid;
+        grid-template-rows: 34px 1fr;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 12px;
+        background: #1f2937;
+      }
+      #host-composer {
+        margin-left: auto;
+        width: 280px;
+      }
+      #browser-host {
+        min-width: 0;
+        min-height: 0;
+        position: relative;
+      }
+      webview {
+        display: flex;
+        width: 100%;
+        height: 100%;
+        background: white;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      Synara visible browser E2E shell
+      <input id="host-composer" aria-label="Host composer" />
+    </header>
+    <main id="browser-host"></main>
+    <script>
+      const { ipcRenderer } = require("electron");
+      const host = document.getElementById("browser-host");
+      let latestState = null;
+      let mountedTabId = null;
+      let webview = null;
+      let attachedWebviewKey = null;
+      let attachInFlight = false;
+      let attachRetryTimer = null;
+      const composer = document.getElementById("host-composer");
+      document.documentElement.dataset.hostSubmits = "0";
+      composer.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          document.documentElement.dataset.hostSubmits = String(
+            Number(document.documentElement.dataset.hostSubmits) + 1,
+          );
+        }
+      });
+
+      const attachMountedWebview = async () => {
+        const tabId = mountedTabId;
+        const currentWebview = webview;
+        const webContentsId = currentWebview?.getWebContentsId?.();
+        if (!tabId || !webContentsId || currentWebview !== webview) return;
+        const attachKey = `${tabId}:${webContentsId}`;
+        if (attachedWebviewKey === attachKey || attachInFlight) return;
+        attachInFlight = true;
+        // Mirror BrowserPanel's renderer lease: mark the physical binding
+        // before main can synchronously push a newer metadata snapshot.
+        attachedWebviewKey = attachKey;
+        document.documentElement.dataset.attachAttempts = String(
+          Number(document.documentElement.dataset.attachAttempts || "0") + 1,
+        );
+        try {
+          await ipcRenderer.invoke("synara-e2e:attach-webview", { tabId, webContentsId });
+        } catch {
+          if (attachedWebviewKey === attachKey) attachedWebviewKey = null;
+          if (attachRetryTimer === null) {
+            attachRetryTimer = setTimeout(() => {
+              attachRetryTimer = null;
+              void attachMountedWebview();
+            }, 25);
+          }
+          return;
+        } finally {
+          attachInFlight = false;
+        }
+        if (mountedTabId === tabId && webview === currentWebview) {
+          document.documentElement.dataset.webviewAttached = "true";
+        }
+      };
+
+      const mountActiveTab = () => {
+        const tabId = latestState?.activeTabId;
+        const tab = latestState?.tabs?.find((candidate) => candidate.id === tabId);
+        if (!latestState?.open || !tabId || !tab) return;
+        if (!webview) {
+          webview = document.createElement("webview");
+          webview.setAttribute("partition", "persist:synara-browser");
+          webview.setAttribute(
+            "webpreferences",
+            "contextIsolation=yes,nodeIntegration=no,sandbox=yes",
+          );
+          // Mirror BrowserPanel exactly: Electron otherwise drops window.open()
+          // before BrowserManager can classify it as an OAuth popup or scoped tab.
+          webview.setAttribute("allowpopups", "true");
+          webview.addEventListener("dom-ready", attachMountedWebview);
+          webview.addEventListener("did-start-loading", attachMountedWebview);
+          webview.addEventListener("did-navigate", (event) => {
+            document.documentElement.dataset.pooledWebviewUrl = event.url;
+          });
+          host.append(webview);
+        }
+        if (mountedTabId === tabId) return;
+        webview.style.visibility = "visible";
+        webview.style.pointerEvents = "auto";
+        // BrowserPanel deliberately reuses the visible guest across logical tab
+        // switches. Removing an opener WebView while Electron is unwinding a
+        // denied target=_blank activation can deadlock the browser process.
+        mountedTabId = tabId;
+        attachedWebviewKey = null;
+        webview.dataset.tabId = tabId;
+        delete document.documentElement.dataset.webviewAttached;
+        webview.setAttribute("src", tab.lastCommittedUrl || tab.url || "about:blank");
+      };
+
+      ipcRenderer.on("synara-e2e:browser-state", (_event, state) => {
+        latestState = state;
+        document.documentElement.dataset.browserVersion = String(state.version);
+        if (!state.open || !state.activeTabId) {
+          if (webview) {
+            webview.style.visibility = "hidden";
+            webview.style.pointerEvents = "none";
+          }
+          mountedTabId = null;
+          attachedWebviewKey = null;
+          attachInFlight = false;
+          if (attachRetryTimer !== null) clearTimeout(attachRetryTimer);
+          attachRetryTimer = null;
+          delete document.documentElement.dataset.webviewAttached;
+          return;
+        }
+        mountActiveTab();
+      });
+      ipcRenderer.on("synara-e2e:open-panel", () => mountActiveTab());
+      document.documentElement.dataset.shellReady = "true";
+      ipcRenderer.send("synara-e2e:shell-ready");
+    </script>
+  </body>
+</html>

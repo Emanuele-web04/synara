@@ -44,6 +44,25 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.isNull(registry.bindWriteAuthority(issued.token, "turn-b"));
   });
 
+  it("permanently fences a terminal turn credential even when A never used it", () => {
+    let nextId = 0;
+    const registry = makeAgentGatewaySessionRegistry({ randomId: () => String(++nextId) });
+    const outgoing = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
+
+    assert.isTrue(registry.retireWriteAuthority(outgoing.token, "turn-a"));
+    assert.isNull(registry.bindWriteAuthority(outgoing.token, "turn-a"));
+    assert.isNull(registry.bindWriteAuthority(outgoing.token, "turn-b"));
+    // Retirement is idempotent for the same terminal turn but cannot be
+    // reassigned to a different one.
+    assert.isTrue(registry.retireWriteAuthority(outgoing.token, "turn-a"));
+    assert.isFalse(registry.retireWriteAuthority(outgoing.token, "turn-b"));
+
+    const replacement = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
+    const turnBAuthority = registry.bindWriteAuthority(replacement.token, "turn-b");
+    assert.isNotNull(turnBAuthority);
+    assert.isTrue(registry.verifyWriteAuthority(turnBAuthority!));
+  });
+
   it("keeps credentials valid for a long-lived provider session but not across restart", () => {
     let time = 1_000;
     const firstRegistry = makeAgentGatewaySessionRegistry({

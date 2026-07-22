@@ -789,12 +789,6 @@ export function createWsNativeApi(): NativeApi {
         }
         throw new Error("Browser screenshots require the desktop app.");
       },
-      executeCdp: async (input) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.browser.executeCdp(input);
-        }
-        throw new Error("Browser automation requires the desktop app.");
-      },
       navigate: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.navigate(input);

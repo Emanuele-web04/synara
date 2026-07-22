@@ -40,7 +40,6 @@ import { ThreadDiagnosticsQuery } from "../../diagnostics/Services/ThreadDiagnos
 import { AgentGateway, type AgentGatewayShape } from "../Services/AgentGateway.ts";
 import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts";
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
-import { SYNARA_GATEWAY_HARNESS_POLICY } from "../harnessPolicy.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -67,11 +66,20 @@ import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
+import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
+import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
+import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
+import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
-const AGENT_GATEWAY_INSTRUCTIONS = SYNARA_GATEWAY_HARNESS_POLICY;
+// Providers already receive the versioned host policy exactly once in their
+// private prompt. MCP clients prepend initialize.instructions to every exposed
+// tool definition, so repeating the full policy here adds tens of thousands of
+// context characters per round without adding authority or safety.
+const AGENT_GATEWAY_INSTRUCTIONS =
+  "Synara tools are thread-scoped. Use browser_* only for Synara's visible WebView; follow the provider-delivered <synara_host_context> for full policy.";
 
 export const makeAgentGateway = Effect.gen(function* () {
   const credentials = yield* AgentGatewayCredentials;
@@ -89,6 +97,10 @@ export const makeAgentGateway = Effect.gen(function* () {
   const providerRuntimeEvents = yield* ProviderRuntimeEventRepository;
   const diagnostics = yield* ThreadDiagnosticsQuery;
   const serverConfig = yield* ServerConfig;
+  const browserAutomationHost = Option.getOrElse(
+    yield* Effect.serviceOption(BrowserAutomationHost),
+    () => makeBrowserAutomationHost({}),
+  );
   const loadProviderAvailabilities = Effect.gen(function* () {
     const [settings, statuses] = yield* Effect.all([
       serverSettings.getSettings,
@@ -345,7 +357,8 @@ export const makeAgentGateway = Effect.gen(function* () {
         ).pipe(
           Effect.map((result) => {
             if (result.isError) return result;
-            const batch = JSON.parse(result.content[0]?.text ?? "{}") as {
+            const content = result.content[0];
+            const batch = JSON.parse(content?.type === "text" ? content.text : "{}") as {
               operationId?: string;
               requestId?: string;
               threads?: Array<Record<string, unknown>>;
@@ -563,6 +576,22 @@ export const makeAgentGateway = Effect.gen(function* () {
         .pipe(Effect.asVoid);
     },
   });
+  const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
+    resolveWorkspaceRoot: (context) =>
+      Effect.gen(function* () {
+        const thread = yield* requireThreadShell(context.callerThreadId);
+        const project = yield* snapshotQuery
+          .getProjectShellById(thread.projectId)
+          .pipe(Effect.map(Option.getOrNull));
+        if (!project) return null;
+        return (
+          resolveThreadWorkspaceCwd({
+            thread,
+            projects: [project],
+          }) ?? null
+        );
+      }).pipe(Effect.orElseSucceed(() => null)),
+  });
 
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
@@ -574,6 +603,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadTitle,
     setThreadArchived,
     ...automationTools,
+    ...browserTools,
   ];
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({

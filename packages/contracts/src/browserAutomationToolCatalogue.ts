@@ -1,0 +1,26 @@
+export const BROWSER_TOOL_NAMES = [
+  "browser_status",
+  "browser_tabs",
+  "browser_open",
+  "browser_navigate",
+  "browser_back",
+  "browser_forward",
+  "browser_reload",
+  "browser_resize",
+  "browser_snapshot",
+  "browser_screenshot",
+  "browser_logs",
+  "browser_click",
+  "browser_hover",
+  "browser_drag",
+  "browser_type",
+  "browser_select",
+  "browser_upload",
+  "browser_press",
+  "browser_scroll",
+  "browser_wait",
+  "browser_evaluate",
+  "browser_close",
+] as const;
+
+export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];

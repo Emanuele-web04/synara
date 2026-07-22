@@ -7,6 +7,8 @@ import {
   session,
   type BrowserWindow,
   type BrowserWindowConstructorOptions,
+  type DownloadItem,
+  type Session,
   type WebContents,
 } from "electron";
 import {
@@ -16,6 +18,14 @@ import {
 } from "@synara/shared/browserSession";
 
 export const BROWSER_SESSION_PARTITION = "persist:synara-browser";
+
+export interface BrowserSessionDownloadEvent {
+  readonly event: Electron.Event;
+  readonly item: DownloadItem;
+  readonly webContents: WebContents;
+}
+
+export type BrowserSessionDownloadListener = (event: BrowserSessionDownloadEvent) => void;
 
 function replaceRequestHeadersCaseInsensitive(
   headers: Record<string, string>,
@@ -38,6 +48,12 @@ function replaceRequestHeadersCaseInsensitive(
 export class BrowserSessionPolicy {
   private spoofedUserAgent: string | null = null;
   private configured = false;
+  private configuredSession: Session | null = null;
+  private willDownloadListener:
+    | ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void)
+    | null = null;
+
+  constructor(private readonly onWillDownload?: BrowserSessionDownloadListener) {}
 
   private resolveUserAgent(): string {
     if (this.spoofedUserAgent === null) {
@@ -50,7 +66,6 @@ export class BrowserSessionPolicy {
     if (this.configured) {
       return;
     }
-    this.configured = true;
     try {
       const partitionSession = session.fromPartition(BROWSER_SESSION_PARTITION);
       const userAgent = this.resolveUserAgent();
@@ -66,10 +81,37 @@ export class BrowserSessionPolicy {
         });
         callback({ requestHeaders });
       });
+      const onWillDownload = this.onWillDownload;
+      if (onWillDownload) {
+        const listener = (event: Electron.Event, item: DownloadItem, webContents: WebContents) => {
+          onWillDownload({ event, item, webContents });
+        };
+        partitionSession.on("will-download", listener);
+        this.configuredSession = partitionSession;
+        this.willDownloadListener = listener;
+      }
+      this.configured = true;
     } catch {
       // Session creation can race Electron readiness. Retrying the next call preserves the
       // per-WebContents fallback without permanently disabling partition configuration.
       this.configured = false;
+    }
+  }
+
+  dispose(): void {
+    const partitionSession = this.configuredSession;
+    const listener = this.willDownloadListener;
+    this.configuredSession = null;
+    this.willDownloadListener = null;
+    this.configured = false;
+    if (!partitionSession || !listener) {
+      return;
+    }
+    try {
+      partitionSession.removeListener("will-download", listener);
+    } catch {
+      // Electron may already be tearing the session down during app quit.
+      // The manager reference is cleared above, so no retained callback remains here.
     }
   }
 

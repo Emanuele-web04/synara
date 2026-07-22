@@ -1,5 +1,5 @@
 import http from "node:http";
-import type { ListenOptions } from "node:net";
+import type { ListenOptions, Socket } from "node:net";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Scope } from "effect";
@@ -8,6 +8,26 @@ import { ServeError } from "effect/unstable/http/HttpServerError";
 import { WebSocketServer } from "ws";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Node's HTTP parser owns the socket error listener until an upgrade starts.
+ * The Effect upgrade handler then runs the route (including authentication)
+ * before `ws.handleUpgrade()` installs its own listener. A peer reset during
+ * that gap otherwise becomes an unhandled `error` event and terminates the
+ * whole backend process.
+ *
+ * Keep this boundary for the complete lifetime of every accepted connection.
+ * Other protocol-specific listeners still receive the event and perform their
+ * own cleanup; destroying an already-failed socket here only guarantees that
+ * HTTP requests, rejected upgrades, and pending upgrades all release promptly.
+ */
+function handleClientSocketError(this: Socket): void {
+  this.destroy();
+}
+
+function protectClientSocket(socket: Socket): void {
+  socket.on("error", handleClientSocketError);
+}
 
 /**
  * Owns the Node HTTP/WebSocket transport so Synara, rather than the platform
@@ -20,9 +40,14 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   const scope = yield* Effect.scope;
   const server = evaluate();
 
+  // Install before `listen()`: no accepted connection may exist without a
+  // permanent error boundary, including connections reset during startup.
+  server.on("connection", protectClientSocket);
+
   yield* Scope.addFinalizer(
     scope,
     Effect.callback<void>((resume) => {
+      server.off("connection", protectClientSocket);
       if (!server.listening) {
         resume(Effect.void);
         return;

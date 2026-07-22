@@ -145,7 +145,11 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
       upsertThreadState: (state) =>
         set((current) => {
           const previousState = current.threadStatesByThreadId[state.threadId];
-          if (previousState?.version === state.version) {
+          // Main pushes state before some invoke Promises resolve. A delayed
+          // response can therefore arrive after a newer onState snapshot; it
+          // must never roll browser chrome (or the renderer binding inputs)
+          // back to an older tab/runtime generation.
+          if (previousState && previousState.version >= state.version) {
             return current;
           }
           const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;

@@ -57,6 +57,7 @@ import {
 } from "../Services/AgentGatewayOperationRepository.ts";
 import { AgentGatewayLive } from "./AgentGateway.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
+import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -273,6 +274,7 @@ function makeHarnessLayer(
     }>;
   } = {},
 ) {
+  const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
   const dispatched: Array<OrchestrationCommand> = [];
   const automationCreates: Array<AutomationCreateInput> = [];
   const automationMemoryUpdates: Array<{ automationId: string | null; content: string }> = [];
@@ -327,6 +329,8 @@ function makeHarnessLayer(
           }
         : null;
     },
+    issueStdioBootstrapToken: () => "bootstrap-test-token",
+    exchangeStdioBootstrapToken: () => null,
     bindWriteAuthority: (token: string, turnId: string) => {
       const threadId = VALID_TOKENS[token];
       return threadId
@@ -341,6 +345,20 @@ function makeHarnessLayer(
     },
     verifyWriteAuthority: (authority) =>
       authority.sessionKey === `session-for-${authority.threadId}`,
+    registerInFlightRequest: inFlightRequests.register,
+    cancelInFlightRequests: inFlightRequests.cancel,
+    cancelSessionTurnRequests: (token, turnId) => {
+      const threadId = VALID_TOKENS[token];
+      return threadId
+        ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
+        : Promise.resolve();
+    },
+    retireSessionTurn: (token, turnId) => {
+      const threadId = VALID_TOKENS[token];
+      return threadId
+        ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
+        : Promise.resolve();
+    },
     revokeSessionToken: () => undefined,
     connectionForThread: (threadId: ThreadIdType) => ({
       url: "http://127.0.0.1:3773/mcp",
@@ -1350,6 +1368,8 @@ describe("AgentGateway", () => {
       const initResult = (init.body as { result: Record<string, unknown> }).result;
       assert.equal(initResult.protocolVersion, "2025-06-18");
       assert.isString(initResult.instructions);
+      assert.isBelow(String(initResult.instructions).length, 200);
+      assert.notInclude(String(initResult.instructions), "[Synara harness policy");
 
       const list = yield* harness.postRaw({
         authorizationHeader: "Bearer token-parent",

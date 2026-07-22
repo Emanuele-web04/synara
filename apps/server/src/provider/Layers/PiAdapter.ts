@@ -52,8 +52,10 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   releaseAgentGatewaySessionLeaseOnInterrupt,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
@@ -1630,6 +1632,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       if (failure.state === "failed") {
         offerRuntimeError(context, { message, method: "prompt", cause });
       }
+      Effect.runFork(cancelAgentGatewayTurn(context.gatewaySessionLease, turnId));
       context.activeTurnId = undefined;
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
@@ -1667,6 +1670,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const disposeSessionContext = async (context: PiSessionContext) => {
       try {
+        await Effect.runPromise(
+          cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId),
+        );
         context.unsubscribe?.();
         context.unsubscribe = undefined;
         for (const pending of Array.from(context.pendingUserInputs.values())) {
@@ -1981,6 +1987,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             });
           }
           const completionBase = makeEventBase(context);
+          Effect.runFork(cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId));
           context.activeTurnId = undefined;
           context.activeAssistantItemId = undefined;
           context.activeReasoningItemId = undefined;
@@ -2423,6 +2430,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                   method: "session/reload",
                   cause: error,
                 });
+                yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
                 context.activeTurnId = undefined;
                 context.session = makeSessionSnapshot(context);
                 return yield* Effect.fail(error);
@@ -2435,6 +2443,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             payload: { state: "completed", stopReason: "reload" },
             raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
           } satisfies ProviderRuntimeEvent);
+          yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
           context.activeTurnId = undefined;
           context.session = makeSessionSnapshot(context);
           return {
@@ -2502,9 +2511,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         };
       });
 
-    const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId) =>
-      requireSession(threadId).pipe(
-        Effect.flatMap((context) =>
+    const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId, turnId) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        if (turnId !== undefined && turnId !== context.activeTurnId) {
+          yield* Effect.logWarning("pi.stale_interrupt_ignored", {
+            threadId,
+            requestedTurnId: turnId,
+            activeTurnId: context.activeTurnId,
+          });
+          return;
+        }
+        const activeTurnId = turnId ?? context.activeTurnId;
+        yield* withAgentGatewayTurnCancellation(
+          context.gatewaySessionLease,
+          activeTurnId,
           Effect.tryPromise({
             try: () => context.runtime.session.abort(),
             catch: (cause) =>
@@ -2515,9 +2536,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 cause,
               }),
           }),
-        ),
-        Effect.asVoid,
-      );
+        );
+      });
 
     const respondUnsupported = (threadId: ThreadId, method: string) =>
       Effect.fail(

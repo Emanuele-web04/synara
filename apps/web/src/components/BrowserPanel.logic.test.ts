@@ -1,12 +1,99 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
+  createBrowserPanelHideScheduler,
+  createBrowserRendererLossHandler,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
 } from "./BrowserPanel.logic";
+
+describe("createBrowserRendererLossHandler", () => {
+  it("recovers the same logical tab on the next renderer generation exactly once", () => {
+    const oldRenderer = { webContentsId: 17 };
+    let currentRenderer = oldRenderer;
+    const detach = vi.fn();
+    const recover = vi.fn((recovery: { tabId: string; generation: number }) => {
+      currentRenderer = { webContentsId: 18 };
+      return recovery;
+    });
+    const onRendererLoss = createBrowserRendererLossHandler({
+      renderer: oldRenderer,
+      rendererGeneration: 4,
+      tabId: "tab-a",
+      isCurrent: (renderer) => currentRenderer === renderer,
+      detach,
+      recover,
+    });
+
+    // Electron can surface both `render-process-gone` and `destroyed` for the
+    // same physical guest. Both events share this one-shot handler.
+    onRendererLoss();
+    onRendererLoss();
+
+    expect(detach).toHaveBeenCalledOnce();
+    expect(detach).toHaveBeenCalledWith(oldRenderer);
+    expect(recover).toHaveBeenCalledOnce();
+    expect(recover).toHaveBeenCalledWith({ tabId: "tab-a", generation: 5 });
+    expect(currentRenderer.webContentsId).toBe(18);
+    expect(currentRenderer.webContentsId).not.toBe(oldRenderer.webContentsId);
+  });
+
+  it("cannot let a stale renderer-loss handler evict its replacement", () => {
+    const oldRenderer = { webContentsId: 17 };
+    const currentRenderer = { webContentsId: 18 };
+    const detach = vi.fn();
+    const recover = vi.fn();
+    const onRendererLoss = createBrowserRendererLossHandler({
+      renderer: oldRenderer,
+      rendererGeneration: 4,
+      tabId: "tab-a",
+      isCurrent: (renderer) => currentRenderer === renderer,
+      detach,
+      recover,
+    });
+
+    onRendererLoss();
+
+    expect(detach).not.toHaveBeenCalled();
+    expect(recover).not.toHaveBeenCalled();
+  });
+});
+
+describe("createBrowserPanelHideScheduler", () => {
+  it("cancels a passive StrictMode cleanup when the same panel remounts", () => {
+    vi.useFakeTimers();
+    try {
+      const hide = vi.fn();
+      const scheduler = createBrowserPanelHideScheduler();
+
+      scheduler.schedule("thread-a", hide);
+      scheduler.cancel("thread-a");
+      vi.runAllTimers();
+
+      expect(hide).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still hides after a real unmount without a matching remount", () => {
+    vi.useFakeTimers();
+    try {
+      const hide = vi.fn();
+      const scheduler = createBrowserPanelHideScheduler();
+
+      scheduler.schedule("thread-a", hide);
+      vi.runAllTimers();
+
+      expect(hide).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("browserAddressDisplayValue", () => {
   it("hides about:blank for new tabs", () => {

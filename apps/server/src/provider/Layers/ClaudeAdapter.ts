@@ -19,6 +19,7 @@ import {
   type PermissionMode,
   type PermissionResult,
   type PermissionUpdate,
+  type SDKAssistantMessageError,
   type SDKMessage,
   type SDKResultMessage,
   type SDKControlGetContextUsageResponse,
@@ -95,7 +96,9 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
@@ -189,6 +192,10 @@ interface ClaudeTurnState {
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
+  readonly assistantError?: {
+    readonly code: SDKAssistantMessageError;
+    readonly message: string;
+  };
   nextSyntheticAssistantBlockIndex: number;
   // Offset into assistantTextBlockOrder where the current assistant API
   // message's blocks begin. A turn spans many API messages (tool-use round
@@ -371,6 +378,14 @@ interface ClaudeSessionContext {
     readonly providerThreadId: string;
     readonly providerParentThreadId: string;
   };
+}
+
+interface ClaudeStopSessionOptions {
+  readonly emitExitEvent?: boolean;
+  // A terminal SDK message is handled on the stream fiber itself. In that
+  // path, closing the query lets the stream finish naturally; interrupting the
+  // current fiber would abort teardown before the session is removed.
+  readonly interruptStream?: boolean;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -1168,6 +1183,39 @@ function normalizeClaudeUserVisibleErrorMessage(
   }
 
   return sanitized;
+}
+
+function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
+  switch (error) {
+    case "authentication_failed":
+      return "Claude is not authenticated. Run `claude auth login --claudeai`, then retry.";
+    case "oauth_org_not_allowed":
+      return "Claude authentication succeeded, but this organization does not allow Claude Code.";
+    case "billing_error":
+      return "Claude billing or subscription access failed. Check the active Claude account, then retry.";
+    case "rate_limit":
+      return "Claude rate limit reached. Wait briefly, then retry.";
+    case "overloaded":
+      return "Claude is temporarily overloaded. Retry in a moment.";
+    case "invalid_request":
+      return "Claude rejected the request as invalid.";
+    case "model_not_found":
+      return "The selected Claude model is unavailable for this account.";
+    case "server_error":
+      return "Claude returned a server error. Retry in a moment.";
+    case "max_output_tokens":
+      return "Claude reached the maximum output length before completing the turn.";
+    case "unknown":
+      return "Claude failed to complete the turn.";
+  }
+}
+
+function claudeAssistantErrorRequiresProcessRestart(error: SDKAssistantMessageError): boolean {
+  return (
+    error === "authentication_failed" ||
+    error === "oauth_org_not_allowed" ||
+    error === "billing_error"
+  );
 }
 
 function extractContentBlockText(block: unknown): string {
@@ -2271,6 +2319,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
+        if (context.interruptRequestedTurnId !== turnState.turnId) {
+          yield* cancelAgentGatewayTurn(context.gatewaySessionLease, turnState.turnId);
+        }
+
         for (const [index, tool] of context.inFlightTools.entries()) {
           const toolStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
@@ -3006,6 +3058,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         yield* ensureSyntheticTurn(context);
+        if (message.error && context.turnState) {
+          context.turnState = {
+            ...context.turnState,
+            assistantError: {
+              code: message.error,
+              message: claudeAssistantErrorMessage(message.error),
+            },
+          };
+        }
         const content = message.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -3132,26 +3193,46 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const handleResultMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
-    ): Effect.Effect<void> =>
+    ): Effect.Effect<void, ProviderAdapterProcessError> =>
       Effect.gen(function* () {
         if (message.type !== "result") {
           return;
         }
 
-        const status =
-          hasPendingUserInterrupt(context) && message.subtype === "error_during_execution"
-            ? "interrupted"
-            : turnStatusFromResult(message);
-        const errorMessage =
-          message.subtype === "success"
-            ? undefined
-            : normalizeClaudeUserVisibleErrorMessage(message.errors[0], status);
+        const assistantError = context.turnState?.assistantError;
+        let status: ProviderRuntimeTurnStatus;
+        if (hasPendingUserInterrupt(context) && message.subtype === "error_during_execution") {
+          status = "interrupted";
+        } else if (assistantError) {
+          status = "failed";
+        } else {
+          status = turnStatusFromResult(message);
+        }
+
+        let errorMessage: string | undefined;
+        if (assistantError) {
+          errorMessage = assistantError.message;
+        } else if (message.subtype !== "success") {
+          errorMessage = normalizeClaudeUserVisibleErrorMessage(message.errors[0], status);
+        }
 
         if (status === "failed") {
           yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
         }
 
         yield* completeTurn(context, status, errorMessage, message);
+
+        // Claude Code caches account credentials in the live SDK process. An
+        // auth/account failure cannot be recovered by reusing that query after
+        // the user logs in, so retire it after publishing the failed turn. The
+        // ProviderService keeps the refreshed resume cursor from turn.completed
+        // and starts a fresh process for the next message.
+        if (assistantError && claudeAssistantErrorRequiresProcessRestart(assistantError.code)) {
+          yield* stopSessionInternal(context, {
+            emitExitEvent: true,
+            interruptStream: false,
+          });
+        }
       });
 
     // Task usage totals belong to the agent that spent them: subagent tasks feed the
@@ -3822,7 +3903,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const handleSdkMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
-    ): Effect.Effect<void> =>
+    ): Effect.Effect<void, ProviderAdapterProcessError> =>
       Effect.gen(function* () {
         yield* logNativeSdkMessage(context, message);
 
@@ -3946,10 +4027,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const performStopSessionInternal = (
       context: ClaudeSessionContext,
-      options?: { readonly emitExitEvent?: boolean },
+      options?: ClaudeStopSessionOptions,
     ): Effect.Effect<void, ProviderAdapterProcessError> =>
       Effect.gen(function* () {
         context.stopped = true;
+        yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.turnState?.turnId);
         context.gatewaySessionLease?.release();
 
         for (const [requestId, pending] of context.pendingApprovals) {
@@ -3995,7 +4077,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const streamFiber = context.streamFiber;
         context.streamFiber = undefined;
-        if (streamFiber && streamFiber.pollUnsafe() === undefined) {
+        if (
+          options?.interruptStream !== false &&
+          streamFiber &&
+          streamFiber.pollUnsafe() === undefined
+        ) {
           yield* Fiber.interrupt(streamFiber);
         }
 
@@ -4038,7 +4124,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const stopSessionInternal = (
       context: ClaudeSessionContext,
-      options?: { readonly emitExitEvent?: boolean },
+      options?: ClaudeStopSessionOptions,
     ): Effect.Effect<void, ProviderAdapterProcessError> =>
       Effect.suspend(() => {
         if (context.stopDeferred) {
@@ -5036,7 +5122,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const interruptTurn: ClaudeAdapterShape["interruptTurn"] = (
       threadId,
-      _turnId,
+      turnId,
       providerThreadId,
     ) =>
       Effect.gen(function* () {
@@ -5053,24 +5139,50 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           const taskId = context.subagentRuns.get(providerThreadId)?.taskId;
-          if (taskId === undefined) {
-            context.pendingSubagentStops.add(providerThreadId);
-            return;
-          }
-          yield* Effect.tryPromise({
-            try: () => context.query.stopTask(taskId),
-            catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
-          });
+          const stopChild =
+            taskId === undefined
+              ? Effect.sync(() => {
+                  context.pendingSubagentStops.add(providerThreadId);
+                })
+              : Effect.tryPromise({
+                  try: () => context.query.stopTask(taskId),
+                  catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+                });
+          // Claude subagents share the parent query's MCP transport. Their
+          // browser calls are consequently registered under the active parent
+          // turn, not the Task tool id. Tombstone and drain that gateway turn
+          // while stopping only the requested task; the parent query remains
+          // alive, but gateway tools stay closed until its next turn. Revoke
+          // the shared bearer before either asynchronous stop can yield so a
+          // delayed request cannot inherit authority from the following turn.
+          yield* withAgentGatewayTurnCancellation(
+            context.gatewaySessionLease,
+            context.turnState?.turnId,
+            stopChild,
+          );
           return;
         }
 
-        if (context.turnState) {
-          context.interruptRequestedTurnId = context.turnState.turnId;
+        if (turnId !== undefined && turnId !== context.turnState?.turnId) {
+          yield* Effect.logWarning("claude.stale_interrupt_ignored", {
+            threadId,
+            requestedTurnId: turnId,
+            activeTurnId: context.turnState?.turnId,
+          });
+          return;
         }
-        yield* Effect.tryPromise({
-          try: () => context.query.interrupt(),
-          catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
-        });
+        const activeTurnId = turnId ?? context.turnState?.turnId;
+        if (activeTurnId) {
+          context.interruptRequestedTurnId = activeTurnId;
+        }
+        yield* withAgentGatewayTurnCancellation(
+          context.gatewaySessionLease,
+          activeTurnId,
+          Effect.tryPromise({
+            try: () => context.query.interrupt(),
+            catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+          }),
+        );
       });
 
     // Stops one background task by its SDK task id (workflow runs and their member

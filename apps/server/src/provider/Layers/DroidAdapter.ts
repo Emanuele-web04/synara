@@ -48,8 +48,10 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -566,6 +568,7 @@ export function makeDroidAdapter(
         Effect.gen(function* () {
           if (!ctx.stopped) {
             ctx.stopped = true;
+            yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
             ctx.gatewaySessionLease?.release();
             sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
             sessions.delete(ctx.threadId);
@@ -1394,6 +1397,10 @@ export function makeDroidAdapter(
     const failDroidTurnAsTimedOut = (ctx: DroidSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
+        if (ctx.activeTurnId !== turnId) {
+          return;
+        }
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
         ctx.planCapturedTurnIds.delete(turnId);
         if (!clearAcpActiveTurn(ctx, turnId)) {
           return;
@@ -1626,6 +1633,10 @@ export function makeDroidAdapter(
             onFailure: (error) =>
               Effect.gen(function* () {
                 yield* waitForDroidQueuedTurnEventsDrained(ctx);
+                if (ctx.activeTurnId !== turnId) {
+                  return;
+                }
+                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
                 ctx.planCapturedTurnIds.delete(turnId);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
@@ -1669,6 +1680,10 @@ export function makeDroidAdapter(
                 yield* waitForDroidQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
+                if (ctx.activeTurnId !== turnId) {
+                  return;
+                }
+                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
                 const planCaptured = ctx.planCapturedTurnIds.delete(turnId);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
@@ -1790,22 +1805,29 @@ export function makeDroidAdapter(
         if (!ctx.turnStarting && ctx.activeTurnId === undefined) {
           return;
         }
+        const activeTurnId = turnId ?? ctx.activeTurnId;
         // A turn that is still starting has no prompt fiber to interrupt yet
         // (it may be gated on resume replay); flag it so startDroidTurn aborts
         // before prompting instead of running the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
-        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
-        const activePromptFiber = ctx.activePromptFiber;
-        yield* cancelDroidPromptWithGrace(ctx, activePromptFiber);
-        // Closing the process group is intentional: Factory can acknowledge
-        // cancel before nested workers quiesce, so session reuse is unsafe.
-        yield* stopSessionInternal(ctx, {
-          exitKind: "graceful",
-          reason: "Droid turn cancelled; runtime closed to stop nested work.",
-        });
+        yield* withAgentGatewayTurnCancellation(
+          ctx.gatewaySessionLease,
+          activeTurnId,
+          Effect.gen(function* () {
+            yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+            yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+            const activePromptFiber = ctx.activePromptFiber;
+            yield* cancelDroidPromptWithGrace(ctx, activePromptFiber);
+            // Closing the process group is intentional: Factory can acknowledge
+            // cancel before nested workers quiesce, so session reuse is unsafe.
+            yield* stopSessionInternal(ctx, {
+              exitKind: "graceful",
+              reason: "Droid turn cancelled; runtime closed to stop nested work.",
+            });
+          }),
+        );
       });
 
     const respondToRequest: DroidAdapterShape["respondToRequest"] = (

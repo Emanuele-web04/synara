@@ -40,9 +40,7 @@ describe("ComposerModelEffortPicker", () => {
     try {
       const trigger = page.getByRole("button", { name: "Change model and reasoning" });
       await expect.element(trigger).toHaveAttribute("title", "Low");
-      expect(
-        trigger.element().querySelector('[data-slot="composer-traits-status-icon"]'),
-      ).not.toBeNull();
+      expect(trigger.element().querySelector('[data-slot="central-icon"]')).not.toBeNull();
 
       await trigger.click();
       await expect.element(page.getByRole("menuitemradio", { name: "None" })).toBeVisible();

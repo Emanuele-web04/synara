@@ -241,6 +241,22 @@ const RETRYABLE_STREAM_CAPACITY_ERROR_CODES = new Set([
 ]);
 const DEFAULT_STREAM_CAPACITY_RETRY_MS = 1_000;
 const MAX_STREAM_CAPACITY_RETRY_MS = 10_000;
+const INITIAL_UNEXPECTED_STREAM_COMPLETION_RETRY_MS = 100;
+const MAX_UNEXPECTED_STREAM_COMPLETION_RETRY_MS = 5_000;
+const STABLE_STREAM_LIFETIME_MS = 10_000;
+
+/**
+ * Infinite subscription streams should not complete successfully. A short,
+ * exponential delay heals a dropped server subscription without allowing an
+ * immediately-completing stream to spin the renderer's event loop.
+ */
+export function getUnexpectedStreamCompletionRetryDelayMs(attempt: number): number {
+  const exponent = Math.max(0, Math.min(Math.trunc(attempt) - 1, 16));
+  return Math.min(
+    INITIAL_UNEXPECTED_STREAM_COMPLETION_RETRY_MS * 2 ** exponent,
+    MAX_UNEXPECTED_STREAM_COMPLETION_RETRY_MS,
+  );
+}
 
 /**
  * Capacity rejections are admission failures the server marks retryable: the
@@ -318,6 +334,8 @@ export class WsTransport {
   private readonly streamSettled = new Map<string, Promise<void>>();
   private readonly streamCapacityRetries = new Map<string, number>();
   private readonly streamCapacityRetryTimers = new Map<string, number>();
+  private readonly streamCompletionRetries = new Map<string, number>();
+  private readonly streamCompletionRetryTimers = new Map<string, number>();
   private readonly activeThreadStreamInputs = new Map<string, unknown>();
   private shellSubscribed = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
@@ -366,12 +384,14 @@ export class WsTransport {
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
         this.shellSubscribed = true;
         this.resetStreamCapacityRetry("orchestration.shell");
+        this.resetStreamCompletionRetry("orchestration.shell");
         this.startShellStream(client);
         return undefined as T;
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
         const threadId = (params as { threadId: string }).threadId;
         this.resetStreamCapacityRetry(`orchestration.thread:${threadId}`);
+        this.resetStreamCompletionRetry(`orchestration.thread:${threadId}`);
         this.threadSubscriptions.set(threadId, params);
         await this.startThreadStream(client, threadId, params as never);
         return undefined as T;
@@ -492,6 +512,7 @@ export class WsTransport {
     this.disposed = true;
     this.setState("disposed");
     this.resetAllStreamCapacityRetries();
+    this.resetAllStreamCompletionRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
     this.activeThreadStreamInputs.clear();
@@ -597,6 +618,7 @@ export class WsTransport {
     const oldRuntime = this.runtime;
     const oldClientScope = this.clientScope;
     this.resetAllStreamCapacityRetries();
+    this.resetAllStreamCompletionRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
     this.activeThreadStreamInputs.clear();
@@ -646,6 +668,73 @@ export class WsTransport {
     }
     this.streamCapacityRetryTimers.clear();
     this.streamCapacityRetries.clear();
+  }
+
+  private clearStreamCompletionRetryTimer(key: string): void {
+    const timeoutId = this.streamCompletionRetryTimers.get(key);
+    if (timeoutId === undefined) return;
+    window.clearTimeout(timeoutId);
+    this.streamCompletionRetryTimers.delete(key);
+  }
+
+  private resetStreamCompletionRetry(key: string): void {
+    this.clearStreamCompletionRetryTimer(key);
+    this.streamCompletionRetries.delete(key);
+  }
+
+  private resetAllStreamCompletionRetries(): void {
+    for (const timeoutId of this.streamCompletionRetryTimers.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    this.streamCompletionRetryTimers.clear();
+    this.streamCompletionRetries.clear();
+  }
+
+  private scheduleUnexpectedStreamCompletionReconnect(
+    key: string,
+    streamSessionVersion: number,
+    streamStartedAt: number,
+    restart: () => void,
+  ): void {
+    if (this.sessionVersion !== streamSessionVersion) return;
+
+    // Subscription streams send an initial snapshot, so receiving an event
+    // does not prove the stream is healthy. Only a stream that remained alive
+    // for a meaningful interval resets the backoff.
+    const streamLifetimeMs = performance.now() - streamStartedAt;
+    const previousAttempt =
+      streamLifetimeMs >= STABLE_STREAM_LIFETIME_MS
+        ? 0
+        : (this.streamCompletionRetries.get(key) ?? 0);
+    const attempt = previousAttempt + 1;
+    this.streamCompletionRetries.set(key, attempt);
+    this.clearStreamCompletionRetryTimer(key);
+
+    const timeoutId = window.setTimeout(() => {
+      if (this.streamCompletionRetryTimers.get(key) !== timeoutId) return;
+      this.streamCompletionRetryTimers.delete(key);
+      if (
+        this.disposed ||
+        this.sessionVersion !== streamSessionVersion ||
+        this.streamCleanups.has(key)
+      ) {
+        return;
+      }
+
+      // An infinite subscription completing successfully usually means the
+      // RPC feature socket became a zombie. Reopening the stream on that same
+      // client can complete immediately forever. A full reconnect restores all
+      // registered subscriptions and lets the server replay the persisted tail.
+      void this.reconnect().catch((error) => {
+        if (!this.disposed && !this.streamCleanups.has(key)) {
+          console.warn("WebSocket RPC stream reconnect failed", error);
+          // getClient() inside the registered restart applies the normal
+          // reconnect backoff after a failed reconnect.
+          restart();
+        }
+      });
+    }, getUnexpectedStreamCompletionRetryDelayMs(attempt));
+    this.streamCompletionRetryTimers.set(key, timeoutId);
   }
 
   private setCompatibilityIssue(issue: WsCompatibilityError | null): void {
@@ -707,8 +796,16 @@ export class WsTransport {
   }
 
   private startChannelStream(channel: WsPushChannel): void {
+    const requestedSessionVersion = this.sessionVersion;
     void this.getClient()
       .then((client) => {
+        if (
+          this.disposed ||
+          this.sessionVersion !== requestedSessionVersion ||
+          !this.listeners.has(channel)
+        ) {
+          return;
+        }
         const restartChannel = () => {
           if (this.listeners.has(channel)) {
             this.startChannelStream(channel);
@@ -789,6 +886,7 @@ export class WsTransport {
       .catch((error) => {
         if (
           !this.disposed &&
+          this.sessionVersion === requestedSessionVersion &&
           this.listeners.has(channel) &&
           !isTerminalCompatibilityFailure(error)
         ) {
@@ -817,6 +915,7 @@ export class WsTransport {
   }
 
   private startLifecycleStream(client: RpcClientInstance): void {
+    if (this.disposed || !this.shouldKeepLifecycleStream()) return;
     const restartLifecycle = () => {
       if (!this.shouldKeepLifecycleStream()) return;
       void this.getClient()
@@ -839,6 +938,7 @@ export class WsTransport {
   }
 
   private startShellStream(client: RpcClientInstance): void {
+    if (this.disposed || !this.shellSubscribed) return;
     const restartShell = () => {
       if (!this.shellSubscribed) return;
       void this.getClient()
@@ -903,6 +1003,9 @@ export class WsTransport {
   ): void {
     if (this.streamCleanups.has(key)) return;
     this.clearStreamCapacityRetryTimer(key);
+    this.clearStreamCompletionRetryTimer(key);
+    const streamSessionVersion = this.sessionVersion;
+    const streamStartedAt = performance.now();
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
     let resolveSettled: () => void = () => undefined;
     const settled = new Promise<void>((resolve) => {
@@ -930,6 +1033,18 @@ export class WsTransport {
           }
           if (wasReplacedOrStopped || this.disposed) {
             return;
+          }
+          if (Exit.isSuccess(exit) && restart) {
+            this.scheduleUnexpectedStreamCompletionReconnect(
+              key,
+              streamSessionVersion,
+              streamStartedAt,
+              restart,
+            );
+            return;
+          }
+          if (Exit.isFailure(exit)) {
+            this.streamCompletionRetries.delete(key);
           }
           if (restart && Exit.isFailure(exit)) {
             const capacityRetryDelayMs = getStreamCapacityRetryDelayMs(exit.cause);
@@ -983,9 +1098,11 @@ export class WsTransport {
     options?: { readonly resetCapacityRetry?: boolean },
   ): Promise<void> {
     this.clearStreamCapacityRetryTimer(key);
+    this.clearStreamCompletionRetryTimer(key);
     if (options?.resetCapacityRetry !== false) {
       this.streamCapacityRetries.delete(key);
     }
+    this.streamCompletionRetries.delete(key);
     this.activeThreadStreamInputs.delete(key);
     const cleanup = this.streamCleanups.get(key);
     const settled = this.streamSettled.get(key) ?? Promise.resolve();

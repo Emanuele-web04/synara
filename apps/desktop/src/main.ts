@@ -95,7 +95,7 @@ import {
 } from "./macIconCacheRefresh";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
-import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
+import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
 import {
   installResumableUpdateDownloader,
   type ResumableDownloaderTarget,
@@ -159,9 +159,9 @@ import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runti
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
 import { registerBrowserIpcHandlers, sendBrowserCopyLink, sendBrowserState } from "./browserIpc";
 import {
-  BrowserUsePipeServer,
-  SYNARA_BROWSER_USE_PIPE_PATH,
-  resolveBrowserUsePipeBackendEnv,
+  BrowserHostPipeServer,
+  SYNARA_BROWSER_HOST_PIPE_PATH,
+  resolveBrowserHostPipeBackendEnv,
 } from "./browserUsePipeServer";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import {
@@ -221,6 +221,8 @@ const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
 const DESKTOP_BACKEND_SHUTDOWN_TOKEN = Crypto.randomBytes(32).toString("hex");
+const DESKTOP_BROWSER_HOST_CAPABILITY = Crypto.randomBytes(32).toString("base64url");
+const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // Electron's single-instance lock is scoped through userData on Windows/Linux.
 // Set the flavor-specific profile first so Stable, Dev, and Canary never contend
 // for the same lock even when they use the same Electron executable.
@@ -283,7 +285,7 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
-let browserUsePipeServer: BrowserUsePipeServer | null = null;
+let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredUpdaterCacheDirName: string | null = null;
@@ -324,17 +326,19 @@ function startBrowserPerformanceLogging(): void {
   browserPerfInterval.unref();
 }
 
-async function ensureBrowserUsePipeServer(): Promise<void> {
-  if (browserUsePipeServer || !SYNARA_BROWSER_USE_PIPE_PATH) {
+async function ensureBrowserHostPipeServer(): Promise<void> {
+  if (browserHostPipeServer || !SYNARA_BROWSER_HOST_PIPE_PATH) {
     return;
   }
-  const server = new BrowserUsePipeServer(browserManager, {
-    requestOpenPanel: () => {
-      mainWindow?.webContents.send(IPC.browser.requestOpenPanel);
+  const server = new BrowserHostPipeServer(browserManager, {
+    capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    requestOpenPanel: (threadId) => {
+      if (!threadId) return;
+      mainWindow?.webContents.send(IPC.browser.requestOpenPanel, { threadId });
     },
   });
   await server.start();
-  browserUsePipeServer = server;
+  browserHostPipeServer = server;
 }
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
@@ -2702,9 +2706,10 @@ function backendNodeArgs(): string[] {
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   return {
-    ...resolveBrowserUsePipeBackendEnv(
+    ...resolveBrowserHostPipeBackendEnv(
       process.env,
-      browserUsePipeServer ? SYNARA_BROWSER_USE_PIPE_PATH : null,
+      browserHostPipeServer ? SYNARA_BROWSER_HOST_PIPE_PATH : null,
+      browserHostPipeServer ? DESKTOP_BROWSER_HOST_CAPABILITY_FD : null,
     ),
     // Point the backend's HTTP static route at the same swap-immune snapshot the
     // synara:// protocol serves, so both surfaces survive app.asar being replaced.
@@ -2769,8 +2774,23 @@ function startBackend(): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
     },
-    stdio: captureBackendLogs ? ["ignore", "pipe", "pipe"] : "inherit",
+    stdio: captureBackendLogs
+      ? ["ignore", "pipe", "pipe", "pipe"]
+      : ["inherit", "inherit", "inherit", "pipe"],
   });
+  const capabilityPipe = child.stdio[DESKTOP_BROWSER_HOST_CAPABILITY_FD];
+  if (capabilityPipe && "end" in capabilityPipe) {
+    capabilityPipe.on("error", (error) => {
+      if (!isBrokenPipeError(error)) {
+        safeConsoleError("[desktop] failed to deliver browser host capability", error);
+      }
+    });
+    capabilityPipe.end(DESKTOP_BROWSER_HOST_CAPABILITY);
+  } else {
+    child.kill();
+    scheduleBackendRestart("browser host capability pipe was unavailable");
+    return;
+  }
   const listeningDetector = new ServerListeningDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
@@ -2920,17 +2940,17 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
   });
 }
 
-async function disposeBrowserUsePipeServerForShutdown(reason: string): Promise<void> {
-  const pipeServer = browserUsePipeServer;
-  browserUsePipeServer = null;
+async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
+  const pipeServer = browserHostPipeServer;
+  browserHostPipeServer = null;
   if (!pipeServer) return;
 
   try {
     await pipeServer.dispose();
   } catch (error: unknown) {
     const message = formatErrorMessage(error);
-    writeDesktopLogHeader(`${reason} browser-use pipe dispose failed message=${message}`);
-    console.warn(`[desktop] Failed to dispose browser-use pipe during ${reason}: ${message}`);
+    writeDesktopLogHeader(`${reason} browser host pipe dispose failed message=${message}`);
+    console.warn(`[desktop] Failed to dispose browser host pipe during ${reason}: ${message}`);
   }
 }
 
@@ -2949,7 +2969,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
     cancelBackendReadinessWait();
     appSnapManager?.dispose();
     appSnapManager = null;
-    await disposeBrowserUsePipeServerForShutdown(reason);
+    await disposeBrowserHostPipeServerForShutdown(reason);
     browserManager.dispose();
     restoreStdIoCapture?.();
     desktopShutdownComplete = true;
@@ -3494,23 +3514,44 @@ function createWindow(): BrowserWindow {
 }
 
 function configureMediaPermissions(): void {
-  for (const targetSession of [
-    session.defaultSession,
-    session.fromPartition(BROWSER_SESSION_PARTITION),
-  ]) {
+  const trustedMainRenderer = () => {
+    const renderer = mainWindow?.webContents ?? null;
+    return renderer && !renderer.isDestroyed() ? renderer : null;
+  };
+  const permissionTargets = [
+    {
+      targetSession: session.defaultSession,
+      trustedRequester: trustedMainRenderer,
+    },
+    {
+      // Browser pages are untrusted web origins. They must never inherit the
+      // microphone grant used by Synara's own voice-composer renderer.
+      targetSession: session.fromPartition(BROWSER_SESSION_PARTITION),
+      trustedRequester: () => null,
+    },
+  ];
+
+  for (const { targetSession, trustedRequester } of permissionTargets) {
     if (!targetSession) continue;
 
-    targetSession.setPermissionCheckHandler((_webContents, permission) => {
-      if (permission === "media") {
-        return process.platform === "darwin"
-          ? systemPreferences.getMediaAccessStatus("microphone") === "granted"
-          : false;
+    targetSession.setPermissionCheckHandler((webContents, permission, origin, details) => {
+      if (
+        permission !== "media" ||
+        !isTrustedMediaPermissionRequest(webContents, trustedRequester(), details, origin)
+      ) {
+        return false;
       }
-      return false;
+
+      return process.platform === "darwin"
+        ? systemPreferences.getMediaAccessStatus("microphone") === "granted"
+        : true;
     });
 
-    targetSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-      if (permission !== "media" || !shouldAllowMediaPermissionRequest(details)) {
+    targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      if (
+        permission !== "media" ||
+        !isTrustedMediaPermissionRequest(webContents, trustedRequester(), details)
+      ) {
         callback(false);
         return;
       }
@@ -3564,9 +3605,9 @@ async function bootstrap(): Promise<void> {
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   try {
-    await ensureBrowserUsePipeServer();
+    await ensureBrowserHostPipeServer();
   } catch (error) {
-    console.warn("[Synara browser] Failed to start browser-use native pipe", error);
+    console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");

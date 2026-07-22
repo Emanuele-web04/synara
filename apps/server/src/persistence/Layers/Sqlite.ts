@@ -76,9 +76,7 @@ const makeSetup = (dbPath?: string) =>
       const migrations = dbPath
         ? runWithPreMigrationBackup(dbPath, runMigrations())
         : runMigrations();
-      yield* dbPath
-        ? migrations.pipe(Effect.ensuring(repairSqliteFilePermissions(dbPath)))
-        : migrations;
+      yield* migrations;
     }),
   );
 
@@ -92,7 +90,13 @@ export const makeSqlitePersistenceLive = (dbPath: string) =>
         const path = yield* Path.Path;
         yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
         yield* requireNoPendingMigrationRecovery(dbPath);
+        // Set the mode before SQLite opens the database. Never reopen the
+        // database, WAL, or SHM merely to chmod them while this connection is
+        // live: closing any descriptor for the same inode releases POSIX
+        // process locks and can leave a mapped WAL index vulnerable to SIGBUS.
+        // SQLite creates its sidecars with the database's private mode.
         yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
+        yield* repairSqliteFilePermissions(dbPath);
 
         return Layer.provideMerge(makeSetup(dbPath), makeRuntimeSqliteLayer({ filename: dbPath }));
       }),

@@ -16,11 +16,19 @@
  */
 import type * as Acp from "@agentclientprotocol/sdk";
 
-import type { AgentGatewayMcpConnection } from "./Services/AgentGatewayCredentials";
+import type {
+  AgentGatewayMcpConnection,
+  AgentGatewayStdioProxySpawn,
+} from "./Services/AgentGatewayCredentials.ts";
 
 export const SYNARA_MCP_SERVER_NAME = "synara";
 export const SYNARA_AGENT_GATEWAY_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_TOKEN";
+export const SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN";
 export const SYNARA_AGENT_GATEWAY_URL_ENV = "SYNARA_AGENT_GATEWAY_URL";
+
+function authorizationHeader(connection: AgentGatewayMcpConnection): string {
+  return `Bearer ${connection.bearerToken}`;
+}
 
 /**
  * Codex reads MCP servers from `config.toml`; the config file is shared by all
@@ -59,9 +67,10 @@ export interface OpenCodeMcpRemoteServerConfig {
 }
 
 /**
- * OpenCode's dynamic `mcp.add` endpoint is process/directory scoped rather
- * than session scoped. Callers must only install this config into a provider
- * server that is proven to be dedicated to the owning Synara thread.
+ * OpenCode's dynamic `mcp.add` endpoint is server/directory scoped rather
+ * than session scoped. Callers must install this config through either a
+ * provider process dedicated to the owning Synara thread or an exclusive
+ * external-server/directory lock held for the full agent turn.
  */
 export function buildOpenCodeMcpServer(
   connection: AgentGatewayMcpConnection,
@@ -70,7 +79,7 @@ export function buildOpenCodeMcpServer(
     type: "remote",
     url: connection.url,
     enabled: true,
-    headers: { Authorization: `Bearer ${connection.bearerToken}` },
+    headers: { Authorization: authorizationHeader(connection) },
     oauth: false,
   };
 }
@@ -85,22 +94,6 @@ export type AgentGatewayMcpFetch = (
   input: string | URL | Request,
   init?: RequestInit,
 ) => Promise<Response>;
-
-interface JsonRpcSuccess {
-  readonly jsonrpc: "2.0";
-  readonly id: string;
-  readonly result: unknown;
-}
-
-interface JsonRpcFailure {
-  readonly jsonrpc: "2.0";
-  readonly id: string | null;
-  readonly error: {
-    readonly code: number;
-    readonly message: string;
-    readonly data?: unknown;
-  };
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -118,7 +111,7 @@ async function postAgentGatewayJsonRpc(input: {
   const response = await fetchImpl(input.connection.url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${input.connection.bearerToken}`,
+      Authorization: authorizationHeader(input.connection),
       Accept: "application/json",
       "Content-Type": "application/json",
     },
@@ -138,14 +131,13 @@ async function postAgentGatewayJsonRpc(input: {
     throw new Error("Synara MCP returned an invalid JSON-RPC response.");
   }
   if ("error" in payload) {
-    const failure = payload as unknown as JsonRpcFailure;
-    throw new Error(failure.error?.message || "Synara MCP request failed.");
+    const failure = isRecord(payload.error) ? payload.error : null;
+    throw new Error(failure?.message ? String(failure.message) : "Synara MCP request failed.");
   }
-  const success = payload as unknown as JsonRpcSuccess;
-  if (success.id !== id || !("result" in success)) {
+  if (payload.id !== id || !("result" in payload)) {
     throw new Error("Synara MCP returned a mismatched JSON-RPC response.");
   }
-  return success.result;
+  return payload.result;
 }
 
 /** Load the canonical gateway tool descriptors for native-tool providers. */
@@ -202,29 +194,65 @@ export function buildClaudeMcpServers(
     [SYNARA_MCP_SERVER_NAME]: {
       type: "http",
       url: connection.url,
-      headers: { Authorization: `Bearer ${connection.bearerToken}` },
+      headers: { Authorization: authorizationHeader(connection) },
     },
   };
 }
 
-export interface AcpStdioProxySpawn {
-  readonly command: string;
-  readonly args: ReadonlyArray<string>;
+export type AcpStdioProxySpawn = AgentGatewayStdioProxySpawn;
+
+export interface AntigravityMcpPluginConfig {
+  readonly mcpServers: Record<
+    string,
+    {
+      readonly command: string;
+      readonly args: ReadonlyArray<string>;
+      readonly env: Record<string, string>;
+      readonly disabled: false;
+      readonly disabledTools: ReadonlyArray<string>;
+    }
+  >;
+}
+
+/**
+ * Build the secret-free MCP fragment installed with Synara's Antigravity
+ * plugin. Antigravity expands the endpoint plus a one-shot bootstrap value
+ * from each `agy` process. The stdio proxy consumes that value during MCP
+ * initialization and keeps the exchanged session bearer in its own memory,
+ * so `run_command` descendants never inherit the bearer.
+ *
+ * `ELECTRON_RUN_AS_NODE` keeps the generated proxy runnable when a packaged
+ * desktop uses its Electron executable as `process.execPath`; it is harmless
+ * for regular Node and Bun executables.
+ */
+export function buildAntigravityMcpPluginConfig(
+  stdioProxy: AcpStdioProxySpawn,
+): AntigravityMcpPluginConfig {
+  return {
+    mcpServers: {
+      [SYNARA_MCP_SERVER_NAME]: {
+        command: stdioProxy.command,
+        args: [...stdioProxy.args],
+        env: {
+          [SYNARA_AGENT_GATEWAY_URL_ENV]: `$${SYNARA_AGENT_GATEWAY_URL_ENV}`,
+          [SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV]: `$${SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV}`,
+          ELECTRON_RUN_AS_NODE: "1",
+        },
+        disabled: false,
+        disabledTools: [],
+      },
+    },
+  };
 }
 
 // Structural view of an ACP initialize response so callers with untyped
 // (raw JSON) responses can reuse the same transport negotiation.
 export interface AcpInitializeCapabilitiesView {
-  readonly agentCapabilities?:
-    | {
-        readonly mcpCapabilities?:
-          | {
-              readonly http?: boolean | undefined;
-            }
-          | undefined;
-      }
-    | undefined
-    | null;
+  readonly agentCapabilities?: {
+    readonly mcpCapabilities?: {
+      readonly http?: boolean;
+    };
+  } | null;
 }
 
 /**
@@ -245,7 +273,7 @@ export function buildAcpSynaraMcpServers(input: {
         type: "http",
         name: SYNARA_MCP_SERVER_NAME,
         url: input.connection.url,
-        headers: [{ name: "Authorization", value: `Bearer ${input.connection.bearerToken}` }],
+        headers: [{ name: "Authorization", value: authorizationHeader(input.connection) }],
       },
     ];
   }

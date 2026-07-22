@@ -82,6 +82,7 @@ import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
+import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import {
   pullRequestDetailInputFromPane,
   pullRequestPaneTabLabel,
@@ -528,9 +529,21 @@ export function SingleChatSurface(props: {
       requestImmediateDockHydration("browser");
       toggleSingletonPane(props.threadId, { kind: "browser" });
     },
-    onOpen: () => {
-      requestImmediateDockHydration("browser");
-      openPane(props.threadId, { kind: "browser" });
+    onOpen: (requestedThreadId) => {
+      routeSingleBrowserPanelOpenRequest({
+        currentThreadId: props.threadId,
+        requestedThreadId,
+        requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
+        openBrowserPane: (threadId) => openPane(threadId, { kind: "browser" }),
+        navigateToThread: (threadId, panel) => {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId },
+            replace: true,
+            search: () => ({ panel }),
+          });
+        },
+      });
     },
   });
 

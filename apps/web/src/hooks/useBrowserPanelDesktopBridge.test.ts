@@ -2,6 +2,7 @@
 // Purpose: Characterize the shared desktop browser-panel menu and open-request subscriptions.
 // Layer: Web hook test
 
+import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const reactHarness = vi.hoisted(() => {
@@ -59,7 +60,7 @@ import { useBrowserPanelDesktopBridge } from "./useBrowserPanelDesktopBridge";
 
 interface DesktopBridgeHarness {
   menuListener: ((action: string) => void) | null;
-  openListener: (() => void) | null;
+  openListener: ((payload: { threadId: ThreadId }) => void) | null;
   unsubscribeMenu: ReturnType<typeof vi.fn>;
   unsubscribeOpen: ReturnType<typeof vi.fn>;
   onMenuAction: ReturnType<typeof vi.fn>;
@@ -79,10 +80,12 @@ function createDesktopBridgeHarness(): DesktopBridgeHarness {
     harness.menuListener = listener;
     return harness.unsubscribeMenu;
   });
-  harness.onOpenRequest.mockImplementation((listener: () => void) => {
-    harness.openListener = listener;
-    return harness.unsubscribeOpen;
-  });
+  harness.onOpenRequest.mockImplementation(
+    (listener: (payload: { threadId: ThreadId }) => void) => {
+      harness.openListener = listener;
+      return harness.unsubscribeOpen;
+    },
+  );
   return harness;
 }
 
@@ -97,7 +100,7 @@ beforeEach(() => {
 });
 
 describe("useBrowserPanelDesktopBridge", () => {
-  it("routes only the browser menu action and the browser open request", () => {
+  it("routes only the browser menu action and delivers the requested thread", () => {
     const bridge = createDesktopBridgeHarness();
     vi.stubGlobal("window", {
       desktopBridge: {
@@ -107,14 +110,15 @@ describe("useBrowserPanelDesktopBridge", () => {
     });
     const onToggle = vi.fn();
     const onOpen = vi.fn();
+    const requestedThreadId = ThreadId.makeUnsafe("thread-requested-by-agent");
 
     render({ onToggle, onOpen });
     bridge.menuListener?.("open-settings");
     bridge.menuListener?.("toggle-browser");
-    bridge.openListener?.();
+    bridge.openListener?.({ threadId: requestedThreadId });
 
     expect(onToggle).toHaveBeenCalledOnce();
-    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(requestedThreadId);
   });
 
   it("keeps subscriptions stable, invokes the latest callbacks, and unsubscribes when inactive", () => {
@@ -130,6 +134,7 @@ describe("useBrowserPanelDesktopBridge", () => {
     const firstOpen = vi.fn();
     const latestToggle = vi.fn();
     const latestOpen = vi.fn();
+    const requestedThreadId = ThreadId.makeUnsafe("thread-latest-handler");
     render({ onToggle: firstToggle, onOpen: firstOpen });
     render({ onToggle: latestToggle, onOpen: latestOpen });
 
@@ -138,11 +143,11 @@ describe("useBrowserPanelDesktopBridge", () => {
     expect(bridge.unsubscribeMenu).not.toHaveBeenCalled();
     expect(bridge.unsubscribeOpen).not.toHaveBeenCalled();
     bridge.menuListener?.("toggle-browser");
-    bridge.openListener?.();
+    bridge.openListener?.({ threadId: requestedThreadId });
     expect(firstToggle).not.toHaveBeenCalled();
     expect(firstOpen).not.toHaveBeenCalled();
     expect(latestToggle).toHaveBeenCalledOnce();
-    expect(latestOpen).toHaveBeenCalledOnce();
+    expect(latestOpen).toHaveBeenCalledExactlyOnceWith(requestedThreadId);
 
     render({ onToggle: null, onOpen: null });
     expect(bridge.unsubscribeMenu).toHaveBeenCalledOnce();
