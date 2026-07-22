@@ -7,6 +7,10 @@ import {
 } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
+import {
+  isOrdinaryProjectRow,
+  type SpaceAssignmentWorkspacePaths,
+} from "../orchestration/commandInvariants.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -57,6 +61,7 @@ export interface ThreadReadToolsInput {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
+  readonly workspacePaths: SpaceAssignmentWorkspacePaths;
 }
 
 export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<ToolEntry> {
@@ -66,6 +71,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     providerDiscovery,
     loadProviderAvailabilities,
     requireThreadShell,
+    workspacePaths,
   } = input;
 
   const contextTool: ToolEntry = {
@@ -170,7 +176,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     definition: {
       name: "synara_list_projects",
       description:
-        "List Synara projects (id, title, workspace root). Use before creating a thread in another project.",
+        "List Synara projects (id, title, workspace root). System-managed containers (the Chats and Studio surfaces) are not projects and are excluded. Use before creating a thread in another project.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { title: "List Synara projects", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
@@ -178,12 +184,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       snapshotQuery.getShellSnapshot().pipe(
         Effect.map((snapshot) =>
           mcpToolResultJson({
-            projects: snapshot.projects.map((project) => ({
-              projectId: project.id,
-              title: project.title,
-              workspaceRoot: project.workspaceRoot,
-              isPinned: project.isPinned,
-            })),
+            projects: snapshot.projects
+              .filter((project) =>
+                isOrdinaryProjectRow({
+                  projectKind: project.kind,
+                  projectTitle: project.title,
+                  projectWorkspaceRoot: project.workspaceRoot,
+                  workspacePaths,
+                }),
+              )
+              .map((project) => ({
+                projectId: project.id,
+                title: project.title,
+                workspaceRoot: project.workspaceRoot,
+                isPinned: project.isPinned,
+              })),
           }),
         ),
         Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),

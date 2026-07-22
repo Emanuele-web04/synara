@@ -20,6 +20,9 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -256,6 +259,7 @@ function makeHarnessLayer(
       readonly state?: "running" | "completed" | "interrupted";
     };
     readonly projectScripts?: OrchestrationProjectShell["scripts"];
+    readonly extraProjects?: ReadonlyArray<OrchestrationProjectShell>;
     readonly diagnosticActivities?: ReadonlyArray<DiagnosticThreadActivity>;
     readonly diagnosticEvents?: ReadonlyArray<OrchestrationEvent>;
     readonly providerRuntimeEvents?: ReadonlyArray<PersistedProviderRuntimeEvent>;
@@ -356,7 +360,7 @@ function makeHarnessLayer(
     getShellSnapshot: () =>
       Effect.succeed({
         snapshotSequence: 1,
-        projects: [makeProjectShell(options.projectScripts)],
+        projects: [makeProjectShell(options.projectScripts), ...(options.extraProjects ?? [])],
         threads: [...threadsById.values()],
         updatedAt: NOW,
       }),
@@ -1363,6 +1367,51 @@ describe("AgentGateway", () => {
       assert.property(createThreadProperties, "baseRef");
       assert.notProperty(createThreadProperties, "baseBranch");
       assert.notProperty(createThreadProperties, "branchName");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("lists only ordinary projects, excluding system-managed containers", () => {
+    // ServerConfig.layerTest canonicalizes the home dir via realpath, so the legacy
+    // Home row must use the same canonical form for the workspace-root match to hold.
+    const homeDir = realpathSync(homedir());
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      extraProjects: [
+        {
+          ...makeProjectShell(),
+          id: ProjectId.makeUnsafe("project-chat-container"),
+          kind: "chat",
+          title: "che progetti ci sono in synara",
+          workspaceRoot: `${homeDir}/Documents/Synara/2026-03-01/chat`,
+        },
+        {
+          ...makeProjectShell(),
+          id: ProjectId.makeUnsafe("project-studio-container"),
+          kind: "studio",
+          title: "Studio",
+          workspaceRoot: `${homeDir}/Documents/Synara/Studio`,
+        },
+        {
+          ...makeProjectShell(),
+          id: ProjectId.makeUnsafe("project-legacy-home"),
+          kind: "project",
+          title: "Home",
+          workspaceRoot: homeDir,
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_list_projects",
+        args: {},
+      });
+      const payload = toolResultJson(response.result);
+      const projects = payload.projects as Array<{ projectId: string }>;
+      assert.deepEqual(
+        projects.map((project) => project.projectId),
+        [PROJECT_ID as string],
+      );
     }).pipe(Effect.provide(gatewayLayer));
   });
 

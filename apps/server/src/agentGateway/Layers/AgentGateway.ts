@@ -169,6 +169,10 @@ export const makeAgentGateway = Effect.gen(function* () {
     providerDiscovery,
     loadProviderAvailabilities,
     requireThreadShell,
+    workspacePaths: {
+      homeDir: serverConfig.homeDir,
+      chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    },
   });
   const diagnosticTools = makeThreadDiagnosticTools({
     snapshotQuery,

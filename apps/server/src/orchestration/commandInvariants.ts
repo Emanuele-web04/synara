@@ -14,9 +14,10 @@ import type {
 } from "@synara/contracts";
 import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
 import {
-  normalizeWorkspaceRootForComparison,
-  workspaceRootsEqual,
-} from "@synara/shared/threadWorkspace";
+  isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
+  isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
+} from "@synara/shared/projectContainers";
+import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -199,16 +200,38 @@ export function isLegacyHomeChatContainerRow(input: {
   readonly projectWorkspaceRoot: string;
   readonly workspacePaths: SpaceAssignmentWorkspacePaths | undefined;
 }): boolean {
-  const homeDir = input.workspacePaths?.homeDir.trim() ?? "";
-  if (homeDir.length === 0 || input.projectTitle !== "Home") {
-    return false;
-  }
-  const chatWorkspaceRoot = input.workspacePaths?.chatWorkspaceRoot.trim() || homeDir;
-  const comparisonOptions = { platform: process.platform } as const;
-  return (
-    workspaceRootsEqual(input.projectWorkspaceRoot, chatWorkspaceRoot, comparisonOptions) ||
-    workspaceRootsEqual(input.projectWorkspaceRoot, homeDir, comparisonOptions)
-  );
+  return isSharedLegacyHomeChatContainerRow({
+    projectTitle: input.projectTitle,
+    projectWorkspaceRoot: input.projectWorkspaceRoot,
+    paths: {
+      homeDir: input.workspacePaths?.homeDir ?? null,
+      chatWorkspaceRoot: input.workspacePaths?.chatWorkspaceRoot ?? null,
+    },
+    comparisonOptions: { platform: process.platform },
+  });
+}
+
+/**
+ * Server half of the web's project partitioning: ordinary projects are the user-visible
+ * ones. Managed chat and Studio containers are excluded by kind alone; the legacy Home
+ * chat container kept `kind: "project"` and is recognized by its row shape instead.
+ */
+export function isOrdinaryProjectRow(input: {
+  readonly projectKind: ProjectKind | undefined;
+  readonly projectTitle: string;
+  readonly projectWorkspaceRoot: string;
+  readonly workspacePaths: SpaceAssignmentWorkspacePaths | undefined;
+}): boolean {
+  return isSharedOrdinaryProjectRow({
+    projectKind: input.projectKind,
+    projectTitle: input.projectTitle,
+    projectWorkspaceRoot: input.projectWorkspaceRoot,
+    paths: {
+      homeDir: input.workspacePaths?.homeDir ?? null,
+      chatWorkspaceRoot: input.workspacePaths?.chatWorkspaceRoot ?? null,
+    },
+    comparisonOptions: { platform: process.platform },
+  });
 }
 
 /** The rejecting form for explicit assignment commands, where a bad target is an error. */
