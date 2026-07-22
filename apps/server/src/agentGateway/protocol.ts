@@ -41,6 +41,7 @@ export interface McpToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  readonly outputSchema?: Record<string, unknown>;
   readonly annotations?: {
     readonly title?: string;
     readonly readOnlyHint?: boolean;
@@ -51,8 +52,12 @@ export interface McpToolDefinition {
 }
 
 export interface McpToolCallResult {
-  readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
+  readonly content: ReadonlyArray<
+    | { readonly type: "text"; readonly text: string }
+    | { readonly type: "image"; readonly data: string; readonly mimeType: string }
+  >;
   readonly isError?: boolean;
+  readonly structuredContent?: Record<string, unknown>;
 }
 
 export function mcpToolResultText(text: string): McpToolCallResult {

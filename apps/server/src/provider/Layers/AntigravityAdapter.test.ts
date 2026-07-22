@@ -1,16 +1,32 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ThreadId } from "@synara/contracts";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
+import { ServerConfig } from "../../config";
+import {
+  AgentGatewayCredentials,
+  type AgentGatewayCredentialsShape,
+} from "../../agentGateway/Services/AgentGatewayCredentials";
+import { AntigravityAdapter } from "../Services/AntigravityAdapter";
 import {
   antigravityPromptCommandLineIssue,
+  type AntigravityAdapterDependencies,
   buildAntigravityCaptureCommand,
   buildAntigravityHookConfig,
+  buildAntigravityTurnProcessEnvironment,
+  buildAntigravityTurnPrompt,
+  ensureCapturePlugin,
   hookScriptSource,
   makeAntigravityRuntimeEventBase,
+  makeAntigravityAdapterLive,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
   readCompleteAntigravityLines,
@@ -25,7 +41,7 @@ function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEn
     env: { ...process.env, ...env },
     input,
     encoding: "utf8",
-    timeout: 1_000,
+    timeout: 5_000,
   });
 }
 
@@ -142,6 +158,269 @@ Claude Sonnet 5 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("rotates the gateway lease per print turn and rejects a retained prior bootstrap", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-turn-lease-"));
+    const liveTokens = new Set<string>();
+    const bootstrapOwners = new Map<string, string>();
+    const revokedTokens: string[] = [];
+    const spawnedEnvironments: NodeJS.ProcessEnv[] = [];
+    let tokenSequence = 0;
+    let bootstrapSequence = 0;
+    const issueSessionToken = () => {
+      const token = `turn-session-${String(++tokenSequence)}`;
+      liveTokens.add(token);
+      return token;
+    };
+    const credentials: AgentGatewayCredentialsShape = {
+      mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+      setListeningPort: () => undefined,
+      issueSessionToken: () => issueSessionToken(),
+      verifySessionToken: (token) => (liveTokens.has(token) ? "thread-antigravity" : null),
+      verifySession: () => null,
+      issueStdioBootstrapToken: (sessionToken) => {
+        if (!liveTokens.has(sessionToken)) return null;
+        const bootstrap = `turn-bootstrap-${String(++bootstrapSequence)}`;
+        bootstrapOwners.set(bootstrap, sessionToken);
+        return bootstrap;
+      },
+      exchangeStdioBootstrapToken: (bootstrap) => {
+        const owner = bootstrapOwners.get(bootstrap);
+        bootstrapOwners.delete(bootstrap);
+        return owner && liveTokens.has(owner) ? owner : null;
+      },
+      bindWriteAuthority: () => null,
+      verifyWriteAuthority: () => false,
+      registerInFlightRequest: () => () => undefined,
+      cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+      cancelSessionTurnRequests: () => Promise.resolve(),
+      retireSessionTurn: () => Promise.resolve(),
+      revokeSessionToken: (token) => {
+        liveTokens.delete(token);
+        revokedTokens.push(token);
+        for (const [bootstrap, owner] of bootstrapOwners) {
+          if (owner === token) bootstrapOwners.delete(bootstrap);
+        }
+      },
+      connectionForThread: () => ({
+        url: "http://127.0.0.1:3773/mcp",
+        bearerToken: issueSessionToken(),
+      }),
+      stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+    };
+    let processSequence = 0;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      spawnedEnvironments.push(options.env ?? {});
+      const child = new EventEmitter() as ChildProcess;
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      Object.assign(child, {
+        pid: 10_000 + ++processSequence,
+        stdout,
+        stderr,
+        killed: false,
+        kill: () => true,
+      });
+      setTimeout(() => {
+        stdout.end("done\n");
+        stderr.end();
+        child.emit("close", 0, null);
+      }, 50).unref();
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-turn-lease");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const waitUntilReady = Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              const session = (yield* adapter.listSessions()).find(
+                (candidate) => candidate.threadId === threadId,
+              );
+              if (session?.status === "ready") return;
+              yield* Effect.sleep(10);
+            }
+            throw new Error("Antigravity test turn did not settle.");
+          });
+
+          yield* adapter.sendTurn({ threadId, input: "turn A", attachments: [] });
+          const bootstrapA = spawnedEnvironments[0]?.SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN;
+          expect(bootstrapA).toBe("turn-bootstrap-1");
+          yield* waitUntilReady;
+          expect(revokedTokens).toEqual(["turn-session-1"]);
+
+          yield* adapter.sendTurn({ threadId, input: "turn B", attachments: [] });
+          const bootstrapB = spawnedEnvironments[1]?.SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN;
+          expect(bootstrapB).toBe("turn-bootstrap-2");
+          expect(credentials.exchangeStdioBootstrapToken(bootstrapA!)).toBeNull();
+          expect(credentials.exchangeStdioBootstrapToken(bootstrapB!)).toBe("turn-session-2");
+          yield* waitUntilReady;
+          expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2"]);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-turn-lease-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("installs the generated Synara MCP plugin alongside the capture hooks", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-home-test-"));
+    const stdioProxy = {
+      command: "/Applications/Synara.app/Contents/MacOS/Synara",
+      args: ["/state/agent-gateway-mcp-proxy.mjs"],
+    };
+    const invocations: Array<{
+      readonly command: string;
+      readonly args: string[];
+      readonly options: { cwd?: string; timeoutMs?: number };
+    }> = [];
+    try {
+      await ensureCapturePlugin("/usr/local/bin/agy", stdioProxy, {
+        homeDir,
+        runHelper: async (command, args, options) => {
+          if (options === undefined) {
+            throw new Error("Expected plugin installation options.");
+          }
+          invocations.push({ command, args, options });
+          return { stdout: "installed", stderr: "", code: 0 };
+        },
+      });
+
+      const pluginDir = path.join(
+        homeDir,
+        ".gemini",
+        "antigravity-cli",
+        "plugins",
+        "synara-capture",
+      );
+      expect(invocations).toEqual([
+        {
+          command: "/usr/local/bin/agy",
+          args: ["plugin", "install", pluginDir],
+          options: { timeoutMs: 30_000 },
+        },
+      ]);
+      expect(
+        JSON.parse(await fs.readFile(path.join(pluginDir, "mcp_config.json"), "utf8")),
+      ).toEqual({
+        mcpServers: {
+          synara: {
+            command: stdioProxy.command,
+            args: stdioProxy.args,
+            env: {
+              SYNARA_AGENT_GATEWAY_URL: "$SYNARA_AGENT_GATEWAY_URL",
+              SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN: "$SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN",
+              ELECTRON_RUN_AS_NODE: "1",
+            },
+            disabled: false,
+            disabledTools: [],
+          },
+        },
+      });
+      await expect(fs.readFile(path.join(pluginDir, "hooks.json"), "utf8")).resolves.toContain(
+        "PreToolUse",
+      );
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives an Antigravity turn only its thread-scoped gateway credential", () => {
+    const env = buildAntigravityTurnProcessEnvironment({
+      eventFile: "/tmp/thread-a-hooks.ndjson",
+      gatewayConnection: {
+        url: "http://127.0.0.1:3773/mcp",
+      },
+      gatewayBootstrapToken: "thread-a-bootstrap",
+      baseEnv: {
+        PATH: "/usr/bin",
+        HOME: "/home/test",
+        GEMINI_API_KEY: "gemini-key",
+        SYNARA_AGENT_GATEWAY_URL: "http://127.0.0.1:9999/stale",
+        SYNARA_AGENT_GATEWAY_TOKEN: "stale-token",
+        SYNARA_AUTH_TOKEN: "host-control-plane-token",
+        SYNARA_BROWSER_HOST_PIPE_PATH: "/tmp/desktop.sock",
+        SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/legacy.sock",
+        SYNARA_BROWSER_HOST_CAPABILITY: "desktop-capability",
+        SYNARA_BROWSER_HOST_CAPABILITY_FD: "3",
+        NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/desktop.sock",
+      },
+    });
+
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/test",
+      GEMINI_API_KEY: "gemini-key",
+      SYNARA_AGENT_GATEWAY_URL: "http://127.0.0.1:3773/mcp",
+      SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN: "thread-a-bootstrap",
+      SYNARA_ANTIGRAVITY_EVENTS: "/tmp/thread-a-hooks.ndjson",
+      SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+    });
+  });
+
+  it("advertises canonical browser tools only while the session owns a gateway lease", () => {
+    const withLease = {};
+    const autonomousPrompt = buildAntigravityTurnPrompt(withLease, {
+      prompt: "Ouvre YouTube dans le navigateur intégré.",
+      hasGatewaySessionLease: true,
+    });
+    expect(autonomousPrompt).toContain("Use the browser_* tools autonomously");
+    expect(autonomousPrompt).toContain("browser_open");
+    expect(autonomousPrompt).toContain("Ouvre YouTube dans le navigateur intégré.");
+    expect(
+      buildAntigravityTurnPrompt(withLease, {
+        prompt: "Continue.",
+        hasGatewaySessionLease: true,
+      }),
+    ).toBe("Continue.");
+
+    const withoutLease = {};
+    const identityOnlyPrompt = buildAntigravityTurnPrompt(withoutLease, {
+      prompt: "Ouvre YouTube dans le navigateur intégré.",
+      hasGatewaySessionLease: false,
+    });
+    expect(identityOnlyPrompt).not.toContain("browser_*");
+    expect(identityOnlyPrompt).toContain("Synara MCP control is unavailable");
+
+    const envWithoutLease = buildAntigravityTurnProcessEnvironment({
+      eventFile: "/tmp/thread-b-hooks.ndjson",
+      baseEnv: {
+        SYNARA_AGENT_GATEWAY_URL: "http://127.0.0.1:9999/stale",
+        SYNARA_AGENT_GATEWAY_TOKEN: "stale-token",
+        SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN: "stale-bootstrap",
+      },
+    });
+    expect(envWithoutLease.SYNARA_AGENT_GATEWAY_URL).toBeUndefined();
+    expect(envWithoutLease.SYNARA_AGENT_GATEWAY_TOKEN).toBeUndefined();
+    expect(envWithoutLease.SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN).toBeUndefined();
+  });
+
   it("propagates the owning lifecycle generation into runtime events", () => {
     expect(
       makeAntigravityRuntimeEventBase({
@@ -167,7 +446,10 @@ describe("Antigravity CLI integration helpers", () => {
     );
     const result = runCaptureCommand(
       command,
-      JSON.stringify({ payload: "x".repeat(2 * 1024 * 1024) }),
+      // Stay below platform pipe-buffer limits: spawnSync itself can deadlock
+      // while writing multi-megabyte stdin on macOS, which tests Node rather
+      // than the hook's simple drain-and-return behavior.
+      JSON.stringify({ payload: "x".repeat(32 * 1024) }),
       { SYNARA_ANTIGRAVITY_EVENTS: "" },
     );
 

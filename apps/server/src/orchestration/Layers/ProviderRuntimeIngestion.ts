@@ -1919,17 +1919,19 @@ const make = Effect.gen(function* () {
         event.type === "turn.completed" ||
         event.type === "turn.aborted"
       ) {
-        const nextActiveTurnId =
-          event.type === "turn.started"
-            ? (eventTurnId ?? null)
-            : isTerminalTurnEvent ||
-                event.type === "session.exited" ||
-                (event.type === "session.state.changed" &&
-                  (event.payload.state === "ready" ||
-                    event.payload.state === "stopped" ||
-                    event.payload.state === "error"))
-              ? null
-              : activeTurnId;
+        let nextActiveTurnId = activeTurnId;
+        if (event.type === "turn.started") {
+          nextActiveTurnId = eventTurnId ?? null;
+        } else if (
+          isTerminalTurnEvent ||
+          event.type === "session.exited" ||
+          (event.type === "session.state.changed" &&
+            (event.payload.state === "ready" ||
+              event.payload.state === "stopped" ||
+              event.payload.state === "error"))
+        ) {
+          nextActiveTurnId = null;
+        }
         const status = (() => {
           switch (event.type) {
             case "session.state.changed":
@@ -1938,8 +1940,14 @@ const make = Effect.gen(function* () {
               return "running";
             case "session.exited":
               return "stopped";
-            case "turn.completed":
-              return runtimeTurnState(event) === "failed" ? "error" : "ready";
+            case "turn.completed": {
+              const turnState = runtimeTurnState(event);
+              if (turnState === "failed") return "error";
+              if (turnState === "interrupted" || turnState === "cancelled") {
+                return "interrupted";
+              }
+              return "ready";
+            }
             case "turn.aborted":
               return "interrupted";
             case "session.started":
@@ -1949,16 +1957,15 @@ const make = Effect.gen(function* () {
               return activeTurnId !== null ? "running" : "ready";
           }
         })();
-        const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : status === "error"
-              ? (asString(runtimePayloadRecord(event)?.errorMessage) ??
-                thread.session?.lastError ??
-                "Turn failed")
-              : status === "ready" || status === "interrupted"
-                ? null
-                : (thread.session?.lastError ?? null);
+        let lastError = thread.session?.lastError ?? null;
+        if (event.type === "session.state.changed" && event.payload.state === "error") {
+          lastError = event.payload.reason ?? lastError ?? "Provider session error";
+        } else if (status === "error") {
+          lastError =
+            asString(runtimePayloadRecord(event)?.errorMessage) ?? lastError ?? "Turn failed";
+        } else if (status === "ready" || status === "interrupted") {
+          lastError = null;
+        }
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {

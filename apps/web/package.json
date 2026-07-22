@@ -13,6 +13,7 @@
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:browser:stable": "vitest run --config vitest.browser.stable.config.ts",
     "test:browser:geometry": "vitest run --config vitest.browser.geometry.config.ts",
+    "test:electron:e2e": "playwright test --config playwright.electron.config.ts",
     "test:browser:install": "playwright install --with-deps chromium",
     "measure:lcp": "node scripts/measure-lcp.mjs"
   },

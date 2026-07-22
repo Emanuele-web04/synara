@@ -51,8 +51,10 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -766,6 +768,7 @@ export function makeGrokAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
         ctx.gatewaySessionLease?.release();
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
@@ -1667,6 +1670,10 @@ export function makeGrokAdapter(
     const failGrokTurnAsTimedOut = (ctx: GrokSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
+        if (ctx.activeTurnId !== turnId) {
+          return;
+        }
+        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
         if (!clearAcpActiveTurn(ctx, turnId)) {
           return;
         }
@@ -1891,6 +1898,10 @@ export function makeGrokAdapter(
             onFailure: (error) =>
               Effect.gen(function* () {
                 yield* waitForGrokQueuedTurnEventsDrained(ctx);
+                if (ctx.activeTurnId !== turnId) {
+                  return;
+                }
+                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1923,8 +1934,12 @@ export function makeGrokAdapter(
                 // Drain BEFORE snapshotting turn state: queued events may still
                 // set activeTurnFailedToolDetail or assistant-content flags.
                 yield* waitForGrokQueuedTurnEventsDrained(ctx);
+                if (ctx.activeTurnId !== turnId) {
+                  return;
+                }
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
+                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
                 const terminalPlanMarkdown = extractGrokTerminalPlanMarkdown({
                   interactionMode: ctx.activeInteractionMode,
                   capturedPlanFingerprint: ctx.lastPlanFingerprint,
@@ -2044,28 +2059,43 @@ export function makeGrokAdapter(
         };
       });
 
-    const interruptTurn: GrokAdapterShape["interruptTurn"] = (threadId) =>
+    const interruptTurn: GrokAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
+        if (turnId !== undefined && turnId !== ctx.activeTurnId) {
+          yield* Effect.logWarning("grok.acp.stale_interrupt_ignored", {
+            threadId,
+            requestedTurnId: turnId,
+            activeTurnId: ctx.activeTurnId,
+          });
+          return;
+        }
+        const activeTurnId = turnId ?? ctx.activeTurnId;
         // A turn that is still starting has no prompt fiber to interrupt yet
         // (it may be gated on resume replay); flag it so startGrokTurn aborts
         // before prompting instead of running the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
-        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
-        const activePromptFiber = ctx.activePromptFiber;
-        yield* Effect.ignore(
-          ctx.acp.cancel.pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
-            ),
-          ),
+        yield* withAgentGatewayTurnCancellation(
+          ctx.gatewaySessionLease,
+          activeTurnId,
+          Effect.gen(function* () {
+            yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+            yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+            const activePromptFiber = ctx.activePromptFiber;
+            yield* Effect.ignore(
+              ctx.acp.cancel.pipe(
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, threadId, "session/cancel", error),
+                ),
+              ),
+            );
+            if (activePromptFiber) {
+              yield* Fiber.interrupt(activePromptFiber);
+            }
+          }),
         );
-        if (activePromptFiber) {
-          yield* Fiber.interrupt(activePromptFiber);
-        }
       });
 
     const respondToRequest: GrokAdapterShape["respondToRequest"] = (

@@ -5,7 +5,8 @@ export type AgentGatewayCapability =
   | "thread:read"
   | "thread:write"
   | "automation:write"
-  | "diagnostics:read";
+  | "diagnostics:read"
+  | "browser:control";
 
 export interface AgentGatewaySessionIdentity {
   readonly sessionKey: string;
@@ -22,10 +23,10 @@ export interface AgentGatewayIssuedSession extends AgentGatewaySessionIdentity {
 /**
  * Non-secret authority captured when an MCP HTTP request enters the gateway.
  *
- * Provider-session credentials intentionally survive across turns so native
- * sessions can resume without rebuilding their MCP client. Write authority is
- * narrower: one request/batch is pinned to the exact running turn observed at
- * ingress and must never be rebound to a later `latestTurn` while it executes.
+ * Provider-session credentials can survive across turns until their adapter
+ * explicitly retires them. Write authority is narrower: one request/batch is
+ * pinned to the exact running turn observed at ingress and must never be
+ * rebound to a later `latestTurn` while it executes.
  */
 export interface AgentGatewayWriteAuthority {
   readonly sessionKey: string;
@@ -39,6 +40,14 @@ export interface AgentGatewaySessionRegistryShape {
   readonly verify: (token: string) => AgentGatewaySessionIdentity | null;
   readonly bindWriteAuthority: (token: string, turnId: string) => AgentGatewayWriteAuthority | null;
   readonly verifyWriteAuthority: (authority: AgentGatewayWriteAuthority) => boolean;
+  /**
+   * Permanently retire this credential's authority for one terminal turn.
+   *
+   * A provider-session bearer may authenticate read-only MCP traffic for the
+   * rest of its runtime, but it can never acquire write authority for a later
+   * turn after this transition.
+   */
+  readonly retireWriteAuthority: (token: string, turnId: string) => boolean;
   readonly revoke: (token: string) => void;
 }
 

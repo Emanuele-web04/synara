@@ -13,12 +13,12 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { ApprovalRequestId, ThreadId } from "@synara/contracts";
+import { ApprovalRequestId, BROWSER_TOOL_NAMES, ThreadId, TurnId } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
   disableCodexConfigSections,
-  resolveCodexBrowserUsePipePath,
+  SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
 } from "./codexProcessEnv";
 import {
   buildCodexInitializeParams,
@@ -38,7 +38,10 @@ import {
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
-import { acquireAgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
+import {
+  AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
+  acquireAgentGatewaySessionLease,
+} from "./agentGateway/sessionLease.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
@@ -60,6 +63,12 @@ describe("Codex Synara harness policy", () => {
       expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
       expect(instructions).toContain("Synara is the host and harness");
       expect(instructions).toContain("one exact synara_create_threads plan");
+      expect(instructions).toContain("tools.mcp__synara__browser_open");
+      for (const name of BROWSER_TOOL_NAMES) {
+        expect(instructions, name).toContain(`\`${name.slice("browser_".length)}\``);
+      }
+      expect(instructions).toContain("Do not search or filter \`ALL_TOOLS\`");
+      expect(instructions).toContain("sequentially in one \`functions.exec\` invocation");
     }
   });
 
@@ -74,6 +83,8 @@ describe("Codex Synara harness policy", () => {
           endpointUrl: () => endpointUrl,
           acquireSessionLease: () => ({
             connection: { url: endpointUrl, bearerToken: "token" },
+            cancelTurn: () => Promise.resolve(),
+            retireTurn: () => Promise.resolve(),
             release: () => undefined,
           }),
         },
@@ -352,6 +363,7 @@ function createCollabNotificationHarness() {
     collabReceiverTurns: new Map<string, string>(),
     collabReceiverParents: new Map<string, string>(),
     reviewTurnIds: new Set<string>(),
+    gatewayCredentialRetired: false,
     nextRequestId: 1,
     stopping: false,
   };
@@ -672,68 +684,32 @@ describe("buildCodexProcessEnv", () => {
     expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
   });
 
-  it("allows the configured desktop browser-use socket in the Codex sandbox", async () => {
-    const env = await buildCodexProcessEnv({
-      env: {
-        SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
-        NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
-      },
-      platform: "darwin",
-    });
-
-    expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe("/tmp/codex-browser-use/synara.sock");
-  });
-
-  it("forwards the browser-use socket capability to the Browser MCP helper", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+  it("keeps the private desktop browser host out of the Codex process", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-private-host-"));
+    const codexHome = path.join(tempDir, "codex-home");
+    mkdirSync(codexHome, { recursive: true });
     try {
-      writeFileSync(
-        path.join(tempDir, "config.toml"),
-        [
-          "[mcp_servers.node_repl]",
-          'command = "/tmp/node_repl"',
-          'env_vars = ["EXISTING_BROWSER_ENV"]',
-          "",
-          "[mcp_servers.node_repl.env]",
-          'BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"',
-        ].join("\n"),
-        "utf8",
-      );
-
       const env = await buildCodexProcessEnv({
         env: {
-          SYNARA_HOME: runtimeHome,
-          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
+          CODEX_HOME: codexHome,
+          SYNARA_HOME: tempDir,
+          SYNARA_BROWSER_HOST_PIPE_PATH: "/tmp/synara-browser-host.sock",
+          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/legacy-browser-use.sock",
+          SYNARA_BROWSER_HOST_CAPABILITY: "desktop-capability",
+          SYNARA_BROWSER_HOST_CAPABILITY_FD: "3",
+          NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
         },
-        homePath: tempDir,
         platform: "darwin",
       });
 
-      const codexHome = env.CODEX_HOME;
-      if (typeof codexHome !== "string") {
-        throw new Error("Expected CODEX_HOME to be set.");
-      }
-      const overlayConfig = readFileSync(path.join(codexHome, "config.toml"), "utf8");
-      expect(overlayConfig).toContain(
-        'env_vars = ["NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS", "EXISTING_BROWSER_ENV"]',
-      );
-      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
-        'env_vars = ["EXISTING_BROWSER_ENV"]',
-      );
+      expect(env.SYNARA_BROWSER_HOST_PIPE_PATH).toBeUndefined();
+      expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
+      expect(env.SYNARA_BROWSER_HOST_CAPABILITY).toBeUndefined();
+      expect(env.SYNARA_BROWSER_HOST_CAPABILITY_FD).toBeUndefined();
+      expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBeUndefined();
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
-      rmSync(runtimeHome, { recursive: true, force: true });
     }
-  });
-
-  it("resolves the browser-use pipe path from desktop env aliases", () => {
-    expect(
-      resolveCodexBrowserUsePipePath({
-        env: { SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock" },
-        platform: "darwin",
-      }),
-    ).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
   it("applies durable section suppressions inside Synara's Codex overlay", async () => {
@@ -746,6 +722,11 @@ describe("buildCodexProcessEnv", () => {
           '[plugins."github@openai-curated"]',
           "enabled = true",
           "",
+          ...SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS.flatMap((header) => [
+            header,
+            "enabled = true",
+            "",
+          ]),
           '[plugins."historical-plugin@local"]',
           "enabled = true",
         ].join("\n"),
@@ -777,6 +758,14 @@ describe("buildCodexProcessEnv", () => {
       expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
         '[plugins."historical-plugin@local"]\nenabled = false',
       );
+      for (const header of SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS) {
+        expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+          `${header}\nenabled = false`,
+        );
+        expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+          `${header}\nenabled = true`,
+        );
+      }
       expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
         '[plugins."historical-plugin@local"]\nenabled = true',
       );
@@ -2092,6 +2081,84 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("cancels the exact gateway turn even when Codex omits MCP cancellation notifications", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    let settleCancellation: (() => void) | undefined;
+    const cancelTurn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settleCancellation = resolve;
+        }),
+    );
+    const release = vi.fn();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn-with-live-browser-wait";
+    Object.assign(context, {
+      gatewaySessionLease: {
+        connection: {
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        },
+        cancelTurn,
+        retireTurn: vi.fn(() => Promise.resolve()),
+        release,
+      },
+    });
+    sendRequest.mockResolvedValue({});
+
+    let interruptSettled = false;
+    const interrupt = manager.interruptTurn(asThreadId("thread_1")).then(() => {
+      interruptSettled = true;
+    });
+    await vi.waitFor(() => expect(cancelTurn).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    expect(interruptSettled).toBe(false);
+    expect(cancelTurn).toHaveBeenCalledWith("turn-with-live-browser-wait");
+    expect(release).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn-with-live-browser-wait",
+    });
+    settleCancellation?.();
+    await interrupt;
+    expect(interruptSettled).toBe(true);
+  });
+
+  it("tombstones the parent gateway turn when stopping one collab child", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    const cancelTurn = vi.fn(() => Promise.resolve());
+    const release = vi.fn();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn-parent";
+    Object.assign(context, {
+      gatewaySessionLease: {
+        connection: {
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        },
+        cancelTurn,
+        retireTurn: vi.fn(() => Promise.resolve()),
+        release,
+      },
+    });
+    sendRequest.mockResolvedValue({});
+
+    await manager.interruptTurn(
+      asThreadId("thread_1"),
+      TurnId.makeUnsafe("turn-child"),
+      "provider-child",
+    );
+
+    expect(cancelTurn).toHaveBeenCalledOnce();
+    expect(cancelTurn).toHaveBeenCalledWith("turn-parent");
+    expect(release).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/interrupt", {
+      threadId: "provider-child",
+      turnId: "turn-child",
+    });
+  });
+
   it("settles review interrupt when thread/read already shows exited review mode", async () => {
     const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
     context.session.status = "running";
@@ -2114,6 +2181,31 @@ describe("thread checkpoint control", () => {
 
     await manager.interruptTurn(asThreadId("thread_1"));
 
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
+  it("settles a stale local turn when Codex reports that it is already idle", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_stale";
+    sendRequest.mockRejectedValue(new Error("turn/interrupt failed: no active turn to interrupt"));
+
+    await expect(manager.interruptTurn(asThreadId("thread_1"))).resolves.toBeUndefined();
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "turn/aborted",
+        threadId: "thread_1",
+        turnId: "turn_stale",
+        lifecycleGeneration: "generation-request-a",
+      }),
+    );
     expect(updateSession).toHaveBeenCalledWith(context, {
       status: "ready",
       activeTurnId: undefined,
@@ -2971,6 +3063,22 @@ describe("handleServerNotification error normalization", () => {
       const emitEvent = vi
         .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
         .mockImplementation(() => {});
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const retireTurn = vi.fn(() => {
+        expect(emitEvent).not.toHaveBeenCalled();
+        return Promise.resolve();
+      });
+      Object.assign(context, {
+        gatewaySessionLease: {
+          connection: {
+            url: "http://127.0.0.1:48123/mcp",
+            bearerToken: "gateway-token",
+          },
+          cancelTurn,
+          retireTurn,
+          release: vi.fn(),
+        },
+      });
       const updateSession = vi
         .spyOn(
           manager as unknown as { updateSession: (...args: unknown[]) => void },
@@ -2991,6 +3099,10 @@ describe("handleServerNotification error normalization", () => {
       });
       vi.advanceTimersByTime(25);
 
+      expect(retireTurn).toHaveBeenCalledOnce();
+      expect(retireTurn).toHaveBeenCalledWith("turn_parent");
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(context.gatewayCredentialRetired).toBe(true);
       expect(updateSession).toHaveBeenCalledWith(context, {
         status: "ready",
         activeTurnId: undefined,
@@ -3002,6 +3114,7 @@ describe("handleServerNotification error normalization", () => {
           turnId: "turn_parent",
           payload: expect.objectContaining({
             recoveredFrom: "codex/event/task_complete",
+            [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
           }),
         }),
       );
@@ -3044,6 +3157,77 @@ describe("handleServerNotification error normalization", () => {
       ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("retires gateway authority before publishing every terminal parent-turn notification", () => {
+    const terminalNotifications = [
+      {
+        expectedTurnId: "turn-completed",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "provider_parent",
+            turn: { id: "turn-completed", status: "completed" },
+          },
+        },
+      },
+      {
+        expectedTurnId: "turn-aborted",
+        notification: {
+          method: "turn/aborted",
+          params: {
+            threadId: "provider_parent",
+            turn: { id: "turn-aborted", status: "interrupted" },
+          },
+        },
+      },
+      {
+        expectedTurnId: "turn-error",
+        notification: {
+          method: "error",
+          params: {
+            threadId: "provider_parent",
+            turnId: "turn-error",
+            error: { message: "terminal provider failure" },
+            willRetry: false,
+          },
+        },
+      },
+    ];
+
+    for (const { expectedTurnId, notification } of terminalNotifications) {
+      const { manager, context, emitEvent } = createCollabNotificationHarness();
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const retireTurn = vi.fn(() => {
+        expect(emitEvent).not.toHaveBeenCalled();
+        return Promise.resolve();
+      });
+      Object.assign(context, {
+        gatewaySessionLease: {
+          connection: {
+            url: "http://127.0.0.1:48123/mcp",
+            bearerToken: "gateway-token",
+          },
+          cancelTurn,
+          retireTurn,
+          release: vi.fn(),
+        },
+      });
+
+      handleServerNotificationForTest(manager, context, notification);
+
+      expect(retireTurn).toHaveBeenCalledOnce();
+      expect(retireTurn).toHaveBeenCalledWith(expectedTurnId);
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(context.gatewayCredentialRetired).toBe(true);
+      expect(emitEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
+          }),
+        }),
+      );
     }
   });
 
