@@ -71,6 +71,18 @@ describe("deriveSynaraMcpToolTitle", () => {
       ["synara_list_projects", "Synara is listing projects", "Synara listed projects"],
       ["synara_list_threads", "Synara is listing threads", "Synara listed threads"],
       ["synara_read_thread", "Synara is reading a thread", "Synara read a thread"],
+      [
+        "synara_read_thread_activity",
+        "Synara is reading thread activity",
+        "Synara read thread activity",
+      ],
+      ["synara_read_thread_events", "Synara is reading thread events", "Synara read thread events"],
+      [
+        "synara_read_thread_runtime_events",
+        "Synara is reading thread runtime events",
+        "Synara read thread runtime events",
+      ],
+      ["synara_diagnose_thread", "Synara is diagnosing a thread", "Synara diagnosed a thread"],
       ["synara_create_thread", "Synara is creating a thread", "Synara created a thread"],
       ["synara_create_threads", "Synara is creating threads", "Synara created threads"],
       [

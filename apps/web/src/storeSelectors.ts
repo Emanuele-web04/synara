@@ -5,8 +5,15 @@
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 
 import type { AppState } from "./storeState";
+import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
-import type { Project, SidebarThreadSummary, Thread, ThreadShell } from "./types";
+import type {
+  ComposerThreadMentionSource,
+  Project,
+  SidebarThreadSummary,
+  Thread,
+  ThreadShell,
+} from "./types";
 
 const EMPTY_THREAD_SHELLS: ThreadShell[] = [];
 
@@ -204,6 +211,64 @@ export function createSidebarThreadSummariesSelector(): (
       return summary ? [summary] : [];
     });
     return previousSummaries;
+  };
+}
+
+export function createComposerThreadMentionSourcesSelector(): (
+  state: AppState,
+) => readonly ComposerThreadMentionSource[] {
+  let previousThreadIds: AppState["threadIds"] | undefined;
+  let previousSummaryById: AppState["sidebarThreadSummaryById"] | undefined;
+  let previousSources: readonly ComposerThreadMentionSource[] = [];
+
+  return (state) => {
+    const threadIds = state.threadIds;
+    const summaryById = state.sidebarThreadSummaryById;
+    if (threadIds === previousThreadIds && summaryById === previousSummaryById) {
+      return previousSources;
+    }
+    previousThreadIds = threadIds;
+    previousSummaryById = summaryById;
+
+    const nextSources = (threadIds ?? []).flatMap((threadId) => {
+      const thread = summaryById[threadId];
+      return thread
+        ? [
+            {
+              id: thread.id,
+              projectId: thread.projectId,
+              title: thread.title,
+              provider: resolveThreadDisplayProvider(thread),
+              createdAt: thread.createdAt,
+              latestUserMessageAt: thread.latestUserMessageAt,
+              ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
+              ...(thread.lastVisitedAt !== undefined
+                ? { lastVisitedAt: thread.lastVisitedAt }
+                : {}),
+            } satisfies ComposerThreadMentionSource,
+          ]
+        : [];
+    });
+    if (
+      nextSources.length === previousSources.length &&
+      nextSources.every((source, index) => {
+        const previous = previousSources[index];
+        return (
+          source.id === previous?.id &&
+          source.projectId === previous.projectId &&
+          source.title === previous.title &&
+          source.provider === previous.provider &&
+          source.createdAt === previous.createdAt &&
+          source.archivedAt === previous.archivedAt &&
+          source.lastVisitedAt === previous.lastVisitedAt &&
+          source.latestUserMessageAt === previous.latestUserMessageAt
+        );
+      })
+    ) {
+      return previousSources;
+    }
+    previousSources = nextSources;
+    return previousSources;
   };
 }
 

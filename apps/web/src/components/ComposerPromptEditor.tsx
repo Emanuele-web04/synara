@@ -28,6 +28,7 @@ import {
   PASTE_COMMAND,
   TextNode,
   $getRoot,
+  $nodesOfType,
   type ElementNode,
   type LexicalNode,
   type EditorState,
@@ -40,6 +41,7 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   type ClipboardEventHandler,
   type Ref,
@@ -60,6 +62,9 @@ import { parseBareComposerLink } from "~/lib/linkChips";
 import { type TerminalContextDraft } from "~/lib/terminalContext";
 import { shouldCollapsePastedText } from "~/lib/composerPastedText";
 import type { ProviderMentionReference } from "@synara/contracts";
+import { useStore } from "~/store";
+import { createComposerThreadMentionSourcesSelector } from "~/storeSelectors";
+import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
 import { cn } from "~/lib/utils";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
@@ -446,7 +451,13 @@ function $setComposerEditorPrompt(
   const segments = splitPromptIntoComposerSegments(prompt, terminalContexts, mentionReferences);
   for (const segment of segments) {
     if (segment.type === "mention") {
-      paragraph.append($createComposerMentionNode(segment.path, segment.kind));
+      const thread = segment.threadId
+        ? useStore.getState().sidebarThreadSummaryById[segment.threadId]
+        : undefined;
+      const provider = thread ? resolveThreadDisplayProvider(thread) : undefined;
+      paragraph.append(
+        $createComposerMentionNode(segment.path, segment.kind, provider, segment.threadId),
+      );
       continue;
     }
     if (segment.type === "skill") {
@@ -842,6 +853,46 @@ function ComposerLinkPastePlugin() {
   return null;
 }
 
+// Thread mention chips resolve their provider icon from the sidebar summaries,
+// which may not be loaded yet when a draft is restored (and can change after a
+// provider handoff). Refresh the stored provider on existing chips whenever the
+// summaries change so the icon never stays stale.
+function ComposerThreadMentionProviderPlugin() {
+  const [editor] = useLexicalComposerContext();
+  const threadMentionSources = useStore(
+    useMemo(() => createComposerThreadMentionSourcesSelector(), []),
+  );
+  const providerByThreadId = useMemo(
+    () => new Map(threadMentionSources.map((source) => [source.id as string, source.provider])),
+    [threadMentionSources],
+  );
+
+  useEffect(() => {
+    const staleProvider = (node: ComposerMentionNode): boolean => {
+      const threadId = node.getMentionThreadId();
+      if (!threadId) return false;
+      const provider = providerByThreadId.get(threadId);
+      return provider !== undefined && provider !== node.getMentionProvider();
+    };
+    const needsUpdate = editor
+      .getEditorState()
+      .read(() => $nodesOfType(ComposerMentionNode).some(staleProvider));
+    if (!needsUpdate) return;
+    editor.update(
+      () => {
+        for (const node of $nodesOfType(ComposerMentionNode)) {
+          if (!staleProvider(node)) continue;
+          const provider = providerByThreadId.get(node.getMentionThreadId() ?? "");
+          if (provider) node.setMentionProvider(provider);
+        }
+      },
+      { tag: "history-merge" },
+    );
+  }, [editor, providerByThreadId]);
+
+  return null;
+}
+
 // A sufficiently large text paste collapses into an attachment card instead of
 // flooding the editor. Intercepting at the Lexical command level (rather than the
 // React onPaste prop) is required: Lexical's own paste listener would otherwise
@@ -1185,6 +1236,7 @@ function ComposerPromptEditorInner({
         <ComposerSlashCommandTransformPlugin />
         <ComposerLinkTransformPlugin />
         <ComposerLinkPastePlugin />
+        <ComposerThreadMentionProviderPlugin />
         {onCollapsePastedText ? (
           <ComposerBigPastePlugin onCollapsePastedText={onCollapsePastedText} />
         ) : null}

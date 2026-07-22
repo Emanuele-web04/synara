@@ -6,12 +6,21 @@
 // Exports: MentionChipIcon, createMentionChipIconElement
 
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
-import { resolveMentionChipKind, type MentionChipKind } from "~/lib/composerMentions";
+import {
+  findThreadProviderMentionReferenceForToken,
+  resolveMentionChipKind,
+  threadIdFromProviderMentionReference,
+  type MentionChipKind,
+} from "~/lib/composerMentions";
 import { CentralIcon, createCentralIconElement } from "~/lib/central-icons";
-import { PluginIcon } from "~/lib/icons";
+import { MessageCircleIcon, PluginIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
 import type { ProviderMentionReference } from "@synara/contracts";
+import { threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
+import { useStore } from "~/store";
+import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
+import { ProviderIcon } from "../ProviderIcon";
 
 export type { MentionChipKind };
 
@@ -41,6 +50,27 @@ export const MentionChipIcon = function MentionChipIcon(props: {
     ...(props.kind ? { kind: props.kind } : {}),
     ...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {}),
   });
+  const threadMention = findThreadProviderMentionReferenceForToken(
+    props.path,
+    props.mentionReferences,
+  );
+  const threadId = threadMention
+    ? threadIdFromProviderMentionReference(threadMention)
+    : threadIdFromThreadMentionPath(props.path);
+  const threadProvider = useStore((state) => {
+    if (!threadId) return null;
+    const thread = state.sidebarThreadSummaryById[threadId];
+    return thread ? resolveThreadDisplayProvider(thread) : null;
+  });
+  if (resolvedKind === "thread") {
+    return (
+      <ProviderIcon
+        provider={threadProvider}
+        className={className}
+        fallback={<MessageCircleIcon className={className} />}
+      />
+    );
+  }
   if (resolvedKind === "plugin") {
     return <PluginIcon className={className} />;
   }

@@ -331,6 +331,18 @@ export interface SidebarThreadSummary {
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }
 
+/** Lightweight composer identity that ignores live turn/status churn. */
+export interface ComposerThreadMentionSource {
+  id: ThreadId;
+  projectId: ProjectId;
+  title: string;
+  provider: ProviderKind;
+  createdAt: string;
+  archivedAt?: string | null;
+  lastVisitedAt?: string | undefined;
+  latestUserMessageAt: string | null;
+}
+
 export interface ThreadSession {
   provider: ProviderKind;
   status: SessionPhase | "error" | "closed";

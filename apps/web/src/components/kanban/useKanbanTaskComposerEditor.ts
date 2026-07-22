@@ -262,7 +262,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
       });
       return;
     }
-    if (item.type === "plugin") {
+    if (item.type === "plugin" || item.type === "thread") {
       applyComposerTriggerReplacement({
         snapshot,
         trigger,

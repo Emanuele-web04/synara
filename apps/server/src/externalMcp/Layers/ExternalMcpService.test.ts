@@ -39,8 +39,7 @@ const layer = ExternalMcpServiceLive.pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provide(
     Layer.succeed(ProjectionSnapshotQuery, {
-      getShellSnapshot: () =>
-        Effect.die("project authorization must not hydrate a shell snapshot"),
+      getShellSnapshot: () => Effect.die("project authorization must not hydrate a shell snapshot"),
       getThreadShellById: () => Effect.succeed({ _tag: "None" }),
     } as never),
   ),

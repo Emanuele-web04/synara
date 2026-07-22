@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { groupCommandItems, type ComposerCommandItem } from "./ComposerCommandMenu";
 
 describe("groupCommandItems", () => {
-  it("groups mention suggestions as plugins, local, then subagents", () => {
+  it("groups mention suggestions as plugins, chats, local, then subagents", () => {
     const items: ComposerCommandItem[] = [
       {
         id: "agent:codex:mini",
@@ -53,6 +53,15 @@ describe("groupCommandItems", () => {
         label: "@local",
         description: "Browse folders on this computer",
       },
+      {
+        id: "thread:thread-1",
+        type: "thread",
+        threadId: "thread-1",
+        provider: "codex",
+        mention: { name: "Release prep", path: "thread://thread-1" },
+        label: "Release prep",
+        description: "Synara",
+      },
     ];
 
     expect(groupCommandItems(items, "mention", true)).toEqual([
@@ -60,6 +69,11 @@ describe("groupCommandItems", () => {
         id: "plugins",
         label: "Plugins",
         items: [items[2]],
+      },
+      {
+        id: "chats",
+        label: "Chats",
+        items: [items[4]],
       },
       {
         id: "local",

@@ -7,6 +7,7 @@ import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
+import type { WorkLogEntry } from "../../workLog";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
@@ -33,6 +34,30 @@ vi.mock("@legendapp/list/react", async () => {
 
   return { LegendList };
 });
+
+// Baseline MessagesTimeline props shared across render tests; spread the
+// result and override individual props (or pass them as JSX after the spread).
+function makeTimelineBaseProps() {
+  return {
+    hasMessages: true,
+    isWorking: false,
+    activeTurnInProgress: false,
+    activeTurnStartedAt: null,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    nowIso: "2026-03-17T19:12:30.000Z",
+    expandedWorkGroups: {},
+    onToggleWorkGroup: () => {},
+    onOpenTurnDiff: () => {},
+    revertTurnCountByUserMessageId: new Map(),
+    onRevertUserMessage: () => {},
+    isRevertingCheckpoint: false,
+    onImageExpand: () => {},
+    markdownCwd: undefined,
+    resolvedTheme: "dark" as const,
+    timestampFormat: "locale" as const,
+    workspaceRoot: undefined,
+  };
+}
 
 function matchMedia() {
   return {
@@ -321,25 +346,7 @@ describe("MessagesTimeline", () => {
 
   it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const baseProps = {
-      hasMessages: true,
-      isWorking: false,
-      activeTurnInProgress: false,
-      activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      nowIso: "2026-03-17T19:12:30.000Z",
-      expandedWorkGroups: {},
-      onToggleWorkGroup: () => {},
-      onOpenTurnDiff: () => {},
-      revertTurnCountByUserMessageId: new Map(),
-      onRevertUserMessage: () => {},
-      isRevertingCheckpoint: false,
-      onImageExpand: () => {},
-      markdownCwd: undefined,
-      resolvedTheme: "light" as const,
-      timestampFormat: "locale" as const,
-      workspaceRoot: undefined,
-    };
+    const baseProps = { ...makeTimelineBaseProps(), resolvedTheme: "light" as const };
 
     const folderMarkup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2515,25 +2522,7 @@ describe("MessagesTimeline", () => {
 
   it("shows the Synara mark for every provider-specific tool row shape", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const baseProps = {
-      hasMessages: true,
-      isWorking: false,
-      activeTurnInProgress: false,
-      activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      nowIso: "2026-03-17T19:12:30.000Z",
-      expandedWorkGroups: {},
-      onToggleWorkGroup: () => {},
-      onOpenTurnDiff: () => {},
-      revertTurnCountByUserMessageId: new Map(),
-      onRevertUserMessage: () => {},
-      isRevertingCheckpoint: false,
-      onImageExpand: () => {},
-      markdownCwd: undefined,
-      resolvedTheme: "dark" as const,
-      timestampFormat: "locale" as const,
-      workspaceRoot: undefined,
-    };
+    const baseProps = makeTimelineBaseProps();
 
     // Provider-style server/tool identifier while the call is active.
     const claudeMarkup = renderToStaticMarkup(
@@ -2618,6 +2607,84 @@ describe("MessagesTimeline", () => {
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
+  it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const baseProps = makeTimelineBaseProps();
+
+    const renderSingleToolRow = (entry: WorkLogEntry) =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...baseProps}
+          timelineEntries={[
+            {
+              id: `entry-${entry.id}`,
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry,
+            },
+          ]}
+        />,
+      );
+
+    const readThreadMarkup = renderSingleToolRow({
+      id: "work-synara-read-thread-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "MCP tool call",
+      tone: "tool",
+      itemType: "mcp_tool_call",
+      toolName: "mcp__synara__synara_read_thread",
+      detail: 'mcp__synara__synara_read_thread: {"threadId":"c357d8c5-b4c1-47d0"}',
+      activityKind: "tool.completed",
+    });
+    expect(readThreadMarkup).toContain("Synara read a thread");
+    expect(readThreadMarkup).not.toContain("mcp__synara__synara_read_thread:");
+    expect(readThreadMarkup).not.toContain("threadId");
+
+    const diagnoseMarkup = renderSingleToolRow({
+      id: "work-synara-diagnose-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "MCP tool call",
+      tone: "tool",
+      itemType: "mcp_tool_call",
+      toolName: "mcp__synara__synara_diagnose_thread",
+      detail: 'mcp__synara__synara_diagnose_thread: {"threadId":"09a1615d-084f-40b9"}',
+      activityKind: "tool.completed",
+    });
+    expect(diagnoseMarkup).toContain("Synara diagnosed a thread");
+    expect(diagnoseMarkup).not.toContain("mcp__synara__synara_diagnose_thread:");
+    expect(diagnoseMarkup).not.toContain("threadId");
+
+    const dynamicToolMarkup = renderSingleToolRow({
+      id: "work-dynamic-tool-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "ToolSearch",
+      tone: "tool",
+      itemType: "dynamic_tool_call",
+      toolName: "ToolSearch",
+      toolTitle: "ToolSearch",
+      detail: 'ToolSearch: {"query":"select:mcp__synara__synara_read_thread_events"}',
+      activityKind: "tool.completed",
+    });
+    expect(dynamicToolMarkup).toContain("ToolSearch");
+    expect(dynamicToolMarkup).not.toContain("&quot;query&quot;");
+
+    // Failed calls are exempt: the JSON-shaped detail may be the only place
+    // the error surfaces, so it stays visible inline.
+    const failedArgsMarkup = renderSingleToolRow({
+      id: "work-synara-failed-args",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "MCP tool call",
+      tone: "tool",
+      itemType: "mcp_tool_call",
+      toolName: "mcp__synara__synara_create_threads",
+      toolStatus: "failed",
+      detail: 'McpError: {"code":-32602,"message":"Invalid params"}',
+      activityKind: "tool.completed",
+    });
+    expect(failedArgsMarkup).toContain("Synara couldn&#x27;t create threads");
+    expect(failedArgsMarkup).toContain("Invalid params");
+  });
+
   it("keeps Synara tool calls and adds a thread creation recap at the end of the turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-synara-recap");
@@ -2674,22 +2741,9 @@ describe("MessagesTimeline", () => {
       },
     ] as const;
     const baseProps = {
-      hasMessages: true,
-      activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
+      ...makeTimelineBaseProps(),
       nowIso: "2026-03-17T19:12:31.000Z",
-      expandedWorkGroups: {},
-      onToggleWorkGroup: () => {},
-      onOpenTurnDiff: () => {},
       onOpenThread: () => {},
-      revertTurnCountByUserMessageId: new Map(),
-      onRevertUserMessage: () => {},
-      isRevertingCheckpoint: false,
-      onImageExpand: () => {},
-      markdownCwd: undefined,
-      resolvedTheme: "dark" as const,
-      timestampFormat: "locale" as const,
-      workspaceRoot: undefined,
     };
     const liveMarkup = renderToStaticMarkup(
       <MessagesTimeline

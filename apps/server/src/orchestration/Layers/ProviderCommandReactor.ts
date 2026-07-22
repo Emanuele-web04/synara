@@ -65,6 +65,11 @@ import {
 } from "../../provider/Errors.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
+  appendThreadMentionContextBlocks,
+  resolveThreadMentionPromptProjection,
+  threadMentionContextSuffix,
+} from "../../provider/threadMentionContext.ts";
+import {
   TextGeneration,
   type BranchNameGenerationInput,
   type ThreadTitleGenerationInput,
@@ -206,6 +211,8 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
+const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
+const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const SIDECHAT_BOUNDARY_INSTRUCTION =
   "You are in a sidechat. Treat all prior conversation as reference-only context. Do not continue any prior task automatically. Do not mutate files, git, or the workspace and do not run workspace-changing commands unless the latest user message explicitly asks you to do so after this boundary. Use this sidechat for focused explanation, safety checks, summaries, and alternatives.";
@@ -232,6 +239,16 @@ function availableProviderContextChars(input: {
   return Math.max(
     0,
     PROVIDER_SEND_TURN_MAX_INPUT_CHARS - wrapProviderContext({ ...input, contextText: "" }).length,
+  );
+}
+
+function availableThreadMentionContextChars(messageText: string): number {
+  return Math.max(
+    0,
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+      messageText.length -
+      PROVIDER_INPUT_SAFETY_MARGIN_CHARS -
+      THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS,
   );
 }
 
@@ -1075,6 +1092,17 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
+      mentions: input.mentions,
+      snapshotQuery: projectionSnapshotQuery,
+      maxTotalContextChars: availableThreadMentionContextChars(input.messageText),
+    });
+    const messageText = appendThreadMentionContextBlocks({
+      text: input.messageText,
+      contextBlocks: threadMentionProjection.contextBlocks,
+    });
+    const mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);
+    const providerMentions = threadMentionProjection.providerMentions;
     // Subagent threads have no provider session of their own: their messages
     // steer the running child task through the parent session (mirrors the
     // interrupt seam), never the session-bootstrap path below. Parent metadata
@@ -1099,7 +1127,9 @@ const make = Effect.gen(function* () {
                 skills: input.skills ?? [],
                 maxChars: Math.max(
                   0,
-                  PROVIDER_SEND_TURN_MAX_INPUT_CHARS - input.messageText.length - 1_000,
+                  PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+                    messageText.length -
+                    PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
                 ),
               }),
             ).pipe(
@@ -1112,8 +1142,8 @@ const make = Effect.gen(function* () {
             )
           : "";
       const steerMessageWithSkills = steerSkillInlineText
-        ? `${input.messageText}\n\n${steerSkillInlineText}`
-        : input.messageText;
+        ? `${messageText}\n\n${steerSkillInlineText}`
+        : messageText;
       const normalizedSteerInput = toNonEmptyProviderInput(
         normalizeSkillMentionTextForProvider({
           provider: steerProvider,
@@ -1138,7 +1168,7 @@ const make = Effect.gen(function* () {
           ? { attachments: normalizedSteerAttachments }
           : {}),
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
-        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(providerMentions !== undefined ? { mentions: providerMentions } : {}),
       });
       return;
     }
@@ -1158,15 +1188,21 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
     }
+    // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
+    // mentioned-thread context is appended after the assembled provider input
+    // instead so it never reads as part of the user's own words. The budget
+    // text below still counts the suffix, keeping the total under the provider
+    // input limit regardless of where the suffix sits.
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
       : input.messageText;
+    const bootstrapBudgetMessageText = `${boundaryMessageText}${mentionContextSuffix}`;
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
       !hasNativeAssistantMessagesBefore(thread, input.messageId);
     const handoffBootstrapAvailableChars = availableProviderContextChars({
       tag: "handoff_context",
-      messageText: boundaryMessageText,
+      messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
     });
     const handoffBootstrapText =
@@ -1189,7 +1225,7 @@ const make = Effect.gen(function* () {
       !hasPendingPriorTranscriptBootstrap;
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
       tag: "sidechat_context",
-      messageText: boundaryMessageText,
+      messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: false,
     });
     const sidechatBootstrapText =
@@ -1221,7 +1257,7 @@ const make = Effect.gen(function* () {
       listPriorTranscriptMessages(thread, input.messageId).length > 0;
     const priorTranscriptBootstrapAvailableChars = availableProviderContextChars({
       tag: "thread_context",
-      messageText: boundaryMessageText,
+      messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
     });
     if (
@@ -1268,6 +1304,7 @@ const make = Effect.gen(function* () {
               wrapLatestUserMessage: true,
             })
           : boundaryMessageText;
+    const providerInputWithMentionContext = `${providerInput}${mentionContextSuffix}`;
     // Portable skills fallback: providers that cannot load the referenced skill
     // file natively get the skill instructions inlined into the prompt.
     const skillInlineText =
@@ -1278,7 +1315,9 @@ const make = Effect.gen(function* () {
               skills: input.skills ?? [],
               maxChars: Math.max(
                 0,
-                PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerInput.length - 1_000,
+                PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+                  providerInputWithMentionContext.length -
+                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
               ),
             }),
           ).pipe(
@@ -1291,8 +1330,8 @@ const make = Effect.gen(function* () {
           )
         : "";
     const providerInputWithSkills = skillInlineText
-      ? `${providerInput}\n\n${skillInlineText}`
-      : providerInput;
+      ? `${providerInputWithMentionContext}\n\n${skillInlineText}`
+      : providerInputWithMentionContext;
     const normalizedInput = toNonEmptyProviderInput(
       normalizeSkillMentionTextForProvider({
         provider: selectedProvider as ProviderKind,
@@ -1332,7 +1371,7 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(input.skills !== undefined ? { skills: input.skills } : {}),
-      ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+      ...(providerMentions !== undefined ? { mentions: providerMentions } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
@@ -1455,9 +1494,10 @@ const make = Effect.gen(function* () {
                 wrapLatestUserMessage: true,
               })
             : boundaryMessageText;
+          const retryProviderInputWithMentionContext = `${retryProviderInput}${mentionContextSuffix}`;
           const retryProviderInputWithSkills = skillInlineText
-            ? `${retryProviderInput}\n\n${skillInlineText}`
-            : retryProviderInput;
+            ? `${retryProviderInputWithMentionContext}\n\n${skillInlineText}`
+            : retryProviderInputWithMentionContext;
           const retryNormalizedInput = toNonEmptyProviderInput(
             normalizeSkillMentionTextForProvider({
               provider: selectedProvider as ProviderKind,

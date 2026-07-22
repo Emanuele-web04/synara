@@ -56,10 +56,7 @@ export interface ExternalMcpTaskRecord {
 }
 
 export interface ExternalMcpRepositoryShape {
-  readonly listActiveProjects: () => Effect.Effect<
-    ReadonlyArray<ExternalMcpProjectRecord>,
-    Error
-  >;
+  readonly listActiveProjects: () => Effect.Effect<ReadonlyArray<ExternalMcpProjectRecord>, Error>;
   readonly createIntegration: (input: {
     readonly integrationId: string;
     readonly name: string;

@@ -19,6 +19,7 @@ import {
 } from "../composerInlineChip";
 import { InlineChipContent } from "../InlineChip";
 import { MentionChipIcon, type MentionChipKind } from "./MentionChipIcon";
+import { resolveMentionChipKind } from "~/lib/composerMentions";
 
 interface InlineMentionChipProps {
   path: string;
@@ -36,7 +37,12 @@ interface InlineMentionChipProps {
 
 export function InlineMentionChip(props: InlineMentionChipProps) {
   const opener = useWorkspaceFileOpener();
-  const label = props.label ?? basenameOfPath(props.path);
+  const resolvedKind = resolveMentionChipKind(props.path, {
+    ...(props.kind ? { kind: props.kind } : {}),
+    ...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {}),
+  });
+  const label =
+    props.label ?? (resolvedKind === "thread" ? props.path : basenameOfPath(props.path));
   const inner = (
     <InlineChipContent
       icon={

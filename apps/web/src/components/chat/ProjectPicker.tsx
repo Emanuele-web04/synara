@@ -43,6 +43,11 @@ interface ProjectPickerProps {
   onResetToHome?: (() => void | Promise<void>) | undefined;
   /** Class override for the trigger button (e.g. tighter height in the composer tray). */
   triggerClassName?: string;
+  /** Copy overrides for folder-tagging contexts (e.g. Studio) where picking never creates a project. */
+  emptyTriggerLabel?: string;
+  addActionLabel?: string;
+  resetActionLabel?: string;
+  searchPlaceholder?: string;
 }
 
 interface ActiveFolderOption {
@@ -95,6 +100,10 @@ export const ProjectPicker = memo(function ProjectPicker({
   onCreateProjectFromPath,
   onResetToHome,
   triggerClassName,
+  emptyTriggerLabel = "Work in a project",
+  addActionLabel,
+  resetActionLabel = "Don't work in a project",
+  searchPlaceholder = "Search projects",
 }: ProjectPickerProps) {
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
@@ -290,7 +299,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       ) : null}
     </span>
   ) : (
-    "Work in a project"
+    emptyTriggerLabel
   );
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {
@@ -423,7 +432,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, [onResetToHome]);
 
   const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
-  const addProjectLabel = isProjectSelectionMode ? "New project" : "Add new project";
+  const addProjectLabel =
+    addActionLabel ?? (isProjectSelectionMode ? "New project" : "Add new project");
   const loadingAddProjectLabel = isProjectSelectionMode
     ? "Adding project..."
     : "Opening folder picker...";
@@ -486,7 +496,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       />
       <ComboboxPopup align={align} side={side} className="p-0">
         <PickerPanelShell
-          searchPlaceholder="Search projects"
+          searchPlaceholder={searchPlaceholder}
           query={query}
           onQueryChange={setQuery}
           footer={
@@ -509,7 +519,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                   onClick={handleResetToHome}
                 >
                   <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                  <span className="truncate">Don&apos;t work in a project</span>
+                  <span className="truncate">{resetActionLabel}</span>
                 </button>
               ) : null}
               {errorMessage ? (

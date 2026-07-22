@@ -60,9 +60,14 @@ import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffRendering";
 import {
+  extractToolArgumentField,
+  isPrefixedToolArgumentSummary,
+} from "../../lib/toolArgumentSummary";
+import {
   deriveReadableCommandDisplay,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
+  normalizeToolTextForComparison,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
   type SynaraMcpToolStatus,
@@ -135,24 +140,11 @@ function extractFilePathFromDetail(detail: string): string | null {
   if (plainPathMatch?.[1]?.includes("/")) {
     return plainPathMatch[1].trim();
   }
-
-  // Try to find a JSON-like object in the detail
-  const jsonStart = detail.indexOf("{");
-  if (jsonStart < 0) return null;
-  const jsonEnd = detail.lastIndexOf("}");
-  if (jsonEnd <= jsonStart) return null;
-  try {
-    const parsed = JSON.parse(detail.slice(jsonStart, jsonEnd + 1));
-    const filePath = parsed.file_path ?? parsed.filePath ?? parsed.path ?? parsed.filename ?? null;
-    if (typeof filePath === "string" && filePath.trim().length > 0) {
-      return filePath.trim();
-    }
-  } catch {
-    // Not valid JSON — try regex fallback
-    const match = /"(?:file_path|filePath|path|filename)"\s*:\s*"([^"]+)"/i.exec(detail);
-    if (match?.[1]) return match[1];
-  }
-  return null;
+  // "path" is generic enough that a nested match (e.g. inside a config object)
+  // may not be the file the tool acted on — only regex-scan truncated JSON.
+  return extractToolArgumentField(detail, ["file_path", "filePath", "path", "filename"], {
+    fallbackScan: "whenUnparsed",
+  });
 }
 
 function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
@@ -206,6 +198,14 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
     // For other entries, if the detail looks like raw JSON, skip it
     const trimmedDetail = workEntry.detail.trim();
     if (trimmedDetail.startsWith("{") || trimmedDetail.startsWith("[")) return null;
+
+    // Dynamic/MCP tool calls surface their arguments as `ToolName: {json}` —
+    // transport detail, not a human summary. The raw call stays in toolDetails.
+    // Failed calls keep their detail inline: it may carry the error text (e.g.
+    // an MCP error serialized as `McpError: {json}`), and on a failure more
+    // information beats a tidy row.
+    if (toolWorkEntryStatus(workEntry) !== "failed" && isPrefixedToolArgumentSummary(trimmedDetail))
+      return null;
 
     const readLinesMatch = /^Read\s+(\d+\s+lines?)$/i.exec(trimmedDetail);
     if (readLinesMatch?.[1]) return readLinesMatch[1];
@@ -369,15 +369,11 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
-function normalizeWorkDisplayText(value: string): string {
-  return normalizeCompactToolLabel(value).toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function combineWorkEntryDisplayText(heading: string, preview: string | null): string {
   if (!preview) {
     return heading;
   }
-  return normalizeWorkDisplayText(heading) === normalizeWorkDisplayText(preview)
+  return normalizeToolTextForComparison(heading) === normalizeToolTextForComparison(preview)
     ? heading
     : `${heading} ${preview}`;
 }
@@ -570,7 +566,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
     Boolean(preview) &&
-    normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
+    normalizeToolTextForComparison(heading) !== normalizeToolTextForComparison(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
   const hoverText =
     rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));

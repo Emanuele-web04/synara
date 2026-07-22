@@ -1653,6 +1653,38 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
+  it("keeps thread mention context within the provider input limit", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const messageText = "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-max-input-with-thread-mention"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("max-input-with-thread-mention"),
+          role: "user",
+          text: messageText,
+          attachments: [],
+          mentions: [{ name: "Current thread", path: "thread://thread-1" }],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as
+      | { input?: string; mentions?: ReadonlyArray<unknown> }
+      | undefined;
+    expect(input?.input).toBe(messageText);
+    expect(input?.input?.length).toBe(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+    expect(input?.mentions).toBeUndefined();
+  });
+
   it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

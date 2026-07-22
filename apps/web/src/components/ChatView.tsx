@@ -200,7 +200,11 @@ import {
   ensureLeadingSpaceForReplacement,
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
-import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import {
+  createProjectSelector,
+  createComposerThreadMentionSourcesSelector,
+  createThreadSelector,
+} from "../storeSelectors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canOfferForkSlashCommand,
@@ -1229,6 +1233,10 @@ export default function ChatView({
   const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
   const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const composerThreadSummaries = useStore(
+    useMemo(() => createComposerThreadMentionSourcesSelector(), []),
+  );
+  const composerThreadProjects = useStore((state) => state.projects);
   const crossTaskSourceThreadId =
     serverThread?.creationSource && serverThread.sourceThreadId
       ? serverThread.sourceThreadId
@@ -3354,6 +3362,11 @@ export default function ChatView({
     canOfferSideCommand,
     canOfferExportCommand,
     dynamicAgents,
+    threadMentionSources: {
+      threads: composerThreadSummaries,
+      projects: composerThreadProjects,
+      currentThreadId: threadId,
+    },
   });
   const composerMenuItems = useMemo(() => {
     if (composerCommandPicker === "fork-target") {
@@ -9173,7 +9186,7 @@ export default function ChatView({
         });
         return;
       }
-      if (item.type === "plugin") {
+      if (item.type === "plugin" || item.type === "thread") {
         applyComposerTriggerReplacement({
           snapshot,
           trigger,
@@ -9825,10 +9838,21 @@ export default function ChatView({
           triggerClassName="h-7 py-1"
           showResetToHome={Boolean(resolvedThreadWorktreePath)}
           selectedWorkspaceRoot={resolvedThreadWorktreePath}
-          onSelectProject={handleSelectProjectForEmptyDraft}
           onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
-          onCreateProjectFromPath={handleCreateProjectFromPickerPath}
           onResetToHome={handleResetWorkspaceToHome}
+          // Studio folder picks only tag the chat's workspace root; they never create a
+          // Projects entry or move the draft out of the Studio container.
+          {...(isStudioContainer
+            ? {
+                emptyTriggerLabel: "Use a folder",
+                addActionLabel: "Choose a folder",
+                resetActionLabel: "Don't use a folder",
+                searchPlaceholder: "Search folders",
+              }
+            : {
+                onSelectProject: handleSelectProjectForEmptyDraft,
+                onCreateProjectFromPath: handleCreateProjectFromPickerPath,
+              })}
         />
       ) : showEmptyLandingProjectPicker ? (
         <ProjectPicker

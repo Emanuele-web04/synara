@@ -674,9 +674,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         );
       }
       const assertActive = () =>
-        externalMcp.assertActive(client.integration.integrationId).pipe(
-          Effect.mapError((error) => new GatewayToolError(error.code, error.message)),
-        );
+        externalMcp
+          .assertActive(client.integration.integrationId)
+          .pipe(Effect.mapError((error) => new GatewayToolError(error.code, error.message)));
       const context: ExternalToolContext = {
         principal: {
           kind: "external-client",

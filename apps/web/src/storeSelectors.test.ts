@@ -6,12 +6,13 @@ import type { AppState } from "./store";
 import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
+  createComposerThreadMentionSourcesSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
 } from "./storeSelectors";
-import type { ThreadShell } from "./types";
+import type { SidebarThreadSummary, ThreadShell } from "./types";
 
 const threadIdA = "thread-a" as ThreadId;
 const threadIdB = "thread-b" as ThreadId;
@@ -20,10 +21,20 @@ const projectId = "project-1" as ProjectId;
 
 const shellA = { id: threadIdA, projectId, title: "A" } as ThreadShell;
 const shellB = { id: threadIdB, projectId, title: "B" } as ThreadShell;
+const summaryA = {
+  id: threadIdA,
+  projectId,
+  title: "A",
+  modelSelection: { provider: "codex", model: "gpt-5-codex" },
+  session: null,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  latestUserMessageAt: null,
+} as SidebarThreadSummary;
 
 interface TestStateSlices {
   threadIds?: readonly ThreadId[];
   threadShellById?: Readonly<Record<string, ThreadShell>>;
+  sidebarThreadSummaryById?: Readonly<Record<string, SidebarThreadSummary>>;
   messageIdsByThreadId?: Readonly<Record<string, readonly MessageId[]>>;
 }
 
@@ -31,6 +42,7 @@ function makeState(slices: TestStateSlices): AppState {
   return {
     threadIds: slices.threadIds ?? [],
     threadShellById: slices.threadShellById ?? {},
+    sidebarThreadSummaryById: slices.sidebarThreadSummaryById ?? {},
     messageIdsByThreadId: slices.messageIdsByThreadId ?? {},
   } as unknown as AppState;
 }
@@ -77,6 +89,38 @@ describe("createThreadShellsSelector", () => {
 
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("createComposerThreadMentionSourcesSelector", () => {
+  it("does not rescan summaries when only streaming detail changes", () => {
+    const selectSources = createComposerThreadMentionSourcesSelector();
+    const threadIds = [threadIdA];
+    let summaryReads = 0;
+    const summaryById = new Proxy(
+      { [threadIdA]: summaryA },
+      {
+        get(target, property, receiver) {
+          summaryReads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+
+    const before = selectSources(
+      makeState({ threadIds, sidebarThreadSummaryById: summaryById }),
+    );
+    const readsAfterFirstSelection = summaryReads;
+    const after = selectSources(
+      makeState({
+        threadIds,
+        sidebarThreadSummaryById: summaryById,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+    expect(summaryReads).toBe(readsAfterFirstSelection);
   });
 });
 

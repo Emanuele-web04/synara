@@ -1,10 +1,7 @@
 import type { ExternalMcpCapability } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  buildExternalMcpOverviewNextSteps,
-  buildExternalMcpOverviewProjects,
-} from "./overview.ts";
+import { buildExternalMcpOverviewNextSteps, buildExternalMcpOverviewProjects } from "./overview.ts";
 
 const project = {
   id: "project-allowed",
@@ -36,10 +33,7 @@ function thread(index: number, overrides: Partial<TestThread> = {}): TestThread 
 describe("external MCP overview", () => {
   it("groups allowed active threads once and returns only the five most recent", () => {
     const projects = buildExternalMcpOverviewProjects({
-      projects: [
-        project,
-        { id: "project-denied", title: "Denied", workspaceRoot: "/tmp/denied" },
-      ],
+      projects: [project, { id: "project-denied", title: "Denied", workspaceRoot: "/tmp/denied" }],
       threads: [
         ...Array.from({ length: 6 }, (_, index) => thread(index + 1)),
         thread(7, { archivedAt: "2026-07-08T00:00:00.000Z" }),
@@ -77,9 +71,7 @@ describe("external MCP overview", () => {
 
   it("mentions only tools granted to the integration", () => {
     expect(
-      buildExternalMcpOverviewNextSteps(
-        new Set<ExternalMcpCapability>(["projects:read"]),
-      ),
+      buildExternalMcpOverviewNextSteps(new Set<ExternalMcpCapability>(["projects:read"])),
     ).toEqual([
       "Call synara_capabilities with a projectId to list the exact provider/model targets available to this integration.",
     ]);

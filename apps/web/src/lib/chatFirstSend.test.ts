@@ -130,7 +130,7 @@ describe("resolveFirstSendTarget", () => {
     });
   });
 
-  it("promotes a Studio folder pick to an ordinary project", () => {
+  it("keeps a Studio folder pick in the Studio container", () => {
     const activeProject = makeProject({
       id: "project-studio" as ProjectId,
       kind: "studio",
@@ -152,12 +152,11 @@ describe("resolveFirstSendTarget", () => {
     });
 
     expect(result).toMatchObject({
-      kind: "create-project",
-      creation: {
-        workspaceRoot: "/Users/tester/Developer/app",
-        title: "app",
-        kind: "project",
-        createWorkspaceRootIfMissing: false,
+      kind: "current",
+      target: {
+        targetProjectId: "project-studio",
+        targetProjectKind: "studio",
+        targetProjectCwd: "/Users/tester/Documents/Synara/Studio",
       },
     });
   });

@@ -199,6 +199,10 @@
     "./migrationRecovery": {
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
+    },
+    "./threadMentions": {
+      "types": "./src/threadMentions.ts",
+      "import": "./src/threadMentions.ts"
     }
   },
   "scripts": {

@@ -5,10 +5,22 @@
 // Depends on: @synara/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
+import { basenameOfPath } from "../file-icons";
+import { extractToolArgumentField } from "./toolArgumentSummary";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value
     .replace(/\s+(?:complete|completed|done|finished|success|succeeded|started|running)\s*$/i, "")
+    .trim();
+}
+
+// Canonical form for comparing tool display strings (heading vs preview vs
+// label): ignores case, whitespace runs, and trailing status words so dedup
+// decisions behave identically in the work-log builder and the timeline rows.
+export function normalizeToolTextForComparison(value: string | undefined): string {
+  return normalizeCompactToolLabel(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -48,9 +60,8 @@ export function extractWebFetchUrl(input: {
   if (!detail) {
     return null;
   }
-  const fieldMatch = /"(?:url|uri)"\s*:\s*"([^"]+)"/i.exec(detail);
   const candidate =
-    fieldMatch?.[1]?.trim() ??
+    extractToolArgumentField(detail, ["url", "uri"]) ??
     /https?:\/\/[^\s"'<>)\]}]+/i.exec(detail)?.[0]?.replace(/[.,;:!?]+$/, "");
   if (candidate && /^https?:\/\//i.test(candidate)) {
     return candidate;
@@ -153,6 +164,26 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     running: "Synara is reading a thread",
     completed: "Synara read a thread",
     failed: "Synara couldn't read a thread",
+  },
+  synara_read_thread_activity: {
+    running: "Synara is reading thread activity",
+    completed: "Synara read thread activity",
+    failed: "Synara couldn't read thread activity",
+  },
+  synara_read_thread_events: {
+    running: "Synara is reading thread events",
+    completed: "Synara read thread events",
+    failed: "Synara couldn't read thread events",
+  },
+  synara_read_thread_runtime_events: {
+    running: "Synara is reading thread runtime events",
+    completed: "Synara read thread runtime events",
+    failed: "Synara couldn't read thread runtime events",
+  },
+  synara_diagnose_thread: {
+    running: "Synara is diagnosing a thread",
+    completed: "Synara diagnosed a thread",
+    failed: "Synara couldn't diagnose a thread",
   },
   synara_create_thread: {
     running: "Synara is creating a thread",
@@ -1054,16 +1085,11 @@ function splitToolAndArgs(command: string): [tool: string, args: string] {
   }
   const separator = normalized.indexOf(" ");
   if (separator === -1) {
-    return [basename(normalized).toLowerCase(), ""];
+    return [basenameOfPath(normalized).toLowerCase(), ""];
   }
-  const tool = basename(normalized.slice(0, separator)).toLowerCase();
+  const tool = basenameOfPath(normalized.slice(0, separator)).toLowerCase();
   const args = normalized.slice(separator + 1).trim();
   return [tool, args];
-}
-
-function basename(value: string): string {
-  const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
-  return slash >= 0 ? value.slice(slash + 1) : value;
 }
 
 function unwrapShellCommandIfPresent(rawCommand: string): string {
