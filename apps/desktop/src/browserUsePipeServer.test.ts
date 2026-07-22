@@ -97,7 +97,7 @@ describe("browser-use pipe path resolution", () => {
   it("creates a discoverable unix socket path under the Codex browser-use directory", () => {
     const pipePath = resolveDefaultBrowserUsePipePath("darwin");
 
-    expect(dirname(pipePath)).toBe(`${tmpdir()}/codex-browser-use`);
+    expect(dirname(pipePath)).toBe("/tmp/codex-browser-use");
     expect(basename(pipePath)).toMatch(/^synara-iab-\d+-[0-9a-f-]{36}\.sock$/);
   });
 
@@ -161,7 +161,13 @@ describe("browser-use pipe RPC compatibility", () => {
       });
       expect(info).toMatchObject({
         id: 1,
-        result: { type: "iab", metadata: { codexSessionId: "codex-session-1" } },
+        result: {
+          type: "iab",
+          metadata: {
+            codexAppBuildFlavor: "prod",
+            codexSessionId: "codex-session-1",
+          },
+        },
       });
 
       await expect(

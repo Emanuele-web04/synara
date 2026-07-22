@@ -684,6 +684,49 @@ describe("buildCodexProcessEnv", () => {
     expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
+  it("forwards the browser-use socket capability to the Browser MCP helper", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [
+          "[mcp_servers.node_repl]",
+          'command = "/tmp/node_repl"',
+          'env_vars = ["EXISTING_BROWSER_ENV"]',
+          "",
+          "[mcp_servers.node_repl.env]",
+          'BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"',
+        ].join("\n"),
+        "utf8",
+      );
+
+      const env = await buildCodexProcessEnv({
+        env: {
+          SYNARA_HOME: runtimeHome,
+          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
+        },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      const overlayConfig = readFileSync(path.join(codexHome, "config.toml"), "utf8");
+      expect(overlayConfig).toContain(
+        'env_vars = ["NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS", "EXISTING_BROWSER_ENV"]',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        'env_vars = ["EXISTING_BROWSER_ENV"]',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the browser-use pipe path from desktop env aliases", () => {
     expect(
       resolveCodexBrowserUsePipePath({
