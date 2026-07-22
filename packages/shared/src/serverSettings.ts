@@ -52,28 +52,36 @@ export function providerStartOptionsFromServerSettings(
   const { providers } = settings;
   return {
     codex: {
-      binaryPath: providers.codex.binaryPath,
+      ...(providers.codex.binaryPath ? { binaryPath: providers.codex.binaryPath } : {}),
       ...(providers.codex.homePath ? { homePath: providers.codex.homePath } : {}),
     },
-    claudeAgent: { binaryPath: providers.claudeAgent.binaryPath },
+    claudeAgent: {
+      ...(providers.claudeAgent.binaryPath ? { binaryPath: providers.claudeAgent.binaryPath } : {}),
+    },
     cursor: {
-      binaryPath: providers.cursor.binaryPath,
+      ...(providers.cursor.binaryPath ? { binaryPath: providers.cursor.binaryPath } : {}),
       ...(providers.cursor.apiEndpoint ? { apiEndpoint: providers.cursor.apiEndpoint } : {}),
     },
-    antigravity: { binaryPath: providers.antigravity.binaryPath },
-    grok: { binaryPath: providers.grok.binaryPath },
-    droid: { binaryPath: providers.droid.binaryPath },
+    antigravity: {
+      ...(providers.antigravity.binaryPath ? { binaryPath: providers.antigravity.binaryPath } : {}),
+    },
+    grok: {
+      ...(providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
+    },
+    droid: {
+      ...(providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
+    },
     kilo: {
-      binaryPath: providers.kilo.binaryPath,
+      ...(providers.kilo.binaryPath ? { binaryPath: providers.kilo.binaryPath } : {}),
       ...(providers.kilo.serverUrl ? { serverUrl: providers.kilo.serverUrl } : {}),
     },
     opencode: {
-      binaryPath: providers.opencode.binaryPath,
+      ...(providers.opencode.binaryPath ? { binaryPath: providers.opencode.binaryPath } : {}),
       ...(providers.opencode.serverUrl ? { serverUrl: providers.opencode.serverUrl } : {}),
       experimentalWebSockets: providers.opencode.experimentalWebSockets,
     },
     pi: {
-      binaryPath: providers.pi.binaryPath,
+      ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
       ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),
     },
   };
