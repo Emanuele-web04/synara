@@ -67,7 +67,10 @@ type WhenToken =
 
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle", when: "!terminalFocus" },
-  { key: "mod+k", command: "sidebar.search" },
+  // Cmd-only on macOS so Ctrl+K stays available for kill-to-end-of-line.
+  // Keep Ctrl+K on Windows/Linux (where `mod` would otherwise be Ctrl).
+  { key: "cmd+k", command: "sidebar.search" },
+  { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
   { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
   { key: "mod+i", command: "sidebar.importThread", when: "!terminalFocus" },
   { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },

@@ -73,6 +73,23 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults sidebar.search to Cmd+K on macOS and Ctrl+K elsewhere", () =>
+    Effect.sync(() => {
+      const searchDefaults = DEFAULT_KEYBINDINGS.filter(
+        (rule) => rule.command === "sidebar.search",
+      );
+      assert.deepEqual(searchDefaults, [
+        { key: "cmd+k", command: "sidebar.search" },
+        { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
+      ]);
+      assert.isUndefined(
+        DEFAULT_KEYBINDINGS.find(
+          (rule) => rule.command === "sidebar.search" && rule.key === "mod+k",
+        ),
+      );
+    }),
+  );
+
   it.effect("compiles valid rule with parsed when AST", () =>
     Effect.sync(() => {
       const compiled = compileResolvedKeybindingRule({
