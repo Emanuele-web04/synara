@@ -43,6 +43,16 @@ export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopApp
     manager.setEnabled(enabled === true),
   );
 
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.checkShortcut);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.checkShortcut, async (_event, shortcut: unknown) =>
+    manager.checkShortcut(shortcut),
+  );
+
+  ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.setShortcut);
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.setShortcut, async (_event, shortcut: unknown) =>
+    manager.setShortcut(shortcut),
+  );
+
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.requestPermissions);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.requestPermissions, async () => manager.requestPermissions());
 

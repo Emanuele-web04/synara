@@ -346,12 +346,33 @@ export type DesktopAppSnapStatus =
   | "ready"
   | "error";
 
+export type DesktopAppSnapShortcutModifier = "command" | "control" | "option" | "shift";
+
+export interface DesktopAppSnapKeyChord {
+  kind: "key-chord";
+  modifier: DesktopAppSnapShortcutModifier;
+  /** A physical DOM KeyboardEvent.code, such as `KeyS` or `Space`. */
+  key: string;
+}
+
+export type DesktopAppSnapShortcut = { kind: "both-option-keys" } | DesktopAppSnapKeyChord;
+
+export interface DesktopAppSnapShortcutAvailability {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface DesktopAppSnapShortcutUpdateResult {
+  state: DesktopAppSnapState;
+  availability: DesktopAppSnapShortcutAvailability;
+}
+
 export interface DesktopAppSnapState {
   platform: DesktopAppSnapPlatform;
   supported: boolean;
   enabled: boolean;
   status: DesktopAppSnapStatus;
-  shortcut: "both-option-keys" | null;
+  shortcut: DesktopAppSnapShortcut | null;
   inputMonitoringPermission: DesktopAppSnapPermission;
   screenRecordingPermission: DesktopAppSnapPermission;
   message: string | null;
@@ -479,6 +500,10 @@ export interface DesktopBridge {
   appSnap: {
     getState: () => Promise<DesktopAppSnapState>;
     setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
+    checkShortcut: (
+      shortcut: DesktopAppSnapShortcut,
+    ) => Promise<DesktopAppSnapShortcutAvailability>;
+    setShortcut: (shortcut: DesktopAppSnapShortcut) => Promise<DesktopAppSnapShortcutUpdateResult>;
     requestPermissions: () => Promise<DesktopAppSnapState>;
     listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
     acknowledgeCapture: (captureId: string) => Promise<void>;

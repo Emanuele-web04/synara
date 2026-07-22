@@ -76,6 +76,10 @@
       "types": "./src/browserShortcuts.ts",
       "import": "./src/browserShortcuts.ts"
     },
+    "./appSnapShortcut": {
+      "types": "./src/appSnapShortcut.ts",
+      "import": "./src/appSnapShortcut.ts"
+    },
     "./browserSession": {
       "types": "./src/browserSession.ts",
       "import": "./src/browserSession.ts"

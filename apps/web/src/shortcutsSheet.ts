@@ -215,6 +215,23 @@ function modSlashLabel(platform: string): string {
   return isMacPlatform(platform) ? "⌘/" : "Ctrl+/";
 }
 
+/** Human-readable sheet label for a keybinding command, e.g. `chat.new` → "New thread". */
+export function shortcutSheetCommandLabel(command: KeybindingCommand): string | null {
+  for (const definitions of [
+    AVAILABLE_NOW_DEFINITIONS,
+    WORKSPACE_DEFINITIONS,
+    THREAD_JUMP_DEFINITIONS,
+  ]) {
+    for (const definition of definitions) {
+      const commands = Array.isArray(definition.command)
+        ? definition.command
+        : [definition.command];
+      if (commands.includes(command)) return definition.label;
+    }
+  }
+  return null;
+}
+
 function definitionToEntry(
   definition: ShortcutDefinition,
   keybindings: ResolvedKeybindingsConfig,

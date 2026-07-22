@@ -23,6 +23,11 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
 } from "@synara/shared/model";
+import {
+  APP_SNAP_SHORTCUT_KEYS,
+  APP_SNAP_SHORTCUT_MODIFIERS,
+  DEFAULT_APP_SNAP_SHORTCUT,
+} from "@synara/shared/appSnapShortcut";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
@@ -85,6 +90,15 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
+
+const AppSnapShortcut = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("both-option-keys") }),
+  Schema.Struct({
+    kind: Schema.Literal("key-chord"),
+    modifier: Schema.Literals(APP_SNAP_SHORTCUT_MODIFIERS),
+    key: Schema.Literals(APP_SNAP_SHORTCUT_KEYS),
+  }),
+]);
 
 export function getDefaultNativeFontSmoothing(platform = globalThis.navigator?.platform ?? "") {
   return /mac|iphone|ipad|ipod/i.test(platform);
@@ -223,6 +237,7 @@ export const AppSettingsSchema = Schema.Struct({
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.
   enableAppSnap: Schema.Boolean.pipe(withDefaults(() => false)),
+  appSnapShortcut: AppSnapShortcut.pipe(withDefaults(() => DEFAULT_APP_SNAP_SHORTCUT)),
   // Local desktop preference: play the shutter cue when an AppSnap lands in a composer.
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.

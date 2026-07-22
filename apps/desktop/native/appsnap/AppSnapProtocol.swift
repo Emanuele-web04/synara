@@ -8,7 +8,11 @@ struct AppSnapFailure: Error {
 enum AppSnapMode {
     case checkPermissions
     case requestPermissions
-    case watch(outputDirectory: URL, excludedBundleIdentifier: String)
+    case watch(
+        outputDirectory: URL,
+        excludedBundleIdentifier: String,
+        externalTrigger: Bool
+    )
 }
 
 struct AppSnapOptions {
@@ -18,6 +22,7 @@ struct AppSnapOptions {
         var requestedMode: String?
         var outputDirectory: String?
         var excludedBundleIdentifier: String?
+        var externalTrigger = false
         var index = 0
 
         while index < arguments.count {
@@ -49,6 +54,8 @@ struct AppSnapOptions {
                     )
                 }
                 excludedBundleIdentifier = arguments[index]
+            case "--external-trigger":
+                externalTrigger = true
             default:
                 throw AppSnapFailure(
                     code: "invalid_arguments",
@@ -60,7 +67,7 @@ struct AppSnapOptions {
 
         switch requestedMode {
         case "--check-permissions":
-            guard outputDirectory == nil, excludedBundleIdentifier == nil else {
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
                 throw AppSnapFailure(
                     code: "invalid_arguments",
                     message: "Permission checks do not accept watch arguments."
@@ -68,7 +75,7 @@ struct AppSnapOptions {
             }
             return AppSnapOptions(mode: .checkPermissions)
         case "--request-permissions":
-            guard outputDirectory == nil, excludedBundleIdentifier == nil else {
+            guard outputDirectory == nil, excludedBundleIdentifier == nil, !externalTrigger else {
                 throw AppSnapFailure(
                     code: "invalid_arguments",
                     message: "Permission requests do not accept watch arguments."
@@ -91,7 +98,8 @@ struct AppSnapOptions {
             return AppSnapOptions(
                 mode: .watch(
                     outputDirectory: URL(fileURLWithPath: outputDirectory).standardizedFileURL,
-                    excludedBundleIdentifier: excludedBundleIdentifier
+                    excludedBundleIdentifier: excludedBundleIdentifier,
+                    externalTrigger: externalTrigger
                 )
             )
         default:

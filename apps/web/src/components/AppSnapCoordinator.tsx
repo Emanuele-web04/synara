@@ -3,7 +3,11 @@
 // Layer: Root web coordinator
 // Depends on: Desktop bridge, focused chat context, and existing composer attachment intake.
 
-import { type DesktopAppSnapCapture, type ThreadId } from "@synara/contracts";
+import {
+  type DesktopAppSnapCapture,
+  type DesktopAppSnapShortcut,
+  type ThreadId,
+} from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef } from "react";
 
@@ -288,15 +292,36 @@ export function AppSnapCoordinator() {
     };
   }, []);
 
+  // Settings objects are re-decoded from localStorage on every write, so key
+  // this effect on the chord's primitive fields rather than object identity.
+  const shortcutModifier =
+    settings.appSnapShortcut.kind === "key-chord" ? settings.appSnapShortcut.modifier : null;
+  const shortcutKey =
+    settings.appSnapShortcut.kind === "key-chord" ? settings.appSnapShortcut.key : null;
+
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
+    const shortcut: DesktopAppSnapShortcut =
+      shortcutModifier && shortcutKey
+        ? { kind: "key-chord", modifier: shortcutModifier, key: shortcutKey }
+        : { kind: "both-option-keys" };
     // The opt-in preference lives in the renderer settings store. This root
     // coordinator is mounted for the full UI lifetime and owns the native listener.
-    void bridge.setEnabled(settings.enableAppSnap).catch((error) => {
-      console.warn("[appsnap] Could not update native listener state", error);
-    });
-  }, [settings.enableAppSnap]);
+    // Enable even when the saved shortcut is unavailable: the manager surfaces
+    // the conflict as an error state instead of AppSnap silently staying off.
+    void bridge
+      .setShortcut(shortcut)
+      .then((result) => {
+        if (!result.availability.available) {
+          console.warn("[appsnap] Saved shortcut is unavailable", result.availability.reason);
+        }
+        return bridge.setEnabled(settings.enableAppSnap);
+      })
+      .catch((error) => {
+        console.warn("[appsnap] Could not update native listener state", error);
+      });
+  }, [shortcutModifier, shortcutKey, settings.enableAppSnap]);
 
   const activateExistingTarget = useCallback(
     async (target: AppSnapThreadTarget) => {

@@ -551,7 +551,8 @@ const mcpServeCommand = Command.make(
             baseDir,
             ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
           }),
-        catch: (cause) => new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+        catch: (cause) =>
+          new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
       });
     }),
 ).pipe(

@@ -8,7 +8,7 @@ import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as Path from "node:path";
 import * as Readline from "node:readline";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -17,8 +17,18 @@ import {
   type DesktopAppSnapErrorEvent,
   type DesktopAppSnapPermission,
   type DesktopAppSnapPlatform,
+  type DesktopAppSnapShortcut,
+  type DesktopAppSnapShortcutAvailability,
+  type DesktopAppSnapShortcutUpdateResult,
   type DesktopAppSnapState,
 } from "@synara/contracts";
+import {
+  DEFAULT_APP_SNAP_SHORTCUT,
+  appSnapShortcutAccelerator,
+  appSnapShortcutSystemConflict,
+  isAppSnapShortcut,
+  sameAppSnapShortcut,
+} from "@synara/shared/appSnapShortcut";
 
 const MAX_PENDING_CAPTURES = PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
 const MAX_HELPER_STDERR_CHARS = 4_096;
@@ -30,7 +40,7 @@ const HELPER_CAPTURE_IMAGE_PATTERN =
   /^appsnap-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.png$/;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<null, Readable, Readable>;
+type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
 
 interface PendingAppSnapCaptureRecord {
   capture: DesktopAppSnapCapture;
@@ -88,6 +98,10 @@ export interface DesktopAppSnapManagerOptions {
   onError: (error: DesktopAppSnapErrorEvent, focusApp: boolean) => void;
   now?: () => Date;
   spawn?: typeof ChildProcess.spawn;
+  shortcutRegistry?: {
+    register: (accelerator: string, callback: () => void) => boolean;
+    unregister: (accelerator: string) => void;
+  };
 }
 
 function normalizeDate(value: unknown, fallback: Date): string {
@@ -350,6 +364,8 @@ export class DesktopAppSnapManager {
   #pendingCaptures: PendingAppSnapCaptureRecord[] = [];
   #pendingCapturesLoadPromise: Promise<void> | null = null;
   #captureReadQueue: Promise<void> = Promise.resolve();
+  #shortcut: DesktopAppSnapShortcut = DEFAULT_APP_SNAP_SHORTCUT;
+  #registeredAccelerator: string | null = null;
 
   constructor(options: DesktopAppSnapManagerOptions) {
     this.#options = {
@@ -369,7 +385,7 @@ export class DesktopAppSnapManager {
       supported: this.#platform === "macos",
       enabled: this.#enabled,
       status: this.#status,
-      shortcut: this.#platform === "macos" ? "both-option-keys" : null,
+      shortcut: this.#platform === "macos" ? this.#shortcut : null,
       inputMonitoringPermission: this.#inputMonitoringPermission,
       screenRecordingPermission: this.#screenRecordingPermission,
       message: this.#message,
@@ -388,12 +404,76 @@ export class DesktopAppSnapManager {
     this.#enabled = enabled;
     if (!enabled) {
       this.#stopWatchProcess();
+      this.#releaseShortcutReservation();
       this.#setState("disabled", null);
       return this.getState();
     }
     if (!(await this.#runPermissionCommand("--check-permissions"))) return this.getState();
     await this.#reconcileWatchProcess();
     return this.getState();
+  }
+
+  checkShortcut(shortcut: unknown): DesktopAppSnapShortcutAvailability {
+    if (this.#platform !== "macos") {
+      return { available: false, reason: "AppSnap shortcuts are available only on macOS." };
+    }
+    if (!isAppSnapShortcut(shortcut)) {
+      return {
+        available: false,
+        reason: "Choose one modifier and one supported keyboard key.",
+      };
+    }
+    if (shortcut.kind === "both-option-keys") {
+      return { available: true, reason: null };
+    }
+    const systemConflict = appSnapShortcutSystemConflict(shortcut);
+    if (systemConflict) {
+      return { available: false, reason: systemConflict };
+    }
+
+    const accelerator = appSnapShortcutAccelerator(shortcut);
+    if (this.#registeredAccelerator === accelerator) {
+      return { available: true, reason: null };
+    }
+    const registry = this.#options.shortcutRegistry;
+    if (!registry) {
+      return { available: false, reason: "Global shortcut checks are unavailable." };
+    }
+    try {
+      if (!registry.register(accelerator, () => undefined)) {
+        return {
+          available: false,
+          reason: "macOS or another app is already using this shortcut.",
+        };
+      }
+      registry.unregister(accelerator);
+      return { available: true, reason: null };
+    } catch {
+      return { available: false, reason: "macOS could not register this shortcut." };
+    }
+  }
+
+  /**
+   * Adopts any well-formed shortcut, even one the availability probe rejects:
+   * a persisted chord that another app grabbed since last launch must surface
+   * as an error state from reconciliation, not silently keep the old chord.
+   */
+  async setShortcut(shortcut: unknown): Promise<DesktopAppSnapShortcutUpdateResult> {
+    const availability = this.checkShortcut(shortcut);
+    if (
+      this.#platform !== "macos" ||
+      !isAppSnapShortcut(shortcut) ||
+      sameAppSnapShortcut(this.#shortcut, shortcut)
+    ) {
+      return { state: this.getState(), availability };
+    }
+
+    this.#stopWatchProcess();
+    this.#releaseShortcutReservation();
+    this.#shortcut = shortcut;
+    if (this.#enabled) await this.#reconcileWatchProcess();
+    this.#emitState();
+    return { state: this.getState(), availability };
   }
 
   async requestPermissions(): Promise<DesktopAppSnapState> {
@@ -424,6 +504,7 @@ export class DesktopAppSnapManager {
   dispose(): void {
     this.#disposed = true;
     this.#stopWatchProcess();
+    this.#releaseShortcutReservation();
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;
     this.#pendingCaptures = [];
@@ -632,6 +713,7 @@ export class DesktopAppSnapManager {
     if (this.#disposed || this.#platform !== "macos") return;
     if (!this.#enabled) {
       this.#stopWatchProcess();
+      this.#releaseShortcutReservation();
       this.#setState("disabled", null);
       return;
     }
@@ -640,6 +722,7 @@ export class DesktopAppSnapManager {
       this.#screenRecordingPermission !== "granted"
     ) {
       this.#stopWatchProcess();
+      this.#releaseShortcutReservation();
       this.#setState(
         "permission-required",
         permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
@@ -648,9 +731,16 @@ export class DesktopAppSnapManager {
     }
     if (!FS.existsSync(this.#options.helperPath)) {
       this.#stopWatchProcess();
+      this.#releaseShortcutReservation();
       this.#setState("error", "The AppSnap native helper is missing from this desktop build.");
       return;
     }
+    if (this.#shortcut.kind === "key-chord" && !this.#reserveShortcut(this.#shortcut)) {
+      this.#stopWatchProcess();
+      this.#setState("error", "The AppSnap shortcut is already used by macOS or another app.");
+      return;
+    }
+    if (this.#shortcut.kind === "both-option-keys") this.#releaseShortcutReservation();
     if (this.#watchProcess) return;
     try {
       await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
@@ -662,10 +752,12 @@ export class DesktopAppSnapManager {
         this.#inputMonitoringPermission !== "granted" ||
         this.#screenRecordingPermission !== "granted"
       ) {
+        if (!this.#watchProcess) this.#releaseShortcutReservation();
         return;
       }
       this.#startWatchProcess();
     } catch (error) {
+      this.#releaseShortcutReservation();
       this.#setState(
         "error",
         `Could not start AppSnap: ${error instanceof Error ? error.message : String(error)}`,
@@ -676,6 +768,9 @@ export class DesktopAppSnapManager {
   #startWatchProcess(): void {
     this.#intentionalWatchStop = false;
     this.#setState("starting", null);
+    // Key chords are detected by Electron's reserved accelerator; the helper
+    // only captures on demand, driven by "trigger" lines on its stdin.
+    const shortcutArguments = this.#shortcut.kind === "key-chord" ? ["--external-trigger"] : [];
     const child = this.#options.spawn(
       this.#options.helperPath,
       [
@@ -684,9 +779,12 @@ export class DesktopAppSnapManager {
         this.#options.captureDirectory,
         "--excluded-bundle-id",
         this.#options.excludedBundleId,
+        ...shortcutArguments,
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      { stdio: ["pipe", "pipe", "pipe"] },
     );
+    // A helper that dies mid-write must not surface as an unhandled stream error.
+    child.stdin?.on("error", () => undefined);
     this.#watchProcess = child;
     this.#watchOutputLines = this.#wireHelperOutput(child, (message) =>
       this.#handleWatchMessage(child, message),
@@ -696,6 +794,7 @@ export class DesktopAppSnapManager {
       this.#watchProcess = null;
       this.#watchOutputLines?.close();
       this.#watchOutputLines = null;
+      this.#releaseShortcutReservation();
       const message = `Could not start AppSnap: ${error.message}`;
       this.#setState("error", message);
       this.#emitCaptureError("helper-stopped", message, undefined, false);
@@ -706,6 +805,7 @@ export class DesktopAppSnapManager {
       this.#watchOutputLines?.close();
       this.#watchOutputLines = null;
       if (this.#disposed || this.#intentionalWatchStop || !this.#enabled) return;
+      this.#releaseShortcutReservation();
       const message = `The AppSnap helper stopped unexpectedly (${signal ?? `exit ${code ?? "unknown"}`}).`;
       this.#setState("error", message);
       this.#emitCaptureError("helper-stopped", message, undefined, false);
@@ -720,6 +820,40 @@ export class DesktopAppSnapManager {
     if (!child) return;
     this.#intentionalWatchStop = true;
     child.kill("SIGTERM");
+  }
+
+  #reserveShortcut(shortcut: Extract<DesktopAppSnapShortcut, { kind: "key-chord" }>): boolean {
+    const accelerator = appSnapShortcutAccelerator(shortcut);
+    if (this.#registeredAccelerator === accelerator) return true;
+    const registry = this.#options.shortcutRegistry;
+    if (!registry) return false;
+    try {
+      if (!registry.register(accelerator, () => this.#handleShortcutTrigger())) return false;
+      this.#registeredAccelerator = accelerator;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  #handleShortcutTrigger(): void {
+    if (this.#disposed || !this.#enabled) return;
+    try {
+      this.#watchProcess?.stdin?.write("trigger\n");
+    } catch {
+      // The helper exit handler owns recovery; a lost trigger is acceptable.
+    }
+  }
+
+  #releaseShortcutReservation(): void {
+    const accelerator = this.#registeredAccelerator;
+    this.#registeredAccelerator = null;
+    if (!accelerator) return;
+    try {
+      this.#options.shortcutRegistry?.unregister(accelerator);
+    } catch {
+      // Electron may already have cleared global shortcuts during app shutdown.
+    }
   }
 
   #wireHelperOutput(
@@ -865,6 +999,7 @@ export class DesktopAppSnapManager {
     }
     if (isPermissionErrorCode(message.code)) {
       this.#stopWatchProcess();
+      this.#releaseShortcutReservation();
       this.#setState(
         "permission-required",
         permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
