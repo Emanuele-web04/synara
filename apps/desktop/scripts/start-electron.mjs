@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildIslandHelper } from "./build-island-helper.mjs";
 import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
 
 if (process.platform === "darwin") {
   buildAppSnapHelper({ arch: process.arch });
+  buildIslandHelper({ arch: process.arch });
 }
 
 const childEnv = { ...process.env };

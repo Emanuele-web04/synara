@@ -132,6 +132,26 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       return () => ipcRenderer.removeListener(IPC.appSnap.state, wrappedListener);
     },
   },
+  island: {
+    getState: () => ipcRenderer.invoke(IPC.island.getState),
+    updateSnapshot: (snapshot) => ipcRenderer.invoke(IPC.island.updateSnapshot, snapshot),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "object" || state === null) return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.island.state, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.island.state, wrappedListener);
+    },
+    onAction: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
+        if (typeof action !== "object" || action === null) return;
+        listener(action as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.island.action, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.island.action, wrappedListener);
+    },
+  },
   storageMigration: {
     readSnapshot: () => ipcRenderer.sendSync(IPC.storageMigration.read),
     acknowledgeSnapshot: () => ipcRenderer.invoke(IPC.storageMigration.acknowledge),

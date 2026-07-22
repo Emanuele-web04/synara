@@ -12,6 +12,13 @@ export const MAC_APPSNAP_HELPER_STAGE_PATH =
   "apps/desktop/native/appsnap/build/synara-appsnap-helper";
 export const MAC_APPSNAP_HELPER_ASAR_EXCLUSION = "!apps/desktop/native/appsnap/build/**";
 export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-helper";
+export const MAC_ISLAND_HELPER_STAGE_PATH =
+  "apps/desktop/native/synara-island-helper/build/synara-island-helper";
+export const MAC_ISLAND_HELPER_ASAR_EXCLUSION =
+  "!apps/desktop/native/synara-island-helper/build/**";
+export const MAC_ISLAND_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-island-helper";
+export const MAC_NATIVE_HELPER_X64_ARCH_FILES =
+  "Contents/Helpers/{synara-appsnap-helper,synara-island-helper}";
 export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
@@ -43,8 +50,8 @@ export interface DesktopNativeBuildHostInput {
 export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInput): string | null {
   if (input.platform === "mac" && input.hostPlatform !== "darwin") {
     return [
-      "macOS desktop artifacts include the native Swift AppSnap helper.",
-      `Build mac/${input.arch} on macOS so the helper can be compiled and signed.`,
+      "macOS desktop artifacts include native Swift helpers.",
+      `Build mac/${input.arch} on macOS so the helpers can be compiled and signed.`,
       `Current host is ${input.hostPlatform}/${input.hostArch}.`,
     ].join(" ");
   }
@@ -75,10 +82,10 @@ export function createDesktopPlatformBuildConfig(
       notarize: input.signed === true,
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
-      binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH],
-      // The universal build stages the same pre-lipo'd helper in both app trees.
-      // @electron/universal needs this pattern to preserve that existing fat binary.
-      x64ArchFiles: MAC_APPSNAP_HELPER_BUNDLE_PATH,
+      binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH, MAC_ISLAND_HELPER_BUNDLE_PATH],
+      // The universal build stages the same pre-lipo'd helpers in both app trees.
+      // @electron/universal needs this pattern to preserve those existing fat binaries.
+      x64ArchFiles: MAC_NATIVE_HELPER_X64_ARCH_FILES,
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
       },
@@ -86,11 +93,15 @@ export function createDesktopPlatformBuildConfig(
 
     return {
       ...nativePackaging,
-      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
+      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION, MAC_ISLAND_HELPER_ASAR_EXCLUSION],
       extraFiles: [
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,
           to: "Helpers/synara-appsnap-helper",
+        },
+        {
+          from: MAC_ISLAND_HELPER_STAGE_PATH,
+          to: "Helpers/synara-island-helper",
         },
       ],
       mac,

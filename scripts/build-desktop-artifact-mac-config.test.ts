@@ -7,6 +7,10 @@ import {
   MAC_APPSNAP_HELPER_STAGE_PATH,
   MAC_ENTITLEMENTS_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
+  MAC_ISLAND_HELPER_ASAR_EXCLUSION,
+  MAC_ISLAND_HELPER_BUNDLE_PATH,
+  MAC_ISLAND_HELPER_STAGE_PATH,
+  MAC_NATIVE_HELPER_X64_ARCH_FILES,
   MICROPHONE_USAGE_DESCRIPTION,
   NODE_PTY_ASAR_UNPACK_GLOBS,
   validateDesktopNativeBuildHost,
@@ -15,7 +19,7 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
-  it("adds explicit microphone entitlements to macOS builds", () => {
+  it("adds explicit microphone entitlements and native helpers to macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
@@ -32,18 +36,42 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
     assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
-    assert.deepStrictEqual(mac.binaries, ["Contents/Helpers/synara-appsnap-helper"]);
-    assert.equal(mac.x64ArchFiles, "Contents/Helpers/synara-appsnap-helper");
+    assert.equal(MAC_ISLAND_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-island-helper");
+    assert.deepStrictEqual(mac.binaries, [
+      "Contents/Helpers/synara-appsnap-helper",
+      "Contents/Helpers/synara-island-helper",
+    ]);
+    assert.equal(mac.x64ArchFiles, "Contents/Helpers/{synara-appsnap-helper,synara-island-helper}");
+    assert.equal(
+      MAC_NATIVE_HELPER_X64_ARCH_FILES,
+      "Contents/Helpers/{synara-appsnap-helper,synara-island-helper}",
+    );
     assert.equal(
       MAC_APPSNAP_HELPER_STAGE_PATH,
       "apps/desktop/native/appsnap/build/synara-appsnap-helper",
     );
+    assert.equal(
+      MAC_ISLAND_HELPER_STAGE_PATH,
+      "apps/desktop/native/synara-island-helper/build/synara-island-helper",
+    );
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
-    assert.deepStrictEqual(config.files, ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION]);
+    assert.equal(
+      MAC_ISLAND_HELPER_ASAR_EXCLUSION,
+      "!apps/desktop/native/synara-island-helper/build/**",
+    );
+    assert.deepStrictEqual(config.files, [
+      "**/*",
+      MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
+      MAC_ISLAND_HELPER_ASAR_EXCLUSION,
+    ]);
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",
         to: "Helpers/synara-appsnap-helper",
+      },
+      {
+        from: "apps/desktop/native/synara-island-helper/build/synara-island-helper",
+        to: "Helpers/synara-island-helper",
       },
     ]);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
@@ -144,7 +172,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(issue?.includes("Build linux/x64 on a matching Linux host"));
   });
 
-  it("requires a macOS host for the native Swift AppSnap helper", () => {
+  it("requires a macOS host for the native Swift helpers", () => {
     assert.equal(
       validateDesktopNativeBuildHost({
         platform: "mac",
@@ -162,6 +190,7 @@ describe("createDesktopPlatformBuildConfig", () => {
       hostArch: "arm64",
     });
     assert.ok(issue?.includes("Build mac/arm64 on macOS"));
+    assert.ok(issue?.includes("helpers can be compiled and signed"));
   });
 
   it("keeps separate macOS sources for solid and rounded icons", () => {

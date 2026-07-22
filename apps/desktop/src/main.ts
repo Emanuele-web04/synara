@@ -188,6 +188,9 @@ import {
   sendAppSnapError,
   sendAppSnapState,
 } from "./appSnapIpc";
+import { DesktopIslandHelperManager } from "./islandHelperManager";
+import { registerIslandIpcHandlers, sendIslandAction, sendIslandState } from "./islandIpc";
+import { resolveDesktopIslandHelperPath } from "./islandHelperPath";
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
@@ -284,6 +287,7 @@ let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
+let islandHelperManager: DesktopIslandHelperManager | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredUpdaterCacheDirName: string | null = null;
 
@@ -1449,6 +1453,47 @@ function resolveAppSnapHelperPath(): string {
     return Path.resolve(process.resourcesPath, "..", "Helpers", "synara-appsnap-helper");
   }
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
+}
+
+function getIslandEventTarget(): Electron.WebContents | null {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+    return null;
+  }
+  return mainWindow.webContents;
+}
+
+function initializeDesktopIsland(): void {
+  if (islandHelperManager) return;
+
+  const helperPath = resolveDesktopIslandHelperPath({
+    isPackaged: app.isPackaged,
+    moduleDir: __dirname,
+    resourcesPath: process.resourcesPath,
+  });
+  const capability = process.platform === "darwin" && (app.isPackaged || FS.existsSync(helperPath));
+
+  islandHelperManager = new DesktopIslandHelperManager({
+    platform: process.platform,
+    capability,
+    helperPath,
+    onState: (state) => sendIslandState(getIslandEventTarget(), state),
+    onAction: (action) => sendIslandAction(getIslandEventTarget(), action),
+    onFallback: (failure) => {
+      writeDesktopLogHeader(
+        `island helper fallback code=${failure.code} message=${sanitizeLogValue(failure.message)}`,
+      );
+      if (process.platform === "darwin") {
+        console.warn(`[desktop-island] ${failure.message}`);
+      }
+    },
+    onError: (failure) => {
+      writeDesktopLogHeader(
+        `island helper error code=${failure.code} message=${sanitizeLogValue(failure.message)}`,
+      );
+      console.warn(`[desktop-island] ${failure.message}`);
+    },
+  });
+  islandHelperManager.start();
 }
 
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
@@ -2945,6 +2990,8 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
     clearUpdateCheckTimeoutTimer();
     clearUpdatePollTimer();
     cancelBackendReadinessWait();
+    islandHelperManager?.dispose();
+    islandHelperManager = null;
     appSnapManager?.dispose();
     appSnapManager = null;
     await disposeBrowserUsePipeServerForShutdown(reason);
@@ -3292,6 +3339,9 @@ function registerIpcHandlers(): void {
   if (appSnapManager) {
     registerAppSnapIpcHandlers(ipcMain, appSnapManager);
   }
+  if (islandHelperManager) {
+    registerIslandIpcHandlers(ipcMain, islandHelperManager);
+  }
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
@@ -3435,6 +3485,9 @@ function createWindow(): BrowserWindow {
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
     emitUpdateState();
+    if (islandHelperManager) {
+      sendIslandState(window.webContents, islandHelperManager.getState());
+    }
   });
   window.once("ready-to-show", () => {
     // Preserve the original first-launch behavior, then respect the state saved
@@ -3559,6 +3612,7 @@ async function bootstrap(): Promise<void> {
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
 
+  initializeDesktopIsland();
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   try {
