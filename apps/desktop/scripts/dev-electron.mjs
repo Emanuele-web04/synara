@@ -4,6 +4,7 @@ import { join } from "node:path";
 import waitOn from "wait-on";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildIslandHelper } from "./build-island-helper.mjs";
 import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
 
 const port = Number(process.env.ELECTRON_RENDERER_PORT ?? 5733);
@@ -24,6 +25,7 @@ const staleComputerUseGracePeriodMs = 300;
 
 if (process.platform === "darwin") {
   buildAppSnapHelper({ arch: process.arch });
+  buildIslandHelper({ arch: process.arch });
 }
 
 await waitOn({

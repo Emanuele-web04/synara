@@ -233,6 +233,8 @@ export const AppSettingsSchema = Schema.Struct({
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Dynamic island overlay below the top bar showing active thread status.
+  dynamicIslandEnabled: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local desktop preference. Native capability/permission state remains owned by Electron.
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.
