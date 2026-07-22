@@ -85,7 +85,7 @@ await writeFile(
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleDisplayName</key><string>Synara Island Preview</string>
   <key>CFBundleExecutable</key><string>synara-island-helper</string>
-  <key>CFBundleIdentifier</key><string>com.synara.island.preview</string>
+  <key>CFBundleIdentifier</key><string>com.emanueledipietro.synara.island.preview</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Synara Island Preview</string>
   <key>CFBundlePackageType</key><string>APPL</string>

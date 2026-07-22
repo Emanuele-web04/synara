@@ -76,7 +76,7 @@ final class IslandPanelController: NSObject {
             }
         )
         let hosting = IslandHostingView(rootView: rootView)
-        hosting.sizingOptions = []
+        hosting.sizingOptions = [.intrinsicContentSize]
         hosting.autoresizingMask = [.width, .height]
         hostingView = hosting
         panel.contentView = hostingView
@@ -92,6 +92,8 @@ final class IslandPanelController: NSObject {
         }
         applyFrame(for: viewModel.presentation, animate: false, label: "show")
         panel.orderFrontRegardless()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
         logFrame(label: "after orderFront")
         DispatchQueue.main.async { [weak self] in
             self?.logFrame(label: "next runloop")
@@ -221,20 +223,7 @@ final class IslandPanelController: NSObject {
 
         print("[island-applyFrame] [\(label)] target=\(target) screen.maxY=\(screenMaxY)")
 
-        if animate {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.20
-                context.timingFunction = CAMediaTimingFunction(
-                    controlPoints: 0.32,
-                    0.72,
-                    0.00,
-                    1.00
-                )
-                panel.animator().setFrame(target, display: true)
-            }
-        } else {
-            panel.setFrame(target, display: true)
-        }
+        panel.setFrame(target, display: true, animate: animate)
 
         print("[island-applyFrame] [\(label)] after setFrame panel.frame=\(panel.frame)")
         assert(
