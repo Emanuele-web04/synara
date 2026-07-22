@@ -50,6 +50,7 @@ import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
 import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -3157,11 +3158,25 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   };
 }
 
+function isMissingExecutableSpawnError(error: Error): boolean {
+  const lower = error.message.toLowerCase();
+  return (
+    lower.includes("enoent") ||
+    lower.includes("command not found") ||
+    lower.includes("not found") ||
+    lower.includes("filesystem.access")
+  );
+}
+
 async function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
 }): Promise<void> {
+  // Prefer an explicit cwd check before spawning. A missing working directory
+  // produces ENOENT that is otherwise misreported as a missing Codex binary.
+  assertCodexWorkingDirectoryExists(input.cwd);
+
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
@@ -3182,12 +3197,9 @@ async function assertSupportedCodexCliVersion(input: {
   });
 
   if (result.error) {
-    const lower = result.error.message.toLowerCase();
-    if (
-      lower.includes("enoent") ||
-      lower.includes("command not found") ||
-      lower.includes("not found")
-    ) {
+    if (isMissingExecutableSpawnError(result.error)) {
+      // Race: cwd may have disappeared between the pre-check and spawn.
+      assertCodexWorkingDirectoryExists(input.cwd);
       throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
     }
     throw new Error(

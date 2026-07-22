@@ -31,6 +31,10 @@ import {
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
+import {
+  assertCodexWorkingDirectoryExists,
+  formatMissingCodexWorkingDirectoryError,
+} from "./codexWorkingDirectory";
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
@@ -1092,6 +1096,71 @@ describe("startSession", () => {
   it("uses an isolated scratch workspace path when no cwd is provided", () => {
     const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"));
     expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
+  });
+
+  it("reports a missing project working directory instead of a missing Codex CLI", () => {
+    const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
+    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
+      formatMissingCodexWorkingDirectoryError(missingCwd),
+    );
+    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
+      /Relocate or reconnect the project/,
+    );
+    expect(formatMissingCodexWorkingDirectoryError(missingCwd)).not.toMatch(
+      /not installed|not executable/i,
+    );
+  });
+
+  it("accepts an existing project working directory", () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-existing-cwd-"));
+    try {
+      expect(() => assertCodexWorkingDirectoryExists(cwd)).not.toThrow();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails session start with missing-cwd guidance instead of missing Codex CLI", async () => {
+    const manager = new CodexAppServerManager();
+    const events: Array<{ method: string; kind: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        method: event.method,
+        kind: event.kind,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const missingCwd = path.join(
+      os.tmpdir(),
+      `synara-missing-session-cwd-${randomUUID()}`,
+      "old-project",
+    );
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-missing-cwd"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          cwd: missingCwd,
+          providerOptions: {
+            codex: {
+              binaryPath: process.execPath,
+            },
+          },
+        }),
+      ).rejects.toThrow(formatMissingCodexWorkingDirectoryError(missingCwd));
+      expect(events).toEqual([
+        {
+          method: "session/startFailed",
+          kind: "error",
+          message: formatMissingCodexWorkingDirectoryError(missingCwd),
+        },
+      ]);
+      expect(events[0]?.message).not.toMatch(/not installed|not executable/i);
+    } finally {
+      await manager.stopAll();
+    }
   });
 
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
