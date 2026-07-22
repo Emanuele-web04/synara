@@ -5,11 +5,11 @@
 
 import { cn } from "~/lib/utils";
 
-// Geometry mirrors Remodex's RunningThreadSpinner: a 15pt canvas with a 3pt
-// stroke, a full track ring at 22% opacity (stroke ×0.7), and a rounded arc
-// trimmed 0.16→0.72 spinning at 0.85s linear.
+// Geometry mirrors Remodex's RunningThreadSpinner (with a thinner stroke and
+// slower spin): a full track ring at 22% opacity (stroke ×0.7) and a rounded
+// arc trimmed 0.16→0.72 spinning linearly.
 const CANVAS = 15;
-const LINE_WIDTH = 3;
+const LINE_WIDTH = 2;
 const RADIUS = (CANVAS - LINE_WIDTH) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const ARC_LENGTH = (0.72 - 0.16) * CIRCUMFERENCE;
@@ -21,7 +21,7 @@ export function ThreadRunningSpinner({ className }: { className?: string }) {
       viewBox={`0 0 ${CANVAS} ${CANVAS}`}
       fill="none"
       className={cn(
-        "inline-block size-3 shrink-0 animate-spin text-muted-foreground/55 [animation-duration:0.85s] motion-reduce:animate-none",
+        "inline-block size-3 shrink-0 animate-spin text-muted-foreground/55 [animation-duration:1.3s] motion-reduce:animate-none",
         className,
       )}
     >
