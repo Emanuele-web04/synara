@@ -107,9 +107,7 @@ describe("createComposerThreadMentionSourcesSelector", () => {
       },
     );
 
-    const before = selectSources(
-      makeState({ threadIds, sidebarThreadSummaryById: summaryById }),
-    );
+    const before = selectSources(makeState({ threadIds, sidebarThreadSummaryById: summaryById }));
     const readsAfterFirstSelection = summaryReads;
     const after = selectSources(
       makeState({

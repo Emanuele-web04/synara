@@ -120,10 +120,7 @@ export function resolveThreadMentionPromptProjection(input: {
   );
   const maxTotalContextChars = Math.min(
     THREAD_MENTION_MAX_TOTAL_CONTEXT_CHARS,
-    Math.max(
-      0,
-      Math.floor(input.maxTotalContextChars ?? THREAD_MENTION_MAX_TOTAL_CONTEXT_CHARS),
-    ),
+    Math.max(0, Math.floor(input.maxTotalContextChars ?? THREAD_MENTION_MAX_TOTAL_CONTEXT_CHARS)),
   );
   const maxResolvedMentionCount = Math.floor(
     (maxTotalContextChars + THREAD_MENTION_CONTEXT_SEPARATOR_CHARS) /
