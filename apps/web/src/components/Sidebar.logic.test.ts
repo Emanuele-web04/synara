@@ -125,10 +125,7 @@ describe("resolvePullRequestReviewBadge", () => {
       text: "3+",
       accessibleLabel: "At least 3 pull requests are waiting for your review",
     });
-    expect(resolvePullRequestReviewBadge({ count: 0, incomplete: true })).toEqual({
-      text: "?",
-      accessibleLabel: "The pull request review count is temporarily incomplete",
-    });
+    expect(resolvePullRequestReviewBadge({ count: 0, incomplete: true })).toBeNull();
     expect(resolvePullRequestReviewBadge({ count: 0, incomplete: false })).toBeNull();
     expect(resolvePullRequestReviewBadge(undefined)).toBeNull();
     expect(resolvePullRequestReviewBadge({ count: 1, incomplete: false })?.accessibleLabel).toBe(

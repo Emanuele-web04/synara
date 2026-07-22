@@ -76,10 +76,7 @@ export function resolvePullRequestReviewBadge(
             "pull requests are",
           )} waiting for your review`,
         }
-      : {
-          text: "?",
-          accessibleLabel: "The pull request review count is temporarily incomplete",
-        };
+      : null;
   }
   return result.count > 0
     ? {
