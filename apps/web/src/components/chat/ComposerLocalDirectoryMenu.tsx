@@ -526,7 +526,7 @@ function UseCurrentFolderRow(props: {
       data-highlight-index={index}
       value="use-current-folder"
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        "cursor-pointer select-none gap-2.5 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
         isHighlighted &&
           "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
@@ -580,7 +580,7 @@ function LocalSearchRow(props: {
       data-highlight-index={index}
       value={`search:${entry.kind}:${entry.path}`}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        "cursor-pointer select-none gap-2.5 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
         isHighlighted &&
           "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
@@ -626,7 +626,7 @@ function LocalEntryRow(props: {
       data-highlight-index={index}
       value={`${entry.kind}:${entry.path}`}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        "cursor-pointer select-none gap-2.5 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
         isHighlighted &&
           "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
