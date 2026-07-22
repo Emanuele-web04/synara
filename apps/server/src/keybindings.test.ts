@@ -469,6 +469,67 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("migrates the old sidebar search default without preserving macOS Ctrl+K", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+k", command: "sidebar.search" },
+      ]);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      const searchBindings = configState.keybindings.filter(
+        (entry) => entry.command === "sidebar.search",
+      );
+      assert.deepEqual(
+        searchBindings.map((entry) => ({
+          shortcut: entry.shortcut,
+          whenAst: entry.whenAst,
+        })),
+        [
+          {
+            shortcut: {
+              key: "k",
+              metaKey: true,
+              ctrlKey: false,
+              shiftKey: false,
+              altKey: false,
+              modKey: false,
+            },
+            whenAst: undefined,
+          },
+          {
+            shortcut: {
+              key: "k",
+              metaKey: false,
+              ctrlKey: true,
+              shiftKey: false,
+              altKey: false,
+              modKey: false,
+            },
+            whenAst: { type: "not", node: { type: "identifier", name: "isMac" } },
+          },
+        ],
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepEqual(
+        persisted.filter((entry) => entry.command === "sidebar.search"),
+        [
+          { key: "cmd+k", command: "sidebar.search" },
+          { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
+        ],
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("preserves new-chat Cmd/Option/N while relaxing its terminal guard", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig;
