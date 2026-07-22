@@ -11,6 +11,7 @@ import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -50,7 +51,6 @@ function normalizeCodexError(
   operation: string,
   error: unknown,
   fallback: string,
-  cwd?: string,
 ): TextGenerationError {
   if (Schema.is(TextGenerationError)(error)) {
     return error;
@@ -58,27 +58,10 @@ function normalizeCodexError(
 
   if (error instanceof Error) {
     const lower = error.message.toLowerCase();
-    const mentionsMissingCwd =
-      cwd !== undefined &&
-      (error.message.includes(cwd) ||
-        lower.includes("filesystem.access") ||
-        lower.includes("no such file or directory"));
-    if (
-      mentionsMissingCwd &&
-      (lower.includes("enoent") ||
-        lower.includes("notfound") ||
-        lower.includes("filesystem.access") ||
-        lower.includes("no such file or directory"))
-    ) {
-      return new TextGenerationError({
-        operation,
-        detail: `Project working directory no longer exists: ${cwd}. Relocate or reconnect the project in Synara.`,
-        cause: error,
-      });
-    }
     if (
       error.message.includes(`Command not found: ${binaryPath}`) ||
       lower.includes(`spawn ${binaryPath.toLowerCase()}`) ||
+      lower.includes("notfound: childprocess.spawn") ||
       lower.includes("enoent")
     ) {
       return new TextGenerationError({
@@ -320,13 +303,19 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
+      const workingDirectoryExists = fileSystem.stat(cwd).pipe(
+        Effect.map((cwdInfo) => cwdInfo.type === "Directory"),
+        Effect.catch(() => Effect.succeed(false)),
+      );
+      const missingWorkingDirectoryError = () =>
+        new TextGenerationError({
+          operation,
+          detail: formatMissingCodexWorkingDirectoryError(cwd),
+        });
+
       const runCodexCommand = Effect.gen(function* () {
-        const cwdInfo = yield* fileSystem.stat(cwd).pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!cwdInfo || cwdInfo.type !== "Directory") {
-          return yield* new TextGenerationError({
-            operation,
-            detail: `Project working directory no longer exists: ${cwd}. Relocate or reconnect the project in Synara.`,
-          });
+        if (!(yield* workingDirectoryExists)) {
+          return yield* missingWorkingDirectoryError();
         }
 
         const env = yield* Effect.promise(() =>
@@ -365,13 +354,20 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         const child = yield* commandSpawner
           .spawn(command)
           .pipe(
-            Effect.mapError((cause) =>
-              normalizeCodexError(
-                codexBinaryPath,
-                operation,
-                cause,
-                "Failed to spawn Codex CLI process",
-                cwd,
+            Effect.catch((cause) =>
+              workingDirectoryExists.pipe(
+                Effect.flatMap((exists) =>
+                  Effect.fail(
+                    exists
+                      ? normalizeCodexError(
+                          codexBinaryPath,
+                          operation,
+                          cause,
+                          "Failed to spawn Codex CLI process",
+                        )
+                      : missingWorkingDirectoryError(),
+                  ),
+                ),
               ),
             ),
           );

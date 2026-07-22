@@ -704,6 +704,55 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("reports a missing working directory before spawning Codex", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "synara-missing-cwd-" });
+      const missingCwd = path.join(parent, "removed-project");
+      const textGeneration = yield* TextGeneration;
+
+      const result = yield* textGeneration
+        .generateBranchName({
+          cwd: missingCwd,
+          message: "Fix the missing project.",
+        })
+        .pipe(Effect.flip);
+
+      expect(result).toBeInstanceOf(TextGenerationError);
+      expect(result.message).toContain(`Project working directory no longer exists: ${missingCwd}`);
+      expect(result.message).toContain("Relocate or reconnect the project");
+    }),
+  );
+
+  it.effect("preserves missing Codex binary errors when the working directory exists", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "synara-existing-cwd-" });
+      const missingBinary = path.join(cwd, "missing-codex-binary");
+      const textGeneration = yield* TextGeneration;
+
+      const result = yield* textGeneration
+        .generateBranchName({
+          cwd,
+          message: "Generate a branch name.",
+          providerOptions: {
+            codex: {
+              binaryPath: missingBinary,
+            },
+          },
+        })
+        .pipe(Effect.flip);
+
+      expect(result).toBeInstanceOf(TextGenerationError);
+      expect(result.message).toContain(
+        `Codex CLI (${missingBinary}) is required but not available`,
+      );
+      expect(result.message).not.toContain("working directory no longer exists");
+    }),
+  );
+
   it.effect("uses the provided codexHomePath and strips local skills config", () =>
     withFakeCodexEnv(
       {

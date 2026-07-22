@@ -21,18 +21,20 @@ import {
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
 import {
-  assertCodexWorkingDirectoryExists,
   buildCodexInitializeParams,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   CodexAppServerManager,
   classifyCodexStderrLine,
-  formatMissingCodexWorkingDirectoryError,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
+import {
+  assertCodexWorkingDirectoryExists,
+  formatMissingCodexWorkingDirectoryError,
+} from "./codexWorkingDirectory";
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
@@ -1097,11 +1099,7 @@ describe("startSession", () => {
   });
 
   it("reports a missing project working directory instead of a missing Codex CLI", () => {
-    const missingCwd = path.join(
-      os.tmpdir(),
-      `synara-missing-cwd-${randomUUID()}`,
-      "old-project",
-    );
+    const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
     expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
       formatMissingCodexWorkingDirectoryError(missingCwd),
     );
