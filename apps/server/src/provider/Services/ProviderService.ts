@@ -37,11 +37,7 @@ import type { Effect, Stream } from "effect";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 
-export type ProviderRuntimeEventPumpStatus =
-  | "starting"
-  | "healthy"
-  | "recovering"
-  | "degraded";
+export type ProviderRuntimeEventPumpStatus = "starting" | "healthy" | "recovering" | "degraded";
 
 export interface ProviderRuntimeEventPumpHealth {
   readonly provider: ProviderKind;

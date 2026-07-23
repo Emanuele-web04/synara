@@ -140,9 +140,7 @@ export function runProviderRuntimeEventPump<R>(
           ...(lastEventAt !== undefined ? { lastEventAt } : {}),
           ...(lastError !== undefined ? { lastError } : {}),
           quarantinedEvents,
-          ...(lastQuarantinedEventId !== undefined
-            ? { lastQuarantinedEventId }
-            : {}),
+          ...(lastQuarantinedEventId !== undefined ? { lastQuarantinedEventId } : {}),
           ...(lastQuarantinedAt !== undefined ? { lastQuarantinedAt } : {}),
         }),
       ),
@@ -191,9 +189,7 @@ export function runProviderRuntimeEventPump<R>(
         Effect.tap(() =>
           Effect.sync(() => {
             lastEventAt = event.createdAt;
-          }).pipe(
-            Effect.andThen(setHealth(quarantinedEvents > 0 ? "degraded" : "healthy", 0)),
-          ),
+          }).pipe(Effect.andThen(setHealth(quarantinedEvents > 0 ? "degraded" : "healthy", 0))),
         ),
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) {

@@ -698,6 +698,43 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("resolves memory writes to the dispatching automation when no id is given", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("memory-implicit-thread");
+      const automationTurnId = TurnId.makeUnsafe("memory-implicit-turn");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        heartbeatCooldownSeconds: 0,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({ run, threadId: targetThreadId, turnId: automationTurnId });
+
+      const memory = yield* service.updateMemory({
+        automationId: null,
+        content: "Iteration 1 complete.",
+        callerThreadId: targetThreadId,
+        callerTurnId: automationTurnId,
+      });
+      const outside = yield* service
+        .updateMemory({
+          automationId: null,
+          content: "nope",
+          callerThreadId: ThreadId.makeUnsafe("memory-implicit-unrelated"),
+          callerTurnId: TurnId.makeUnsafe("memory-implicit-unrelated-turn"),
+        })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(memory.content, "Iteration 1 complete.");
+      assert.deepStrictEqual(yield* service.getMemory(created.id), memory);
+      assert.match(outside.message, /automationId/);
+    }),
+  );
+
   it.effect("initializes future scheduled automations with their first real run time", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -3715,10 +3752,7 @@ layer("AutomationService", (it) => {
       threadShell = Option.some(
         makeThreadShell({
           id: targetThreadId,
-          latestTurn: makeLatestTurn(
-            "running",
-            TurnId.makeUnsafe("turn-once-deferred-blocking"),
-          ),
+          latestTurn: makeLatestTurn("running", TurnId.makeUnsafe("turn-once-deferred-blocking")),
         }),
       );
 
@@ -3840,6 +3874,68 @@ layer("AutomationService", (it) => {
         (run) => service.cancelRun({ runId: run.id }),
         { discard: true },
       );
+    }),
+  );
+
+  it.effect("does not defer a heartbeat behind its own previous run's cooldown", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("cooldown-self-thread");
+      const automationTurnId = TurnId.makeUnsafe("cooldown-self-turn");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        heartbeatCooldownSeconds: 60,
+      });
+      const first = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run: first.run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const justCompleted = new Date().toISOString();
+      const completedTurn = (turnId: TurnId) =>
+        ({
+          turnId,
+          state: "completed",
+          requestedAt: justCompleted,
+          startedAt: justCompleted,
+          completedAt: justCompleted,
+          assistantMessageId: null,
+        }) as unknown as OrchestrationThreadShell["latestTurn"];
+
+      // The latest turn completed inside the cooldown window, but it belongs to this
+      // automation's own finished run, so the next run must dispatch immediately.
+      threadShell = Option.some(
+        makeThreadShell({ id: targetThreadId, latestTurn: completedTurn(automationTurnId) }),
+      );
+      const second = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(second.run.status, "running");
+      assert.isNull(second.run.deferredUntil);
+
+      yield* completeHeartbeatRun({
+        run: second.run,
+        threadId: targetThreadId,
+        turnId: TurnId.makeUnsafe("cooldown-self-turn-2"),
+      });
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      // Activity from anything else inside the cooldown window still defers.
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: completedTurn(TurnId.makeUnsafe("cooldown-user-turn")),
+        }),
+      );
+      const third = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(third.run.status, "pending");
+      assert.isNotNull(third.run.deferredUntil);
+      yield* service.cancelRun({ runId: third.run.id });
     }),
   );
 

@@ -30,7 +30,17 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Cause, Effect, FileSystem, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Queue,
+  Schema,
+  ServiceMap,
+  Stream,
+} from "effect";
 
 import {
   ProviderAdapterProcessError,

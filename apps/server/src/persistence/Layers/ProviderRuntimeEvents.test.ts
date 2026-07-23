@@ -251,10 +251,7 @@ layer("ProviderRuntimeEventRepository", (it) => {
       });
       assert.deepStrictEqual(
         persisted.map(({ event }) => event.eventId),
-        [
-          "native-task-complete:task.completed:0",
-          "native-task-complete:turn.proposed.completed:1",
-        ],
+        ["native-task-complete:task.completed:0", "native-task-complete:turn.proposed.completed:1"],
       );
       assert.notStrictEqual(persisted[0]?.sequence, persisted[1]?.sequence);
     }),

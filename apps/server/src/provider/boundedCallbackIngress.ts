@@ -60,10 +60,7 @@ export const makeBoundedCallbackIngress = <A, E, R>(
   Effect.gen(function* () {
     const capacity = normalizedPositiveInt(options.capacity, 1);
     const maxBufferedBytes = normalizedPositiveInt(options.maxBufferedBytes, 1);
-    const terminalReserve = Math.min(
-      capacity,
-      Math.max(1, Math.floor(options.terminalReserve)),
-    );
+    const terminalReserve = Math.min(capacity, Math.max(1, Math.floor(options.terminalReserve)));
     const normalCapacity = Math.max(0, capacity - terminalReserve);
     const buffer: Array<BufferedItem<A>> = [];
     let queuedBytes = 0;

@@ -2972,7 +2972,10 @@ describe("handleServerNotification error normalization", () => {
         .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
         .mockImplementation(() => {});
       const updateSession = vi
-        .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+        .spyOn(
+          manager as unknown as { updateSession: (...args: unknown[]) => void },
+          "updateSession",
+        )
         .mockImplementation(() => {});
 
       handleServerNotificationForTest(manager, context, {

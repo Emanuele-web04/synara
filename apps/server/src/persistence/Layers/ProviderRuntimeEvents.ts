@@ -103,7 +103,10 @@ const make = Effect.gen(function* () {
           issue: `Provider event '${event.eventId}' was reused with different content.`,
         });
       }
-      return { sequence: row.sequence, event: persistedEvent } satisfies PersistedProviderRuntimeEvent;
+      return {
+        sequence: row.sequence,
+        event: persistedEvent,
+      } satisfies PersistedProviderRuntimeEvent;
     });
 
   const getHighWaterSequence = sql<{ readonly highWaterSequence: number }>`

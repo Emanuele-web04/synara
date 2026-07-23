@@ -53,7 +53,7 @@ export function buildAutomationRunEnvelope(input: {
     `Run: ${run.trigger.type}, scheduled for ${run.scheduledFor} (last run: ${
       input.lastRunAt ?? "never"
     }, iteration ${iterationLabel(definition, run)})`,
-    "Memory (persistent across runs — update it via synara_update_automation_memory before finishing):",
+    'Memory (persistent across runs — replace it via synara_update_automation_memory {"memory": "..."} before finishing):',
     automationMemoryForEnvelope(input.memoryContent),
     "",
     reportingInstructions(definition.mode),

@@ -1110,9 +1110,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     });
   }
 
-  async closeSessionsOpenedAtOrBefore(
-    input: TerminalCloseOpenedAtOrBeforeInput,
-  ): Promise<void> {
+  async closeSessionsOpenedAtOrBefore(input: TerminalCloseOpenedAtOrBeforeInput): Promise<void> {
     const cutoff = Date.parse(input.openedAtOrBefore);
     if (!Number.isFinite(cutoff)) {
       throw new Error(`Invalid terminal archive fence timestamp: ${input.openedAtOrBefore}`);
@@ -1137,9 +1135,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.sessions.delete(toSessionKey(session.threadId, session.terminalId));
     }
     await Promise.all(
-      threadSessions.map((session) =>
-        this.flushPersistQueue(session.threadId, session.terminalId),
-      ),
+      threadSessions.map((session) => this.flushPersistQueue(session.threadId, session.terminalId)),
     );
 
     if (deleteHistory) {

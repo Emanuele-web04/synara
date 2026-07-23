@@ -111,8 +111,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           status: plan.action === "align-running-turn" ? "running" : "interrupted",
           providerName: plan.provider,
           runtimeMode,
-          activeTurnId:
-            plan.action === "align-running-turn" ? plan.runtimeTurnId : null,
+          activeTurnId: plan.action === "align-running-turn" ? plan.runtimeTurnId : null,
           lastError: null,
           updatedAt: now,
         },
@@ -137,13 +136,11 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           { concurrency: 5 },
         );
       if (candidateThreadIds.length === 0) return;
-      const threads = (
-        yield* Effect.forEach(
-          candidateThreadIds,
-          (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
-          { concurrency: 8 },
-        )
-      ).flatMap(Option.toArray);
+      const threads = (yield* Effect.forEach(
+        candidateThreadIds,
+        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
+        { concurrency: 8 },
+      )).flatMap(Option.toArray);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const plans = planProviderRuntimeReconciliation({
         threads,
@@ -198,16 +195,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
 
     const start = () =>
       Effect.forkScoped(
-        reconcileSafely.pipe(
-          Effect.repeat(Schedule.spaced(Duration.millis(intervalMs))),
-        ),
+        reconcileSafely.pipe(Effect.repeat(Schedule.spaced(Duration.millis(intervalMs)))),
       ).pipe(Effect.asVoid);
 
     return { reconcileNow, start } satisfies ProviderRuntimeReconcilerShape;
   });
 
-export const makeProviderRuntimeReconcilerLive = (
-  options?: ProviderRuntimeReconcilerLiveOptions,
-) => Layer.effect(ProviderRuntimeReconciler, make(options));
+export const makeProviderRuntimeReconcilerLive = (options?: ProviderRuntimeReconcilerLiveOptions) =>
+  Layer.effect(ProviderRuntimeReconciler, make(options));
 
 export const ProviderRuntimeReconcilerLive = makeProviderRuntimeReconcilerLive();

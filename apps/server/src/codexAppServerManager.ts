@@ -800,10 +800,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.synaraSkillsDir = options?.synaraSkillsDir;
     this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
-    this.taskCompleteFallbackGraceMs = Math.max(
-      0,
-      options?.taskCompleteFallbackGraceMs ?? 750,
-    );
+    this.taskCompleteFallbackGraceMs = Math.max(0, options?.taskCompleteFallbackGraceMs ?? 750);
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -2750,10 +2747,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
-  private clearTaskCompleteFallback(
-    context: CodexSessionContext,
-    turnId?: TurnId,
-  ): void {
+  private clearTaskCompleteFallback(context: CodexSessionContext, turnId?: TurnId): void {
     const pending = context.taskCompleteFallback;
     if (!pending || (turnId !== undefined && pending.turnId !== turnId)) {
       return;

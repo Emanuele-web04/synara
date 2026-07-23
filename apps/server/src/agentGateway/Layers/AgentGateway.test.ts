@@ -142,6 +142,7 @@ interface GatewayHarness {
   readonly automationCreates: Array<AutomationCreateInput>;
   readonly automationUpdates: Array<AutomationUpdateInput>;
   readonly automationDeletes: Array<{ id: string }>;
+  readonly automationMemoryUpdates: Array<{ automationId: string | null; content: string }>;
   readonly worktreeCreates: Array<{
     ref?: string;
     newBranch?: string;
@@ -274,6 +275,7 @@ function makeHarnessLayer(
 ) {
   const dispatched: Array<OrchestrationCommand> = [];
   const automationCreates: Array<AutomationCreateInput> = [];
+  const automationMemoryUpdates: Array<{ automationId: string | null; content: string }> = [];
   const automationUpdates: Array<AutomationUpdateInput> = [];
   const automationDeletes: Array<{ id: string }> = [];
   const worktreeCreates: Array<{
@@ -596,6 +598,15 @@ function makeHarnessLayer(
           .slice(0, input.limit),
       ),
     getMemory: () => Effect.succeed(null),
+    updateMemory: (input: { automationId: string | null; content: string }) =>
+      Effect.sync(() => {
+        automationMemoryUpdates.push({ automationId: input.automationId, content: input.content });
+        return {
+          automationId: input.automationId ?? "automation-1",
+          content: input.content,
+          updatedAt: NOW,
+        };
+      }),
   } as unknown as (typeof AutomationService)["Service"]);
 
   const gitLayer = Layer.succeed(GitCore, {
@@ -1093,6 +1104,7 @@ function makeHarnessLayer(
       automationCreates,
       automationUpdates,
       automationDeletes,
+      automationMemoryUpdates,
       worktreeCreates,
       gitExecutions,
       fetchedPullRequests,
@@ -4201,9 +4213,43 @@ describe("AgentGateway", () => {
         const created = harness.automationCreates[0]!;
         assert.equal(created.maxIterations, 10);
         assert.include(created.acknowledgedRisks ?? [], "fast-interval");
+        // The default cooldown must not exceed the schedule spacing, or the
+        // acknowledged fast interval would silently degrade to cooldown cadence.
+        assert.equal(created.heartbeatCooldownSeconds, 15);
       }).pipe(Effect.provide(gatewayLayer));
     },
   );
+
+  it.effect("accepts memory writes without automationId and via the content alias", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const implicit = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation_memory",
+        args: { memory: "Iteration 1 complete." },
+      });
+      const legacy = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation_memory",
+        args: { automationId: "automation-1", content: "Legacy payload." },
+      });
+      const missing = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation_memory",
+        args: { automationId: "automation-1" },
+      });
+
+      assert.isFalse(isToolError(implicit.result), toolErrorText(implicit.result));
+      assert.isFalse(isToolError(legacy.result), toolErrorText(legacy.result));
+      assert.isTrue(isToolError(missing.result));
+      assert.include(toolErrorText(missing.result), '"memory"');
+      assert.deepEqual(harness.automationMemoryUpdates, [
+        { automationId: null, content: "Iteration 1 complete." },
+        { automationId: "automation-1", content: "Legacy payload." },
+      ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
 
   it.effect("persists suggested automations as pending and surfaces a proposal card", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);

@@ -85,9 +85,7 @@ describe("makeBoundedCallbackIngress", () => {
           expect(ingress.offer({ id: "delta-a" })).toBe("accepted");
           expect(ingress.offer({ id: "delta-b" })).toBe("accepted");
           expect(ingress.offer({ id: "terminal-a", terminal: true })).toBe("accepted");
-          expect(ingress.offer({ id: "terminal-b", terminal: true })).toBe(
-            "evicted-for-terminal",
-          );
+          expect(ingress.offer({ id: "terminal-b", terminal: true })).toBe("evicted-for-terminal");
 
           expect(ingress.status()).toMatchObject({
             queued: 3,

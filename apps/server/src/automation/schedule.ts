@@ -433,10 +433,7 @@ export function computeNextAutomationRunAt(
   const jitterMilliseconds = scheduleJitterMilliseconds(schedule, jitterContext);
   const baseFrom = new Date(from.getTime() - jitterMilliseconds);
   if (schedule.type === "cron") {
-    return applyScheduleJitter(
-      computeNextCronRunAt(schedule, baseFrom),
-      jitterMilliseconds,
-    );
+    return applyScheduleJitter(computeNextCronRunAt(schedule, baseFrom), jitterMilliseconds);
   }
 
   return applyScheduleJitter(

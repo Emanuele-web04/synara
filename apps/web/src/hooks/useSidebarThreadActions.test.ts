@@ -255,7 +255,6 @@ beforeEach(() => {
   reactHarness.reset();
   sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID)];
   harness.pinnedThreadIds = [];
-  harness.running = false;
   harness.alreadyUnarchived = false;
   harness.splitViewsById = {};
   for (const mock of [
@@ -385,10 +384,7 @@ describe("useSidebarThreadActions", () => {
   it("keeps archive available while server-side runtime cleanup is pending", async () => {
     await expect(render().archiveThread(THREAD_ID)).resolves.toBe(true);
 
-    expect(harness.archiveThread).toHaveBeenCalledWith(
-      expect.anything(),
-      THREAD_ID,
-    );
+    expect(harness.archiveThread).toHaveBeenCalledWith(expect.anything(), THREAD_ID);
   });
 
   it("serializes archives and navigates the active thread to its fallback", async () => {

@@ -7,9 +7,7 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  planProviderRuntimeReconciliation,
-} from "./providerRuntimeReconciliation.ts";
+import { planProviderRuntimeReconciliation } from "./providerRuntimeReconciliation.ts";
 import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory.ts";
 
 const NOW = Date.parse("2026-07-23T20:00:30.000Z");
@@ -17,9 +15,7 @@ const THREAD_ID = ThreadId.makeUnsafe("thread-reconcile");
 const OLD_TURN_ID = TurnId.makeUnsafe("turn-old");
 const LIVE_TURN_ID = TurnId.makeUnsafe("turn-live");
 
-function threadShell(
-  overrides: Partial<OrchestrationThreadShell> = {},
-): OrchestrationThreadShell {
+function threadShell(overrides: Partial<OrchestrationThreadShell> = {}): OrchestrationThreadShell {
   return {
     id: THREAD_ID,
     projectId: ProjectId.makeUnsafe("project-reconcile"),

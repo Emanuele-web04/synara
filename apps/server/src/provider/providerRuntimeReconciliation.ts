@@ -55,10 +55,7 @@ function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number
 
 function pumpDetail(
   provider: ProviderRuntimeBinding["provider"],
-  healthByProvider: ReadonlyMap<
-    ProviderRuntimeBinding["provider"],
-    ProviderRuntimeEventPumpHealth
-  >,
+  healthByProvider: ReadonlyMap<ProviderRuntimeBinding["provider"], ProviderRuntimeEventPumpHealth>,
 ): string {
   const health = healthByProvider.get(provider);
   if (!health || health.status === "healthy") return "";
@@ -81,9 +78,7 @@ export function planProviderRuntimeReconciliation(input: {
   const liveSessionByThreadId = new Map(
     input.liveSessions.map((session) => [session.threadId, session]),
   );
-  const healthByProvider = new Map(
-    input.pumpHealth.map((health) => [health.provider, health]),
-  );
+  const healthByProvider = new Map(input.pumpHealth.map((health) => [health.provider, health]));
   const plans: ProviderRuntimeReconciliationPlan[] = [];
 
   for (const thread of input.threads) {
@@ -95,8 +90,7 @@ export function planProviderRuntimeReconciliation(input: {
     const binding = bindingByThreadId.get(thread.id);
     if (!binding) continue;
 
-    const projectedTurnId =
-      thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
+    const projectedTurnId = thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
     const liveSession = liveSessionByThreadId.get(thread.id);
     const liveTurnId = liveSession?.activeTurnId ?? null;
     const detail = pumpDetail(binding.provider, healthByProvider);

@@ -2165,18 +2165,31 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
-        const definition = yield* requireDefinition(input.automationId);
-        const callerOwnsDefinition =
-          definition.sourceThreadId === input.callerThreadId ||
-          definition.targetThreadId === input.callerThreadId;
-        if (!callerOwnsDefinition) {
-          const run = yield* requireCallerAutomationRun(input);
-          if (run.automationId !== definition.id) {
-            return yield* Effect.fail(
-              new AutomationServiceError({
-                message: "The active turn does not belong to this automation.",
-              }),
-            );
+        let definition: AutomationDefinition;
+        if (input.automationId === null) {
+          const run = yield* requireCallerAutomationRun(input).pipe(
+            Effect.mapError(
+              (error) =>
+                new AutomationServiceError({
+                  message: `${error.message} Pass "automationId" explicitly outside automation-dispatched turns.`,
+                }),
+            ),
+          );
+          definition = yield* requireDefinition(run.automationId);
+        } else {
+          definition = yield* requireDefinition(input.automationId);
+          const callerOwnsDefinition =
+            definition.sourceThreadId === input.callerThreadId ||
+            definition.targetThreadId === input.callerThreadId;
+          if (!callerOwnsDefinition) {
+            const run = yield* requireCallerAutomationRun(input);
+            if (run.automationId !== definition.id) {
+              return yield* Effect.fail(
+                new AutomationServiceError({
+                  message: "The active turn does not belong to this automation.",
+                }),
+              );
+            }
           }
         }
         const memory = yield* automationRepository
@@ -2472,10 +2485,11 @@ export const AutomationServiceLive = Layer.effect(
             reason: "Target thread has a pending user-input request.",
           };
         }
-        const completedAt = shell.latestTurn?.completedAt;
+        const latestTurn = shell.latestTurn;
+        const completedAt = latestTurn?.completedAt;
         const cooldownSeconds =
           definition.heartbeatCooldownSeconds ?? DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS;
-        if (completedAt && cooldownSeconds > 0) {
+        if (latestTurn && completedAt && cooldownSeconds > 0) {
           const completedAtMs = Date.parse(completedAt);
           const nowMs = Date.parse(now);
           if (
@@ -2483,10 +2497,20 @@ export const AutomationServiceLive = Layer.effect(
             Number.isFinite(nowMs) &&
             nowMs - completedAtMs < cooldownSeconds * 1_000
           ) {
-            return {
-              eligible: false as const,
-              reason: `Target thread is inside its ${cooldownSeconds}-second activity cooldown.`,
-            };
+            // The cooldown protects user/agent activity on the target thread; the
+            // automation's own previous run must not throttle its successor, or every
+            // schedule faster than the cooldown silently degrades to cooldown cadence.
+            const ownLatestRun = yield* automationRepository
+              .getLatestFinishedRunForDefinition({ automationId: definition.id })
+              .pipe(Effect.mapError(toServiceError("Failed to load the automation's latest run.")));
+            const latestTurnIsOwnRun =
+              Option.isSome(ownLatestRun) && ownLatestRun.value.turnId === latestTurn.turnId;
+            if (!latestTurnIsOwnRun) {
+              return {
+                eligible: false as const,
+                reason: `Target thread is inside its ${cooldownSeconds}-second activity cooldown.`,
+              };
+            }
           }
         }
         return { eligible: true as const };
@@ -2670,16 +2694,15 @@ export const AutomationServiceLive = Layer.effect(
         yield* publishDefinition(definition.id);
       });
 
-    const completeDeferredOneShotDefinition = (
-      definition: AutomationDefinition,
-      now: string,
-    ) =>
+    const completeDeferredOneShotDefinition = (definition: AutomationDefinition, now: string) =>
       definition.schedule.type !== "once"
         ? Effect.void
-        : automationRepository.disableDefinition({ id: definition.id, now }).pipe(
-            Effect.mapError(toServiceError("Failed to complete deferred one-shot automation.")),
-            Effect.andThen(publishDefinition(definition.id)),
-          );
+        : automationRepository
+            .disableDefinition({ id: definition.id, now })
+            .pipe(
+              Effect.mapError(toServiceError("Failed to complete deferred one-shot automation.")),
+              Effect.andThen(publishDefinition(definition.id)),
+            );
 
     // Run one due definition: enforce the iteration cap, apply misfire policy, skip when a
     // prior heartbeat run is still in flight, then dispatch. The run row is durable before

@@ -47,7 +47,8 @@ export interface AutomationServiceShape {
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationServiceError>;
   readonly updateMemory: (input: {
-    readonly automationId: AutomationDefinition["id"];
+    /** null resolves to the automation that dispatched the caller's active turn. */
+    readonly automationId: AutomationDefinition["id"] | null;
     readonly content: string;
     readonly callerThreadId: ThreadId;
     readonly callerTurnId: TurnId | null;

@@ -221,9 +221,10 @@ function readMode(args: Record<string, unknown>): AutomationDefinition["mode"] {
 }
 
 function readMemoryContent(args: Record<string, unknown>): string {
-  const value = args.content;
+  // "content" is the legacy name of "memory"; accept both so older callers keep working.
+  const value = args.memory ?? args.content;
   if (typeof value !== "string") {
-    throw new ToolInputError('Argument "content" must be a string.');
+    throw new ToolInputError('Argument "memory" must be a string.');
   }
   return value;
 }
@@ -297,7 +298,12 @@ export function makeAgentGatewayAutomationTools(
             enum: ["all", "failed-runs-only"],
           },
           completionPolicy: COMPLETION_POLICY_INPUT_SCHEMA,
-          heartbeatCooldownSeconds: { type: "number", minimum: 0 },
+          heartbeatCooldownSeconds: {
+            type: "number",
+            minimum: 0,
+            description:
+              "Idle seconds required on the target thread (excluding this automation's own runs) before a heartbeat run may start. Defaults to min(60, schedule spacing).",
+          },
           maxIterations: { type: "number", minimum: 1 },
           fastInterval: {
             type: "boolean",
@@ -338,7 +344,11 @@ export function makeAgentGatewayAutomationTools(
             everySeconds: Math.round(everyMinutes * 60),
           } as const);
         const fastInterval = readBooleanArg(args, "fastInterval") ?? false;
-        const fastSchedule = scheduleIsFast(schedule);
+        const scheduleSpacingSeconds = computeAutomationScheduleSpacingSeconds(
+          schedule,
+          new Date().toISOString(),
+        );
+        const fastSchedule = scheduleSpacingSeconds !== null && scheduleSpacingSeconds < 60;
         if (fastSchedule && !fastInterval) {
           throw new ToolInputError(
             'Sub-minute schedules require explicit "fastInterval": true acknowledgement.',
@@ -360,9 +370,17 @@ export function makeAgentGatewayAutomationTools(
         }
         const notificationPolicy = readNotificationPolicy(args) ?? "all";
         const suggested = readBooleanArg(args, "suggested") ?? false;
+        // A cooldown longer than the schedule spacing would silently degrade the
+        // requested cadence to cooldown cadence, so the default is capped at the spacing.
+        const defaultCooldownSeconds =
+          scheduleSpacingSeconds === null
+            ? DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS
+            : Math.min(
+                DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS,
+                Math.max(0, Math.floor(scheduleSpacingSeconds)),
+              );
         const heartbeatCooldownSeconds =
-          readNumberArg(args, "heartbeatCooldownSeconds") ??
-          DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS;
+          readNumberArg(args, "heartbeatCooldownSeconds") ?? defaultCooldownSeconds;
         if (!Number.isInteger(heartbeatCooldownSeconds) || heartbeatCooldownSeconds < 0) {
           throw new ToolInputError(
             'Argument "heartbeatCooldownSeconds" must be a non-negative integer.',
@@ -706,21 +724,33 @@ export function makeAgentGatewayAutomationTools(
       inputSchema: {
         type: "object",
         properties: {
-          automationId: { type: "string" },
-          content: { type: "string", maxLength: 32 * 1_024 },
+          memory: {
+            type: "string",
+            maxLength: 32 * 1_024,
+            description: "Complete replacement memory content.",
+          },
+          automationId: {
+            type: "string",
+            description:
+              "Defaults to the automation that dispatched the current turn; only needed elsewhere.",
+          },
+          content: {
+            type: "string",
+            maxLength: 32 * 1_024,
+            description: 'Deprecated alias of "memory".',
+          },
         },
-        required: ["automationId", "content"],
+        required: ["memory"],
         additionalProperties: false,
       },
       annotations: { title: "Update automation memory", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
+        const automationIdArg = readStringArg(args, "automationId");
         const memory = yield* automationService
           .updateMemory({
-            automationId: AutomationId.makeUnsafe(
-              readStringArg(args, "automationId", { required: true })!,
-            ),
+            automationId: automationIdArg ? AutomationId.makeUnsafe(automationIdArg) : null,
             content: readMemoryContent(args),
             callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
             callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,

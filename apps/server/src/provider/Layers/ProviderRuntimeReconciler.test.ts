@@ -21,13 +21,8 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import {
-  ProviderRuntimeReconciler,
-} from "../Services/ProviderRuntimeReconciler.ts";
-import {
-  ProviderService,
-  type ProviderServiceShape,
-} from "../Services/ProviderService.ts";
+import { ProviderRuntimeReconciler } from "../Services/ProviderRuntimeReconciler.ts";
+import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
   type ProviderSessionDirectoryShape,

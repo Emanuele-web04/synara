@@ -247,9 +247,7 @@ const make = Effect.gen(function* () {
   });
 
   const processThreadLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
-    event.type === "thread.deleted"
-      ? processThreadDeleted(event)
-      : cleanupArchivedThread(event);
+    event.type === "thread.deleted" ? processThreadDeleted(event) : cleanupArchivedThread(event);
 
   const processThreadLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
     processThreadLifecycleEvent(event).pipe(

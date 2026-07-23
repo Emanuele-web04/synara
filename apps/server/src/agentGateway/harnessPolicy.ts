@@ -3,7 +3,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-07-23.4";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-07-23.5";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -31,7 +31,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         AUTOMATION_AUTHORING_GUIDANCE,
         "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
         "Before synara_update_automation, call synara_view_automation and resend the complete mutable configuration, including unchanged fields. Updates are full replacement and partial payloads are rejected.",
-        "Automation-dispatched turns receive an identity/run/memory envelope. Persist durable context with synara_update_automation_memory before finishing; memory is full replacement, DB-backed, and capped at 32 KiB.",
+        'Automation-dispatched turns receive an identity/run/memory envelope. Persist durable context with synara_update_automation_memory {"memory": "..."} before finishing; memory is full replacement, DB-backed, and capped at 32 KiB.',
         'Every automation-dispatched turn must finish by calling synara_report_automation_result. Use decision "silent" only for a successful run with nothing requiring user attention; otherwise use "notify" with a concise title and summary. Failures remain visible regardless of this decision or the automation notification policy.',
       ]
     : [

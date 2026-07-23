@@ -83,7 +83,9 @@ it("bounds durable quarantine cause details while preserving diagnostics", () =>
   assert.equal(summary.causeTruncated, true);
   assert.equal(summary.causeOriginalBytes, Buffer.byteLength(cause, "utf8"));
   assert.equal(summary.causeSha256?.length, 64);
-  assert.ok(Buffer.byteLength(summary.cause, "utf8") <= PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES);
+  assert.ok(
+    Buffer.byteLength(summary.cause, "utf8") <= PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES,
+  );
   assert.equal(summary.cause.includes("\uFFFD"), false);
 });
 

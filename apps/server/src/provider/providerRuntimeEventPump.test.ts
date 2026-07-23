@@ -1,19 +1,6 @@
-import {
-  Cause,
-  Deferred,
-  Effect,
-  Fiber,
-  Option,
-  Queue,
-  Stream,
-} from "effect";
+import { Cause, Deferred, Effect, Fiber, Option, Queue, Stream } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  EventId,
-  ThreadId,
-  TurnId,
-  type ProviderRuntimeEvent,
-} from "@synara/contracts";
+import { EventId, ThreadId, TurnId, type ProviderRuntimeEvent } from "@synara/contracts";
 
 import {
   makeProviderRuntimeEventPumpHealthRegistry,

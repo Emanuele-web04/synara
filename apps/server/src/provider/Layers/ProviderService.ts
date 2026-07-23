@@ -1043,9 +1043,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         ...(options?.runtimeEventRetryMaxDelayMs !== undefined
           ? { retryMaxDelayMs: options.runtimeEventRetryMaxDelayMs }
           : {}),
-      }).pipe(
-        Effect.forkIn(runtimeEventProducerScope),
-      ),
+      }).pipe(Effect.forkIn(runtimeEventProducerScope)),
     ).pipe(Effect.asVoid);
 
     const recoverSessionForThread = (input: {

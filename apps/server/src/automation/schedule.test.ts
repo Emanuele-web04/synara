@@ -420,17 +420,8 @@ describe("deterministic automation schedule jitter", () => {
     };
     expect(deterministicAutomationJitterSeconds(longJitterContext)).toBe(93);
 
-    const first = computeNextAutomationRunAt(
-      cron,
-      "2026-06-16T10:00:00.000Z",
-      longJitterContext,
-    );
-    const second = computeNextAutomationRunAtAfter(
-      cron,
-      first!,
-      first!,
-      longJitterContext,
-    );
+    const first = computeNextAutomationRunAt(cron, "2026-06-16T10:00:00.000Z", longJitterContext);
+    const second = computeNextAutomationRunAtAfter(cron, first!, first!, longJitterContext);
 
     expect(first).toBe("2026-06-16T10:00:33.000Z");
     expect(second).toBe("2026-06-16T10:01:33.000Z");
