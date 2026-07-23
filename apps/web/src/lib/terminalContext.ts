@@ -65,7 +65,7 @@ const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
 
 interface DisplayedUserMessageOptions {
   hideImageOnlyBootstrapPrompt?: boolean;
-  messageId?: MessageId;
+  messageId: MessageId | undefined;
 }
 
 export function normalizeTerminalContextText(text: string): string {
