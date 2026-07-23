@@ -293,6 +293,40 @@ export function formatCadence(schedule: AutomationSchedule): string {
   }
 }
 
+function formatIntervalCadenceLong(seconds: number): string {
+  if (seconds === 3600) return "Hourly";
+  if (seconds % 3600 === 0) return `Every ${seconds / 3600} hours`;
+  if (seconds === 60) return "Every minute";
+  if (seconds % 60 === 0) return `Every ${seconds / 60} minutes`;
+  return seconds === 1 ? "Every second" : `Every ${seconds} seconds`;
+}
+
+/** Like {@link formatCadence} but with interval units spelled out ("Every 5 minutes"). */
+export function formatCadenceLong(schedule: AutomationSchedule): string {
+  return schedule.type === "interval"
+    ? formatIntervalCadenceLong(schedule.everySeconds)
+    : formatCadence(schedule);
+}
+
+/**
+ * Countdown phrase for an upcoming run: "now", "in 5 minutes", "in 9 hours", "in 3 days".
+ * A past-due `nextRunAt` (scheduler catching up) also reads "now". Null when unscheduled
+ * or unparseable so callers can drop the segment entirely.
+ */
+export function formatNextRun(nextRunAt: string | null, now: number = Date.now()): string | null {
+  if (!nextRunAt) return null;
+  const time = new Date(nextRunAt).getTime();
+  if (Number.isNaN(time)) return null;
+  const seconds = Math.round((time - now) / 1000);
+  if (seconds < 60) return "now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return minutes === 1 ? "in 1 minute" : `in ${minutes} minutes`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return hours === 1 ? "in 1 hour" : `in ${hours} hours`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "in 1 day" : `in ${days} days`;
+}
+
 export function weekdayLabel(value: number): string {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
 }

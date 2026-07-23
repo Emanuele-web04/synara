@@ -58,8 +58,10 @@ import {
   datetimeLocalFromIso,
   defaultModelSelection,
   formatCadence,
+  formatCadenceLong,
   formatClockTime,
   formatDateTime,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
   groupHeartbeatAutomationsByTargetThread,
@@ -111,8 +113,10 @@ export {
   datetimeLocalFromIso,
   defaultModelSelection,
   formatCadence,
+  formatCadenceLong,
   formatClockTime,
   formatDateTime,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
   groupHeartbeatAutomationsByTargetThread,
@@ -350,6 +354,10 @@ export function canCancelAutomationRun(run: AutomationRun): boolean {
   );
 }
 
+/**
+ * Tint for the list row's leading status glyph: dimmed when paused, blue while a run is
+ * live, destructive when the latest run needs review, otherwise neutral.
+ */
 export function automationStatusDotClass(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
@@ -363,7 +371,7 @@ export function automationStatusDotClass(
     return "text-blue-500";
   }
   if (latestRun && isTriageRun(latestRun)) return "text-destructive";
-  return "text-emerald-500";
+  return "text-foreground/70";
 }
 
 const deletedAutomationIdsInCache = new Set<string>();

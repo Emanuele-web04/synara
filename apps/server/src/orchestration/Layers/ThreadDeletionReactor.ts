@@ -35,7 +35,7 @@ export function isThreadLifecycleCleanupEvent(
 }
 
 export function isThreadCurrentlyArchived(
-  thread: { readonly archivedAt: string | null } | undefined,
+  thread: { readonly archivedAt?: string | null | undefined } | undefined,
 ): boolean {
   return thread?.archivedAt !== null && thread?.archivedAt !== undefined;
 }

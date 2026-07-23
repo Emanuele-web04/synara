@@ -1,4 +1,4 @@
-import { EventId, ThreadId, type ProviderRuntimeEvent } from "@synara/contracts";
+import { EventId, RuntimeTaskId, ThreadId, type ProviderRuntimeEvent } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { assignDerivedProviderRuntimeEventIds } from "./providerRuntimeEventIdentity.ts";
@@ -25,7 +25,7 @@ describe("assignDerivedProviderRuntimeEventIds", () => {
       {
         ...base,
         type: "task.completed",
-        payload: { taskId: "task-1", status: "completed" },
+        payload: { taskId: RuntimeTaskId.makeUnsafe("task-1"), status: "completed" },
       },
       {
         ...base,

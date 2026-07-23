@@ -99,7 +99,9 @@ export const makeBoundedCallbackIngress = <A, E, R>(
               process(buffered.item).pipe(
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
-                    ? Effect.failCause(cause)
+                    ? // An interrupts-only cause carries no E failures, so it is safe to
+                      // repropagate from a never-error consumer.
+                      Effect.failCause(cause as Cause.Cause<never>)
                     : Effect.logError("bounded callback ingress item failed", {
                         cause: Cause.pretty(cause),
                       }),

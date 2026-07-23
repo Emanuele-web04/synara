@@ -27,6 +27,8 @@ import {
   createInputFromForm,
   datetimeLocalFromIso,
   formatCadence,
+  formatCadenceLong,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
   isoFromDatetimeLocal,
@@ -141,6 +143,29 @@ describe("automation shared route helpers", () => {
         timezone: "Europe/Rome",
       }),
     ).toBe("cron");
+  });
+
+  it("spells out interval cadences in the long form", () => {
+    expect(formatCadenceLong({ type: "interval", everySeconds: 300 })).toBe("Every 5 minutes");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 60 })).toBe("Every minute");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 3600 })).toBe("Hourly");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 7200 })).toBe("Every 2 hours");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 90 })).toBe("Every 90 seconds");
+    expect(formatCadenceLong({ type: "daily", timeOfDay: "09:00", timezone: "Europe/Rome" })).toBe(
+      "Daily at 9:00",
+    );
+  });
+
+  it("phrases the next-run countdown with pluralized units", () => {
+    const now = Date.parse("2026-06-19T00:00:00.000Z");
+    expect(formatNextRun("2026-06-19T00:00:30.000Z", now)).toBe("now");
+    expect(formatNextRun("2026-06-18T23:00:00.000Z", now)).toBe("now");
+    expect(formatNextRun("2026-06-19T00:01:30.000Z", now)).toBe("in 2 minutes");
+    expect(formatNextRun("2026-06-19T00:59:00.000Z", now)).toBe("in 59 minutes");
+    expect(formatNextRun("2026-06-19T09:00:00.000Z", now)).toBe("in 9 hours");
+    expect(formatNextRun("2026-06-22T00:00:00.000Z", now)).toBe("in 3 days");
+    expect(formatNextRun(null, now)).toBeNull();
+    expect(formatNextRun("not-a-date", now)).toBeNull();
   });
 
   it("counts only unread unarchived triage runs", () => {

@@ -1,6 +1,6 @@
 import { type AutomationDefinition, type AutomationRun } from "@synara/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
@@ -36,7 +36,8 @@ import {
   automationStatusDotClass,
   buildAutomationFormWarnings,
   createInputFromForm,
-  formatCadence,
+  formatCadenceLong,
+  formatNextRun,
   formatRelativeTime,
   formFromDefinition,
   isFormSubmittable,
@@ -79,9 +80,11 @@ function triageRunLabel(run: AutomationRun): string {
 }
 
 /**
- * Minimal list row shared by the automation sections and the triage list: a leading
- * status glyph, a title, a muted detail that fills the row, and optional right-aligned
- * meta plus a trailing affordance.
+ * Minimal list row shared by the automation list and the triage list: a leading status
+ * glyph, a title, a muted detail, and optional right-aligned meta plus a trailing
+ * affordance. The default layout is a single line with the detail filling the row;
+ * `stacked` places the detail on a second line under the title (the automation list),
+ * and `dimmed` mutes the title for paused rows.
  */
 function AutomationListRow({
   onClick,
@@ -91,6 +94,8 @@ function AutomationListRow({
   meta,
   trailing,
   onDelete,
+  stacked = false,
+  dimmed = false,
 }: {
   readonly onClick: () => void;
   readonly leading: ReactNode;
@@ -99,6 +104,8 @@ function AutomationListRow({
   readonly meta?: ReactNode;
   readonly trailing?: ReactNode;
   readonly onDelete?: () => void;
+  readonly stacked?: boolean;
+  readonly dimmed?: boolean;
 }) {
   return (
     // A div with role="button" (not a real <button>) so inline controls like the hover delete
@@ -115,13 +122,43 @@ function AutomationListRow({
           onClick();
         }
       }}
-      className="group flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+      className={cn(
+        "group flex w-full cursor-pointer gap-2.5 rounded-md px-2 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        stacked ? "items-start py-2.5" : "items-center py-2",
+      )}
     >
-      {leading}
-      <span className="min-w-0 max-w-[45%] truncate text-[0.8125rem] text-foreground">{title}</span>
-      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{detail}</span>
+      {stacked ? <span className="mt-0.5 flex shrink-0">{leading}</span> : leading}
+      {stacked ? (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            className={cn(
+              "truncate text-[0.8125rem]",
+              dimmed ? "text-muted-foreground" : "text-foreground",
+            )}
+          >
+            {title}
+          </span>
+          <span
+            className={cn(
+              "truncate text-xs",
+              dimmed ? "text-muted-foreground/60" : "text-muted-foreground",
+            )}
+          >
+            {detail}
+          </span>
+        </span>
+      ) : (
+        <>
+          <span className="min-w-0 max-w-[45%] truncate text-[0.8125rem] text-foreground">
+            {title}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{detail}</span>
+        </>
+      )}
       {meta == null ? null : (
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{meta}</span>
+        <span className="shrink-0 self-center text-xs tabular-nums text-muted-foreground">
+          {meta}
+        </span>
       )}
       {onDelete ? (
         <button
@@ -132,7 +169,7 @@ function AutomationListRow({
             event.stopPropagation();
             onDelete();
           }}
-          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          className="shrink-0 self-center rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
         >
           <CentralIcon name="trash-can-simple" className="size-3.5" />
         </button>
@@ -142,14 +179,30 @@ function AutomationListRow({
   );
 }
 
-/** Right-aligned meta for an automation row: live status, triage outcome, cadence, or "Paused". */
-function rowMeta(definition: AutomationDefinition, latestRun: AutomationRun | null): string {
-  if (isLiveRun(latestRun)) return runStatusLabel(latestRun.status);
-  if (latestRun && isTriageRun(latestRun)) return triageRunLabel(latestRun);
-  if (!definition.enabled) {
-    return automationLifecycleState(definition) === "done" ? "Done" : "Paused";
+const AUTOMATION_STATUS_FILTERS = ["all", "active", "paused"] as const;
+type AutomationStatusFilter = (typeof AUTOMATION_STATUS_FILTERS)[number];
+
+/**
+ * Second line of an automation row: the spelled-out cadence, then the live run status
+ * while a run is in flight, the next-run countdown while the automation is active, or
+ * "Done" once a one-shot has fired. Paused rows show the cadence alone — the dimmed
+ * row and play glyph already read as paused.
+ */
+function rowSubtitle(
+  definition: AutomationDefinition,
+  latestRun: AutomationRun | null,
+  now: number,
+): string {
+  const segments = [formatCadenceLong(definition.schedule)];
+  if (isLiveRun(latestRun)) {
+    segments.push(runStatusLabel(latestRun.status));
+  } else if (definition.enabled) {
+    const nextRun = formatNextRun(definition.nextRunAt, now);
+    if (nextRun) segments.push(`Next run ${nextRun}`);
+  } else if (automationLifecycleState(definition) === "done") {
+    segments.push("Done");
   }
-  return formatCadence(definition.schedule);
+  return segments.join(" · ");
 }
 
 function AutomationsRouteView() {
@@ -167,6 +220,13 @@ function AutomationsRouteView() {
     ReadonlySet<AutomationDraftWarningId>
   >(() => new Set());
   const [triageFilter, setTriageFilter] = useState<"unread" | "all">("unread");
+  const [statusFilter, setStatusFilter] = useState<AutomationStatusFilter>("all");
+  // Coarse clock for the "Next run in …" countdowns; nothing else in the row is time-derived.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
   const fallbackProjectId = projects[0]?.id ?? "";
   const [form, setForm] = useState<AutomationFormState>(() =>
     formFromDefinition(null, fallbackProjectId, projectModelSelection(projects, fallbackProjectId)),
@@ -240,7 +300,13 @@ function AutomationsRouteView() {
   };
 
   const active = data.definitions.filter((definition) => definition.enabled);
-  const inactive = data.definitions.filter((definition) => !definition.enabled);
+  const paused = data.definitions.filter((definition) => !definition.enabled);
+  const filteredDefinitions =
+    statusFilter === "active"
+      ? active
+      : statusFilter === "paused"
+        ? paused
+        : [...active, ...paused];
   const allTriageRuns = allVisibleTriageRuns(data.runs);
   const triageRuns = triageFilter === "unread" ? unresolvedTriageRuns(data.runs) : allTriageRuns;
   const unreadTriageCount = unresolvedTriageRuns(data.runs).length;
@@ -268,9 +334,12 @@ function AutomationsRouteView() {
 
   const renderRow = (definition: AutomationDefinition) => {
     const latestRun: AutomationRun | null = runsByAutomationId.get(definition.id)?.[0] ?? null;
+    const needsReview = !isLiveRun(latestRun) && latestRun !== null && isTriageRun(latestRun);
     return (
       <AutomationListRow
         key={definition.id}
+        stacked
+        dimmed={!definition.enabled}
         onClick={() =>
           void navigate({
             to: "/automations/$automationId",
@@ -278,30 +347,51 @@ function AutomationsRouteView() {
           })
         }
         leading={
-          <span
-            className={cn(
-              "flex size-3.5 shrink-0 items-center justify-center",
-              automationStatusDotClass(definition, latestRun),
-            )}
-          >
-            <span className="block size-1.5 rounded-full bg-current" />
-          </span>
+          <CentralIcon
+            name={definition.enabled ? "circle" : "play-circle"}
+            className={cn("size-4", automationStatusDotClass(definition, latestRun))}
+          />
         }
         title={definition.name}
-        detail={subtitle(definition)}
-        meta={rowMeta(definition, latestRun)}
+        detail={rowSubtitle(definition, latestRun, now)}
+        meta={needsReview ? triageRunLabel(latestRun) : undefined}
         onDelete={() => void deleteDefinition(definition)}
       />
     );
   };
 
-  const renderSection = (title: string, defs: readonly AutomationDefinition[]) =>
-    defs.length > 0 ? (
-      <section className="flex flex-col gap-0.5">
-        <h2 className="px-2 pb-1 text-sm font-medium text-foreground">{title}</h2>
-        <div className="flex flex-col">{defs.map(renderRow)}</div>
-      </section>
-    ) : null;
+  const renderStatusFilter = () => (
+    <div className="flex items-center gap-1 px-2">
+      {AUTOMATION_STATUS_FILTERS.map((value) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => setStatusFilter(value)}
+          className={cn(
+            "rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition-colors",
+            statusFilter === value
+              ? "bg-[var(--color-background-elevated-secondary)] text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {value}
+        </button>
+      ))}
+    </div>
+  );
+
+  const renderAutomationList = () => (
+    <section className="flex flex-col gap-2">
+      {renderStatusFilter()}
+      {filteredDefinitions.length === 0 ? (
+        <div className="px-2 py-4 text-xs text-muted-foreground">
+          {statusFilter === "paused" ? "No paused automations." : "No active automations."}
+        </div>
+      ) : (
+        <div className="flex flex-col">{filteredDefinitions.map(renderRow)}</div>
+      )}
+    </section>
+  );
 
   const renderTriageRow = (run: AutomationRun) => {
     const definition = data.definitions.find((entry) => entry.id === run.automationId);
@@ -432,8 +522,7 @@ function AutomationsRouteView() {
             ) : (
               <div className="flex flex-col gap-6">
                 {renderTriage()}
-                {renderSection("Current", active)}
-                {renderSection("Paused", inactive)}
+                {renderAutomationList()}
               </div>
             )}
           </div>
