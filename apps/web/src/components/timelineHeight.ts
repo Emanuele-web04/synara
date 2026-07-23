@@ -3,6 +3,8 @@
 // Layer: Web chat virtualization utility
 // Exports: message/work height estimators used by MessagesTimeline and browser tests
 
+import type { MessageId } from "@synara/contracts";
+
 import type { TurnDiffFileChange } from "../types";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../appSettings";
 import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
@@ -59,6 +61,7 @@ const changedFilesSummaryHeightCache = new WeakMap<
 >();
 
 interface TimelineMessageHeightInput {
+  id?: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ReadonlyArray<{ id: string; type?: "image" | "file" | "assistant-selection" }>;
@@ -279,6 +282,7 @@ export function estimateTimelineMessageHeight(
     const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(chatFontSizePx);
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text, {
       hideImageOnlyBootstrapPrompt: (message.attachments?.length ?? 0) > 0,
+      messageId: message.id,
     });
     const renderedText =
       displayedUserMessage.contexts.length > 0
@@ -303,6 +307,7 @@ export function estimateTimelineMessageHeight(
     // from the parsed display state to keep virtualization estimates aligned.
     const fileCommentCount = displayedUserMessage.fileComments.length;
     const pastedTextCount = displayedUserMessage.pastedTexts.length;
+    const browserAnnotationCount = displayedUserMessage.browserAnnotations.length;
     const imageAttachmentHeight =
       imageAttachmentCount > 0
         ? Math.ceil(imageAttachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
@@ -318,18 +323,24 @@ export function estimateTimelineMessageHeight(
         ? pastedTextCount * USER_PASTED_TEXT_CARD_HEIGHT_PX +
           Math.max(pastedTextCount - 1, 0) * USER_PASTED_TEXT_CARD_GAP_PX
         : 0;
+    // Browser annotations always render as one compact strip: two pills plus a
+    // popover trigger for any overflow. The hidden list is portalled and does
+    // not change the virtualized transcript row's measured height.
+    const browserAnnotationHeight = browserAnnotationCount > 0 ? 40 : 0;
     const attachmentHeight =
       imageAttachmentHeight +
         assistantSelectionHeight +
         fileAttachmentHeight +
         fileCommentHeight +
-        pastedTextHeight >
+        pastedTextHeight +
+        browserAnnotationHeight >
       0
         ? imageAttachmentHeight +
           assistantSelectionHeight +
           fileAttachmentHeight +
           fileCommentHeight +
           pastedTextHeight +
+          browserAnnotationHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
     const dispatchChipHeight =
@@ -339,6 +350,7 @@ export function estimateTimelineMessageHeight(
             imageCount: imageAttachmentCount,
             fileCount: fileAttachmentCount,
             assistantSelectionCount,
+            browserAnnotationCount,
             fileCommentCount,
             pastedTextCount,
           })

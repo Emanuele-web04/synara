@@ -2,7 +2,7 @@ import { defineConfig } from "playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "visibleBrowserMcp.e2e.ts",
+  testMatch: ["visibleBrowserMcp.e2e.ts", "browserAnnotations.e2e.ts"],
   globalSetup: "./e2e/globalSetup.ts",
   workers: 1,
   fullyParallel: false,

@@ -6,6 +6,30 @@ import {
   type QueuedComposerTurn,
 } from "./composerDraftStore";
 import type { TerminalContextDraft } from "./lib/terminalContext";
+import type { BrowserAnnotationDraft } from "./lib/browserAnnotations";
+
+export function makeBrowserAnnotation(
+  input: Partial<BrowserAnnotationDraft> & { id: string },
+): BrowserAnnotationDraft {
+  return {
+    id: input.id,
+    ordinal: input.ordinal ?? 1,
+    tabId: input.tabId ?? "tab-1",
+    documentKey: input.documentKey ?? `sha256:${"0".repeat(64)}`,
+    source: input.source ?? {
+      url: "https://example.test/docs",
+      pageTitle: "Docs",
+    },
+    selector: input.selector ?? "#save",
+    tagName: input.tagName ?? "button",
+    role: input.role ?? "button",
+    name: input.name ?? "Save",
+    text: input.text ?? "Save",
+    fingerprint: input.fingerprint ?? "button|save",
+    comment: input.comment ?? "",
+    capturedAt: input.capturedAt ?? "2026-07-23T10:00:00.000Z",
+  };
+}
 
 export function makeImage(input: {
   id: string;
@@ -111,6 +135,7 @@ export function makeQueuedChatTurn(
     images: image ? [image] : [],
     files: [],
     assistantSelections: [],
+    browserAnnotations: [],
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
     fileComments: [],
     pastedTexts: [],

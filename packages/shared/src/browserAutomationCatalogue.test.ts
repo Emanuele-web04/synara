@@ -56,6 +56,9 @@ describe("browser automation catalogue projection", () => {
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_click.description).toContain(
       "humanActionRequired",
     );
+    expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_navigate.description).toContain(
+      "annotationId",
+    );
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain('"kind":"text"');
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_wait.description).toContain('"timeMs":500');
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_type.description).toContain(

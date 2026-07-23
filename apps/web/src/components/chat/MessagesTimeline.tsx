@@ -74,6 +74,7 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
+import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
   EditedFileRowContent,
@@ -925,12 +926,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setEditingUserMessageId(messageId);
   }, []);
   const submitUserMessageEdit = useCallback(
-    (messageId: MessageId, text: string) => {
+    (messageId: MessageId, text: string, allowEmpty = false) => {
       if (!onEditUserMessage) {
         return Promise.resolve();
       }
       const nextText = text.trim();
-      if (!nextText) {
+      if (!nextText && !allowEmpty) {
         return Promise.resolve();
       }
       setSubmittingEditedUserMessageId(messageId);
@@ -1108,6 +1109,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
             hideImageOnlyBootstrapPrompt:
               userImages.length > 0 || userFiles.length > 0 || assistantSelections.length > 0,
+            messageId: row.message.id,
           });
           const renderedAssistantSelections =
             assistantSelections.length > 0
@@ -1121,6 +1123,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
           const renderedPastedTexts = displayedUserMessage.pastedTexts;
+          const renderedBrowserAnnotations = displayedUserMessage.browserAnnotations;
           const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
           const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
@@ -1134,11 +1137,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const showEditUserMessage =
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
-            displayedUserMessage.copyText.trim().length > 0;
+            (displayedUserMessage.copyText.trim().length > 0 ||
+              renderedBrowserAnnotations.length > 0);
           const hasLeadingMedia = hasLeadingUserMedia({
             imageCount: userImages.length,
             fileCount: userFiles.length,
             assistantSelectionCount: renderedAssistantSelections.length,
+            browserAnnotationCount: renderedBrowserAnnotations.length,
             fileCommentCount: renderedFileComments.length,
             pastedTextCount: renderedPastedTexts.length,
           });
@@ -1173,6 +1178,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   {renderedAssistantSelections.length > 0 && (
                     <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                       <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
+                    </div>
+                  )}
+                  {renderedBrowserAnnotations.length > 0 && (
+                    <div className="mb-1 flex w-full max-w-[28rem] justify-end self-end">
+                      <BrowserAnnotationStrip
+                        annotations={renderedBrowserAnnotations}
+                        className="justify-end"
+                      />
                     </div>
                   )}
                   {renderedFileComments.length > 0 && (
@@ -1224,9 +1237,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       key={row.message.id}
                       initialValue={displayedUserMessage.copyText}
                       disabled={isSubmittingThisEdit || isRevertingCheckpoint}
+                      allowEmpty={renderedBrowserAnnotations.length > 0}
                       chatTypographyStyle={userMessageTypographyStyle}
                       onCancel={cancelUserMessageEdit}
-                      onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+                      onSubmit={(text) =>
+                        void submitUserMessageEdit(
+                          row.message.id,
+                          text,
+                          renderedBrowserAnnotations.length > 0,
+                        )
+                      }
                     />
                   ) : showUserText ? (
                     <div
@@ -2596,17 +2616,30 @@ function hasOnlyInlineSkillChips(
   return skillCount > 0;
 }
 
+export function canSubmitUserMessageEdit(input: {
+  draft: string;
+  allowEmpty: boolean;
+  disabled: boolean;
+}): boolean {
+  return (input.allowEmpty || input.draft.trim().length > 0) && !input.disabled;
+}
+
 // Inline editor for replaying a user message after the following assistant turn is rolled back.
 const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   initialValue: string;
   disabled: boolean;
+  allowEmpty: boolean;
   chatTypographyStyle: CSSProperties;
   onCancel: () => void;
   onSubmit: (value: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(props.initialValue);
-  const canSubmit = draft.trim().length > 0 && !props.disabled;
+  const canSubmit = canSubmitUserMessageEdit({
+    draft,
+    allowEmpty: props.allowEmpty,
+    disabled: props.disabled,
+  });
 
   useEffect(() => {
     const textarea = textareaRef.current;

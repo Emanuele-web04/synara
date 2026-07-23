@@ -1,13 +1,72 @@
-import { EventId, type ModelSelection, type OrchestrationThreadActivity } from "@synara/contracts";
+import {
+  EventId,
+  MessageId,
+  type ModelSelection,
+  type OrchestrationThreadActivity,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildThreadHandoffImportedActivities,
+  buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
+import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
+import {
+  appendBrowserAnnotationsToPrompt,
+  extractTrailingBrowserAnnotations,
+  type BrowserAnnotationDraft,
+} from "./browserAnnotations";
 
 describe("threadHandoff", () => {
+  it("rebinds browser annotations to imported message ids before stripping selections", () => {
+    const sourceMessageId = MessageId.makeUnsafe("source-user-message");
+    const annotation: BrowserAnnotationDraft = {
+      id: "annotation-1",
+      ordinal: 1,
+      tabId: "tab-1",
+      source: { url: "https://example.test/docs", pageTitle: "Docs" },
+      selector: "main > button",
+      tagName: "button",
+      role: "button",
+      name: "Save",
+      text: "Save",
+      fingerprint: "button|save|main",
+      comment: "Remove this",
+      capturedAt: "2026-07-23T10:00:00.000Z",
+    };
+    const text = appendBrowserAnnotationsToPrompt(
+      appendAssistantSelectionsToPrompt("Update the page", [
+        { assistantMessageId: "assistant-1", text: "Quoted response" },
+      ]),
+      [annotation],
+      sourceMessageId,
+    );
+
+    const [imported] = buildThreadHandoffImportedMessages({
+      messages: [
+        {
+          id: sourceMessageId,
+          role: "user",
+          text,
+          createdAt: "2026-07-23T10:00:00.000Z",
+          streaming: false,
+          source: "native",
+        },
+      ],
+    });
+    expect(imported).toBeTruthy();
+    const extracted = extractTrailingBrowserAnnotations(
+      imported!.text,
+      imported!.messageId,
+    );
+    expect(imported!.messageId).not.toBe(sourceMessageId);
+    expect(extracted.promptText).toBe("Update the page");
+    expect(extracted.annotations).toEqual([annotation]);
+    expect(imported!.text).not.toContain("<assistant_selection>");
+  });
+
   it("does not import a source provider's configured context window", () => {
     const activity = (kind: string): OrchestrationThreadActivity => ({
       id: EventId.makeUnsafe(`activity-${kind}`),

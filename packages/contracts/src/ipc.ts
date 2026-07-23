@@ -206,6 +206,7 @@ import type {
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
 } from "./stats";
+import type { BrowserAnnotationMethods } from "./browserAnnotations";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -529,6 +530,7 @@ export interface DesktopBridge {
     ) => Promise<ServerVoiceTranscriptionResult>;
   };
   browser: BrowserControlMethods & {
+    annotations: BrowserAnnotationMethods;
     onBrowserUseOpenPanelRequest: (
       listener: (request: BrowserUseOpenPanelRequest) => void,
     ) => () => void;
@@ -758,6 +760,7 @@ export interface NativeApi {
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
   browser: BrowserControlMethods & {
+    annotations: BrowserAnnotationMethods;
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

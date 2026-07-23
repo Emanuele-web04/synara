@@ -16,6 +16,10 @@ import { getDefaultModel } from "@synara/shared/model";
 import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
+import {
+  appendBrowserAnnotationsToPrompt,
+  extractTrailingBrowserAnnotations,
+} from "./browserAnnotations";
 import { randomUUID } from "./utils";
 
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
@@ -61,10 +65,27 @@ export function buildThreadHandoffImportedMessages(
   thread: Pick<Thread, "messages">,
 ): ReadonlyArray<ThreadHandoffImportedMessage> {
   return thread.messages.filter(isImportableThreadMessage).map((message) => {
-    const importedText =
-      message.role === "user" ? stripEmbeddedAssistantSelections(message.text) : message.text;
+    const importedMessageId = MessageId.makeUnsafe(randomUUID());
+    let importedText = message.text;
+    if (message.role === "user") {
+      const extractedBrowserAnnotations = extractTrailingBrowserAnnotations(
+        message.text,
+        message.id,
+      );
+      const visibleAndContextText = stripEmbeddedAssistantSelections(
+        extractedBrowserAnnotations.promptText,
+      );
+      importedText =
+        extractedBrowserAnnotations.annotations.length > 0
+          ? appendBrowserAnnotationsToPrompt(
+              visibleAndContextText,
+              extractedBrowserAnnotations.annotations,
+              importedMessageId,
+            )
+          : visibleAndContextText;
+    }
     const importedMessage: ThreadHandoffImportedMessage = {
-      messageId: MessageId.makeUnsafe(randomUUID()),
+      messageId: importedMessageId,
       role: message.role,
       text: importedText,
       createdAt: message.createdAt,
