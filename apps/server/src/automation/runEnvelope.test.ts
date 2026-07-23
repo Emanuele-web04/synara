@@ -62,6 +62,9 @@ describe("buildAutomationRunEnvelope", () => {
         "(last run: 2026-07-22T09:00:12.000Z, iteration 3/10)",
     );
     expect(envelope).toContain("Last build was green.");
+    expect(envelope).toContain(
+      "These automation-only completion duties do not carry into later manual follow-up turns.",
+    );
     expect(envelope).toContain("call synara_report_automation_result");
     expect(envelope).toContain('decision "silent"');
     expect(envelope).toContain("synara_cancel_automation");

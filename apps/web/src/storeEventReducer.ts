@@ -1239,10 +1239,18 @@ function applyOrchestrationEvent(
             event.payload.modelSelection !== undefined
               ? normalizeModelSelection(event.payload.modelSelection, thread.modelSelection)
               : thread.modelSelection;
+          // Automation-dispatched turns must not repaint the thread's persisted
+          // modes (mirrors the server projection): the automation's modes govern
+          // its own turn only, while the user's composer selection stays put.
+          const adoptTurnModes = event.payload.dispatchOrigin !== "automation";
+          const runtimeMode = adoptTurnModes ? event.payload.runtimeMode : thread.runtimeMode;
+          const interactionMode = adoptTurnModes
+            ? event.payload.interactionMode
+            : thread.interactionMode;
           if (
             modelSelection === thread.modelSelection &&
-            thread.runtimeMode === event.payload.runtimeMode &&
-            thread.interactionMode === event.payload.interactionMode &&
+            thread.runtimeMode === runtimeMode &&
+            thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
           ) {
@@ -1251,8 +1259,8 @@ function applyOrchestrationEvent(
           return {
             ...thread,
             modelSelection,
-            runtimeMode: event.payload.runtimeMode,
-            interactionMode: event.payload.interactionMode,
+            runtimeMode,
+            interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt

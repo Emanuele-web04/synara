@@ -2161,6 +2161,9 @@ const make = Effect.gen(function* () {
             ? { assistantDeliveryMode: nextQueuedTurn.assistantDeliveryMode }
             : {}),
           dispatchMode: nextQueuedTurn.dispatchMode,
+          ...(nextQueuedTurn.dispatchOrigin !== undefined
+            ? { dispatchOrigin: nextQueuedTurn.dispatchOrigin }
+            : {}),
           runtimeMode: nextQueuedTurn.runtimeMode,
           interactionMode: nextQueuedTurn.interactionMode,
           ...(nextQueuedTurn.sourceProposedPlan !== undefined

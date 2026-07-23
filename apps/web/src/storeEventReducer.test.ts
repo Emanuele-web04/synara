@@ -446,6 +446,42 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
   });
 
+  it("does not adopt runtime/interaction modes from automation-dispatched turns", () => {
+    const initialState = makeState(makeThread({ runtimeMode: "approval-required" }));
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.turn-start-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("automation-message"),
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        dispatchMode: "queue",
+        dispatchOrigin: "automation",
+        createdAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(threadsOf(next)[0]?.runtimeMode).toBe("approval-required");
+  });
+
+  it("adopts runtime mode from user-dispatched turns", () => {
+    const initialState = makeState(makeThread({ runtimeMode: "approval-required" }));
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.turn-start-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("user-message"),
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        dispatchMode: "queue",
+        dispatchOrigin: "user",
+        createdAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(threadsOf(next)[0]?.runtimeMode).toBe("full-access");
+  });
+
   it("does not truncate streamed assistant text when completion only carries the trailing chunk", () => {
     const assistantId = MessageId.makeUnsafe("assistant-message");
     const turnId = TurnId.makeUnsafe("turn-1");

@@ -425,6 +425,43 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         model: "openai/gpt-5.5",
       });
       assert.equal(providerRows[0]!.providerName, "pi");
+
+      // Automation-dispatched turns run with the automation's modes but must not
+      // repaint the thread's persisted runtime/interaction modes.
+      const automationRequestedAt = "2026-02-26T13:00:20.000Z";
+      const automationEvent = yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-turn-settings-automation"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-turn-settings"),
+        occurredAt: automationRequestedAt,
+        commandId: CommandId.makeUnsafe("cmd-turn-settings-automation"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-turn-settings-automation"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-turn-settings"),
+          messageId: MessageId.makeUnsafe("message-turn-settings-automation"),
+          dispatchOrigin: "automation",
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+          createdAt: automationRequestedAt,
+        },
+      });
+      yield* projectionPipeline.projectEvent(automationEvent);
+
+      const automationRows = yield* sql<{
+        readonly runtimeMode: string;
+        readonly interactionMode: string;
+      }>`
+        SELECT
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode"
+        FROM projection_threads
+        WHERE thread_id = 'thread-turn-settings'
+      `;
+      assert.equal(automationRows[0]!.runtimeMode, "full-access");
+      assert.equal(automationRows[0]!.interactionMode, "default");
     }),
   );
 

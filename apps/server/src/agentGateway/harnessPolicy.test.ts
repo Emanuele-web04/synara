@@ -20,6 +20,8 @@ describe("Synara harness policy", () => {
     assert.include(policy, "3–8 word outcome-oriented task label");
     assert.include(policy, "no assumed chat context");
     assert.include(policy, "notifying the user versus staying silent");
+    assert.include(policy, 'later manual follow-up such as "continue"');
+    assert.include(policy, "Never call this tool for a manual follow-up turn");
   });
 
   it("never advertises gateway mutation to providers without scoped MCP", () => {

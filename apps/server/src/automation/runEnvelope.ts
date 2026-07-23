@@ -53,6 +53,7 @@ export function buildAutomationRunEnvelope(input: {
     `Run: ${run.trigger.type}, scheduled for ${run.scheduledFor} (last run: ${
       input.lastRunAt ?? "never"
     }, iteration ${iterationLabel(definition, run)})`,
+    "Turn scope: this user message is the automation-dispatched turn. These automation-only completion duties do not carry into later manual follow-up turns.",
     'Memory (persistent across runs — replace it via synara_update_automation_memory {"memory": "..."} before finishing):',
     automationMemoryForEnvelope(input.memoryContent),
     "",

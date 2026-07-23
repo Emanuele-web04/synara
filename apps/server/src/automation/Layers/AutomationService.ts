@@ -1889,6 +1889,35 @@ export const AutomationServiceLive = Layer.effect(
         }
 
         if (!turn || turn.turnId === null || turn.state === "pending" || turn.state === "running") {
+          // A heartbeat run's turn can be abandoned mid-flight when the user sends a
+          // manual turn on the same thread: the provider session moves on, the run's
+          // turn row stays pending/running forever, and no reconcile event ever flips
+          // the run terminal. Detect the supersession (a strictly newer turn owns the
+          // thread) and close the run out as interrupted instead of looping here.
+          if (
+            runUsesExistingThread(run) &&
+            turn !== null &&
+            turn.turnId !== null &&
+            shell.latestTurn !== null &&
+            shell.latestTurn.turnId !== turn.turnId &&
+            isBeforeIso(turn.requestedAt, shell.latestTurn.requestedAt)
+          ) {
+            const interrupted = yield* automationRepository
+              .markRunInterrupted({
+                id: run.id,
+                turnId: turn.turnId,
+                finishedAt: now,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
+            yield* publishRunResult(
+              interrupted,
+              "interrupted",
+              now,
+              "Automation run was superseded by a newer turn on the target thread.",
+              true,
+            );
+            return;
+          }
           if (
             run.status === "waiting-for-approval" &&
             run.threadId &&
