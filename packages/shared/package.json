@@ -219,6 +219,10 @@
     "./browserAutomationMcpError": {
       "types": "./src/browserAutomationMcpError.ts",
       "import": "./src/browserAutomationMcpError.ts"
+    },
+    "./browserAnnotations": {
+      "types": "./src/browserAnnotations.ts",
+      "import": "./src/browserAnnotations.ts"
     }
   },
   "scripts": {

@@ -15,6 +15,11 @@ import {
 } from "electron";
 import type { WebContents } from "electron";
 import type {
+  BrowserAnnotationCancelInput,
+  BrowserAnnotationEvent,
+  BrowserAnnotationSession,
+  BrowserAnnotationStartInput,
+  BrowserAnnotationSyncMarkersInput,
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserCopyLinkEvent,
@@ -43,6 +48,10 @@ import {
   BrowserSessionPolicy,
   type BrowserSessionDownloadEvent,
 } from "./browserSessionPolicy";
+import {
+  BrowserAnnotationCoordinator,
+  type BrowserAnnotationRuntime,
+} from "./browserAnnotations/coordinator";
 
 export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
@@ -405,6 +414,7 @@ export class DesktopBrowserManager {
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
   private readonly copyLinkListeners = new Set<BrowserCopyLinkListener>();
+  private readonly annotations: BrowserAnnotationCoordinator;
   // OAuth/sign-in popups opened by pages via `window.open`. Tracked so they can be sized over
   // the panel and torn down cleanly without leaking native windows.
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
@@ -431,6 +441,19 @@ export class DesktopBrowserManager {
   constructor() {
     this.sessionPolicy = new BrowserSessionPolicy((event) => {
       this.handleSessionDownload(event);
+    });
+    this.annotations = new BrowserAnnotationCoordinator({
+      resolveVisibleRuntime: (input) => {
+        const runtime = this.getVisibleAutomationRuntime(input);
+        return {
+          threadId: runtime.threadId,
+          tabId: runtime.tabId,
+          webContents: runtime.webContents,
+        };
+      },
+      resolveRuntimeByWebContentsId: (webContentsId) =>
+        this.toAnnotationRuntime(this.findRendererRuntimeByWebContentsId(webContentsId)),
+      markHumanControl: (threadId) => this.markHumanControl(threadId),
     });
   }
 
@@ -467,6 +490,60 @@ export class DesktopBrowserManager {
     return () => {
       this.copyLinkListeners.delete(listener);
     };
+  }
+
+  subscribeAnnotationEvents(listener: (event: BrowserAnnotationEvent) => void): () => void {
+    return this.annotations.subscribe(listener);
+  }
+
+  startAnnotation(input: BrowserAnnotationStartInput): BrowserAnnotationSession {
+    return this.annotations.start(input);
+  }
+
+  cancelAnnotation(input: BrowserAnnotationCancelInput): void {
+    this.annotations.cancel(input);
+  }
+
+  syncAnnotationMarkers(input: BrowserAnnotationSyncMarkersInput): void {
+    const state = this.states.get(input.threadId);
+    if (!state?.tabs.some((tab) => tab.id === input.tabId)) {
+      throw new Error("The requested browser tab is not available in this thread.");
+    }
+    this.annotations.syncMarkers(input);
+  }
+
+  resolveAnnotationNavigationTarget(input: {
+    threadId: ThreadId;
+    tabId?: string;
+    annotationId: string;
+  }): { readonly tabId: string; readonly url: string } | null {
+    const state = this.states.get(input.threadId);
+    if (!state) {
+      return null;
+    }
+    const target = this.annotations.resolveNavigationTarget(
+      input.threadId,
+      input.annotationId,
+      input.tabId,
+    );
+    if (!target || !state.tabs.some((tab) => tab.id === target.tabId)) {
+      return null;
+    }
+    return { tabId: target.tabId, url: target.liveUrl };
+  }
+
+  handleAnnotationGuestMessage(sender: WebContents, payload: unknown): void {
+    this.annotations.handleGuestMessage(sender, payload);
+  }
+
+  isAnnotationInteractive(threadId: ThreadId): boolean {
+    return this.annotations.isInteractive(threadId);
+  }
+
+  isTrustedRenderer(webContentsId: number): boolean {
+    return Boolean(
+      this.window && !this.window.isDestroyed() && this.window.webContents.id === webContentsId,
+    );
   }
 
   /**
@@ -1021,6 +1098,7 @@ export class DesktopBrowserManager {
 
   dispose(): void {
     this.disposed = true;
+    this.annotations.dispose();
     this.sessionPolicy.dispose();
     this.clearAllPendingWindowOpenTasks();
     for (const timer of this.suspendTimers.values()) {
@@ -1247,6 +1325,7 @@ export class DesktopBrowserManager {
     this.destroyRuntime(input.threadId, input.tabId, {
       preserveRendererDebugger: preservesRendererGuest,
     });
+    this.annotations.clearProjection(input.threadId, input.tabId);
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = state.tabs.filter((candidate) => candidate.id !== input.tabId);
     if (state.activeTabId === input.tabId) {
@@ -1331,6 +1410,7 @@ export class DesktopBrowserManager {
     const existingState = this.states.get(input.threadId);
     this.destroyThreadRuntimes(input.threadId);
     for (const tab of existingState?.tabs ?? []) {
+      this.annotations.clearProjection(input.threadId, tab.id);
       this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
     }
 
@@ -1467,6 +1547,7 @@ export class DesktopBrowserManager {
     if (existingRendererRuntime && existingRendererRuntime.key !== key) {
       this.destroyRuntime(existingRendererRuntime.threadId, existingRendererRuntime.tabId, {
         preserveRendererDebugger: true,
+        annotationReason: "replaced",
       });
     }
 
@@ -1482,6 +1563,7 @@ export class DesktopBrowserManager {
         }
         this.destroyRuntime(input.threadId, tab.id, {
           preserveAutomationDownloadTracking: true,
+          annotationReason: "replaced",
         });
       }
       const runtime: LiveTabRuntime = {
@@ -1645,6 +1727,7 @@ export class DesktopBrowserManager {
 
     this.closePopupWindowsForTab(input.threadId, input.tabId);
     this.destroyRuntime(input.threadId, input.tabId);
+    this.annotations.clearProjection(input.threadId, input.tabId);
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = nextTabs;
 
@@ -2279,6 +2362,7 @@ export class DesktopBrowserManager {
 
     const didStopLoading = () => {
       this.queueRuntimeStateSync(threadId, tabId);
+      this.annotations.recoverNavigation(threadId, tabId, webContents.id);
     };
     webContents.on("did-stop-loading", didStopLoading);
     runtime.listenerDisposers.push(() => {
@@ -2293,8 +2377,24 @@ export class DesktopBrowserManager {
       webContents.removeListener("did-navigate", didNavigate);
     });
 
+    const didStartNavigation = (
+      _event: Electron.Event,
+      _url: string,
+      _isInPlace: boolean,
+      isMainFrame: boolean,
+    ) => {
+      if (isMainFrame && !_isInPlace) {
+        this.annotations.handleNavigation(threadId, tabId, webContents.id);
+      }
+    };
+    webContents.on("did-start-navigation", didStartNavigation);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-start-navigation", didStartNavigation);
+    });
+
     const didNavigateInPage = () => {
       this.queueRuntimeStateSync(threadId, tabId);
+      this.annotations.handleInPageNavigation(threadId, tabId, webContents.id);
     };
     webContents.on("did-navigate-in-page", didNavigateInPage);
     runtime.listenerDisposers.push(() => {
@@ -2308,9 +2408,11 @@ export class DesktopBrowserManager {
       validatedURL: string,
       isMainFrame: boolean,
     ) => {
-      if (!isMainFrame || errorCode === BROWSER_ERROR_ABORTED) {
+      if (!isMainFrame) {
         return;
       }
+      this.annotations.recoverNavigation(threadId, tabId, webContents.id);
+      if (errorCode === BROWSER_ERROR_ABORTED) return;
 
       const state = this.states.get(threadId);
       const tab = state ? this.getTab(state, tabId) : null;
@@ -2487,6 +2589,7 @@ export class DesktopBrowserManager {
     options: {
       readonly preserveRendererDebugger?: boolean;
       readonly preserveAutomationDownloadTracking?: boolean;
+      readonly annotationReason?: "detached" | "destroyed" | "replaced";
     } = {},
   ): void {
     const key = buildRuntimeKey(threadId, tabId);
@@ -2509,6 +2612,12 @@ export class DesktopBrowserManager {
     if (!runtime) {
       return;
     }
+    this.annotations.handleRuntimeDetached(
+      threadId,
+      tabId,
+      runtime.webContents.id,
+      options.annotationReason ?? (runtime.webContents.isDestroyed() ? "destroyed" : "detached"),
+    );
 
     if (this.attachedRuntimeKey === key) {
       this.detachAttachedRuntime();
@@ -2561,6 +2670,15 @@ export class DesktopBrowserManager {
       }
     }
     return null;
+  }
+
+  private toAnnotationRuntime(runtime: LiveTabRuntime | null): BrowserAnnotationRuntime | null {
+    if (!runtime || runtime.ownsWebContents || runtime.webContents.isDestroyed()) return null;
+    return {
+      threadId: runtime.threadId,
+      tabId: runtime.tabId,
+      webContents: runtime.webContents,
+    };
   }
 
   private getOrCreateState(threadId: ThreadId): ThreadBrowserState {

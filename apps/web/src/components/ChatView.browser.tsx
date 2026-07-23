@@ -41,6 +41,7 @@ import {
   type TerminalContextDraft,
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
+import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
@@ -3354,6 +3355,124 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("sends every browser annotation as prompt context without upload attachments", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const prompt = "Delete everything I annotated.";
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(THREAD_ID, prompt);
+    expect(
+      store.addBrowserAnnotation(THREAD_ID, {
+        id: "annotation-without-comment",
+        tabId: "tab-a",
+        source: {
+          url: "https://example.test/landing",
+          pageTitle: "Landing page",
+        },
+        selector: "#hero-title",
+        tagName: "h1",
+        role: null,
+        name: null,
+        text: "Build faster",
+        fingerprint: "fnv1a64:0123456789abcdef",
+        comment: null,
+        capturedAt: NOW_ISO,
+      }),
+    ).toBe(true);
+    expect(
+      store.addBrowserAnnotation(THREAD_ID, {
+        id: "annotation-with-comment",
+        tabId: "tab-a",
+        source: {
+          url: "https://example.test/pricing",
+          pageTitle: "Pricing",
+        },
+        selector: "#legacy-plan",
+        tagName: "section",
+        role: "region",
+        name: "Legacy plan",
+        text: "Legacy",
+        fingerprint: "fnv1a64:fedcba9876543210",
+        comment: "This one is obsolete.",
+        capturedAt: NOW_ISO,
+      }),
+    ).toBe(true);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-browser-annotations-send" as MessageId,
+        targetText: "browser annotations send target",
+      }),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(document.querySelectorAll('[data-testid="browser-annotation-chip"]')).toHaveLength(2);
+      });
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const request = wsRequests.find(
+            (candidate) =>
+              candidate._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof candidate.command === "object" &&
+              candidate.command !== null &&
+              "type" in candidate.command &&
+              candidate.command.type === "thread.turn.start",
+          );
+          expect(request).toBeTruthy();
+          const command = request!.command as {
+            message?: { messageId?: unknown; text?: unknown; attachments?: unknown[] };
+          };
+          expect(typeof command.message?.messageId).toBe("string");
+          expect(typeof command.message?.text).toBe("string");
+          const serializedPayload = (command.message!.text as string).split("\n").at(-2);
+          expect(serializedPayload).toBeTruthy();
+          expect(JSON.parse(serializedPayload!)?.messageId).toBe(command.message!.messageId);
+          const extracted = extractTrailingBrowserAnnotations(
+            command.message!.text as string,
+            MessageId.makeUnsafe(command.message!.messageId as string),
+          );
+          expect(extracted.promptText).toBe(prompt);
+          expect(
+            extracted.annotations.map(({ id, ordinal, comment, source }) => ({
+              id,
+              ordinal,
+              comment,
+              url: source.url,
+            })),
+          ).toEqual([
+            {
+              id: "annotation-without-comment",
+              ordinal: 1,
+              comment: null,
+              url: "https://example.test/landing",
+            },
+            {
+              id: "annotation-with-comment",
+              ordinal: 2,
+              comment: "This one is obsolete.",
+              url: "https://example.test/pricing",
+            },
+          ]);
+          expect(command.message?.attachments ?? []).toHaveLength(0);
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.browserAnnotations ?? [],
+          ).toHaveLength(0);
+          expect(document.body.textContent).not.toContain("<browser_annotations>");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("shows a pointer cursor for the running stop button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -3509,6 +3628,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [queuedImage],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3534,6 +3654,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3626,6 +3747,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3709,6 +3831,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [queuedImage],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -5300,6 +5423,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           nonPersistedImageIds: [],
           persistedAttachments: [],
           assistantSelections: [],
+          browserAnnotations: [],
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],

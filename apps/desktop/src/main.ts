@@ -157,7 +157,12 @@ import {
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
-import { registerBrowserIpcHandlers, sendBrowserCopyLink, sendBrowserState } from "./browserIpc";
+import {
+  registerBrowserIpcHandlers,
+  sendBrowserAnnotationEvent,
+  sendBrowserCopyLink,
+  sendBrowserState,
+} from "./browserIpc";
 import {
   BrowserHostPipeServer,
   SYNARA_BROWSER_HOST_PIPE_PATH,
@@ -183,6 +188,7 @@ import {
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
+import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import {
   registerAppSnapIpcHandlers,
   sendAppSnapCaptured,
@@ -296,6 +302,10 @@ browserManager.subscribe((state) => {
 
 browserManager.subscribeCopyLink((event) => {
   sendBrowserCopyLink(mainWindow?.webContents, event);
+});
+
+browserManager.subscribeAnnotationEvents((event) => {
+  sendBrowserAnnotationEvent(mainWindow?.webContents, event);
 });
 
 function startBrowserPerformanceLogging(): void {
@@ -3405,6 +3415,20 @@ function createWindow(): BrowserWindow {
   });
   browserManager.setWindow(window);
   attachDesktopZoomFactorSync(window);
+
+  const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
+  window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    if (
+      !hardenBrowserAnnotationWebviewPreferences({
+        partition: params.partition,
+        expectedPartition: BROWSER_SESSION_PARTITION,
+        preloadPath: annotationGuestPreload,
+        webPreferences,
+      })
+    ) {
+      event.preventDefault();
+    }
+  });
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();

@@ -871,6 +871,34 @@ export function createWsNativeApi(): NativeApi {
           await window.desktopBridge.browser.openDevTools(input);
         }
       },
+      annotations: {
+        start: async (input) => {
+          if (window.desktopBridge) {
+            return window.desktopBridge.browser.annotations.start(input);
+          }
+          throw new Error("Browser annotations require the desktop app.");
+        },
+        cancel: async (input) => {
+          if (window.desktopBridge) {
+            await window.desktopBridge.browser.annotations.cancel(input);
+            return;
+          }
+          throw new Error("Browser annotations require the desktop app.");
+        },
+        syncMarkers: async (input) => {
+          if (window.desktopBridge) {
+            await window.desktopBridge.browser.annotations.syncMarkers(input);
+            return;
+          }
+          throw new Error("Browser annotations require the desktop app.");
+        },
+        onEvent: (callback) => {
+          if (window.desktopBridge) {
+            return window.desktopBridge.browser.annotations.onEvent(callback);
+          }
+          return () => {};
+        },
+      },
       onState: (callback) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.onState(callback);

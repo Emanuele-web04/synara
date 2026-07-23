@@ -16,6 +16,7 @@ import {
   BrowserSnapshotOutput,
   BrowserStatusInput,
   BrowserTabsInput,
+  BrowserToolNavigateInput,
   BrowserToolOpenInput,
   BrowserTypeInput,
   BrowserUploadInput,
@@ -88,6 +89,22 @@ describe("browser automation tool schemas", () => {
         truncated: false,
       }),
     ).not.toThrow();
+  });
+
+  it("navigates by exactly one public URL or private annotation reference", () => {
+    expect(
+      Schema.is(BrowserToolNavigateInput)({ url: "https://example.test/page" }),
+    ).toBe(true);
+    expect(
+      Schema.is(BrowserToolNavigateInput)({ annotationId: "annotation-1" }),
+    ).toBe(true);
+    expect(Schema.is(BrowserToolNavigateInput)({})).toBe(false);
+    expect(
+      Schema.is(BrowserToolNavigateInput)({
+        url: "https://example.test/page",
+        annotationId: "annotation-1",
+      }),
+    ).toBe(false);
   });
 
   it("bounds advanced element actions and only accepts workspace-relative uploads", () => {

@@ -310,6 +310,7 @@ const createManager = () => {
     lastError: null,
   };
   const manager = {
+    isAnnotationInteractive: vi.fn(() => false),
     getState: vi.fn(() => state),
     getAutomationHumanControlEpoch: vi.fn(() => 0),
     subscribeAutomationHumanControl: vi.fn(
@@ -326,6 +327,15 @@ const createManager = () => {
     selectAutomationTab: vi.fn(() => state),
     prepareAutomationTab: vi.fn(() => state),
     prepareAutomationNavigation: vi.fn(() => state),
+    resolveAnnotationNavigationTarget: vi.fn(
+      ({ annotationId }: { annotationId: string }) =>
+        annotationId === "annotation-page"
+          ? {
+              tabId: TAB_ID,
+              url: "https://example.test/private?token=local-only",
+            }
+          : null,
+    ),
     getVisibleAutomationRuntime: vi.fn(
       () =>
         ({
@@ -340,6 +350,33 @@ const createManager = () => {
 };
 
 describe("DesktopBrowserAutomationHost", () => {
+  it("blocks new DOM tools while a human annotation picker is interactive", async () => {
+    const { manager, raw } = createManager();
+    raw.isAnnotationInteractive.mockReturnValue(true);
+    const host = new DesktopBrowserAutomationHost(manager);
+
+    await expect(
+      host.executeTool({
+        sessionId: "annotation-takeover",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_snapshot",
+        arguments: {},
+      }),
+    ).rejects.toMatchObject({
+      browserError: { code: "BrowserInterruptedByHuman" },
+    });
+    await expect(
+      host.executeTool({
+        sessionId: "annotation-status",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_status",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({ available: true });
+  });
+
   it("allows scoped browser tools without an authorization prompt", async () => {
     const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
@@ -364,6 +401,54 @@ describe("DesktopBrowserAutomationHost", () => {
         }),
       ).resolves.toMatchObject({ activeTabId: TAB_ID });
     }
+  });
+
+  it("resolves annotation navigation locally and rejects stale annotation ids", async () => {
+    const { manager, raw } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+
+    await expect(
+      host.executeTool({
+        sessionId: "annotation-navigation",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_navigate",
+        arguments: {
+          annotationId: "annotation-page",
+          idempotencyKey: "annotation-navigation-valid",
+        },
+      }),
+    ).resolves.toMatchObject({
+      tabId: TAB_ID,
+      finalUrl: "https://example.test/private?token=local-only",
+    });
+    expect(raw.resolveAnnotationNavigationTarget).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      annotationId: "annotation-page",
+    });
+    expect(raw.prepareAutomationNavigation).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      url: "https://example.test/private?token=local-only",
+    });
+
+    await expect(
+      host.executeTool({
+        sessionId: "annotation-navigation",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_navigate",
+        arguments: {
+          annotationId: "annotation-stale",
+          idempotencyKey: "annotation-navigation-stale",
+        },
+      }),
+    ).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserNavigationBlocked",
+        effectMayHaveCommitted: false,
+      },
+    });
   });
 
   it("binds one provider session to exactly one thread", async () => {

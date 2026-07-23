@@ -284,9 +284,15 @@ describe("agent gateway browser tools", () => {
     const openSchema = tools.find((tool) => tool.definition.name === "browser_open")!.definition
       .inputSchema as { readonly required?: readonly string[] };
     const navigateSchema = tools.find((tool) => tool.definition.name === "browser_navigate")!
-      .definition.inputSchema as { readonly required?: readonly string[] };
+      .definition.inputSchema as {
+      readonly required?: readonly string[];
+      readonly properties?: Readonly<Record<string, unknown>>;
+    };
     expect(openSchema.required ?? []).not.toContain("idempotencyKey");
-    expect(navigateSchema.required ?? []).toContain("url");
+    expect(navigateSchema.required ?? []).not.toContain("url");
+    expect(navigateSchema.required ?? []).not.toContain("annotationId");
+    expect(navigateSchema.properties).toHaveProperty("url");
+    expect(navigateSchema.properties).toHaveProperty("annotationId");
     expect(navigateSchema.required ?? []).not.toContain("idempotencyKey");
   });
 

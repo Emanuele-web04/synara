@@ -831,6 +831,70 @@ describe("wsNativeApi", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
+  it("forwards browser annotation sessions and events to the desktop bridge", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-annotations");
+    const session = {
+      sessionId: "session-a",
+      threadId,
+      tabId: "tab-a",
+      document: {
+        token: "document-a",
+        key: `sha256:${"0".repeat(64)}`,
+        url: "https://example.test/",
+      },
+      source: { url: "https://example.test/", pageTitle: "Example" },
+    };
+    const start = vi.fn().mockResolvedValue(session);
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const syncMarkers = vi.fn().mockResolvedValue(undefined);
+    const unsubscribe = vi.fn();
+    const onEvent = vi.fn(() => unsubscribe);
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: {
+        browser: {
+          annotations: { start, cancel, syncMarkers, onEvent },
+        },
+      },
+    });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const startInput = {
+      threadId,
+      tabId: "tab-a",
+      theme: {
+        mode: "dark" as const,
+        accent: "rgb(96, 115, 204)",
+        surface: "rgb(27, 27, 29)",
+        text: "rgb(250, 250, 250)",
+        mutedText: "rgb(161, 161, 170)",
+        border: "rgb(63, 63, 70)",
+        focusBorder: "rgb(96, 115, 204)",
+        primary: "rgb(250, 250, 250)",
+        primaryText: "rgb(24, 24, 27)",
+      },
+    };
+    const cancelInput = { threadId, tabId: "tab-a" };
+    const projection = {
+      threadId,
+      tabId: "tab-a",
+      version: 7,
+      markers: [],
+    };
+    const listener = vi.fn();
+
+    await expect(api.browser.annotations.start(startInput)).resolves.toEqual(session);
+    await api.browser.annotations.cancel(cancelInput);
+    await api.browser.annotations.syncMarkers(projection);
+    expect(api.browser.annotations.onEvent(listener)).toBe(unsubscribe);
+    expect(start).toHaveBeenCalledWith(startInput);
+    expect(cancel).toHaveBeenCalledWith(cancelInput);
+    expect(syncMarkers).toHaveBeenCalledWith(projection);
+    expect(onEvent).toHaveBeenCalledWith(listener);
+  });
+
   it("keeps a blank fallback browser tab after closing the last tab", async () => {
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();

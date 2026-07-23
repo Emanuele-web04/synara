@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { IconPointer } from "@tabler/icons-react";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -54,7 +55,10 @@ import {
   selectThreadBrowserHistory,
   selectThreadBrowserState,
 } from "../browserStateStore";
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  useComposerDraftStore,
+  type BrowserAnnotationDraft,
+} from "../composerDraftStore";
 import { anchoredToastManager } from "./ui/toast";
 import {
   composerImageFromBrowserScreenshot,
@@ -71,6 +75,10 @@ import {
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import {
+  useBrowserAnnotations,
+  type BrowserAnnotationsController,
+} from "./browser/useBrowserAnnotations";
 import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -78,6 +86,7 @@ import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 interface BrowserPanelProps {
   mode: DiffPanelMode;
@@ -104,6 +113,7 @@ const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
   "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
 const BROWSER_ACTION_MENU_ICON_CLASS_NAME =
   "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
+const EMPTY_BROWSER_ANNOTATIONS: readonly BrowserAnnotationDraft[] = [];
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='dialog-backdrop']",
   "[data-slot='dialog-popup']",
@@ -123,6 +133,41 @@ function BrowserActionMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
     <span className={BROWSER_ACTION_MENU_ICON_CLASS_NAME}>
       <Icon aria-hidden="true" />
     </span>
+  );
+}
+
+export function BrowserAnnotationButton(props: {
+  controller: BrowserAnnotationsController;
+  disabled: boolean;
+}) {
+  const label = props.controller.active ? "Cancel annotation" : "Annotate page";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant={props.controller.active ? "default" : "ghost"}
+            size="icon-sm"
+            className="size-7 [&_svg]:!opacity-100"
+            disabled={props.disabled}
+            aria-label={label}
+            aria-pressed={props.controller.active}
+            aria-busy={props.controller.starting || undefined}
+            data-pressed={props.controller.active ? "" : undefined}
+            title={label}
+            onClick={props.controller.toggle}
+          />
+        }
+      >
+        <IconPointer className="size-3.5" aria-hidden="true" />
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {props.controller.active
+          ? "Cancel element selection (Esc)"
+          : "Select an element to annotate"}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -514,6 +559,11 @@ export function BrowserPanel({
   const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
+  const addBrowserAnnotation = useComposerDraftStore((store) => store.addBrowserAnnotation);
+  const browserAnnotations = useComposerDraftStore(
+    (store) =>
+      store.draftsByThreadId[threadId]?.browserAnnotations ?? EMPTY_BROWSER_ANNOTATIONS,
+  );
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
   );
@@ -594,6 +644,22 @@ export function BrowserPanel({
   });
   const showBrowserAddressSuggestions =
     isLiveRuntime && isAddressFocused && browserAddressSuggestions.length > 0 && runtimeReady;
+  const annotationMethods = api?.browser.annotations;
+  const annotationController = useBrowserAnnotations({
+    methods: annotationMethods,
+    threadId,
+    activeTabId,
+    browserStateVersion: threadBrowserState?.version ?? 0,
+    enabled:
+      isElectron &&
+      isLiveRuntime &&
+      workspaceReady &&
+      activeTab !== null &&
+      !showLocalServersHome,
+    annotations: browserAnnotations,
+    addAnnotation: addBrowserAnnotation,
+    onError: setLocalError,
+  });
 
   const requestLiveRuntime = useCallback(() => {
     onRequestLive?.();
@@ -1573,6 +1639,17 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <BrowserAnnotationButton
+          controller={annotationController}
+          disabled={
+            !isLiveRuntime ||
+            !isElectron ||
+            !workspaceReady ||
+            !activeTab ||
+            showLocalServersHome ||
+            !annotationMethods
+          }
+        />
         <Button
           ref={copyScreenshotButtonRef}
           type="button"

@@ -337,6 +337,18 @@ export class DesktopBrowserAutomationHost {
       });
     }
     const definition = BROWSER_TOOL_DEFINITIONS_BY_NAME[request.name];
+    if (
+      request.name !== "browser_status" &&
+      request.name !== "browser_tabs" &&
+      this.browserManager.isAnnotationInteractive(request.threadId)
+    ) {
+      throw new BrowserAutomationHostError({
+        code: "BrowserInterruptedByHuman",
+        retryable: true,
+        phase: "runtime",
+        effectMayHaveCommitted: false,
+      });
+    }
     let input: Record<string, unknown>;
     try {
       input = Schema.decodeUnknownSync(definition.input as never)(request.arguments) as Record<
@@ -901,7 +913,27 @@ export class DesktopBrowserAutomationHost {
         );
     }
 
-    const targetTabId = this.resolveTabId(affinity, input.tabId);
+    const annotationTarget =
+      request.name === "browser_navigate" && typeof input.annotationId === "string"
+        ? this.browserManager.resolveAnnotationNavigationTarget({
+            threadId: affinity.threadId,
+            annotationId: input.annotationId,
+            ...(typeof input.tabId === "string" ? { tabId: input.tabId } : {}),
+          })
+        : null;
+    if (request.name === "browser_navigate" && typeof input.annotationId === "string") {
+      if (!annotationTarget) {
+        browserHostError({
+          code: "BrowserNavigationBlocked",
+          retryable: false,
+          phase: "navigation",
+          effectMayHaveCommitted: false,
+        });
+      }
+      affinity.tabId = annotationTarget.tabId;
+    }
+    const targetTabId =
+      annotationTarget?.tabId ?? this.resolveTabId(affinity, input.tabId);
     return this.withLock(
       `tab:${affinity.threadId}:${targetTabId}`,
       () =>
@@ -955,7 +987,24 @@ export class DesktopBrowserAutomationHost {
   ): Promise<TabToolExecution> {
     if (request.name === "browser_navigate") {
       const navigateInput = input as BrowserToolNavigateInput;
-      const url = validateWebUrl(navigateInput.url);
+      const resolvedUrl =
+        navigateInput.annotationId === undefined
+          ? navigateInput.url
+          : this.browserManager.resolveAnnotationNavigationTarget({
+              threadId: affinity.threadId,
+              tabId: targetTabId,
+              annotationId: navigateInput.annotationId,
+            })?.url;
+      if (!resolvedUrl) {
+        browserHostError({
+          code: "BrowserNavigationBlocked",
+          retryable: false,
+          phase: "navigation",
+          tabId: targetTabId,
+          effectMayHaveCommitted: false,
+        });
+      }
+      const url = validateWebUrl(resolvedUrl);
       this.snapshotBySession.delete(request.sessionId);
       this.browserManager.prepareAutomationNavigation({
         threadId: affinity.threadId,

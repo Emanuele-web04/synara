@@ -23,6 +23,8 @@ export const BROWSER_FIELD_INSTRUCTION_COPY = {
   show: "Whether to reveal the shared visible browser surface; defaults true. False only reuses an already attached renderer WebView and otherwise reports unavailable; it never creates a separate/headless browser.",
   waitUntil:
     "Navigation milestone; domcontentloaded is the default, while networkidle uses Synara's bounded tracker.",
+  annotationId:
+    "Optional opaque annotation id from a browser annotation attachment. Pass exactly one of annotationId or url; annotationId resolves the exact captured live page locally without embedding its private live URL in the prompt.",
   conditions:
     'One to eight closed wait conditions. Every condition uses the discriminator field "kind" (never "type"), for example {"kind":"text","text":"Done","state":"present"}; a deliberate bounded delay uses {"kind":"delay","timeMs":500}; no regular expressions or arbitrary predicates.',
 } as const;
@@ -61,6 +63,12 @@ export const BrowserEffectingTabInvocationCommon = closedStruct({
 const BrowserUrl = described(
   BoundedUtf8String(8_192, 1),
   "Absolute HTTP or HTTPS URL, bounded to 8 KiB; other schemes are rejected by browser policy.",
+);
+const BrowserAnnotationId = described(
+  BoundedUtf8String(128, 1).check(
+    Schema.makeFilter((value: string) => /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u.test(value)),
+  ),
+  BROWSER_FIELD_INSTRUCTION_COPY.annotationId,
 );
 const BrowserWaitUntil = described(BrowserLoadState, BROWSER_FIELD_INSTRUCTION_COPY.waitUntil);
 const BrowserTypedText = described(
@@ -125,9 +133,14 @@ export const BrowserToolOpenInput = closedStruct({
 export const BrowserToolNavigateInput = closedStruct({
   ...effectingInvocationFields,
   ...optionalTabField,
-  url: BrowserUrl,
+  url: Schema.optional(BrowserUrl),
+  annotationId: Schema.optional(BrowserAnnotationId),
   waitUntil: optionalDefault(BrowserWaitUntil, defaultDomContentLoaded),
-});
+}).check(
+  Schema.makeFilter(
+    (input) => (input.url === undefined) !== (input.annotationId === undefined),
+  ),
+);
 const BrowserHistoryNavigationFields = {
   ...effectingInvocationFields,
   ...optionalTabField,
