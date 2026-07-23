@@ -374,6 +374,49 @@ export function automationAttentionLabel(run: AutomationRun): string | null {
   }
 }
 
+type LiveAutomationRun = AutomationRun & {
+  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
+};
+
+export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
+  return (
+    run?.status === "pending" ||
+    run?.status === "claimed" ||
+    run?.status === "running" ||
+    run?.status === "waiting-for-approval"
+  );
+}
+
+/**
+ * Icon + tint for an automation list row's leading status glyph.
+ * - Live runs spin with a circular loading glyph.
+ * - Completed successful runs show a checkmark circle.
+ * - Failed/cancelled/interrupted runs keep the warning exclamation.
+ * - Scheduled (enabled with a future next run) shows a clock.
+ * - Paused automations show a pause glyph.
+ */
+export function automationListRowIcon(
+  definition: AutomationDefinition,
+  latestRun: AutomationRun | null,
+): { readonly name: string; readonly className: string; readonly spin?: boolean } {
+  if (!definition.enabled) {
+    return { name: "pause", className: "size-4 text-muted-foreground/40" };
+  }
+  if (isLiveRun(latestRun)) {
+    return { name: "loading-circle", className: "size-4 animate-spin text-blue-500", spin: true };
+  }
+  if (latestRun?.status === "succeeded") {
+    return { name: "circle-check", className: "size-4 text-green-500" };
+  }
+  if (latestRun && automationAttentionLabel(latestRun) !== null) {
+    return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+  }
+  if (definition.nextRunAt) {
+    return { name: "clock", className: "size-4 text-foreground/70" };
+  }
+  return { name: "circle-placeholder-on", className: "size-4 text-foreground/70" };
+}
+
 /**
  * Tint for the list row's leading status glyph: dimmed when paused, blue while a run is
  * live, amber when the latest run needs attention, otherwise neutral.
