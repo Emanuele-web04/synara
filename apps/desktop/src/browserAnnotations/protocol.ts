@@ -16,6 +16,7 @@ import {
   type BrowserAnnotationSource,
   type BrowserAnnotationTheme,
 } from "@synara/contracts";
+import { sanitizeBrowserAnnotationPageTitle } from "@synara/shared/browserAnnotations";
 
 export const BROWSER_ANNOTATION_PROTOCOL_VERSION = 1 as const;
 
@@ -169,7 +170,9 @@ function parseSource(value: unknown): BrowserAnnotationSource | null {
   const pageTitle = boundedString(value.pageTitle, BROWSER_ANNOTATION_MAX_PAGE_TITLE_LENGTH, {
     allowEmpty: true,
   });
-  return url && pageTitle !== null ? { url, pageTitle } : null;
+  return url && pageTitle !== null
+    ? { url, pageTitle: sanitizeBrowserAnnotationPageTitle(pageTitle) }
+    : null;
 }
 
 function parseNullableText(value: unknown, maximumLength: number): string | null | undefined {

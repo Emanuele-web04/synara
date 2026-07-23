@@ -267,6 +267,32 @@ describe("browserAnnotations", () => {
     });
   });
 
+  it("removes sensitive page titles before durable storage and provider serialization", () => {
+    const sensitiveTitle =
+      "private@example.test · Card 4242 4242 4242 4242 · token=abc123def456ghi789jkl012";
+    const annotation = makeAnnotation({
+      source: {
+        url: "https://example.test/account",
+        pageTitle: sensitiveTitle,
+      },
+    });
+    const normalized = normalizeBrowserAnnotations([annotation]);
+    const prompt = appendBrowserAnnotationsToPrompt("Inspect this", [annotation], MESSAGE_ID);
+
+    expect(normalized[0]?.source.pageTitle).toBe("");
+    expect(prompt).not.toContain("private@example.test");
+    expect(prompt).not.toContain("4242 4242 4242 4242");
+    expect(prompt).not.toContain("abc123def456ghi789jkl012");
+    expect(extractTrailingBrowserAnnotations(prompt, MESSAGE_ID).annotations).toEqual([
+      makeAnnotation({
+        source: {
+          url: "https://example.test/account",
+          pageTitle: "",
+        },
+      }),
+    ]);
+  });
+
   it("retains ordinary route and allow-listed query context without persisting fragments", () => {
     const annotation = makeAnnotation({
       source: {

@@ -20,7 +20,7 @@ import {
 } from "./browserAnnotations";
 
 describe("threadHandoff", () => {
-  it("rebinds browser annotations to imported message ids before stripping selections", () => {
+  it("strips source-thread browser annotations and selections from imported messages", () => {
     const sourceMessageId = MessageId.makeUnsafe("source-user-message");
     const annotation: BrowserAnnotationDraft = {
       id: "annotation-1",
@@ -63,7 +63,9 @@ describe("threadHandoff", () => {
     );
     expect(imported!.messageId).not.toBe(sourceMessageId);
     expect(extracted.promptText).toBe("Update the page");
-    expect(extracted.annotations).toEqual([annotation]);
+    expect(extracted.annotations).toEqual([]);
+    expect(imported!.text).not.toContain("<browser_annotations>");
+    expect(imported!.text).not.toContain("annotation-1");
     expect(imported!.text).not.toContain("<assistant_selection>");
   });
 

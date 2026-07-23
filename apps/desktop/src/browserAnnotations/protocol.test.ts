@@ -133,6 +133,30 @@ describe("browser annotation protocol", () => {
     expect(parsed.annotation.text).toBeNull();
   });
 
+  it("removes sensitive page titles at the trusted guest-message boundary", () => {
+    const sensitive = parseAnnotationGuestMessage({
+      version: 1,
+      kind: "ready",
+      documentToken: "document-1",
+      source: {
+        url: "https://example.test/account",
+        pageTitle: "Account for private@example.test",
+      },
+    });
+    const ordinary = parseAnnotationGuestMessage({
+      version: 1,
+      kind: "ready",
+      documentToken: "document-2",
+      source: {
+        url: "https://example.test/docs",
+        pageTitle: "React 19 documentation",
+      },
+    });
+
+    expect(sensitive).toMatchObject({ source: { pageTitle: "" } });
+    expect(ordinary).toMatchObject({ source: { pageTitle: "React 19 documentation" } });
+  });
+
   it("rejects oversized, duplicate, and malformed marker projections", () => {
     const marker = {
       id: "annotation-1",

@@ -16,10 +16,7 @@ import { getDefaultModel } from "@synara/shared/model";
 import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
-import {
-  appendBrowserAnnotationsToPrompt,
-  extractTrailingBrowserAnnotations,
-} from "./browserAnnotations";
+import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
 import { randomUUID } from "./utils";
 
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
@@ -75,14 +72,11 @@ export function buildThreadHandoffImportedMessages(
       const visibleAndContextText = stripEmbeddedAssistantSelections(
         extractedBrowserAnnotations.promptText,
       );
-      importedText =
-        extractedBrowserAnnotations.annotations.length > 0
-          ? appendBrowserAnnotationsToPrompt(
-              visibleAndContextText,
-              extractedBrowserAnnotations.annotations,
-              importedMessageId,
-            )
-          : visibleAndContextText;
+      // Browser annotation ids and tab ids are scoped to the source thread's
+      // live browser session. Carrying them into a handoff would advertise an
+      // exact-page navigation target that the destination thread cannot
+      // resolve, so import only the visible user/context text.
+      importedText = visibleAndContextText;
     }
     const importedMessage: ThreadHandoffImportedMessage = {
       messageId: importedMessageId,

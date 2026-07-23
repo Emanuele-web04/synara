@@ -180,12 +180,89 @@ const SENSITIVE_PATH_KEYS = new Set([
   "verify",
 ]);
 
+const EMAIL_PATTERN =
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/u;
+const EXPOSED_CREDENTIAL_PATTERN =
+  /\b(?:authorization|password|passwd|secret|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|session[-_ ]?token|credential)s?\s*(?::|=)\s*\S+/iu;
+const BEARER_CREDENTIAL_PATTERN = /\bbearer\s+\S+/iu;
+const URL_CREDENTIAL_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/iu;
+const JWT_PATTERN =
+  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/u;
+const UUID_PATTERN =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
+const LONG_HEX_IDENTIFIER_PATTERN = /\b[0-9a-f]{24,}\b/iu;
+const OPAQUE_IDENTIFIER_CANDIDATE_PATTERN = /[A-Za-z0-9._~+/-]{12,}/gu;
+
 function decodeForInspection(value: string): string {
   try {
     return decodeURIComponent(value);
   } catch {
     return value;
   }
+}
+
+function isPaymentCardNumber(value: string): boolean {
+  const digits = value.replace(/[ -]/gu, "");
+  if (
+    digits.length < 13 ||
+    digits.length > 19 ||
+    !/^\d+$/u.test(digits) ||
+    /^(\d)\1+$/u.test(digits)
+  ) {
+    return false;
+  }
+  let checksum = 0;
+  const parity = digits.length % 2;
+  for (let index = 0; index < digits.length; index += 1) {
+    let digit = Number(digits[index]);
+    if (index % 2 === parity) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    checksum += digit;
+  }
+  return checksum % 10 === 0;
+}
+
+function containsPaymentCardNumber(value: string): boolean {
+  const candidates = value.match(/(?:\d[ -]?){13,19}/gu) ?? [];
+  return candidates.some(isPaymentCardNumber);
+}
+
+function isOpaqueIdentifier(value: string, fullTitle: string): boolean {
+  const hasLetter = /[A-Za-z]/u.test(value);
+  const hasDigit = /\d/u.test(value);
+  if (!hasLetter || !hasDigit) return false;
+  if (value.length >= 24) return true;
+  if (value !== fullTitle || value.length < 12) return false;
+  return /[A-Z]/u.test(value) && /[a-z]/u.test(value);
+}
+
+/**
+ * Removes page titles that appear to expose private identifiers or credentials.
+ *
+ * Page titles are controlled by the visited document and can include account
+ * details, reset tokens, or form values. Ordinary human-readable titles are
+ * preserved verbatim so they remain useful annotation context.
+ */
+export function sanitizeBrowserAnnotationPageTitle(value: string): string {
+  const title = value.trim();
+  if (
+    EMAIL_PATTERN.test(title) ||
+    EXPOSED_CREDENTIAL_PATTERN.test(title) ||
+    BEARER_CREDENTIAL_PATTERN.test(title) ||
+    URL_CREDENTIAL_PATTERN.test(title) ||
+    JWT_PATTERN.test(title) ||
+    UUID_PATTERN.test(title) ||
+    LONG_HEX_IDENTIFIER_PATTERN.test(title) ||
+    containsPaymentCardNumber(title)
+  ) {
+    return "";
+  }
+  const opaqueCandidates = title.match(OPAQUE_IDENTIFIER_CANDIDATE_PATTERN) ?? [];
+  return opaqueCandidates.some((candidate) => isOpaqueIdentifier(candidate, title))
+    ? ""
+    : value;
 }
 
 function looksPrivate(value: string): boolean {

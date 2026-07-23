@@ -1,6 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeBrowserAnnotationUrl } from "./browserAnnotations";
+import {
+  sanitizeBrowserAnnotationPageTitle,
+  sanitizeBrowserAnnotationUrl,
+} from "./browserAnnotations";
+
+describe("sanitizeBrowserAnnotationPageTitle", () => {
+  it.each([
+    "Account for private@example.test",
+    "Password: hunter2",
+    "Card 4242 4242 4242 4242",
+    "Customer 550e8400-e29b-41d4-a716-446655440000",
+    "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+    "aB3dE5fG7hJ9kL2m",
+    "Build abc123def456ghi789jkl012 details",
+  ])("removes a title containing private data: %s", (title) => {
+    expect(sanitizeBrowserAnnotationPageTitle(title)).toBe("");
+  });
+
+  it.each([
+    "Synara",
+    "React 19 documentation",
+    "API keys – Settings",
+    "Invoice #1234",
+    "Checkout",
+  ])("preserves an ordinary title: %s", (title) => {
+    expect(sanitizeBrowserAnnotationPageTitle(title)).toBe(title);
+  });
+});
 
 describe("sanitizeBrowserAnnotationUrl", () => {
   it("keeps ordinary page context while removing fragments and opaque query values", () => {
