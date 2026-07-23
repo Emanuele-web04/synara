@@ -52,7 +52,6 @@ import {
   IconRefresh,
   IconRotate2,
   IconSelector,
-  IconSettings,
   IconStar,
   IconStarFilled,
   IconSun,
@@ -225,7 +224,9 @@ export const RefreshCwIcon = adaptIcon(IconRefresh);
 export const RotateCcwIcon = adaptIcon(IconRotate2);
 export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
 export const SearchIcon: LucideIcon = centralIconWrapper("magnifying-glass");
-export const SettingsIcon = adaptIcon(IconSettings);
+// Single source for the settings gear. Every settings affordance renders this
+// one Central glyph so gears stay identical across the chrome.
+export const SettingsIcon: LucideIcon = centralIconWrapper("settings-gear-4");
 export const StarIcon = adaptIcon(IconStar);
 export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);

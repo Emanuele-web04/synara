@@ -137,6 +137,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
@@ -529,6 +530,7 @@ export function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onRegisterCommitAndPushTrigger,
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
@@ -867,6 +869,7 @@ export function ChatHeader({
                 gitCwd={gitCwd}
                 activeThreadId={activeThreadId}
                 hideQuickActionLabel={compact}
+                onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
               />
             ) : null}
             {diffToggleControl}

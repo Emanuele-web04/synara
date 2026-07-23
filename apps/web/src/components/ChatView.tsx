@@ -1430,6 +1430,13 @@ export default function ChatView({
   }, [threadId]);
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  // Set by whichever mounted GitActionsControl instance (header quick-action or the
+  // Environment panel row) last registered — either performs the identical commit &
+  // push mutation for this thread's repo, so it doesn't matter which one is "current".
+  const commitAndPushTriggerRef = useRef<(() => void) | null>(null);
+  const onRegisterCommitAndPushTrigger = useCallback((trigger: (() => void) | null) => {
+    commitAndPushTriggerRef.current = trigger;
+  }, []);
   const pendingComposerFocusRef = useRef(false);
   const promptHistoryNavigationRef = useRef<PromptHistoryNavigationState | null>(null);
   const applyingPromptHistoryNavigationRef = useRef(false);
@@ -5747,6 +5754,28 @@ export default function ChatView({
         return;
       }
 
+      if (command === "git.commitAndPush") {
+        if (commitAndPushTriggerRef.current) {
+          event.preventDefault();
+          event.stopPropagation();
+          commitAndPushTriggerRef.current();
+          return;
+        }
+        // No registered trigger inside a git-enabled thread means the action just
+        // isn't runnable right now (clean tree, behind upstream, action in flight)
+        // — tell the user instead of eating the chord silently. Outside git threads
+        // the chord falls through untouched.
+        if (showGitActions && isGitRepo) {
+          event.preventDefault();
+          event.stopPropagation();
+          toastManager.add({
+            type: "info",
+            title: "Nothing to commit or push.",
+          });
+        }
+        return;
+      }
+
       if (command === "browser.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -5798,6 +5827,8 @@ export default function ChatView({
     onToggleDiff,
     onInterrupt,
     onSplitSurface,
+    showGitActions,
+    isGitRepo,
     composerSubagentStripItems,
     onBackgroundAllForegroundSubagentStripItems,
     isFocusedPane,
@@ -9972,6 +10003,7 @@ export default function ChatView({
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
     onClose: closeEnvironmentPanelAfterAction,
+    onRegisterCommitAndPushTrigger,
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -10652,6 +10684,7 @@ export default function ChatView({
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
+          onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
