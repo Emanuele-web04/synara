@@ -1,10 +1,7 @@
 import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  partializeComposerDraftStoreState,
-  useComposerDraftStore,
-} from "./composerDraftStore";
+import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
 import { toHydratedThreadDraft } from "./composerDraftPersistence";
 import {
   makeBrowserAnnotation,
@@ -95,9 +92,8 @@ describe("composerDraftStore browser annotations", () => {
     store.addBrowserAnnotation(threadId, live);
     store.enqueueQueuedTurn(threadId, queued);
 
-    const persisted = partializeComposerDraftStoreState(
-      useComposerDraftStore.getState(),
-    ).draftsByThreadId[threadId];
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState())
+      .draftsByThreadId[threadId];
     expect(persisted?.browserAnnotations).toMatchObject([
       { id: "live", ordinal: 1, documentKey: live.documentKey },
     ]);

@@ -92,12 +92,8 @@ describe("browser automation tool schemas", () => {
   });
 
   it("navigates by exactly one public URL or private annotation reference", () => {
-    expect(
-      Schema.is(BrowserToolNavigateInput)({ url: "https://example.test/page" }),
-    ).toBe(true);
-    expect(
-      Schema.is(BrowserToolNavigateInput)({ annotationId: "annotation-1" }),
-    ).toBe(true);
+    expect(Schema.is(BrowserToolNavigateInput)({ url: "https://example.test/page" })).toBe(true);
+    expect(Schema.is(BrowserToolNavigateInput)({ annotationId: "annotation-1" })).toBe(true);
     expect(Schema.is(BrowserToolNavigateInput)({})).toBe(false);
     expect(
       Schema.is(BrowserToolNavigateInput)({

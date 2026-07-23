@@ -250,8 +250,7 @@ function resolvedBrowserAnnotationColor(
   if (!ownerDocument || !view || typeof element.append !== "function") return fallback;
   const probe = ownerDocument.createElement("span");
   probe.setAttribute("aria-hidden", "true");
-  probe.style.cssText =
-    "position:fixed;inset:0 auto auto 0;visibility:hidden;pointer-events:none;";
+  probe.style.cssText = "position:fixed;inset:0 auto auto 0;visibility:hidden;pointer-events:none;";
   probe.style.color = `var(${property}, ${fallback})`;
   try {
     element.append(probe);
@@ -282,11 +281,7 @@ export function browserAnnotationTheme(
       fallback.mutedText,
     ),
     border: resolvedBrowserAnnotationColor(root, "--color-border-heavy", fallback.border),
-    focusBorder: resolvedBrowserAnnotationColor(
-      root,
-      "--color-border-focus",
-      fallback.focusBorder,
-    ),
+    focusBorder: resolvedBrowserAnnotationColor(root, "--color-border-focus", fallback.focusBorder),
     primary: resolvedBrowserAnnotationColor(
       root,
       "--color-background-button-primary",

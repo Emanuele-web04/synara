@@ -19,14 +19,7 @@ const threadId = process.env.SYNARA_E2E_THREAD_ID as ThreadId | undefined;
 const synaraHome = process.env.SYNARA_HOME;
 const annotationPreloadPath = process.env.SYNARA_E2E_BROWSER_ANNOTATION_PRELOAD;
 
-if (
-  !pipePath ||
-  !capability ||
-  !shellPath ||
-  !threadId ||
-  !synaraHome ||
-  !annotationPreloadPath
-) {
+if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annotationPreloadPath) {
   throw new Error("The visible-browser Electron fixture requires its isolated E2E environment.");
 }
 

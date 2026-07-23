@@ -18,15 +18,12 @@ describe("sanitizeBrowserAnnotationPageTitle", () => {
     expect(sanitizeBrowserAnnotationPageTitle(title)).toBe("");
   });
 
-  it.each([
-    "Synara",
-    "React 19 documentation",
-    "API keys – Settings",
-    "Invoice #1234",
-    "Checkout",
-  ])("preserves an ordinary title: %s", (title) => {
-    expect(sanitizeBrowserAnnotationPageTitle(title)).toBe(title);
-  });
+  it.each(["Synara", "React 19 documentation", "API keys – Settings", "Invoice #1234", "Checkout"])(
+    "preserves an ordinary title: %s",
+    (title) => {
+      expect(sanitizeBrowserAnnotationPageTitle(title)).toBe(title);
+    },
+  );
 });
 
 describe("sanitizeBrowserAnnotationUrl", () => {
@@ -43,9 +40,7 @@ describe("sanitizeBrowserAnnotationUrl", () => {
       sanitizeBrowserAnnotationUrl(
         "https://alice:hunter2@example.test/docs?token=secret&data=eyJhbGciOiJIUzI1NiJ9.payload.signature&tab=details",
       ),
-    ).toBe(
-      "https://example.test/docs?tab=details",
-    );
+    ).toBe("https://example.test/docs?tab=details");
   });
 
   it("redacts private path segments, including values following sensitive route names", () => {
@@ -61,9 +56,7 @@ describe("sanitizeBrowserAnnotationUrl", () => {
       sanitizeBrowserAnnotationUrl(
         "https://example.test/patients/123456789/records/jane-doe?section=jane-doe&view=details",
       ),
-    ).toBe(
-      "https://example.test/patients/REDACTED/records/REDACTED?section=REDACTED&view=details",
-    );
+    ).toBe("https://example.test/patients/REDACTED/records/REDACTED?section=REDACTED&view=details");
   });
 
   it("redacts codes after compound authentication route names", () => {
@@ -79,9 +72,7 @@ describe("sanitizeBrowserAnnotationUrl", () => {
       sanitizeBrowserAnnotationUrl(
         "https://example.test/s/Ab3xY7/share/a1B2c3?section=Ab3xY7&tab=details",
       ),
-    ).toBe(
-      "https://example.test/s/REDACTED/share/REDACTED?section=REDACTED&tab=details",
-    );
+    ).toBe("https://example.test/s/REDACTED/share/REDACTED?section=REDACTED&tab=details");
   });
 
   it("redacts short alphabetic bearer codes and non-static route values", () => {
@@ -95,11 +86,9 @@ describe("sanitizeBrowserAnnotationUrl", () => {
   });
 
   it("keeps sensitive collection routes while redacting their entity identifiers", () => {
-    expect(
-      sanitizeBrowserAnnotationUrl(
-        "https://example.test/customers/acme/settings",
-      ),
-    ).toBe("https://example.test/customers/REDACTED/settings");
+    expect(sanitizeBrowserAnnotationUrl("https://example.test/customers/acme/settings")).toBe(
+      "https://example.test/customers/REDACTED/settings",
+    );
   });
 
   it("keeps ordinary route structure while redacting dynamic identifiers", () => {
@@ -110,9 +99,7 @@ describe("sanitizeBrowserAnnotationUrl", () => {
       "https://example.test/products/REDACTED",
     );
     expect(
-      sanitizeBrowserAnnotationUrl(
-        "https://example.test/projects/my-project/tasks/first-task",
-      ),
+      sanitizeBrowserAnnotationUrl("https://example.test/projects/my-project/tasks/first-task"),
     ).toBe("https://example.test/projects/REDACTED/tasks/REDACTED");
     expect(sanitizeBrowserAnnotationUrl("https://example.test/go/QWERTY")).toBe(
       "https://example.test/REDACTED/REDACTED",

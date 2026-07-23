@@ -137,9 +137,7 @@ export const BrowserToolNavigateInput = closedStruct({
   annotationId: Schema.optional(BrowserAnnotationId),
   waitUntil: optionalDefault(BrowserWaitUntil, defaultDomContentLoaded),
 }).check(
-  Schema.makeFilter(
-    (input) => (input.url === undefined) !== (input.annotationId === undefined),
-  ),
+  Schema.makeFilter((input) => (input.url === undefined) !== (input.annotationId === undefined)),
 );
 const BrowserHistoryNavigationFields = {
   ...effectingInvocationFields,

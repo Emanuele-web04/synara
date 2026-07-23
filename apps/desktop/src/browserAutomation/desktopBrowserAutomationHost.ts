@@ -932,8 +932,7 @@ export class DesktopBrowserAutomationHost {
       }
       affinity.tabId = annotationTarget.tabId;
     }
-    const targetTabId =
-      annotationTarget?.tabId ?? this.resolveTabId(affinity, input.tabId);
+    const targetTabId = annotationTarget?.tabId ?? this.resolveTabId(affinity, input.tabId);
     return this.withLock(
       `tab:${affinity.threadId}:${targetTabId}`,
       () =>

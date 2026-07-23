@@ -10,8 +10,10 @@ import { COMPOSER_ATTACHMENT_CHIP_CLASS_NAME } from "../composerInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
 
-interface BrowserAnnotationChipProps
-  extends Omit<ComponentPropsWithoutRef<"span">, "children" | "title"> {
+interface BrowserAnnotationChipProps extends Omit<
+  ComponentPropsWithoutRef<"span">,
+  "children" | "title"
+> {
   annotation: BrowserAnnotationDraft;
   onRemove?: (() => void) | undefined;
   variant?: "pill" | "list";

@@ -78,8 +78,7 @@ export function BrowserAnnotationStrip({
           >
             <div className="min-w-0 py-1">
               <p className="px-2 pb-1.5 text-[11px] font-medium text-muted-foreground">
-                {hiddenAnnotations.length} more{" "}
-                {pluralize(hiddenAnnotations.length, "annotation")}
+                {hiddenAnnotations.length} more {pluralize(hiddenAnnotations.length, "annotation")}
               </p>
               <div
                 className="max-h-52 overflow-y-auto overscroll-contain pr-0.5"

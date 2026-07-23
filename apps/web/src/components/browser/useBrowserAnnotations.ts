@@ -147,7 +147,9 @@ export function useBrowserAnnotations({
             scope.activeTabId !== session.tabId ||
             !scope.enabled
           ) {
-            void methods.cancel({ threadId: session.threadId, tabId: session.tabId }).catch(() => {});
+            void methods
+              .cancel({ threadId: session.threadId, tabId: session.tabId })
+              .catch(() => {});
             return;
           }
           pendingRef.current = { ...pending, session };
@@ -161,15 +163,7 @@ export function useBrowserAnnotations({
           onError(formatBrowserAnnotationActionError(error, "start"));
         },
       );
-  }, [
-    activeTabId,
-    cancelPendingSession,
-    clearLocalSession,
-    enabled,
-    methods,
-    onError,
-    threadId,
-  ]);
+  }, [activeTabId, cancelPendingSession, clearLocalSession, enabled, methods, onError, threadId]);
 
   useEffect(() => {
     if (!methods) {
@@ -225,8 +219,7 @@ export function useBrowserAnnotations({
         if (
           pending &&
           (event.sessionId === null ||
-            (pending.session !== null &&
-              event.sessionId === pending.session.sessionId))
+            (pending.session !== null && event.sessionId === pending.session.sessionId))
         ) {
           clearLocalSession();
         }
@@ -234,10 +227,7 @@ export function useBrowserAnnotations({
       }
 
       if (event.kind === "document-changed") {
-        if (
-          pending?.session &&
-          event.document.token !== pending.session.document.token
-        ) {
+        if (pending?.session && event.document.token !== pending.session.document.token) {
           clearLocalSession();
         }
         setDocumentRevision((revision) => revision + 1);
@@ -249,10 +239,7 @@ export function useBrowserAnnotations({
     const pending = pendingRef.current;
     if (
       !pending ||
-      (enabled &&
-        methods &&
-        threadId === pending.threadId &&
-        activeTabId === pending.tabId)
+      (enabled && methods && threadId === pending.threadId && activeTabId === pending.tabId)
     ) {
       return;
     }
@@ -300,9 +287,7 @@ export function useBrowserAnnotations({
       if (!methods || !pending) {
         return;
       }
-      void methods
-        .cancel({ threadId: pending.threadId, tabId: pending.tabId })
-        .catch(() => {});
+      void methods.cancel({ threadId: pending.threadId, tabId: pending.tabId }).catch(() => {});
     },
     [methods, threadId],
   );

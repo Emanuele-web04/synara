@@ -131,14 +131,7 @@ export function parseBrowserAnnotationTheme(value: unknown): BrowserAnnotationTh
   const focusBorder = parseResolvedColor(value.focusBorder);
   const primary = parseResolvedColor(value.primary);
   const primaryText = parseResolvedColor(value.primaryText);
-  return accent &&
-    surface &&
-    text &&
-    mutedText &&
-    border &&
-    focusBorder &&
-    primary &&
-    primaryText
+  return accent && surface && text && mutedText && border && focusBorder && primary && primaryText
     ? {
         mode: value.mode,
         accent,
@@ -197,9 +190,7 @@ function parseMarker(value: unknown): BrowserAnnotationMarker | null {
   if (!isRecord(value)) return null;
   const id = parseIdentifier(value.id);
   const ordinal =
-    typeof value.ordinal === "number" &&
-    Number.isSafeInteger(value.ordinal) &&
-    value.ordinal >= 1
+    typeof value.ordinal === "number" && Number.isSafeInteger(value.ordinal) && value.ordinal >= 1
       ? value.ordinal
       : null;
   const source = parseSource(value.source);

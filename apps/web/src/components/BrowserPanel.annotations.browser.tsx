@@ -239,9 +239,7 @@ describe("BrowserPanel annotations", () => {
         }),
       );
     });
-    await expect
-      .element(mounted.getByRole("button", { name: "Cancel annotation" }))
-      .toBeVisible();
+    await expect.element(mounted.getByRole("button", { name: "Cancel annotation" })).toBeVisible();
 
     await mounted.getByRole("button", { name: "Remove annotations" }).click();
     await vi.waitFor(() => {
