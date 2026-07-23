@@ -2960,7 +2960,8 @@ const make = Effect.gen(function* () {
           // therefore cannot race an older archive stop against the new turn.
           yield* processThreadSessionStop({
             threadId: event.payload.threadId,
-            createdAt: event.payload.archivedAt,
+            // Legacy thread.archived events may omit archivedAt; fall back like the projector.
+            createdAt: event.payload.archivedAt ?? event.payload.updatedAt ?? event.occurredAt,
           });
           return;
         case "thread.meta-updated": {

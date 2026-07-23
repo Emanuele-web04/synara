@@ -52,6 +52,7 @@ function makeLayer(input: {
         getCommandReadModel: () => unsupported(),
         getCounts: () => unsupported(),
         getSnapshotSequence: () => unsupported(),
+        listStaleInFlightThreadIds: () => unsupported(),
         getShellSnapshot: () => unsupported(),
         getActiveProjectByWorkspaceRoot: () => unsupported(),
         getProjectShellById: () => unsupported(),

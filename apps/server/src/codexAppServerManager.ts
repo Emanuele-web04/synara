@@ -148,10 +148,12 @@ interface CodexSessionContext {
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
-  taskCompleteFallback?: {
-    readonly turnId: TurnId;
-    readonly timeout: ReturnType<typeof setTimeout>;
-  };
+  taskCompleteFallback?:
+    | {
+        readonly turnId: TurnId;
+        readonly timeout: ReturnType<typeof setTimeout>;
+      }
+    | undefined;
   nextRequestId: number;
   stopping: boolean;
   stopPromise?: Promise<void>;

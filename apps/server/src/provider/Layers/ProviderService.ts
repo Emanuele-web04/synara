@@ -108,7 +108,7 @@ export function summarizeProviderRuntimeQuarantineCause(cause: string): {
     return { cause };
   }
   let prefixEnd = PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES;
-  while (prefixEnd > 0 && (encoded[prefixEnd] & 0xc0) === 0x80) {
+  while (prefixEnd > 0 && ((encoded[prefixEnd] ?? 0) & 0xc0) === 0x80) {
     prefixEnd -= 1;
   }
   return {
