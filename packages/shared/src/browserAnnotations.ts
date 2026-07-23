@@ -96,16 +96,7 @@ const SAFE_STATIC_QUERY_VALUES: Readonly<Record<string, ReadonlySet<string>>> = 
     "preview",
     "settings",
   ]),
-  sort: new Set([
-    "created",
-    "date",
-    "name",
-    "position",
-    "priority",
-    "status",
-    "title",
-    "updated",
-  ]),
+  sort: new Set(["created", "date", "name", "position", "priority", "status", "title", "updated"]),
   tab: new Set([
     "activity",
     "code",
@@ -180,14 +171,12 @@ const SENSITIVE_PATH_KEYS = new Set([
   "verify",
 ]);
 
-const EMAIL_PATTERN =
-  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/u;
+const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/u;
 const EXPOSED_CREDENTIAL_PATTERN =
   /\b(?:authorization|password|passwd|secret|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|session[-_ ]?token|credential)s?\s*(?::|=)\s*\S+/iu;
 const BEARER_CREDENTIAL_PATTERN = /\bbearer\s+\S+/iu;
 const URL_CREDENTIAL_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/iu;
-const JWT_PATTERN =
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/u;
+const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/u;
 const UUID_PATTERN =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
 const LONG_HEX_IDENTIFIER_PATTERN = /\b[0-9a-f]{24,}\b/iu;
@@ -260,9 +249,7 @@ export function sanitizeBrowserAnnotationPageTitle(value: string): string {
     return "";
   }
   const opaqueCandidates = title.match(OPAQUE_IDENTIFIER_CANDIDATE_PATTERN) ?? [];
-  return opaqueCandidates.some((candidate) => isOpaqueIdentifier(candidate, title))
-    ? ""
-    : value;
+  return opaqueCandidates.some((candidate) => isOpaqueIdentifier(candidate, title)) ? "" : value;
 }
 
 function looksPrivate(value: string): boolean {
@@ -274,9 +261,7 @@ function looksPrivate(value: string): boolean {
     ) ||
     /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/u.test(decoded) ||
     /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/u.test(decoded) ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-      decoded,
-    ) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(decoded) ||
     /^\d{4,}$/u.test(decoded) ||
     (decoded.length >= 6 &&
       /^[A-Za-z0-9._~-]+$/u.test(decoded) &&

@@ -1291,8 +1291,9 @@ export default function ChatView({
   const composerAssistantSelectionsRef = useRef<ComposerAssistantSelectionAttachment[]>(
     composerAssistantSelections,
   );
-  const composerBrowserAnnotationsRef =
-    useRef<BrowserAnnotationDraft[]>(composerBrowserAnnotations);
+  const composerBrowserAnnotationsRef = useRef<BrowserAnnotationDraft[]>(
+    composerBrowserAnnotations,
+  );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const composerFileCommentsRef = useRef<FileCommentDraft[]>(composerFileComments);
   const composerPastedTextsRef = useRef<PastedTextDraft[]>(composerPastedTexts);
@@ -7653,10 +7654,7 @@ export default function ChatView({
         for (const selection of composerAssistantSelectionsSnapshot) {
           addComposerAssistantSelectionToDraft(selection);
         }
-        addComposerDraftBrowserAnnotations(
-          threadIdForSend,
-          composerBrowserAnnotationsSnapshot,
-        );
+        addComposerDraftBrowserAnnotations(threadIdForSend, composerBrowserAnnotationsSnapshot);
         for (const comment of composerFileCommentsSnapshot) {
           addComposerFileCommentToDraft(comment);
         }

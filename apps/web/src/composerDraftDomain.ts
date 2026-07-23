@@ -20,10 +20,7 @@ import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
-import {
-  type BrowserAnnotationDraft,
-  normalizeBrowserAnnotations,
-} from "./lib/browserAnnotations";
+import { type BrowserAnnotationDraft, normalizeBrowserAnnotations } from "./lib/browserAnnotations";
 import type { ComposerImageSource } from "./lib/composerImageSource";
 import {
   type PastedTextDraft,
@@ -337,9 +334,7 @@ export interface ComposerDraftStoreState {
   ) => boolean;
   addBrowserAnnotations: (
     threadId: ThreadId,
-    annotations: ReadonlyArray<
-      Omit<BrowserAnnotationDraft, "ordinal"> & { ordinal?: number }
-    >,
+    annotations: ReadonlyArray<Omit<BrowserAnnotationDraft, "ordinal"> & { ordinal?: number }>,
   ) => number;
   removeBrowserAnnotation: (threadId: ThreadId, annotationId: string) => void;
   clearBrowserAnnotations: (threadId: ThreadId) => void;

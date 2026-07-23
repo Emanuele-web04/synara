@@ -134,30 +134,29 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     await expect
       .poll(
         () =>
-          electronApp
-            .evaluate(
-              (_electron, input) => {
-                const fixture = (
-                  globalThis as typeof globalThis & {
-                    __synaraVisibleBrowserE2E: {
-                      browserManager: {
-                        startAnnotation(value: {
-                          threadId: string;
-                          tabId: string;
-                          theme: BrowserAnnotationTheme;
-                        }): BrowserAnnotationSession;
-                      };
+          electronApp.evaluate(
+            (_electron, input) => {
+              const fixture = (
+                globalThis as typeof globalThis & {
+                  __synaraVisibleBrowserE2E: {
+                    browserManager: {
+                      startAnnotation(value: {
+                        threadId: string;
+                        tabId: string;
+                        theme: BrowserAnnotationTheme;
+                      }): BrowserAnnotationSession;
                     };
-                  }
-                ).__synaraVisibleBrowserE2E;
-                try {
-                  return fixture.browserManager.startAnnotation(input);
-                } catch {
-                  return null;
+                  };
                 }
-              },
-              { threadId, tabId, theme: DARK_ANNOTATION_THEME },
-            ),
+              ).__synaraVisibleBrowserE2E;
+              try {
+                return fixture.browserManager.startAnnotation(input);
+              } catch {
+                return null;
+              }
+            },
+            { threadId, tabId, theme: DARK_ANNOTATION_THEME },
+          ),
         { timeout: 5_000, intervals: [25, 50, 100, 200] },
       )
       .not.toBeNull();
@@ -181,9 +180,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
                 };
               }
             ).__synaraVisibleBrowserE2E;
-            return (
-              fixture.annotationEvents.find((event) => event.kind === "committed") ?? null
-            );
+            return fixture.annotationEvents.find((event) => event.kind === "committed") ?? null;
           }),
         { timeout: 5_000, intervals: [25, 50, 100] },
       )
@@ -216,10 +213,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
           globalThis as typeof globalThis & {
             __synaraVisibleBrowserE2E: {
               browserManager: {
-                getVisibleAutomationRuntime(value: {
-                  threadId: string;
-                  tabId: string;
-                }): {
+                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
                   webContents: {
                     executeJavaScript(script: string): Promise<string | undefined>;
                   };
@@ -241,10 +235,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
           globalThis as typeof globalThis & {
             __synaraVisibleBrowserE2E: {
               browserManager: {
-                getVisibleAutomationRuntime(value: {
-                  threadId: string;
-                  tabId: string;
-                }): {
+                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
                   webContents: {
                     executeJavaScript(script: string): Promise<unknown>;
                   };
@@ -334,8 +325,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
             ).__synaraVisibleBrowserE2E;
             return fixture.annotationEvents.some(
               (event) =>
-                event.kind === "markers-synced" &&
-                event.projectedMarkerIds.includes(annotationId),
+                event.kind === "markers-synced" && event.projectedMarkerIds.includes(annotationId),
             );
           }, committedEvent.annotation.id),
         { timeout: 5_000, intervals: [25, 50, 100] },
@@ -367,10 +357,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
           globalThis as typeof globalThis & {
             __synaraVisibleBrowserE2E: {
               browserManager: {
-                getVisibleAutomationRuntime(value: {
-                  threadId: string;
-                  tabId: string;
-                }): {
+                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
                   webContents: {
                     executeJavaScript(script: string): Promise<unknown>;
                   };
@@ -381,9 +368,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
         ).__synaraVisibleBrowserE2E;
         return fixture.browserManager
           .getVisibleAutomationRuntime(input)
-          .webContents.executeJavaScript(
-            "history.pushState({}, '', '/app#annotation-cancelled')",
-          );
+          .webContents.executeJavaScript("history.pushState({}, '', '/app#annotation-cancelled')");
       },
       { threadId, tabId },
     );
@@ -418,10 +403,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
                 globalThis as typeof globalThis & {
                   __synaraVisibleBrowserE2E: {
                     browserManager: {
-                      getVisibleAutomationRuntime(value: {
-                        threadId: string;
-                        tabId: string;
-                      }): {
+                      getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
                         webContents: {
                           executeJavaScript(script: string): Promise<string | undefined>;
                         };

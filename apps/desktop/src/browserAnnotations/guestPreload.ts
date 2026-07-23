@@ -7,10 +7,7 @@ import type {
 } from "@synara/contracts";
 import { sanitizeBrowserAnnotationUrl } from "@synara/shared/browserAnnotations";
 
-import {
-  BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL,
-  BROWSER_IPC_CHANNELS,
-} from "../ipcChannels";
+import { BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, BROWSER_IPC_CHANNELS } from "../ipcChannels";
 import { createGuestIdentifier } from "./guestIdentity";
 import {
   GUEST_ANNOTATION_MAX_COMMENT_LENGTH,
@@ -161,14 +158,9 @@ function implicitRole(element: Element): string {
 }
 
 function labelledByText(element: Element): string {
-  const ids = element
-    .getAttribute("aria-labelledby")
-    ?.split(/\s+/)
-    .filter(Boolean);
+  const ids = element.getAttribute("aria-labelledby")?.split(/\s+/).filter(Boolean);
   if (!ids || ids.length === 0) return "";
-  return ids
-    .map((id) => document.getElementById(id)?.textContent ?? "")
-    .join(" ");
+  return ids.map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
 }
 
 function associatedLabelText(element: Element): string {
@@ -222,9 +214,7 @@ function elementFingerprint(element: Element): string {
           .filter((candidate) => candidate.tagName === current?.tagName)
           .indexOf(current)
       : 0;
-    structuralParts.unshift(
-      `${current.tagName.toLowerCase()}:${Math.max(0, sameTagIndex)}`,
-    );
+    structuralParts.unshift(`${current.tagName.toLowerCase()}:${Math.max(0, sameTagIndex)}`);
     current = parent;
     depth += 1;
   }
@@ -250,8 +240,7 @@ function isSensitiveElement(element: Element): boolean {
 
 function describeElement(element: Element, comment: string): BrowserAnnotation | null {
   const sensitive = isSensitiveElement(element);
-  const role =
-    normalizedText(element.getAttribute("role") ?? implicitRole(element), 64) || null;
+  const role = normalizedText(element.getAttribute("role") ?? implicitRole(element), 64) || null;
   const name = sensitive ? null : elementAccessibleName(element) || null;
   const rawText = element instanceof HTMLElement ? element.innerText : element.textContent;
   const text = sensitive
@@ -779,8 +768,7 @@ function initializeOverlay(): void {
     if (
       records.every(
         (record) =>
-          record.target === host ||
-          (shadow !== null && record.target.getRootNode() === shadow),
+          record.target === host || (shadow !== null && record.target.getRootNode() === shadow),
       )
     ) {
       return;

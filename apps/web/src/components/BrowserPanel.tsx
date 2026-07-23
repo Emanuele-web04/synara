@@ -55,10 +55,7 @@ import {
   selectThreadBrowserHistory,
   selectThreadBrowserState,
 } from "../browserStateStore";
-import {
-  useComposerDraftStore,
-  type BrowserAnnotationDraft,
-} from "../composerDraftStore";
+import { useComposerDraftStore, type BrowserAnnotationDraft } from "../composerDraftStore";
 import { anchoredToastManager } from "./ui/toast";
 import {
   composerImageFromBrowserScreenshot,
@@ -561,8 +558,7 @@ export function BrowserPanel({
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addBrowserAnnotation = useComposerDraftStore((store) => store.addBrowserAnnotation);
   const browserAnnotations = useComposerDraftStore(
-    (store) =>
-      store.draftsByThreadId[threadId]?.browserAnnotations ?? EMPTY_BROWSER_ANNOTATIONS,
+    (store) => store.draftsByThreadId[threadId]?.browserAnnotations ?? EMPTY_BROWSER_ANNOTATIONS,
   );
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
@@ -651,11 +647,7 @@ export function BrowserPanel({
     activeTabId,
     browserStateVersion: threadBrowserState?.version ?? 0,
     enabled:
-      isElectron &&
-      isLiveRuntime &&
-      workspaceReady &&
-      activeTab !== null &&
-      !showLocalServersHome,
+      isElectron && isLiveRuntime && workspaceReady && activeTab !== null && !showLocalServersHome,
     annotations: browserAnnotations,
     addAnnotation: addBrowserAnnotation,
     onError: setLocalError,

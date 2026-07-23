@@ -57,10 +57,7 @@ describe("threadHandoff", () => {
       ],
     });
     expect(imported).toBeTruthy();
-    const extracted = extractTrailingBrowserAnnotations(
-      imported!.text,
-      imported!.messageId,
-    );
+    const extracted = extractTrailingBrowserAnnotations(imported!.text, imported!.messageId);
     expect(imported!.messageId).not.toBe(sourceMessageId);
     expect(extracted.promptText).toBe("Update the page");
     expect(extracted.annotations).toEqual([]);

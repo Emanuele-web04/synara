@@ -19,9 +19,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validIdentifier(value: unknown): value is string {
   return (
-    typeof value === "string" &&
-    value.length <= 128 &&
-    /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(value)
+    typeof value === "string" && value.length <= 128 && /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(value)
   );
 }
 

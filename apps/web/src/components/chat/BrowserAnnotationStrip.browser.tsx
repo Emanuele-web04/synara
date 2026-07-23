@@ -54,9 +54,7 @@ describe("BrowserAnnotationStrip overflow", () => {
     expect(document.body.textContent).toContain("Comment 3");
     expect(document.body.textContent).toContain("Comment 5");
 
-    await page
-      .getByRole("button", { name: "Remove browser annotation 4" })
-      .click();
+    await page.getByRole("button", { name: "Remove browser annotation 4" }).click();
     expect(onRemove).toHaveBeenCalledWith("annotation-4");
     await overflowTrigger.click();
     await mounted.unmount();
@@ -74,9 +72,7 @@ describe("BrowserAnnotationStrip overflow", () => {
     });
     await overflowTrigger.click();
     expect(document.body.textContent).toContain("Comment 3");
-    expect(
-      document.querySelector('[aria-label^="Remove browser annotation"]'),
-    ).toBeNull();
+    expect(document.querySelector('[aria-label^="Remove browser annotation"]')).toBeNull();
     await overflowTrigger.click();
     await mounted.unmount();
   });

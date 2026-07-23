@@ -103,15 +103,9 @@ describe("MessagesTimeline", () => {
   it("allows an empty edit only when hidden annotations remain attached", async () => {
     const { canSubmitUserMessageEdit } = await import("./MessagesTimeline");
 
-    expect(
-      canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: false }),
-    ).toBe(true);
-    expect(
-      canSubmitUserMessageEdit({ draft: "", allowEmpty: false, disabled: false }),
-    ).toBe(false);
-    expect(
-      canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: true }),
-    ).toBe(false);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: false })).toBe(true);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: false, disabled: false })).toBe(false);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: true })).toBe(false);
   });
 
   it("keeps small transcripts on the simple non-virtualized path", async () => {

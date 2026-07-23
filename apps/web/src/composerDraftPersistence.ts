@@ -51,10 +51,7 @@ import {
   sanitizeStickyModelSelectionMap,
 } from "./composerDraftModels";
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
-import {
-  type BrowserAnnotationDraft,
-  normalizeBrowserAnnotations,
-} from "./lib/browserAnnotations";
+import { type BrowserAnnotationDraft, normalizeBrowserAnnotations } from "./lib/browserAnnotations";
 import { normalizePastedTextContent } from "./lib/composerPastedText";
 import { normalizeFileCommentSelection } from "./lib/fileComments";
 import {
@@ -1139,9 +1136,7 @@ export function partializeComposerDraftStoreState(
               ...(draft.promptHistorySavedDraft.browserAnnotations.length > 0
                 ? {
                     browserAnnotations:
-                      draft.promptHistorySavedDraft.browserAnnotations.map(
-                        cloneBrowserAnnotation,
-                      ),
+                      draft.promptHistorySavedDraft.browserAnnotations.map(cloneBrowserAnnotation),
                   }
                 : {}),
               ...(draft.promptHistorySavedDraft.terminalContexts.length > 0

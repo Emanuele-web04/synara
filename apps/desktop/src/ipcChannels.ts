@@ -77,8 +77,7 @@ export const DESKTOP_IPC_CHANNELS = {
 } as const;
 
 export const BROWSER_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.browser;
-export const BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL =
-  "desktop:browser-annotations-guest-command";
+export const BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL = "desktop:browser-annotations-guest-command";
 export const APPSNAP_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.appSnap;
 export const DESKTOP_WS_URL_CHANNEL = DESKTOP_IPC_CHANNELS.wsUrl;
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = DESKTOP_IPC_CHANNELS.transcribeVoice;

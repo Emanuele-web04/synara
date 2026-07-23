@@ -327,14 +327,13 @@ const createManager = () => {
     selectAutomationTab: vi.fn(() => state),
     prepareAutomationTab: vi.fn(() => state),
     prepareAutomationNavigation: vi.fn(() => state),
-    resolveAnnotationNavigationTarget: vi.fn(
-      ({ annotationId }: { annotationId: string }) =>
-        annotationId === "annotation-page"
-          ? {
-              tabId: TAB_ID,
-              url: "https://example.test/private?token=local-only",
-            }
-          : null,
+    resolveAnnotationNavigationTarget: vi.fn(({ annotationId }: { annotationId: string }) =>
+      annotationId === "annotation-page"
+        ? {
+            tabId: TAB_ID,
+            url: "https://example.test/private?token=local-only",
+          }
+        : null,
     ),
     getVisibleAutomationRuntime: vi.fn(
       () =>

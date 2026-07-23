@@ -82,10 +82,7 @@ function createHarness(initialUrl = "https://example.test/app") {
   };
 }
 
-function marker(
-  url = "https://example.test/app",
-  liveUrl = url,
-) {
+function marker(url = "https://example.test/app", liveUrl = url) {
   return {
     id: "annotation-1",
     ordinal: 1,
@@ -161,9 +158,7 @@ describe("BrowserAnnotationCoordinator", () => {
         capturedAt: "2026-07-23T10:01:00.000Z",
       },
     });
-    expect(
-      harness.events.filter((event) => event.kind === "committed"),
-    ).toHaveLength(2);
+    expect(harness.events.filter((event) => event.kind === "committed")).toHaveLength(2);
     expect(harness.coordinator.isInteractive(THREAD_ID)).toBe(true);
 
     harness.setUrl("https://example.test/next");
@@ -240,7 +235,9 @@ describe("BrowserAnnotationCoordinator", () => {
     harness.coordinator.handleInPageNavigation(THREAD_ID, TAB_ID, harness.webContents.id);
     harness.ready("same-document", "Page A");
     expect(
-      harness.events.filter((event) => event.kind === "document-changed").map((event) => event.source.url),
+      harness.events
+        .filter((event) => event.kind === "document-changed")
+        .map((event) => event.source.url),
     ).toEqual([
       "https://example.test/app",
       "https://example.test/next",
@@ -315,8 +312,7 @@ describe("BrowserAnnotationCoordinator", () => {
   });
 
   it("persists only a safe URL while restoring exact affinity for a stable logical tab", () => {
-    const firstLiveUrl =
-      "https://alice:secret@example.test/docs?token=first-secret#first";
+    const firstLiveUrl = "https://alice:secret@example.test/docs?token=first-secret#first";
     const secondLiveUrl = "https://example.test/docs?token=second-secret#second";
     const safeUrl = "https://example.test/docs";
     const harness = createHarness(firstLiveUrl);
@@ -353,11 +349,7 @@ describe("BrowserAnnotationCoordinator", () => {
       },
     });
     expect(
-      harness.coordinator.resolveNavigationTarget(
-        THREAD_ID,
-        "annotation-private",
-        TAB_ID,
-      ),
+      harness.coordinator.resolveNavigationTarget(THREAD_ID, "annotation-private", TAB_ID),
     ).toEqual({ tabId: TAB_ID, liveUrl: firstLiveUrl });
     expect(
       harness.coordinator.resolveNavigationTarget(
@@ -367,11 +359,7 @@ describe("BrowserAnnotationCoordinator", () => {
       ),
     ).toBeNull();
     expect(
-      harness.coordinator.resolveNavigationTarget(
-        THREAD_ID,
-        "annotation-private",
-        "tab-other",
-      ),
+      harness.coordinator.resolveNavigationTarget(THREAD_ID, "annotation-private", "tab-other"),
     ).toBeNull();
     harness.coordinator.syncMarkers({
       threadId: THREAD_ID,
@@ -430,11 +418,7 @@ describe("BrowserAnnotationCoordinator", () => {
       markers: [{ id: "annotation-private" }],
     });
     expect(
-      restartedHarness.coordinator.resolveNavigationTarget(
-        THREAD_ID,
-        "annotation-private",
-        TAB_ID,
-      ),
+      restartedHarness.coordinator.resolveNavigationTarget(THREAD_ID, "annotation-private", TAB_ID),
     ).toEqual({ tabId: TAB_ID, liveUrl: firstLiveUrl });
   });
 });

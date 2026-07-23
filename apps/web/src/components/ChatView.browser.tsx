@@ -3407,7 +3407,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await vi.waitFor(() => {
-        expect(document.querySelectorAll('[data-testid="browser-annotation-chip"]')).toHaveLength(2);
+        expect(document.querySelectorAll('[data-testid="browser-annotation-chip"]')).toHaveLength(
+          2,
+        );
       });
 
       const sendButton = await waitForSendButton();

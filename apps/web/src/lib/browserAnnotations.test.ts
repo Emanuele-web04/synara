@@ -12,9 +12,7 @@ import {
 
 const MESSAGE_ID = MessageId.makeUnsafe("message-browser-annotations");
 
-function makeAnnotation(
-  overrides: Partial<BrowserAnnotationDraft> = {},
-): BrowserAnnotationDraft {
+function makeAnnotation(overrides: Partial<BrowserAnnotationDraft> = {}): BrowserAnnotationDraft {
   return {
     id: "annotation-1",
     ordinal: 1,
@@ -154,11 +152,7 @@ describe("browserAnnotations", () => {
   });
 
   it("does not strip an exact but empty transport block copied into the prompt", () => {
-    const serialized = appendBrowserAnnotationsToPrompt(
-      "ignored",
-      [makeAnnotation()],
-      MESSAGE_ID,
-    )
+    const serialized = appendBrowserAnnotationsToPrompt("ignored", [makeAnnotation()], MESSAGE_ID)
       .split("\n")
       .at(-2);
     if (!serialized) throw new Error("Expected a serialized annotation payload.");
@@ -185,10 +179,7 @@ describe("browserAnnotations", () => {
     );
 
     expect(
-      extractTrailingBrowserAnnotations(
-        copiedPrompt,
-        MessageId.makeUnsafe("message-destination"),
-      ),
+      extractTrailingBrowserAnnotations(copiedPrompt, MessageId.makeUnsafe("message-destination")),
     ).toEqual({
       promptText: copiedPrompt,
       annotations: [],
