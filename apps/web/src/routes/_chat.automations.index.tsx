@@ -32,28 +32,22 @@ import {
   type AutomationFormState,
   AutomationDialog,
   acknowledgedRiskIdsForFormWarnings,
-  allVisibleTriageRuns,
+  automationAttentionLabel,
   automationStatusDotClass,
   buildAutomationFormWarnings,
   createInputFromForm,
   formatCadenceLong,
   formatNextRun,
-  formatRelativeTime,
   formFromDefinition,
   isFormSubmittable,
   isRowInteractiveEventTarget,
-  isTriageRun,
+  isUnresolvedTriageResult,
   providerOptionsForAutomationEdit,
   projectModelSelection,
-  runResultSummary,
-  runResultTitle,
   runStatusLabel,
-  RunStatusIndicator,
   updateInputFromForm,
-  unresolvedTriageRuns,
   useAutomations,
 } from "./-automations.shared";
-import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 
 export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
@@ -74,17 +68,15 @@ function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
   );
 }
 
-function triageRunLabel(run: AutomationRun): string {
-  if (run.status === "succeeded" && run.result?.unread) return "New result";
-  return runStatusLabel(run.status);
+/** Unread successful result the user has not opened yet — surfaced as quiet row meta. */
+function hasUnreadResult(run: AutomationRun | null): boolean {
+  return run?.status === "succeeded" && isUnresolvedTriageResult(run.result);
 }
 
 /**
- * Minimal list row shared by the automation list and the triage list: a leading status
- * glyph, a title, a muted detail, and optional right-aligned meta plus a trailing
- * affordance. The default layout is a single line with the detail filling the row;
- * `stacked` places the detail on a second line under the title (the automation list),
- * and `dimmed` mutes the title for paused rows.
+ * Minimal automation list row: a leading status glyph, a two-line title/detail stack,
+ * and optional right-aligned meta plus a hover delete. `dimmed` mutes the title for
+ * paused rows.
  */
 function AutomationListRow({
   onClick,
@@ -92,9 +84,7 @@ function AutomationListRow({
   title,
   detail,
   meta,
-  trailing,
   onDelete,
-  stacked = false,
   dimmed = false,
 }: {
   readonly onClick: () => void;
@@ -102,9 +92,7 @@ function AutomationListRow({
   readonly title: string;
   readonly detail: string;
   readonly meta?: ReactNode;
-  readonly trailing?: ReactNode;
   readonly onDelete?: () => void;
-  readonly stacked?: boolean;
   readonly dimmed?: boolean;
 }) {
   return (
@@ -122,39 +110,27 @@ function AutomationListRow({
           onClick();
         }
       }}
-      className={cn(
-        "group flex w-full cursor-pointer gap-2.5 rounded-md px-2 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
-        stacked ? "items-start py-2.5" : "items-center py-2",
-      )}
+      className="group flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
     >
-      {stacked ? <span className="mt-0.5 flex shrink-0">{leading}</span> : leading}
-      {stacked ? (
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span
-            className={cn(
-              "truncate text-[0.8125rem]",
-              dimmed ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {title}
-          </span>
-          <span
-            className={cn(
-              "truncate text-xs",
-              dimmed ? "text-muted-foreground/60" : "text-muted-foreground",
-            )}
-          >
-            {detail}
-          </span>
+      <span className="mt-0.5 flex shrink-0">{leading}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn(
+            "truncate text-[0.8125rem]",
+            dimmed ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {title}
         </span>
-      ) : (
-        <>
-          <span className="min-w-0 max-w-[45%] truncate text-[0.8125rem] text-foreground">
-            {title}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{detail}</span>
-        </>
-      )}
+        <span
+          className={cn(
+            "truncate text-xs",
+            dimmed ? "text-muted-foreground/60" : "text-muted-foreground",
+          )}
+        >
+          {detail}
+        </span>
+      </span>
       {meta == null ? null : (
         <span className="shrink-0 self-center text-xs tabular-nums text-muted-foreground">
           {meta}
@@ -174,7 +150,6 @@ function AutomationListRow({
           <CentralIcon name="trash-can-simple" className="size-3.5" />
         </button>
       ) : null}
-      {trailing}
     </div>
   );
 }
@@ -185,8 +160,9 @@ type AutomationStatusFilter = (typeof AUTOMATION_STATUS_FILTERS)[number];
 /**
  * Second line of an automation row: the spelled-out cadence, then the live run status
  * while a run is in flight, the next-run countdown while the automation is active, or
- * "Done" once a one-shot has fired. Paused rows show the cadence alone — the dimmed
- * row and play glyph already read as paused.
+ * "Done" once a one-shot has fired. When the latest run ended badly the warning
+ * ("Last run failed", …) is appended so the amber glyph always has words next to it;
+ * a warned one-shot skips the redundant "Done".
  */
 function rowSubtitle(
   definition: AutomationDefinition,
@@ -196,12 +172,16 @@ function rowSubtitle(
   const segments = [formatCadenceLong(definition.schedule)];
   if (isLiveRun(latestRun)) {
     segments.push(runStatusLabel(latestRun.status));
-  } else if (definition.enabled) {
+    return segments.join(" · ");
+  }
+  const attention = latestRun === null ? null : automationAttentionLabel(latestRun);
+  if (definition.enabled) {
     const nextRun = formatNextRun(definition.nextRunAt, now);
     if (nextRun) segments.push(`Next run ${nextRun}`);
-  } else if (automationLifecycleState(definition) === "done") {
+  } else if (attention === null && automationLifecycleState(definition) === "done") {
     segments.push("Done");
   }
+  if (attention) segments.push(attention);
   return segments.join(" · ");
 }
 
@@ -219,7 +199,6 @@ function AutomationsRouteView() {
   const [acknowledgedWarningIds, setAcknowledgedWarningIds] = useState<
     ReadonlySet<AutomationDraftWarningId>
   >(() => new Set());
-  const [triageFilter, setTriageFilter] = useState<"unread" | "all">("unread");
   const [statusFilter, setStatusFilter] = useState<AutomationStatusFilter>("all");
   // Coarse clock for the "Next run in …" countdowns; nothing else in the row is time-derived.
   const [now, setNow] = useState(() => Date.now());
@@ -307,38 +286,14 @@ function AutomationsRouteView() {
       : statusFilter === "paused"
         ? paused
         : [...active, ...paused];
-  const allTriageRuns = allVisibleTriageRuns(data.runs);
-  const triageRuns = triageFilter === "unread" ? unresolvedTriageRuns(data.runs) : allTriageRuns;
-  const unreadTriageCount = unresolvedTriageRuns(data.runs).length;
-
-  const projectName = (definition: AutomationDefinition) =>
-    projects.find((project) => project.id === definition.projectId)?.name ?? "Unknown project";
-
-  const sourceSuffix = (definition: AutomationDefinition) => {
-    if (!definition.sourceThreadId || definition.sourceThreadId === definition.targetThreadId) {
-      return "";
-    }
-    const sourceThread = threads.find((candidate) => candidate.id === definition.sourceThreadId);
-    return sourceThread ? ` · From ${resolveThreadPickerTitle(sourceThread.title)}` : "";
-  };
-
-  const subtitle = (definition: AutomationDefinition) => {
-    const suffix = sourceSuffix(definition);
-    if (definition.mode === "heartbeat") {
-      const thread = threads.find((candidate) => candidate.id === definition.targetThreadId);
-      const target = thread ? resolveThreadPickerTitle(thread.title) : projectName(definition);
-      return `Heartbeat · ${target}${suffix}`;
-    }
-    return `${projectName(definition)}${suffix}`;
-  };
 
   const renderRow = (definition: AutomationDefinition) => {
     const latestRun: AutomationRun | null = runsByAutomationId.get(definition.id)?.[0] ?? null;
-    const needsReview = !isLiveRun(latestRun) && latestRun !== null && isTriageRun(latestRun);
+    const needsAttention =
+      definition.enabled && latestRun !== null && automationAttentionLabel(latestRun) !== null;
     return (
       <AutomationListRow
         key={definition.id}
-        stacked
         dimmed={!definition.enabled}
         onClick={() =>
           void navigate({
@@ -348,13 +303,19 @@ function AutomationsRouteView() {
         }
         leading={
           <CentralIcon
-            name={definition.enabled ? "circle" : "play-circle"}
+            name={
+              definition.enabled
+                ? needsAttention
+                  ? "exclamation-circle"
+                  : "circle-placeholder-on"
+                : "play-circle"
+            }
             className={cn("size-4", automationStatusDotClass(definition, latestRun))}
           />
         }
         title={definition.name}
         detail={rowSubtitle(definition, latestRun, now)}
-        meta={needsReview ? triageRunLabel(latestRun) : undefined}
+        meta={hasUnreadResult(latestRun) ? "New result" : undefined}
         onDelete={() => void deleteDefinition(definition)}
       />
     );
@@ -392,72 +353,6 @@ function AutomationsRouteView() {
       )}
     </section>
   );
-
-  const renderTriageRow = (run: AutomationRun) => {
-    const definition = data.definitions.find((entry) => entry.id === run.automationId);
-    const summary = runResultSummary(run);
-    const resultTitle = runResultTitle(run);
-    const target = definition ? subtitle(definition) : "Saved run";
-    const automationName = definition?.name ?? "Automation run";
-    return (
-      <AutomationListRow
-        key={run.id}
-        // A run row opens its automation; the run's thread is opened from inside the
-        // automation detail's "Previous runs" sidebar (orphan runs fall back to the thread).
-        onClick={() =>
-          definition
-            ? void navigate({
-                to: "/automations/$automationId",
-                params: { automationId: definition.id },
-              })
-            : run.threadId
-              ? void navigate({ to: "/$threadId", params: { threadId: run.threadId } })
-              : undefined
-        }
-        leading={<RunStatusIndicator status={run.status} />}
-        title={resultTitle ?? automationName}
-        detail={resultTitle ? `${automationName} · ${summary || target}` : summary || target}
-        meta={formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor)}
-        trailing={
-          <CentralIcon
-            name="chevron-right-small"
-            className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
-          />
-        }
-      />
-    );
-  };
-
-  const renderTriage = () =>
-    allTriageRuns.length > 0 ? (
-      <section className="flex flex-col gap-0.5">
-        <div className="flex items-center justify-between gap-3 px-2 pb-1">
-          <h2 className="text-sm font-medium text-foreground">Needs review</h2>
-          <div className="flex items-center gap-0.5 rounded-md bg-[var(--color-background-elevated-secondary)] p-0.5 text-xs">
-            {(["unread", "all"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setTriageFilter(value)}
-                className={cn(
-                  "rounded px-2 py-0.5 transition-colors",
-                  triageFilter === value
-                    ? "bg-background text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {value === "unread" ? `Unread ${unreadTriageCount}` : `All ${allTriageRuns.length}`}
-              </button>
-            ))}
-          </div>
-        </div>
-        {triageRuns.length === 0 ? (
-          <div className="px-2 py-4 text-xs text-muted-foreground">No unread runs.</div>
-        ) : (
-          <div className="flex flex-col">{triageRuns.map(renderTriageRow)}</div>
-        )}
-      </section>
-    ) : null;
 
   return (
     <RouteInsetSurface>
@@ -520,10 +415,7 @@ function AutomationsRouteView() {
                 </p>
               </div>
             ) : (
-              <div className="flex flex-col gap-6">
-                {renderTriage()}
-                {renderAutomationList()}
-              </div>
+              renderAutomationList()
             )}
           </div>
         </main>

@@ -355,8 +355,28 @@ export function canCancelAutomationRun(run: AutomationRun): boolean {
 }
 
 /**
+ * Plain-language warning for a latest run that needs the user's attention, or null when
+ * the run ended normally (or is still progressing). Drives the amber glyph and the
+ * subtitle warning segment on automation list rows.
+ */
+export function automationAttentionLabel(run: AutomationRun): string | null {
+  switch (run.status) {
+    case "waiting-for-approval":
+      return "Waiting for approval";
+    case "failed":
+      return "Last run failed";
+    case "cancelled":
+      return "Last run cancelled";
+    case "interrupted":
+      return "Last run interrupted";
+    default:
+      return null;
+  }
+}
+
+/**
  * Tint for the list row's leading status glyph: dimmed when paused, blue while a run is
- * live, destructive when the latest run needs review, otherwise neutral.
+ * live, amber when the latest run needs attention, otherwise neutral.
  */
 export function automationStatusDotClass(
   definition: AutomationDefinition,
@@ -370,7 +390,7 @@ export function automationStatusDotClass(
   ) {
     return "text-blue-500";
   }
-  if (latestRun && isTriageRun(latestRun)) return "text-destructive";
+  if (latestRun && automationAttentionLabel(latestRun) !== null) return "text-amber-500";
   return "text-foreground/70";
 }
 

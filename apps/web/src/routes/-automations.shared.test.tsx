@@ -22,6 +22,7 @@ import {
   allVisibleTriageRuns,
   applyAutomationEvent,
   automationAttentionCount,
+  automationAttentionLabel,
   automationFastIntervalLimitMessage,
   canCancelAutomationRun,
   createInputFromForm,
@@ -166,6 +167,20 @@ describe("automation shared route helpers", () => {
     expect(formatNextRun("2026-06-22T00:00:00.000Z", now)).toBe("in 3 days");
     expect(formatNextRun(null, now)).toBeNull();
     expect(formatNextRun("not-a-date", now)).toBeNull();
+  });
+
+  it("labels only badly-ended or approval-blocked runs as needing attention", () => {
+    expect(automationAttentionLabel(runWith({ status: "failed" }))).toBe("Last run failed");
+    expect(automationAttentionLabel(runWith({ status: "cancelled" }))).toBe("Last run cancelled");
+    expect(automationAttentionLabel(runWith({ status: "interrupted" }))).toBe(
+      "Last run interrupted",
+    );
+    expect(automationAttentionLabel(runWith({ status: "waiting-for-approval" }))).toBe(
+      "Waiting for approval",
+    );
+    expect(automationAttentionLabel(runWith({ status: "succeeded" }))).toBeNull();
+    expect(automationAttentionLabel(runWith({ status: "running" }))).toBeNull();
+    expect(automationAttentionLabel(runWith({ status: "skipped" }))).toBeNull();
   });
 
   it("counts only unread unarchived triage runs", () => {
