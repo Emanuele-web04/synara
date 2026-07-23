@@ -31,6 +31,7 @@ import {
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
+  resolveGitRepoUiState,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
@@ -883,6 +884,38 @@ describe("environment panel visibility", () => {
         environmentPanelOpen: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("git repository UI state", () => {
+  it("waits for positive repository detection in Studio", () => {
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: true,
+        queriedIsRepo: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: true,
+        queriedIsRepo: true,
+      }),
+    ).toBe(true);
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: true,
+        queriedIsRepo: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps normal project Git UI stable while discovery is pending", () => {
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: false,
+        queriedIsRepo: undefined,
+      }),
+    ).toBe(true);
   });
 });
 

@@ -16,7 +16,7 @@ import {
 // ── Shared spacing ────────────────────────────────────────────────────
 // One gap token for block sides (vs plain text) and icon→label inside the block.
 export const COMPOSER_INLINE_CHIP_SIDE_GAP_CLASS_NAME = "mx-0.5";
-export const COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME = "mr-0.5";
+export const COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME = "mr-1";
 
 // ── Shared base ───────────────────────────────────────────────────────
 // Plain inline flow (not inline-flex) so parsed tokens share the same line box /
