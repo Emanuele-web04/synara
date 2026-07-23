@@ -30,8 +30,9 @@ import {
   DialogTitle,
   dialogFieldLabelClassName,
 } from "./ui/dialog";
+import { ComposerPickerSelectPopup } from "./chat/ComposerPickerMenuPopup";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { CentralIcon } from "~/lib/central-icons";
 
 // Inputs share one fixed height + radius so every control in the dialog reads
@@ -327,7 +328,7 @@ export function CreateProjectDialog(props: {
                     </span>
                   </SelectValue>
                 </SelectTrigger>
-                <SelectPopup>
+                <ComposerPickerSelectPopup align="start">
                   <SelectItem value={VOID_SPACE_KEY}>
                     <span className="flex items-center gap-2">
                       <SpaceIcon icon={VOID_SPACE_ICON} className="size-3.5" />
@@ -342,7 +343,7 @@ export function CreateProjectDialog(props: {
                       </span>
                     </SelectItem>
                   ))}
-                </SelectPopup>
+                </ComposerPickerSelectPopup>
               </Select>
             </div>
           ) : null}
