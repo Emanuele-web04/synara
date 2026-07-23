@@ -3185,8 +3185,10 @@ export default function Sidebar() {
   const handleCreateProjectSubmit = useCallback(
     async (value: CreateProjectSubmitValue) => {
       const previousSpaceId = activeSpaceId;
-      const existingProject = findWorkspaceRootMatch(projects, value.workspaceRoot, (project) =>
-        project.cwd,
+      const existingProject = findWorkspaceRootMatch(
+        projects,
+        value.workspaceRoot,
+        (project) => project.cwd,
       );
       // Reopening an existing project must follow the Space where that project
       // actually lives. New projects use the destination selected in the dialog.
