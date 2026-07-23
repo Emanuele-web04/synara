@@ -732,13 +732,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             requestedModelSelection: event.payload.modelSelection,
             canAdoptRequestedProvider: canAdoptFirstTurnProvider,
           });
+          // Automation-dispatched turns run with the automation's modes but must not
+          // repaint the thread's persisted modes: on a heartbeat target thread the
+          // user's own composer selection has to survive the automation turn.
+          const adoptTurnModes = event.payload.dispatchOrigin !== "automation";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...(projectedModelSelection !== existingRow.value.modelSelection
               ? { modelSelection: projectedModelSelection }
               : {}),
-            runtimeMode: event.payload.runtimeMode,
-            interactionMode: event.payload.interactionMode,
+            ...(adoptTurnModes
+              ? {
+                  runtimeMode: event.payload.runtimeMode,
+                  interactionMode: event.payload.interactionMode,
+                }
+              : {}),
             updatedAt: event.payload.createdAt,
           });
           return;

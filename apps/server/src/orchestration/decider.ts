@@ -1532,6 +1532,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
+        dispatchOrigin: command.dispatchOrigin ?? "user",
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
@@ -1615,6 +1616,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
           dispatchMode: command.dispatchMode ?? "queue",
+          dispatchOrigin: command.dispatchOrigin ?? "user",
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...(command.sourceProposedPlan !== undefined

@@ -720,6 +720,39 @@ layer("AutomationService", (it) => {
         callerThreadId: targetThreadId,
         callerTurnId: automationTurnId,
       });
+      const manualTurnId = TurnId.makeUnsafe("memory-implicit-manual-follow-up");
+      const projectionTurns = yield* ProjectionTurnRepository;
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: manualTurnId,
+        pendingMessageId: MessageId.makeUnsafe("memory-implicit-manual-message"),
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      const manualFollowUp = yield* service
+        .updateMemory({
+          automationId: null,
+          content: "must not inherit automation scope",
+          callerThreadId: targetThreadId,
+          callerTurnId: manualTurnId,
+        })
+        .pipe(Effect.flip);
+      const manualReport = yield* service
+        .reportResult({
+          callerThreadId: targetThreadId,
+          callerTurnId: manualTurnId,
+          decision: "silent",
+        })
+        .pipe(Effect.flip);
       const outside = yield* service
         .updateMemory({
           automationId: null,
@@ -731,6 +764,8 @@ layer("AutomationService", (it) => {
 
       assert.strictEqual(memory.content, "Iteration 1 complete.");
       assert.deepStrictEqual(yield* service.getMemory(created.id), memory);
+      assert.match(manualFollowUp.message, /not dispatched by this automation run/);
+      assert.match(manualReport.message, /not dispatched by this automation run/);
       assert.match(outside.message, /automationId/);
     }),
   );
@@ -1574,6 +1609,128 @@ layer("AutomationService", (it) => {
       assert.strictEqual(
         (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
         "waiting-for-approval",
+      );
+    }),
+  );
+
+  it.effect("interrupts a heartbeat run superseded by a strictly newer foreign turn", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const projectionTurns = yield* ProjectionTurnRepository;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-superseded");
+      const automationTurnId = TurnId.makeUnsafe("turn-superseded-owned");
+      const manualTurnId = TurnId.makeUnsafe("turn-superseded-manual");
+      const later = "2026-06-16T10:05:00.000Z";
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      assert.isNotNull(run.messageId);
+
+      // The run's own turn started but never settled — the provider session was
+      // taken over by a manual user turn before this turn reached a terminal state.
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        pendingMessageId: run.messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: {
+            turnId: manualTurnId,
+            state: "running",
+            requestedAt: later,
+            startedAt: later,
+            completedAt: null,
+            assistantMessageId: null,
+          } as unknown as OrchestrationThreadShell["latestTurn"],
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const reconciled = (yield* service.list({ projectId })).runs.find(
+        (entry) => entry.id === run.id,
+      );
+      assert.strictEqual(reconciled?.status, "interrupted");
+      assert.strictEqual(
+        reconciled?.result?.summary,
+        "Automation run was superseded by a newer turn on the target thread.",
+      );
+    }),
+  );
+
+  it.effect("keeps a queued heartbeat run pending behind an older active turn", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const projectionTurns = yield* ProjectionTurnRepository;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-queued-not-superseded");
+      const automationTurnId = TurnId.makeUnsafe("turn-queued-owned");
+      const olderTurnId = TurnId.makeUnsafe("turn-queued-older");
+      const earlier = "2026-06-16T09:55:00.000Z";
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      assert.isNotNull(run.messageId);
+
+      // The run's turn is queued behind an older, still-running user turn. The
+      // older turn owning the thread is normal queueing, not supersession.
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        pendingMessageId: run.messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "pending",
+        requestedAt: now,
+        startedAt: null,
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: {
+            turnId: olderTurnId,
+            state: "running",
+            requestedAt: earlier,
+            startedAt: earlier,
+            completedAt: null,
+            assistantMessageId: null,
+          } as unknown as OrchestrationThreadShell["latestTurn"],
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "running",
       );
     }),
   );

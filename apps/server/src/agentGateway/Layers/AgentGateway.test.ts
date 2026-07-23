@@ -1415,6 +1415,20 @@ describe("AgentGateway", () => {
         createAutomationProperties?.prompt?.description ?? "",
         "notifying the user versus staying silent",
       );
+      const updateAutomationMemory = tools.find(
+        (tool) => tool.name === "synara_update_automation_memory",
+      );
+      const reportAutomationResult = tools.find(
+        (tool) => tool.name === "synara_report_automation_result",
+      );
+      assert.include(
+        updateAutomationMemory?.description ?? "",
+        'manual follow-up such as "continue"',
+      );
+      assert.include(
+        reportAutomationResult?.description ?? "",
+        'manual follow-up such as "continue"',
+      );
 
       const updateAutomationProperties = tools.find(
         (tool) => tool.name === "synara_update_automation",

@@ -720,7 +720,7 @@ export function makeAgentGatewayAutomationTools(
     definition: {
       name: "synara_update_automation_memory",
       description:
-        "Fully replace an automation's DB-backed persistent memory. Maximum UTF-8 size: 32 KiB. Call this before finishing when durable context changed.",
+        'Fully replace an automation\'s DB-backed persistent memory. Maximum UTF-8 size: 32 KiB. Omit automationId only when the current user message is the automation run envelope. A later manual follow-up such as "continue" is not part of that run and must not call this tool as completion bookkeeping.',
       inputSchema: {
         type: "object",
         properties: {
@@ -766,7 +766,7 @@ export function makeAgentGatewayAutomationTools(
     definition: {
       name: "synara_report_automation_result",
       description:
-        'Report the structured result of the current automation-dispatched turn. Use decision "silent" only when a successful run needs no user attention. Failures always remain visible.',
+        'Report the structured result only when the current user message is the automation run envelope. Automation status never carries into a later manual follow-up such as "continue"; never call this tool for that turn. Use decision "silent" only when a successful run needs no user attention. Failures always remain visible.',
       inputSchema: {
         type: "object",
         properties: {
