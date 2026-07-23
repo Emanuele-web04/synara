@@ -24,7 +24,7 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
-import { CentralIcon } from "~/lib/central-icons";
+import { CentralIcon, createCentralIconComponent } from "~/lib/central-icons";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
@@ -33,12 +33,10 @@ import {
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch, FiPlus } from "react-icons/fi";
+import { FiGitBranch } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox } from "react-icons/hi2";
-import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2 } from "react-icons/tb";
-import { IoFilter } from "react-icons/io5";
 import {
   useCallback,
   useEffect,
@@ -388,6 +386,12 @@ import {
   spaceKey,
   resolveActiveSpaceId,
 } from "../lib/spaceGrouping";
+
+// Central glyphs for the sidebar section-header buttons (expand/collapse, sort, add).
+const ExpandAllIcon = createCentralIconComponent("expand-45");
+const CollapseAllIcon = createCentralIconComponent("minimize-45");
+const SortFilterIcon = createCentralIconComponent("filter-2");
+const AddPlusIcon = createCentralIconComponent("plus-medium");
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
@@ -829,7 +833,7 @@ function ProjectSortMenu({
     <Menu>
       <SidebarIconButton
         render={<MenuTrigger />}
-        icon={IoFilter}
+        icon={SortFilterIcon}
         label="Sort projects"
         tooltip="Sort projects"
         tooltipSide="right"
@@ -904,7 +908,7 @@ function ChatSortMenu({
     <Menu>
       <SidebarIconButton
         render={<MenuTrigger />}
-        icon={IoFilter}
+        icon={SortFilterIcon}
         label="Sort chats"
         tooltip="Sort chats"
         tooltipSide="top"
@@ -5329,7 +5333,7 @@ export default function Sidebar() {
         description: "Group projects into a focused work context.",
         keywords: ["space", "create", "new", "group", "workspace"],
         run: () => openSpaceCreator(),
-        icon: ({ className }: { className?: string }) => <FiPlus className={className} />,
+        icon: AddPlusIcon,
       },
     ],
     [
@@ -5929,7 +5933,7 @@ export default function Sidebar() {
                     <>
                       {standardProjects.length > 0 ? (
                         <SidebarIconButton
-                          icon={allProjectsExpanded ? TbArrowsDiagonalMinimize2 : TbArrowsDiagonal}
+                          icon={allProjectsExpanded ? CollapseAllIcon : ExpandAllIcon}
                           label={
                             allProjectsExpanded
                               ? focusedProjectId
@@ -5960,7 +5964,7 @@ export default function Sidebar() {
                         }}
                       />
                       <SidebarIconButton
-                        icon={FiPlus}
+                        icon={AddPlusIcon}
                         label="Add project"
                         onClick={handleStartAddProject}
                         tooltip="Add project"
@@ -6390,7 +6394,7 @@ export default function Sidebar() {
                     }}
                   >
                     <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                      <FiPlus aria-hidden="true" />
+                      <AddPlusIcon />
                     </span>
                     <span>New space…</span>
                   </MenuItem>

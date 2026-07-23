@@ -13,12 +13,14 @@ import {
   resolveDroppedFileAbsolutePath,
 } from "../lib/composerDropPaths";
 import { VOID_SPACE_ICON, VOID_SPACE_KEY, VOID_SPACE_NAME, spaceKey } from "../lib/spaceGrouping";
+import { createSpace } from "../lib/spaces";
 import { readNativeApi } from "../nativeApi";
 import type { Space } from "../types";
 import { cn } from "~/lib/utils";
 
 import { FolderClosed } from "./FolderClosed";
 import { describeAddProjectError } from "./Sidebar.logic";
+import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
 import { SpaceIcon } from "./SpaceIcon";
 import { Button } from "./ui/button";
 import {
@@ -82,6 +84,13 @@ export function CreateProjectDialog(props: {
    */
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const [selectedSpaceKey, setSelectedSpaceKey] = useState<string>(VOID_SPACE_KEY);
+  const [spaceEditorOpen, setSpaceEditorOpen] = useState(false);
+  /**
+   * A space created from this dialog, kept locally until the refreshed shell
+   * snapshot delivers it through `props.spaces` — otherwise submitting right
+   * after creating would not find the id and silently fall back to Void.
+   */
+  const [createdSpace, setCreatedSpace] = useState<Space | null>(null);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -102,6 +111,8 @@ export function CreateProjectDialog(props: {
     setPath("");
     setPickedPath(null);
     setSelectedSpaceKey(spaceKey(props.activeSpaceId));
+    setSpaceEditorOpen(false);
+    setCreatedSpace(null);
     setIsPickingFolder(false);
     setIsDropTarget(false);
     setSubmitting(false);
@@ -114,6 +125,10 @@ export function CreateProjectDialog(props: {
 
   const trimmedPath = path.trim();
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
+  const spaces =
+    createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
+      ? [...props.spaces, createdSpace]
+      : props.spaces;
 
   const applyPickedFolder = useCallback(
     (picked: string) => {
@@ -204,7 +219,7 @@ export function CreateProjectDialog(props: {
     try {
       await props.onSubmit({
         workspaceRoot: trimmedPath,
-        spaceId: props.spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null,
+        spaceId: spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null,
         createIfMissing: trimmedPath !== pickedPath,
       });
       props.onOpenChange(false);
@@ -222,7 +237,25 @@ export function CreateProjectDialog(props: {
     void submit();
   };
 
-  const selectedSpace = props.spaces.find((space) => space.id === selectedSpaceKey) ?? null;
+  // The space is created right away (same command the sidebar uses) and picked
+  // as the destination, so one Create click ships the project into it.
+  const handleCreateSpace = async (value: SpaceEditorValue) => {
+    const api = readNativeApi();
+    if (!api) throw new Error("The app server is unavailable.");
+    const { spaceId } = await createSpace({ api, name: value.name, icon: value.icon });
+    const createdAt = new Date().toISOString();
+    setCreatedSpace({
+      id: spaceId,
+      name: value.name,
+      icon: value.icon,
+      sortOrder: Number.MAX_SAFE_INTEGER,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    setSelectedSpaceKey(spaceId);
+  };
+
+  const selectedSpace = spaces.find((space) => space.id === selectedSpaceKey) ?? null;
   // Only echo the drop/browse result while the path field still matches it;
   // hand-editing the path afterwards puts the box back in its idle state.
   const pickedFolderName =
@@ -299,25 +332,28 @@ export function CreateProjectDialog(props: {
             </div>
           ) : null}
 
-          {props.spaces.length > 0 ? (
-            <div className="space-y-2">
-              <span
-                id={spaceLabelId}
-                className={cn(
-                  "block",
-                  dialogFieldLabelClassName,
-                  "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-                )}
-              >
-                Space
-              </span>
+          <div className="space-y-2">
+            <span
+              id={spaceLabelId}
+              className={cn(
+                "block",
+                dialogFieldLabelClassName,
+                "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+              )}
+            >
+              Space
+            </span>
+            <div className="flex items-center gap-2">
               <Select
                 value={selectedSpaceKey}
                 onValueChange={(next) => {
                   if (typeof next === "string") setSelectedSpaceKey(next);
                 }}
               >
-                <SelectTrigger aria-labelledby={spaceLabelId} className={fieldControlClassName}>
+                <SelectTrigger
+                  aria-labelledby={spaceLabelId}
+                  className={cn(fieldControlClassName, "min-w-0 flex-1")}
+                >
                   <SelectValue>
                     <span className="flex items-center gap-2">
                       <SpaceIcon
@@ -335,7 +371,7 @@ export function CreateProjectDialog(props: {
                       {VOID_SPACE_NAME}
                     </span>
                   </SelectItem>
-                  {props.spaces.map((space) => (
+                  {spaces.map((space) => (
                     <SelectItem key={space.id} value={space.id}>
                       <span className="flex items-center gap-2">
                         <SpaceIcon icon={space.icon} className="size-3.5" />
@@ -345,8 +381,18 @@ export function CreateProjectDialog(props: {
                   ))}
                 </ComposerPickerSelectPopup>
               </Select>
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="New space"
+                disabled={submitting}
+                className={cn(fieldControlClassName, "w-9 shrink-0 sm:h-9")}
+                onClick={() => setSpaceEditorOpen(true)}
+              >
+                <CentralIcon name="plus-medium" className="size-4" aria-hidden="true" />
+              </Button>
             </div>
-          ) : null}
+          </div>
 
           {formError ? (
             <div id={errorId} role="alert" className="space-y-1">
@@ -381,6 +427,13 @@ export function CreateProjectDialog(props: {
             {submitting ? "Creating…" : "Create project"}
           </Button>
         </DialogFooter>
+        <SpaceEditorDialog
+          open={spaceEditorOpen}
+          mode="create"
+          existingNames={spaces.map((space) => space.name)}
+          onOpenChange={setSpaceEditorOpen}
+          onSubmit={handleCreateSpace}
+        />
       </DialogPopup>
     </Dialog>
   );

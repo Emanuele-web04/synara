@@ -4437,6 +4437,74 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("creates a Space inline from the Create Project dialog and files the project into it", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-create-project-inline-space" as MessageId,
+        targetText: "create project inline space",
+      }),
+    });
+
+    const findDispatchedCommand = (type: string) =>
+      wsRequests
+        .map((request) =>
+          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          "command" in request &&
+          request.command &&
+          typeof request.command === "object" &&
+          "type" in request.command &&
+          request.command.type === type
+            ? (request.command as Record<string, unknown>)
+            : null,
+        )
+        .find(Boolean);
+
+    try {
+      await page.getByRole("button", { name: "Add project", exact: true }).click();
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .toBeInTheDocument();
+
+      await page.getByRole("button", { name: "New space", exact: true }).click();
+      await expect.element(page.getByRole("heading", { name: "New space" })).toBeInTheDocument();
+      await page.getByLabelText("Name").fill("Focus");
+      await page.getByRole("button", { name: "Create space", exact: true }).click();
+
+      // The nested editor closes, the space.create command is dispatched, and
+      // the fresh space is preselected as the project's destination.
+      await expect
+        .element(page.getByRole("heading", { name: "New space" }))
+        .not.toBeInTheDocument();
+      let createdSpaceId: unknown;
+      await vi.waitFor(
+        () => {
+          const spaceCreateCommand = findDispatchedCommand("space.create");
+          expect(spaceCreateCommand).toBeDefined();
+          expect(spaceCreateCommand?.name).toBe("Focus");
+          createdSpaceId = spaceCreateCommand?.spaceId;
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expect.element(page.getByText("Focus", { exact: true }).first()).toBeInTheDocument();
+
+      await page.getByLabelText("Project folder path").fill("/repo/spaced-project");
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          const projectCreateCommand = findDispatchedCommand("project.create");
+          expect(projectCreateCommand).toBeDefined();
+          expect(projectCreateCommand?.workspaceRoot).toBe("/repo/spaced-project");
+          expect(projectCreateCommand?.spaceId).toBe(createdSpaceId);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("rolls back the provisional Space when project creation fails", async () => {
     const currentSpaceId = SpaceId.makeUnsafe("space-current");
     const destinationSpaceId = SpaceId.makeUnsafe("space-destination");
