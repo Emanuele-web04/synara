@@ -2,6 +2,7 @@ import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
+  canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
   chunkCollapsedTurnItems,
   chunkWorkEntries,
@@ -20,6 +21,14 @@ import {
 } from "./MessagesTimeline.logic";
 import type { TimelineEntry, WorkLogEntry } from "../../session-logic";
 import type { TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
+
+describe("canSubmitUserMessageEdit", () => {
+  it("allows an empty edit only when hidden annotations remain attached", () => {
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: false })).toBe(true);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: false, disabled: false })).toBe(false);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: true })).toBe(false);
+  });
+});
 
 function makeSummary(
   overrides: Omit<Partial<TurnDiffSummary>, "turnId"> & { turnId: string },

@@ -87,6 +87,7 @@ import {
   type UserTurnMarkerKind,
 } from "./userTurnMarker";
 import {
+  canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
   chunkCollapsedTurnItems,
   computeStableMessagesTimelineRows,
@@ -2571,14 +2572,6 @@ function hasOnlyInlineSkillChips(
   }
 
   return skillCount > 0;
-}
-
-export function canSubmitUserMessageEdit(input: {
-  draft: string;
-  allowEmpty: boolean;
-  disabled: boolean;
-}): boolean {
-  return (input.allowEmpty || input.draft.trim().length > 0) && !input.disabled;
 }
 
 // Inline editor for replaying a user message after the following assistant turn is rolled back.
