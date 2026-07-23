@@ -17,7 +17,10 @@ import {
   type BrowserAnnotation,
   type MessageId,
 } from "@synara/contracts";
-import { sanitizeBrowserAnnotationUrl } from "@synara/shared/browserAnnotations";
+import {
+  sanitizeBrowserAnnotationPageTitle,
+  sanitizeBrowserAnnotationUrl,
+} from "@synara/shared/browserAnnotations";
 
 export const BROWSER_ANNOTATIONS_VERSION = 2 as const;
 export const BROWSER_ANNOTATION_MAX_COUNT = 32;
@@ -113,7 +116,9 @@ export function normalizeBrowserAnnotation(value: unknown): BrowserAnnotationDra
     tabId,
     source: {
       url,
-      pageTitle: normalizeText(sourceCandidate.pageTitle, FIELD_LIMITS.pageTitle),
+      pageTitle: sanitizeBrowserAnnotationPageTitle(
+        normalizeText(sourceCandidate.pageTitle, FIELD_LIMITS.pageTitle),
+      ),
     },
     selector,
     tagName,
