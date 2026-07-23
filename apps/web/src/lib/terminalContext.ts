@@ -65,7 +65,7 @@ const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
 
 interface DisplayedUserMessageOptions {
   hideImageOnlyBootstrapPrompt?: boolean;
-  messageId: MessageId;
+  messageId?: MessageId;
 }
 
 export function normalizeTerminalContextText(text: string): string {
@@ -345,7 +345,10 @@ export function deriveDisplayedUserMessageState(
   // Trailing blocks are serialized in order: assistant selections, terminal
   // contexts, file comments, pasted text, then browser annotations (outermost).
   // Strip them in reverse so each extractor sees its block at the end.
-  const extractedBrowserAnnotations = extractTrailingBrowserAnnotations(prompt, options.messageId);
+  const extractedBrowserAnnotations =
+    options.messageId === undefined
+      ? { promptText: prompt, annotations: [] }
+      : extractTrailingBrowserAnnotations(prompt, options.messageId);
   const extractedPastedTexts = extractTrailingPastedTexts(extractedBrowserAnnotations.promptText);
   const extractedFileComments = extractTrailingFileComments(extractedPastedTexts.promptText);
   const extractedContexts = extractTrailingTerminalContexts(extractedFileComments.promptText);
