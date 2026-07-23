@@ -17,6 +17,9 @@ describe("Synara harness policy", () => {
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
     assert.include(policy, "do not create Synara threads");
+    assert.include(policy, "3–8 word outcome-oriented task label");
+    assert.include(policy, "no assumed chat context");
+    assert.include(policy, "notifying the user versus staying silent");
   });
 
   it("never advertises gateway mutation to providers without scoped MCP", () => {

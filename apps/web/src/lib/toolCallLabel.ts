@@ -230,6 +230,26 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara listed automations",
     failed: "Synara couldn't list automations",
   },
+  synara_view_automation: {
+    running: "Synara is viewing an automation",
+    completed: "Synara viewed an automation",
+    failed: "Synara couldn't view an automation",
+  },
+  synara_update_automation: {
+    running: "Synara is updating an automation",
+    completed: "Synara updated an automation",
+    failed: "Synara couldn't update an automation",
+  },
+  synara_update_automation_memory: {
+    running: "Synara is updating automation memory",
+    completed: "Synara updated automation memory",
+    failed: "Synara couldn't update automation memory",
+  },
+  synara_report_automation_result: {
+    running: "Synara is reporting an automation result",
+    completed: "Synara reported an automation result",
+    failed: "Synara couldn't report an automation result",
+  },
   synara_cancel_automation: {
     running: "Synara is stopping an automation",
     completed: "Synara stopped an automation",

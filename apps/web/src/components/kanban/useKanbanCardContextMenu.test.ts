@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => ({
   clicked: "delete" as string,
-  running: false,
   showContextMenu: vi.fn(),
   confirm: vi.fn(),
   clearOptimisticDispatch: vi.fn(),
@@ -72,7 +71,6 @@ vi.mock("../../terminalStateStore", () => ({
   useTerminalStateStore: (selector: (state: unknown) => unknown) =>
     selector({ clearTerminalState: harness.clearTerminalState }),
 }));
-vi.mock("../../session-logic", () => ({ isThreadRunningTurn: () => harness.running }));
 vi.mock("../../threadDerivation", () => ({
   getThreadFromState: () => ({ id: ThreadId.makeUnsafe("thread-kanban") }),
 }));
@@ -119,7 +117,6 @@ const EVENT = {
 
 beforeEach(() => {
   harness.clicked = "delete";
-  harness.running = false;
   for (const mock of [
     harness.showContextMenu,
     harness.confirm,
@@ -156,7 +153,7 @@ describe("useKanbanCardContextMenu", () => {
     expect(harness.clearTerminalState).toHaveBeenCalledWith(THREAD_ID);
   });
 
-  it("uses the shared archive command after checking active-thread eligibility", async () => {
+  it("uses the shared archive command while server-side cleanup owns active sessions", async () => {
     harness.clicked = "archive";
 
     useKanbanCardContextMenu().onCardContextMenu(CARD, EVENT);
@@ -164,23 +161,6 @@ describe("useKanbanCardContextMenu", () => {
 
     expect(harness.clearOptimisticDispatch).toHaveBeenCalledWith(THREAD_ID);
     expect(harness.archiveThread).toHaveBeenCalledWith(expect.any(Object), THREAD_ID);
-  });
-
-  it("rejects archive while the thread is running", async () => {
-    harness.clicked = "archive";
-    harness.running = true;
-
-    useKanbanCardContextMenu().onCardContextMenu(CARD, EVENT);
-    await vi.waitFor(() => expect(harness.toast).toHaveBeenCalled());
-
-    expect(harness.archiveThread).not.toHaveBeenCalled();
-    expect(harness.clearOptimisticDispatch).not.toHaveBeenCalled();
-    expect(harness.toast).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Cannot archive",
-      }),
-    );
   });
 
   it("deletes a local-only draft without invoking active-thread deletion", async () => {

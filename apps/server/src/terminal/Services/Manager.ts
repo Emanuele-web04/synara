@@ -41,6 +41,8 @@ export interface TerminalSessionState {
   exitCode: number | null;
   exitSignal: number | null;
   updatedAt: string;
+  /** Last open/reattach time; used as an archive-cleanup generation fence. */
+  lastOpenedAt: string;
   cols: number;
   rows: number;
   process: PtyProcess | null;
@@ -105,6 +107,11 @@ export interface TerminalStartInput extends TerminalOpenInput {
   rows: number;
 }
 
+export interface TerminalCloseOpenedAtOrBeforeInput {
+  readonly threadId: string;
+  readonly openedAtOrBefore: string;
+}
+
 /**
  * TerminalManagerShape - Service API for terminal session lifecycle operations.
  */
@@ -154,6 +161,14 @@ export interface TerminalManagerShape {
    * When `terminalId` is omitted, closes all sessions for the thread.
    */
   readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
+
+  /**
+   * Close only sessions whose latest open/reattach predates an archive event.
+   * The comparison and close run under the same per-thread terminal lock.
+   */
+  readonly closeSessionsOpenedAtOrBefore: (
+    input: TerminalCloseOpenedAtOrBeforeInput,
+  ) => Effect.Effect<void, TerminalError>;
 
   /**
    * Subscribe to terminal runtime events.

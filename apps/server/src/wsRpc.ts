@@ -1603,6 +1603,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
+        [WS_METHODS.automationGetMemory]: ({ automationId }) =>
+          rpcEffect(automationService.getMemory(automationId), "Failed to load automation memory"),
         [WS_METHODS.automationCreate]: (input) =>
           rpcEffect(automationService.create(input), "Failed to create automation"),
         [WS_METHODS.automationUpdate]: (input) =>
@@ -1617,6 +1619,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(automationService.markRunRead(input), "Failed to update automation run"),
         [WS_METHODS.automationArchiveRun]: (input) =>
           rpcEffect(automationService.archiveRun(input), "Failed to update automation run"),
+        [WS_METHODS.automationResolveProposal]: (input) =>
+          rpcEffect(
+            automationService.resolveProposal(input),
+            "Failed to resolve automation proposal",
+          ),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -1624,10 +1631,11 @@ const makeWsRpcHandlersLayer = () =>
             Stream.merge(
               Stream.fromEffect(
                 automationService.list({}).pipe(
-                  Effect.map(({ definitions, runs }) => ({
+                  Effect.map(({ definitions, runs, memories }) => ({
                     type: "snapshot" as const,
                     definitions,
                     runs,
+                    memories,
                   })),
                 ),
               ),

@@ -1961,4 +1961,112 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
     }),
   );
+
+  it.effect("lists only stale active thread ids for runtime reconciliation", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-runtime-candidates', 'Runtime candidates', '/tmp/runtime-candidates',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, archived_at, deleted_at
+        ) VALUES
+          (
+            'thread-stale-running', 'project-runtime-candidates', 'Stale',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-fresh-running', 'project-runtime-candidates', 'Fresh',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T09:59:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-settled', 'project-runtime-candidates', 'Settled',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-archived-running', 'project-runtime-candidates', 'Archived',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z',
+            '2026-07-23T08:00:00.000Z', NULL
+          ),
+          (
+            'thread-unbound-oldest', 'project-runtime-candidates', 'Unbound',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-22T00:00:00.000Z', '2026-07-22T00:00:00.000Z', NULL, NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, provider_session_id, provider_thread_id,
+          runtime_mode, active_turn_id, last_error, updated_at
+        ) VALUES
+          (
+            'thread-stale-running', 'running', 'codex', NULL, NULL,
+            'full-access', 'turn-stale', NULL, '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'thread-fresh-running', 'running', 'codex', NULL, NULL,
+            'full-access', 'turn-fresh', NULL, '2026-07-23T09:59:00.000Z'
+          ),
+          (
+            'thread-settled', 'ready', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'thread-archived-running', 'running', 'codex', NULL, NULL,
+            'full-access', 'turn-archived', NULL, '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'thread-unbound-oldest', 'running', 'codex', NULL, NULL,
+            'full-access', 'turn-unbound', NULL, '2026-07-22T00:00:00.000Z'
+          )
+      `;
+      yield* sql`
+        INSERT INTO provider_session_runtime (
+          thread_id, provider_name, adapter_key, runtime_mode, status,
+          lifecycle_generation, last_seen_at
+        ) VALUES
+          (
+            'thread-stale-running', 'codex', 'codex', 'full-access', 'running',
+            'generation-stale', '2026-07-23T00:00:00.000Z'
+          ),
+          (
+            'thread-fresh-running', 'codex', 'codex', 'full-access', 'running',
+            'generation-fresh', '2026-07-23T09:59:00.000Z'
+          )
+        ON CONFLICT (thread_id) DO UPDATE SET
+          provider_name = excluded.provider_name,
+          adapter_key = excluded.adapter_key,
+          runtime_mode = excluded.runtime_mode,
+          status = excluded.status,
+          lifecycle_generation = excluded.lifecycle_generation,
+          last_seen_at = excluded.last_seen_at
+      `;
+
+      const candidates = yield* snapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: "2026-07-23T09:00:00.000Z",
+        limit: 1,
+      });
+
+      assert.deepEqual(candidates, [ThreadId.makeUnsafe("thread-stale-running")]);
+    }),
+  );
 });

@@ -84,6 +84,15 @@ export type AutomationWorktreeMode = typeof AutomationWorktreeMode.Type;
 export const AutomationMode = Schema.Literals(["standalone", "heartbeat"]);
 export type AutomationMode = typeof AutomationMode.Type;
 
+export const AutomationProposalState = Schema.Literals(["pending", "accepted", "dismissed"]);
+export type AutomationProposalState = typeof AutomationProposalState.Type;
+
+export const AutomationNotificationPolicy = Schema.Literals(["all", "failed-runs-only"]);
+export type AutomationNotificationPolicy = typeof AutomationNotificationPolicy.Type;
+
+export const DEFAULT_AUTOMATION_NOTIFICATION_POLICY: AutomationNotificationPolicy = "all";
+export const DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS = 60;
+
 export const AutomationTrigger = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
   Schema.Struct({ type: Schema.Literal("scheduled") }),
@@ -112,6 +121,8 @@ export const AutomationRunResult = Schema.Struct({
     "unknown",
   ]),
   summary: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+  decision: Schema.optional(Schema.Literals(["notify", "silent"])),
   severity: Schema.optional(Schema.Literals(["info", "warning", "error"])),
   unread: Schema.Boolean,
   archivedAt: Schema.NullOr(AutomationIsoDateTime),
@@ -140,6 +151,8 @@ export const AutomationPermissionSnapshot = Schema.Struct({
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   completionPolicyVersion: Schema.optional(NonNegativeInt),
+  /** Stable one-based iteration ordinal claimed for this run. */
+  iterationNumber: Schema.optional(PositiveInt),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   worktreeMode: AutomationWorktreeMode,
@@ -204,6 +217,18 @@ export const AutomationDefinition = Schema.Struct({
   mode: AutomationMode,
   /** Heartbeat target thread continued on each wake. Null for standalone automations. */
   targetThreadId: Schema.NullOr(ThreadId),
+  /** Suggested agent-created automations require an explicit user resolution. */
+  proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  /** Successful-run attention policy. Null legacy rows decode as the default "all". */
+  notificationPolicy: Schema.optional(AutomationNotificationPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_NOTIFICATION_POLICY),
+  ),
+  /** Minimum quiet period after the target thread's last completed turn. */
+  heartbeatCooldownSeconds: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS),
+  ),
   /** Hard cap on total runs before the automation auto-disables. Null = unbounded. */
   maxIterations: Schema.NullOr(PositiveInt),
   /** When true, a failed run disables the automation (stops a runaway loop). */
@@ -261,6 +286,15 @@ const AutomationDefinitionConfig = Schema.Struct({
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  notificationPolicy: Schema.optional(AutomationNotificationPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_NOTIFICATION_POLICY),
+  ),
+  heartbeatCooldownSeconds: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS),
+  ),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -303,6 +337,9 @@ export const AutomationUpdateInput = Schema.Struct({
   worktreeMode: Schema.optional(AutomationWorktreeMode),
   mode: Schema.optional(AutomationMode),
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)),
+  notificationPolicy: Schema.optional(AutomationNotificationPolicy),
+  heartbeatCooldownSeconds: Schema.optional(NonNegativeInt),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
   stopOnError: Schema.optional(Schema.Boolean),
   completionPolicy: Schema.optional(AutomationCompletionPolicy),
@@ -321,11 +358,27 @@ export const AutomationDeleteInput = Schema.Struct({
 });
 export type AutomationDeleteInput = typeof AutomationDeleteInput.Type;
 
+export const AutomationResolveProposalInput = Schema.Struct({
+  automationId: AutomationId,
+  resolution: Schema.Literals(["accepted", "dismissed"]),
+});
+export type AutomationResolveProposalInput = typeof AutomationResolveProposalInput.Type;
+
+export const AutomationResolveProposalResult = Schema.Struct({
+  definition: AutomationDefinition,
+});
+export type AutomationResolveProposalResult = typeof AutomationResolveProposalResult.Type;
+
 export const AutomationListInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   includeArchived: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });
 export type AutomationListInput = typeof AutomationListInput.Type;
+
+export const AutomationGetMemoryInput = Schema.Struct({
+  automationId: AutomationId,
+});
+export type AutomationGetMemoryInput = typeof AutomationGetMemoryInput.Type;
 
 export const AutomationRunNowInput = Schema.Struct({
   automationId: AutomationId,
@@ -358,6 +411,9 @@ export const AutomationRun = Schema.Struct({
   trigger: AutomationTrigger,
   status: AutomationRunStatus,
   scheduledFor: AutomationIsoDateTime,
+  deferredUntil: Schema.optional(Schema.NullOr(AutomationIsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   claimedBy: Schema.NullOr(TrimmedNonEmptyString),
   claimedAt: Schema.NullOr(AutomationIsoDateTime),
   leaseExpiresAt: Schema.NullOr(AutomationIsoDateTime),
@@ -374,9 +430,19 @@ export const AutomationRun = Schema.Struct({
 });
 export type AutomationRun = typeof AutomationRun.Type;
 
+export const AutomationMemory = Schema.Struct({
+  automationId: AutomationId,
+  content: Schema.String.check(Schema.isMaxLength(32 * 1_024)),
+  updatedAt: AutomationIsoDateTime,
+});
+export type AutomationMemory = typeof AutomationMemory.Type;
+
 export const AutomationListResult = Schema.Struct({
   definitions: Schema.Array(AutomationDefinition),
   runs: Schema.Array(AutomationRun),
+  memories: Schema.optional(Schema.Array(AutomationMemory)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
 });
 export type AutomationListResult = typeof AutomationListResult.Type;
 
@@ -400,6 +466,9 @@ export const AutomationStreamEvent = Schema.Union([
     type: Schema.Literal("snapshot"),
     definitions: Schema.Array(AutomationDefinition),
     runs: Schema.Array(AutomationRun),
+    memories: Schema.optional(Schema.Array(AutomationMemory)).pipe(
+      Schema.withDecodingDefault(() => []),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("definition-upserted"),
@@ -412,6 +481,10 @@ export const AutomationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("run-upserted"),
     run: AutomationRun,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("memory-upserted"),
+    memory: AutomationMemory,
   }),
 ]);
 export type AutomationStreamEvent = typeof AutomationStreamEvent.Type;

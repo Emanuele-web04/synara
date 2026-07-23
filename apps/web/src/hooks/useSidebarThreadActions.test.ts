@@ -85,7 +85,6 @@ const harness = vi.hoisted(() => ({
   archiveThread: vi.fn(),
   unarchiveThread: vi.fn(),
   alreadyUnarchived: false,
-  running: false,
   activeThreadDelete: vi.fn(),
   navigate: vi.fn(),
   toast: vi.fn(),
@@ -157,7 +156,6 @@ vi.mock("../nativeApi", () => ({
     dialogs: { confirm: harness.confirm },
   }),
 }));
-vi.mock("../session-logic", () => ({ isThreadRunningTurn: () => harness.running }));
 vi.mock("../lib/threadArchive", () => ({
   archiveThreadFromClient: harness.archiveThread,
   unarchiveThreadFromClient: harness.unarchiveThread,
@@ -384,14 +382,12 @@ describe("useSidebarThreadActions", () => {
     resolveMigration();
   });
 
-  it("rejects running archives without dispatching", async () => {
-    harness.running = true;
+  it("keeps archive available while server-side runtime cleanup is pending", async () => {
+    await expect(render().archiveThread(THREAD_ID)).resolves.toBe(true);
 
-    await expect(render().archiveThread(THREAD_ID)).resolves.toBe(false);
-
-    expect(harness.archiveThread).not.toHaveBeenCalled();
-    expect(harness.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Cannot archive" }),
+    expect(harness.archiveThread).toHaveBeenCalledWith(
+      expect.anything(),
+      THREAD_ID,
     );
   });
 

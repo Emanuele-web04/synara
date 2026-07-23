@@ -31,6 +31,7 @@ import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
+import { buildAutomationProposalActivity } from "../../automation/proposalActivity.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
@@ -546,6 +547,21 @@ export const makeAgentGateway = Effect.gen(function* () {
     automationService,
     requireThreadShell,
     assertCallerMayDriveThread,
+    surfaceAutomationProposal: ({ callerThreadId, definition }) => {
+      const createdAt = isoNow();
+      return orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:automation-proposal`),
+          threadId: callerThreadId,
+          activity: buildAutomationProposalActivity({
+            definition,
+            proposalState: "pending",
+          }),
+          createdAt,
+        })
+        .pipe(Effect.asVoid);
+    },
   });
 
   const tools: ReadonlyArray<ToolEntry> = [

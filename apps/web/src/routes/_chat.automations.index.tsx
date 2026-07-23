@@ -45,6 +45,7 @@ import {
   providerOptionsForAutomationEdit,
   projectModelSelection,
   runResultSummary,
+  runResultTitle,
   runStatusLabel,
   RunStatusIndicator,
   updateInputFromForm,
@@ -305,7 +306,9 @@ function AutomationsRouteView() {
   const renderTriageRow = (run: AutomationRun) => {
     const definition = data.definitions.find((entry) => entry.id === run.automationId);
     const summary = runResultSummary(run);
+    const resultTitle = runResultTitle(run);
     const target = definition ? subtitle(definition) : "Saved run";
+    const automationName = definition?.name ?? "Automation run";
     return (
       <AutomationListRow
         key={run.id}
@@ -322,8 +325,8 @@ function AutomationsRouteView() {
               : undefined
         }
         leading={<RunStatusIndicator status={run.status} />}
-        title={definition?.name ?? "Automation run"}
-        detail={summary || target}
+        title={resultTitle ?? automationName}
+        detail={resultTitle ? `${automationName} · ${summary || target}` : summary || target}
         meta={formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor)}
         trailing={
           <CentralIcon

@@ -47,6 +47,7 @@ import {
   TerminalError,
   TerminalManager,
   TerminalManagerShape,
+  type TerminalCloseOpenedAtOrBeforeInput,
   TerminalSessionState,
   TerminalStartInput,
 } from "../Services/Manager";
@@ -817,6 +818,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         const history = await this.readHistory(input.threadId, input.terminalId);
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
+        const openedAt = new Date().toISOString();
         const session: TerminalSessionState = {
           threadId: input.threadId,
           terminalId: input.terminalId,
@@ -827,7 +829,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
-          updatedAt: new Date().toISOString(),
+          updatedAt: openedAt,
+          lastOpenedAt: openedAt,
           cols,
           rows,
           process: null,
@@ -862,6 +865,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
+      existing.lastOpenedAt = new Date().toISOString();
       // A re-open may flip headless mode (e.g. a viewer attaching later); honor it
       // when explicitly provided, otherwise keep the session's current mode.
       if (input.streamOutput !== undefined) {
@@ -1026,6 +1030,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       if (!session) {
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
+        const openedAt = new Date().toISOString();
         session = {
           threadId: input.threadId,
           terminalId: input.terminalId,
@@ -1036,7 +1041,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
-          updatedAt: new Date().toISOString(),
+          updatedAt: openedAt,
+          lastOpenedAt: openedAt,
           cols,
           rows,
           process: null,
@@ -1081,6 +1087,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         );
       }
 
+      session.lastOpenedAt = new Date().toISOString();
       const cols = input.cols ?? session.cols;
       const rows = input.rows ?? session.rows;
 
@@ -1099,22 +1106,48 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return;
       }
 
-      const threadSessions = this.sessionsForThread(input.threadId);
-      for (const session of threadSessions) {
-        this.stopProcess(session);
-        this.sessions.delete(toSessionKey(session.threadId, session.terminalId));
-      }
-      await Promise.all(
-        threadSessions.map((session) =>
-          this.flushPersistQueue(session.threadId, session.terminalId),
-        ),
-      );
-
-      if (input.deleteHistory) {
-        await this.deleteAllHistoryForThread(input.threadId);
-      }
-      this.updateSubprocessPollingState();
+      await this.closeThreadSessions(input.threadId, input.deleteHistory === true);
     });
+  }
+
+  async closeSessionsOpenedAtOrBefore(
+    input: TerminalCloseOpenedAtOrBeforeInput,
+  ): Promise<void> {
+    const cutoff = Date.parse(input.openedAtOrBefore);
+    if (!Number.isFinite(cutoff)) {
+      throw new Error(`Invalid terminal archive fence timestamp: ${input.openedAtOrBefore}`);
+    }
+    await this.runWithThreadLock(input.threadId, () =>
+      this.closeThreadSessions(
+        input.threadId,
+        false,
+        (session) => Date.parse(session.lastOpenedAt) <= cutoff,
+      ),
+    );
+  }
+
+  private async closeThreadSessions(
+    threadId: string,
+    deleteHistory: boolean,
+    shouldClose: (session: TerminalSessionState) => boolean = () => true,
+  ): Promise<void> {
+    const threadSessions = this.sessionsForThread(threadId).filter(shouldClose);
+    for (const session of threadSessions) {
+      this.stopProcess(session);
+      this.sessions.delete(toSessionKey(session.threadId, session.terminalId));
+    }
+    await Promise.all(
+      threadSessions.map((session) =>
+        this.flushPersistQueue(session.threadId, session.terminalId),
+      ),
+    );
+
+    if (deleteHistory) {
+      await this.deleteAllHistoryForThread(threadId);
+    }
+    if (threadSessions.length > 0) {
+      this.updateSubprocessPollingState();
+    }
   }
 
   dispose(): void {
@@ -2308,6 +2341,12 @@ export const TerminalManagerLive = Layer.effect(
         Effect.tryPromise({
           try: () => runtime.close(input),
           catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
+        }),
+      closeSessionsOpenedAtOrBefore: (input) =>
+        Effect.tryPromise({
+          try: () => runtime.closeSessionsOpenedAtOrBefore(input),
+          catch: (cause) =>
+            terminalErrorFromCause("Failed to close archived thread terminals", cause),
         }),
       subscribe: (listener) =>
         Effect.sync(() => {

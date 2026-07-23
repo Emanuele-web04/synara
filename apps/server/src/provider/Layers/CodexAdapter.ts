@@ -30,7 +30,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, FileSystem, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
+import { Cause, Effect, FileSystem, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
 
 import {
   ProviderAdapterProcessError,
@@ -41,6 +41,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   CodexAppServerManager,
   type CodexAppServerSendTurnInput,
@@ -62,9 +63,57 @@ import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { synaraSkillsDir } from "../skillsCatalog.ts";
+import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { assignDerivedProviderRuntimeEventIds } from "../providerRuntimeEventIdentity.ts";
+import {
+  compactProviderRuntimeEventForIngress,
+  isTerminalProviderRuntimeEvent,
+  PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+  PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+  PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES,
+  providerRuntimeEventBytes,
+} from "../providerRuntimeEventIngress.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+
+type CodexRuntimeIngressItem = {
+  readonly nativeEvent: ProviderEvent;
+  readonly runtimeEvents: ReadonlyArray<ProviderRuntimeEvent>;
+};
+
+function compactCodexNativeEventForIngress(event: ProviderEvent): ProviderEvent {
+  let originalBytes: number;
+  try {
+    originalBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+  } catch {
+    originalBytes = PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES + 1;
+  }
+  if (originalBytes <= PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES) {
+    return event;
+  }
+  return {
+    ...event,
+    payload: {
+      synaraTruncated: true,
+      reason: "Codex native event exceeded the callback ingress size limit",
+      originalBytes,
+    },
+  };
+}
+
+function codexRuntimeIngressItemBytes(item: CodexRuntimeIngressItem): number {
+  let nativeBytes: number;
+  try {
+    nativeBytes = Buffer.byteLength(JSON.stringify(item.nativeEvent), "utf8");
+  } catch {
+    nativeBytes = PROVIDER_RUNTIME_INGRESS_EVENT_MAX_BYTES;
+  }
+  return (
+    nativeBytes +
+    item.runtimeEvents.reduce((total, event) => total + providerRuntimeEventBytes(event), 0)
+  );
+}
 
 export interface CodexAdapterLiveOptions {
   readonly manager?: CodexAppServerManager;
@@ -1978,7 +2027,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ServerVoiceTranscriptionResult));
 
-    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
 
     yield* Effect.acquireRelease(
       Effect.gen(function* () {
@@ -1990,30 +2041,67 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             yield* nativeEventLogger.write(event, event.threadId);
           });
 
-        const services = yield* Effect.services<never>();
-        const listener = (event: ProviderEvent) =>
-          Effect.gen(function* () {
-            yield* writeNativeEvent(event);
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
-            if (runtimeEvents.length === 0) {
-              yield* Effect.logDebug("ignoring unhandled Codex provider event", {
-                method: event.method,
+        const ingress = yield* makeBoundedCallbackIngress<CodexRuntimeIngressItem, never, never>(
+          (item) =>
+            Effect.gen(function* () {
+              yield* writeNativeEvent(item.nativeEvent).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Codex native event logging failed", {
+                    threadId: item.nativeEvent.threadId,
+                    method: item.nativeEvent.method,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+              const runtimeEvents = item.runtimeEvents;
+              if (runtimeEvents.length === 0) {
+                yield* Effect.logDebug("ignoring unhandled Codex provider event", {
+                  method: item.nativeEvent.method,
+                  threadId: item.nativeEvent.threadId,
+                  turnId: item.nativeEvent.turnId,
+                  itemId: item.nativeEvent.itemId,
+                });
+                return;
+              }
+              yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            }),
+          {
+            capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+            maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+            terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+            isTerminal: (item) => item.runtimeEvents.some(isTerminalProviderRuntimeEvent),
+            sizeOf: codexRuntimeIngressItemBytes,
+          },
+        );
+        const listener = (event: ProviderEvent) => {
+          const runtimeEvents = assignDerivedProviderRuntimeEventIds(
+            mapToRuntimeEvents(event, event.threadId),
+          ).map(compactProviderRuntimeEventForIngress);
+          const result = ingress.offer({
+            nativeEvent: compactCodexNativeEventForIngress(event),
+            runtimeEvents,
+          });
+          if (result === "terminal-overflow") {
+            // This means the reserved terminal budget itself was exhausted.
+            // The runtime reconciler remains the final recovery fence.
+            void Effect.runPromise(
+              Effect.logError("Codex callback ingress exhausted terminal reserve", {
                 threadId: event.threadId,
-                turnId: event.turnId,
-                itemId: event.itemId,
-              });
-              return;
-            }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
-          }).pipe(Effect.runPromiseWith(services));
+                method: event.method,
+                status: ingress.status(),
+              }),
+            );
+          }
+        };
         manager.on("event", listener);
-        return listener;
+        return { ingress, listener };
       }),
-      (listener) =>
+      ({ ingress, listener }) =>
         Effect.gen(function* () {
           yield* Effect.sync(() => {
             manager.off("event", listener);
           });
+          yield* ingress.stop;
           yield* Queue.shutdown(runtimeEventQueue);
         }),
     );

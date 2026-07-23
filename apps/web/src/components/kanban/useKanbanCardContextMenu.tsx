@@ -25,7 +25,6 @@ import { useKanbanUiStore } from "../../kanbanUiStore";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { useTerminalStateStore } from "../../terminalStateStore";
-import { isThreadRunningTurn } from "../../session-logic";
 import { getThreadFromState } from "../../threadDerivation";
 import { toastManager } from "../ui/toast";
 import { isKanbanDraftOnlyCard, type KanbanCard } from "./kanban.logic";
@@ -57,14 +56,6 @@ async function archiveCardThread(threadId: ThreadId) {
   if (!api) return;
   const thread = getThreadFromState(useStore.getState(), threadId);
   if (!thread) return;
-  if (isThreadRunningTurn(thread)) {
-    toastManager.add({
-      type: "error",
-      title: "Cannot archive",
-      description: "Stop the running session before archiving this thread.",
-    });
-    return;
-  }
   // Archived threads leave the board's thread feed, so a live optimistic
   // dispatch entry could never reconcile — drop it with the card.
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);

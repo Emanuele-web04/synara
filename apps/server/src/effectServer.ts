@@ -33,6 +33,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
+import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeReconciler";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -67,6 +68,7 @@ export interface ServerShape {
     | OrchestrationReactor
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
+    | ProviderRuntimeReconciler
     | ProviderService
     | ServerRuntimeStartup
     | ServerSettingsService
@@ -127,6 +129,7 @@ export const createEffectServer = Effect.fn(function* (
   const orchestrationReactor = yield* OrchestrationReactor;
   const providerService = yield* ProviderService;
   const providerSessionReaper = yield* ProviderSessionReaper;
+  const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
@@ -203,6 +206,7 @@ export const createEffectServer = Effect.fn(function* (
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
+  yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
   // Heal turns orphaned by the previous process exit (their in-memory runtimes

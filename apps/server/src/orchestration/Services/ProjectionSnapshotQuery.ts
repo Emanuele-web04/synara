@@ -107,6 +107,16 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
+   * Find only stale threads whose projected session/turn still appears in
+   * flight. Used by the runtime reconciler to avoid hydrating the full shell
+   * snapshot on every polling interval.
+   */
+  readonly listStaleInFlightThreadIds: (input: {
+    readonly updatedBefore: string;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  /**
    * Read the latest orchestration shell snapshot.
    *
    * Returns only project rows plus thread shell summaries so clients can

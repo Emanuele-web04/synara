@@ -7372,6 +7372,50 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.activeTurnId).toBeNull();
   });
 
+  it("serializes archive cleanup through the durable provider intent source", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-for-archive"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.makeUnsafe("cmd-archive-active-provider-session"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+      }),
+    );
+
+    await waitFor(async () => {
+      if (harness.stopSession.mock.calls.length !== 1) return false;
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return thread?.archivedAt !== null && thread?.session?.status === "stopped";
+    });
+
+    expect(harness.stopSession).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+  });
+
   it("does not restore pending sidechat context after an explicit session stop", async () => {
     const threadId = ThreadId.makeUnsafe("thread-stopped-droid-sidechat");
     const harness = await createHarness({

@@ -25,20 +25,52 @@ const StoredRowSchema = Schema.Struct({
 });
 const decodeStoredRow = Schema.decodeUnknownEffect(StoredRowSchema);
 
+const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
+  Effect.gen(function* () {
+    const eventJson = yield* encodeEvent(event).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
+    );
+    const originalBytes = Buffer.byteLength(eventJson, "utf8");
+    if (originalBytes <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
+      return { event, eventJson };
+    }
+
+    if (event.raw !== undefined) {
+      const compactedEvent = {
+        ...event,
+        raw: {
+          source: event.raw.source,
+          ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
+          ...(event.raw.messageType !== undefined ? { messageType: event.raw.messageType } : {}),
+          payload: {
+            synaraTruncated: true,
+            reason: "provider runtime event exceeded the durable journal size limit",
+            originalBytes,
+          },
+        },
+      } satisfies ProviderRuntimeEvent;
+      const compactedJson = yield* encodeEvent(compactedEvent).pipe(
+        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
+      );
+      if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
+        return { event: compactedEvent, eventJson: compactedJson };
+      }
+    }
+
+    return yield* new PersistenceDecodeError({
+      operation: "ProviderRuntimeEvent.append",
+      issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes after raw payload compaction.`,
+    });
+  });
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const append: ProviderRuntimeEventRepositoryShape["append"] = (event) =>
     Effect.gen(function* () {
-      const eventJson = yield* encodeEvent(event).pipe(
-        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
-      );
-      if (Buffer.byteLength(eventJson, "utf8") > PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-        return yield* new PersistenceDecodeError({
-          operation: "ProviderRuntimeEvent.append",
-          issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes.`,
-        });
-      }
+      const persistable = yield* encodePersistableEvent(event);
+      const persistedEvent = persistable.event;
+      const eventJson = persistable.eventJson;
       const rows = yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -71,7 +103,7 @@ const make = Effect.gen(function* () {
           issue: `Provider event '${event.eventId}' was reused with different content.`,
         });
       }
-      return { sequence: row.sequence, event } satisfies PersistedProviderRuntimeEvent;
+      return { sequence: row.sequence, event: persistedEvent } satisfies PersistedProviderRuntimeEvent;
     });
 
   const getHighWaterSequence = sql<{ readonly highWaterSequence: number }>`

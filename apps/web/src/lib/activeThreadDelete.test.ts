@@ -9,7 +9,6 @@ const harness = vi.hoisted(() => ({
   events: [] as string[],
   dispatchCommand: vi.fn(),
   confirm: vi.fn(),
-  closeTerminal: vi.fn(),
   disposeThread: vi.fn(),
   reconcile: vi.fn(),
   removeDeletedThreadFromClientState: vi.fn(),
@@ -31,7 +30,6 @@ vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({
     dialogs: { confirm: harness.confirm },
     orchestration: { dispatchCommand: harness.dispatchCommand },
-    terminal: { close: harness.closeTerminal },
   }),
 }));
 
@@ -77,9 +75,6 @@ beforeEach(() => {
   harness.dispatchCommand.mockReset().mockImplementation(async (command: { type: string }) => {
     harness.events.push(command.type);
   });
-  harness.closeTerminal.mockReset().mockImplementation(async () => {
-    harness.events.push("terminal.close");
-  });
   harness.disposeThread.mockReset().mockImplementation(() => {
     harness.events.push("terminal.dispose");
   });
@@ -90,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("deleteActiveThreadFromClient", () => {
-  it("stops the session and terminal before delete, then reconciles before local cleanup", async () => {
+  it("lets the server own runtime cleanup and disposes the renderer after delete acceptance", async () => {
     const onDeleted = vi.fn(() => {
       harness.events.push("onDeleted");
     });
@@ -106,11 +101,9 @@ describe("deleteActiveThreadFromClient", () => {
     });
 
     expect(harness.events).toEqual([
-      "thread.session.stop",
-      "terminal.dispose",
-      "terminal.close",
       "prepare",
       "thread.delete",
+      "terminal.dispose",
       "reconcile",
       "onDeleted",
     ]);

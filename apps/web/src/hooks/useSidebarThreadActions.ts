@@ -30,7 +30,6 @@ import { newCommandId, randomUUID } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
-import { isThreadRunningTurn } from "../session-logic";
 import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
@@ -376,14 +375,6 @@ export function useSidebarThreadActions(input: {
       if (!api) return false;
       const thread = getThreadFromState(useStore.getState(), threadId);
       if (!thread) return false;
-      if (isThreadRunningTurn(thread)) {
-        toastManager.add({
-          type: "error",
-          title: "Cannot archive",
-          description: "Stop the running session before archiving this thread.",
-        });
-        return false;
-      }
       const pendingThreadIds = archivePendingThreadIdsRef.current;
       if (pendingThreadIds.has(threadId)) return false;
 
@@ -543,29 +534,10 @@ export function useSidebarThreadActions(input: {
         });
         return;
       }
-      const archivableThreads = projectThreads.filter((thread) => !isThreadRunningTurn(thread));
-      const runningCount = projectThreads.length - archivableThreads.length;
-      if (archivableThreads.length === 0) {
-        toastManager.add({
-          type: "error",
-          title: "Cannot archive threads",
-          description:
-            runningCount === 1
-              ? "The only thread in this project is running. Stop it before archiving."
-              : `All ${runningCount} threads in this project are running. Stop them before archiving.`,
-        });
-        return;
-      }
       const archiveLines = [
-        `Archive ${archivableThreads.length} ${pluralize(archivableThreads.length, "thread")} in "${project.name}"?`,
+        `Archive ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
         "Archived threads are hidden from the sidebar but can be restored later.",
       ];
-      if (runningCount > 0) {
-        archiveLines.push(
-          "",
-          `${runningCount} running ${pluralize(runningCount, "thread is", "threads are")} currently active and will be skipped.`,
-        );
-      }
       const confirmed = api
         ? await api.dialogs.confirm(archiveLines.join("\n"))
         : await showConfirmDialogFallback(archiveLines.join("\n"));
@@ -573,7 +545,7 @@ export function useSidebarThreadActions(input: {
 
       let archivedCount = 0;
       let failureCount = 0;
-      for (const thread of archivableThreads) {
+      for (const thread of projectThreads) {
         try {
           if (await archiveThread(thread.id)) archivedCount += 1;
           else failureCount += 1;
@@ -586,21 +558,15 @@ export function useSidebarThreadActions(input: {
           });
         }
       }
-      removeFromSelection(archivableThreads.map((thread) => thread.id));
+      removeFromSelection(projectThreads.map((thread) => thread.id));
       if (archivedCount > 0) {
-        const skippedDescription =
-          runningCount > 0
-            ? ` Skipped ${runningCount} running ${pluralize(runningCount, "thread")}.`
-            : "";
         toastManager.add({
           type: failureCount > 0 ? "warning" : "success",
           title: archivedCount === 1 ? "Thread archived" : `Archived ${archivedCount} threads`,
           description:
             failureCount > 0
-              ? `Failed to archive ${failureCount} ${pluralize(failureCount, "thread")}.${skippedDescription}`
-              : runningCount > 0
-                ? skippedDescription.trim()
-                : `"${project.name}" cleared.`,
+              ? `Failed to archive ${failureCount} ${pluralize(failureCount, "thread")}.`
+              : `"${project.name}" cleared.`,
         });
       } else if (failureCount > 0) {
         toastManager.add({

@@ -114,6 +114,20 @@ it.effect("accepts automation create requests", () =>
   }),
 );
 
+it.effect("accepts automation proposal resolution requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-automation-proposal-1",
+      body: {
+        _tag: WS_METHODS.automationResolveProposal,
+        automationId: "automation-1",
+        resolution: "accepted",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.automationResolveProposal);
+  }),
+);
+
 it.effect("accepts automation run action requests", () =>
   Effect.gen(function* () {
     const markRead = yield* decode(WebSocketRequest, {

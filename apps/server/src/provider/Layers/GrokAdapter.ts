@@ -48,6 +48,7 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
   startAgentGatewaySessionLeaseExitWatcher,
@@ -115,6 +116,7 @@ import {
   applyGrokAcpModelSelection,
   getGrokApiKeyEnv,
   makeGrokAcpRuntime,
+  runGrokAcpCompactionCommand,
   type GrokAcpRuntimeSettings,
 } from "../acp/GrokAcpSupport.ts";
 import { GrokAdapter, type GrokAdapterShape } from "../Services/GrokAdapter.ts";
@@ -145,7 +147,6 @@ const GROK_RESUME_REPLAY_MAX_WAIT_MS = 1_500;
 // is treated as pathological: give up, warn, and unblock turns rather than
 // gating the thread forever.
 const GROK_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
-const GROK_COMPACT_PROMPT = "/compact";
 // Backstop for an alive-but-silent grok child: if a turn produces no ACP
 // activity for this long, force-fail it instead of showing "Working" forever.
 // Generous by design so legitimate long, quiet tool runs are not killed;
@@ -683,7 +684,9 @@ export function makeGrokAdapter(
 
     const sessions = new Map<ThreadId, GrokSessionContext>();
     const withThreadLock = yield* makeAcpThreadLock();
-    const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+    const runtimeEventPubSub = yield* PubSub.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
@@ -1937,7 +1940,8 @@ export function makeGrokAdapter(
                     turnId,
                     payload: { planMarkdown: terminalPlanMarkdown },
                     raw: {
-                      source: "synara.grok.terminal-plan-response",
+                      source: "acp.jsonrpc",
+                      method: "synara.grok.terminal-plan-response",
                       payload: result,
                     },
                   });
@@ -2241,17 +2245,13 @@ export function makeGrokAdapter(
           title: "Compacting context",
         });
 
-        const compactResult = yield* ctx.acp
-          .prompt({
-            prompt: [{ type: "text", text: GROK_COMPACT_PROMPT }],
-          })
-          .pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
-            ),
-            Effect.timeoutOption(GROK_COMPACT_TIMEOUT_MS),
-            Effect.exit,
-          );
+        const compactResult = yield* runGrokAcpCompactionCommand(ctx.acp).pipe(
+          Effect.mapError((error) =>
+            mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
+          ),
+          Effect.timeoutOption(GROK_COMPACT_TIMEOUT_MS),
+          Effect.exit,
+        );
 
         if (Exit.isFailure(compactResult)) {
           // Interruption (session stopping) is not a compaction failure; let it unwind.

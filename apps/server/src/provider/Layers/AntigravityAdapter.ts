@@ -28,8 +28,19 @@ import {
   AntigravityAdapter,
   type AntigravityAdapterShape,
 } from "../Services/AntigravityAdapter.ts";
-import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  type ProviderThreadSnapshot,
+} from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import {
+  compactProviderRuntimeEventForIngress,
+  isTerminalProviderRuntimeEvent,
+  PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+  PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+  providerRuntimeEventBytes,
+} from "../providerRuntimeEventIngress.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "antigravity" as const;
@@ -440,12 +451,25 @@ export function makeAntigravityRuntimeEventBase(input: {
 
 const makeAntigravityAdapter = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
-  const events = yield* Queue.unbounded<ProviderRuntimeEvent>();
+  const eventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+    PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  );
   const sessions = new Map<ThreadId, AntigravitySessionContext>();
   const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
 
+  const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
+    (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
+    {
+      capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+      maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+      terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+      isTerminal: isTerminalProviderRuntimeEvent,
+      sizeOf: providerRuntimeEventBytes,
+    },
+  );
+
   const offer = (event: ProviderRuntimeEvent) => {
-    Effect.runPromise(Queue.offer(events, event)).catch(() => undefined);
+    eventIngress.offer(compactProviderRuntimeEventForIngress(event));
   };
 
   const base = (
@@ -1089,7 +1113,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
     }).pipe(Effect.asVoid);
 
   yield* Effect.addFinalizer(() =>
-    stopAll().pipe(Effect.ignore, Effect.andThen(Queue.shutdown(events))),
+    stopAll().pipe(
+      Effect.ignore,
+      Effect.andThen(eventIngress.stop),
+      Effect.andThen(Queue.shutdown(eventQueue)),
+    ),
   );
 
   return {
@@ -1125,7 +1153,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         supportsThreadImport: false,
       } satisfies ProviderComposerCapabilities),
     get streamEvents() {
-      return Stream.fromQueue(events);
+      return Stream.fromQueue(eventQueue);
     },
   } satisfies AntigravityAdapterShape;
 });

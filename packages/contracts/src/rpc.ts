@@ -9,9 +9,13 @@ import {
   AutomationCreateInput,
   AutomationDefinition,
   AutomationDeleteInput,
+  AutomationGetMemoryInput,
   AutomationListInput,
   AutomationListResult,
   AutomationMarkRunReadInput,
+  AutomationMemory,
+  AutomationResolveProposalInput,
+  AutomationResolveProposalResult,
   AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
@@ -896,6 +900,12 @@ export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   error: WsRpcError,
 });
 
+export const WsAutomationGetMemoryRpc = Rpc.make(WS_METHODS.automationGetMemory, {
+  payload: AutomationGetMemoryInput,
+  success: Schema.NullOr(AutomationMemory),
+  error: WsRpcError,
+});
+
 export const WsAutomationCreateRpc = Rpc.make(WS_METHODS.automationCreate, {
   payload: AutomationCreateInput,
   success: AutomationDefinition,
@@ -935,6 +945,12 @@ export const WsAutomationMarkRunReadRpc = Rpc.make(WS_METHODS.automationMarkRunR
 export const WsAutomationArchiveRunRpc = Rpc.make(WS_METHODS.automationArchiveRun, {
   payload: AutomationArchiveRunInput,
   success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationResolveProposalRpc = Rpc.make(WS_METHODS.automationResolveProposal, {
+  payload: AutomationResolveProposalInput,
+  success: AutomationResolveProposalResult,
   error: WsRpcError,
 });
 
@@ -1051,6 +1067,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAutomationListRpc,
+  WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,
   WsAutomationUpdateRpc,
   WsAutomationDeleteRpc,
@@ -1058,6 +1075,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationCancelRunRpc,
   WsAutomationMarkRunReadRpc,
   WsAutomationArchiveRunRpc,
+  WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
 );
 

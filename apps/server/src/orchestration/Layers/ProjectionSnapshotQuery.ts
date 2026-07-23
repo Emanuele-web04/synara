@@ -163,6 +163,10 @@ const SpaceIdLookupInput = Schema.Struct({
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+const StaleInFlightThreadLookupInput = Schema.Struct({
+  updatedBefore: IsoDateTime,
+  limit: Schema.Number,
+});
 const ThreadTurnLookupInput = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
@@ -848,6 +852,36 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listStaleInFlightThreadIdRows = SqlSchema.findAll({
+    Request: StaleInFlightThreadLookupInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ updatedBefore, limit }) =>
+      sql`
+        SELECT threads.thread_id AS "threadId"
+        FROM projection_threads AS threads
+        INNER JOIN provider_session_runtime AS runtime
+          ON runtime.thread_id = threads.thread_id
+        LEFT JOIN projection_thread_sessions AS sessions
+          ON sessions.thread_id = threads.thread_id
+        LEFT JOIN projection_turns AS latest_turn
+          ON latest_turn.thread_id = threads.thread_id
+         AND latest_turn.turn_id = threads.latest_turn_id
+        WHERE threads.deleted_at IS NULL
+          AND threads.archived_at IS NULL
+          AND (
+            sessions.status IN ('starting', 'running')
+            OR (
+              sessions.active_turn_id IS NOT NULL
+              AND sessions.status <> 'error'
+            )
+            OR latest_turn.state IN ('pending', 'running')
+          )
+          AND COALESCE(sessions.updated_at, threads.updated_at) <= ${updatedBefore}
+        ORDER BY COALESCE(sessions.updated_at, threads.updated_at) ASC, threads.thread_id ASC
+        LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}
       `,
   });
 
@@ -2148,6 +2182,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  const listStaleInFlightThreadIds: ProjectionSnapshotQueryShape["listStaleInFlightThreadIds"] = (
+    input,
+  ) =>
+    listStaleInFlightThreadIdRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listStaleInFlightThreadIds:query",
+          "ProjectionSnapshotQuery.listStaleInFlightThreadIds:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map((row) => row.threadId)),
+    );
+
   const getCounts: ProjectionSnapshotQueryShape["getCounts"] = () =>
     readProjectionCounts(undefined).pipe(
       Effect.mapError(
@@ -2662,6 +2709,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getShellSnapshot,
     getCounts,
     getSnapshotSequence,
+    listStaleInFlightThreadIds,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
     getSpaceShellById,

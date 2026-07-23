@@ -888,7 +888,12 @@ function workLogSubagentsEqual(
 function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry["automation"]) {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.id === b.id && a.name === b.name && a.cadenceLabel === b.cadenceLabel;
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.cadenceLabel === b.cadenceLabel &&
+    a.proposalState === b.proposalState
+  );
 }
 
 function workLogSynaraThreadCreationsEqual(

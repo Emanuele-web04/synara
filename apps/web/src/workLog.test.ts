@@ -192,6 +192,32 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("carries pending proposal state into automation transcript cards", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "automation-proposal",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "automation.created",
+        summary: "Suggested automation: Watch CI",
+        tone: "info",
+        payload: {
+          source: "agent-gateway",
+          automationId: "automation-proposal-1",
+          automationName: "Watch CI",
+          cadenceLabel: "Every 5m",
+          proposalState: "pending",
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)[0]?.automation).toEqual({
+      id: "automation-proposal-1",
+      name: "Watch CI",
+      cadenceLabel: "Every 5m",
+      proposalState: "pending",
+    });
+  });
+
   it("exposes a provider-independent Synara thread creation recap", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

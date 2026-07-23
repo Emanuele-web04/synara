@@ -26,9 +26,13 @@ import type {
   AutomationCreateInput,
   AutomationDefinition,
   AutomationDeleteInput,
+  AutomationGetMemoryInput,
   AutomationListInput,
   AutomationListResult,
   AutomationMarkRunReadInput,
+  AutomationMemory,
+  AutomationResolveProposalInput,
+  AutomationResolveProposalResult,
   AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
@@ -728,6 +732,7 @@ export interface NativeApi {
   };
   automation: {
     list: (input?: AutomationListInput) => Promise<AutomationListResult>;
+    getMemory: (input: AutomationGetMemoryInput) => Promise<AutomationMemory | null>;
     create: (input: AutomationCreateInput) => Promise<AutomationDefinition>;
     update: (input: AutomationUpdateInput) => Promise<AutomationDefinition>;
     delete: (input: AutomationDeleteInput) => Promise<void>;
@@ -735,6 +740,9 @@ export interface NativeApi {
     cancelRun: (input: AutomationCancelRunInput) => Promise<AutomationCancelRunResult>;
     markRunRead: (input: AutomationMarkRunReadInput) => Promise<AutomationRunActionResult>;
     archiveRun: (input: AutomationArchiveRunInput) => Promise<AutomationRunActionResult>;
+    resolveProposal: (
+      input: AutomationResolveProposalInput,
+    ) => Promise<AutomationResolveProposalResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
   browser: BrowserControlMethods & {

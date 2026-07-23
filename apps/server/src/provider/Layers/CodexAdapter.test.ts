@@ -1131,6 +1131,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       const firstEvent = events[0];
       const secondEvent = events[1];
 
+      assert.notEqual(firstEvent?.eventId, secondEvent?.eventId);
       assert.equal(firstEvent?.type, "session.state.changed");
       if (firstEvent?.type === "session.state.changed") {
         assert.equal(firstEvent.payload.state, "error");
@@ -1329,6 +1330,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[4].turnId, "turn-structured-1");
         assert.equal(events[4].payload.planMarkdown, "# Ship it");
       }
+      assert.notEqual(events[3]?.eventId, events[4]?.eventId);
     }),
   );
 

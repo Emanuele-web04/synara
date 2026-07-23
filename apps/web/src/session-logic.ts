@@ -182,11 +182,9 @@ type RunningTurnSessionView = {
 /**
  * A session is actively running a turn: it reports the `running` status and still
  * has an in-flight `activeTurnId`. This is the single rule for "there is live work
- * on this session right now" — it gates destructive thread lifecycle actions
- * (archive/delete must stop the turn first) and marks the latest turn as running
- * during read-model reconciliation. Centralized so every gate agrees on what
- * "running" means; widening it later (e.g. to also block `starting`) updates every
- * caller at once instead of leaving a stale inline check behind.
+ * on this session right now" during read-model reconciliation. Thread lifecycle
+ * cleanup is server-owned and intentionally does not use this predicate as a UI
+ * gate.
  */
 export function isSessionRunningTurn<T extends RunningTurnSessionView>(
   session: T | null | undefined,

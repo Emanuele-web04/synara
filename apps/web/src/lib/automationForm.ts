@@ -11,6 +11,7 @@ import type {
   AutomationCreateInput,
   AutomationDefinition,
   AutomationMode,
+  AutomationNotificationPolicy,
   AutomationSchedule,
   AutomationUpdateInput,
   AutomationWorktreeMode,
@@ -84,6 +85,7 @@ export type AutomationFormState = {
   readonly worktreeMode: AutomationWorktreeMode;
   readonly modelSelection: ModelSelection;
   readonly mode: AutomationMode;
+  readonly notificationPolicy: AutomationNotificationPolicy;
   readonly targetThreadId: string;
   readonly maxIterations: string;
   readonly stopOnError: boolean;
@@ -387,6 +389,7 @@ export function formFromDefinition(
     worktreeMode: definition?.worktreeMode ?? "auto",
     modelSelection: definition?.modelSelection ?? fallbackModelSelection,
     mode: definition?.mode ?? "standalone",
+    notificationPolicy: definition?.notificationPolicy ?? "all",
     targetThreadId: definition?.targetThreadId ?? "",
     maxIterations: definition?.maxIterations != null ? String(definition.maxIterations) : "",
     stopOnError: definition?.stopOnError ?? true,
@@ -558,6 +561,7 @@ export function createInputFromForm(
     worktreeMode: form.worktreeMode,
     ...(providerOptions ? { providerOptions } : {}),
     mode: form.mode,
+    notificationPolicy: form.notificationPolicy,
     targetThreadId: form.mode === "heartbeat" ? (form.targetThreadId as ThreadId) : null,
     maxIterations,
     ...(form.mode === "heartbeat"

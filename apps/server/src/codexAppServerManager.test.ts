@@ -2960,6 +2960,90 @@ describe("collab child conversation routing", () => {
 });
 
 describe("handleServerNotification error normalization", () => {
+  it("recovers a missing turn/completed after legacy task_complete", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        taskCompleteFallbackGraceMs: 25,
+      });
+      const harness = createCollabNotificationHarness();
+      const context = harness.context;
+      const emitEvent = vi
+        .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+        .mockImplementation(() => {});
+      const updateSession = vi
+        .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+        .mockImplementation(() => {});
+
+      handleServerNotificationForTest(manager, context, {
+        method: "codex/event/task_complete",
+        params: {
+          id: "turn_parent",
+          msg: {
+            type: "task_complete",
+            turn_id: "turn_parent",
+            last_agent_message: "Done.",
+          },
+        },
+      });
+      vi.advanceTimersByTime(25);
+
+      expect(updateSession).toHaveBeenCalledWith(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      expect(emitEvent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          method: "turn/completed",
+          turnId: "turn_parent",
+          payload: expect.objectContaining({
+            recoveredFrom: "codex/event/task_complete",
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the task_complete fallback when native turn/completed arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        taskCompleteFallbackGraceMs: 25,
+      });
+      const context = createCollabNotificationHarness().context;
+      const emitEvent = vi
+        .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+        .mockImplementation(() => {});
+
+      handleServerNotificationForTest(manager, context, {
+        method: "codex/event/task_complete",
+        params: {
+          id: "turn_parent",
+          msg: { type: "task_complete", turn_id: "turn_parent" },
+        },
+      });
+      handleServerNotificationForTest(manager, context, {
+        method: "turn/completed",
+        params: {
+          threadId: "provider_parent",
+          turn: { id: "turn_parent", status: "completed" },
+        },
+      });
+      vi.advanceTimersByTime(25);
+
+      expect(
+        emitEvent.mock.calls.filter(
+          ([event]) => (event as { method?: string }).method === "turn/completed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("settles native review when review mode exits", () => {
     const { manager, context, updateSession, emitEvent } = createCollabNotificationHarness();
     context.reviewTurnIds.add("turn_parent");

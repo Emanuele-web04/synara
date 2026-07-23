@@ -276,10 +276,15 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [78, "ExternalMcpLiveTurnCapacity"],
         [79, "Spaces"],
         [80, "ExternalMcpProjectScope"],
+        [81, "AutomationProposals"],
+        [82, "AutomationMemory"],
+        [83, "AutomationHeartbeatEligibility"],
+        [84, "AutomationNotificationPolicy"],
+        [85, "AutomationSettings"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-27), [
+      assert.deepStrictEqual(tracker.slice(-32), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -307,6 +312,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 78, name: "ExternalMcpLiveTurnCapacity" },
         { migration_id: 79, name: "Spaces" },
         { migration_id: 80, name: "ExternalMcpProjectScope" },
+        { migration_id: 81, name: "AutomationProposals" },
+        { migration_id: 82, name: "AutomationMemory" },
+        { migration_id: 83, name: "AutomationHeartbeatEligibility" },
+        { migration_id: 84, name: "AutomationNotificationPolicy" },
+        { migration_id: 85, name: "AutomationSettings" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -379,6 +389,11 @@ agentGatewayRetentionLegacyLayer(
           [78, "ExternalMcpLiveTurnCapacity"],
           [79, "Spaces"],
           [80, "ExternalMcpProjectScope"],
+          [81, "AutomationProposals"],
+          [82, "AutomationMemory"],
+          [83, "AutomationHeartbeatEligibility"],
+          [84, "AutomationNotificationPolicy"],
+          [85, "AutomationSettings"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -454,11 +469,16 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [78, "ExternalMcpLiveTurnCapacity"],
         [79, "Spaces"],
         [80, "ExternalMcpProjectScope"],
+        [81, "AutomationProposals"],
+        [82, "AutomationMemory"],
+        [83, "AutomationHeartbeatEligibility"],
+        [84, "AutomationNotificationPolicy"],
+        [85, "AutomationSettings"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-11).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-16).map((row) => [row.migration_id, row.name]),
         [
           [70, "AgentGatewayOperations"],
           [71, "ProjectionThreadsGatewayProvenance"],
@@ -471,6 +491,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [78, "ExternalMcpLiveTurnCapacity"],
           [79, "Spaces"],
           [80, "ExternalMcpProjectScope"],
+          [81, "AutomationProposals"],
+          [82, "AutomationMemory"],
+          [83, "AutomationHeartbeatEligibility"],
+          [84, "AutomationNotificationPolicy"],
+          [85, "AutomationSettings"],
         ],
       );
 
@@ -541,11 +566,16 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [78, "ExternalMcpLiveTurnCapacity"],
         [79, "Spaces"],
         [80, "ExternalMcpProjectScope"],
+        [81, "AutomationProposals"],
+        [82, "AutomationMemory"],
+        [83, "AutomationHeartbeatEligibility"],
+        [84, "AutomationNotificationPolicy"],
+        [85, "AutomationSettings"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-7).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-12).map((row) => [row.migration_id, row.name]),
         [
           [74, "ExternalMcpIntegrations"],
           [75, "ExternalMcpActiveCapacity"],
@@ -554,6 +584,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [78, "ExternalMcpLiveTurnCapacity"],
           [79, "Spaces"],
           [80, "ExternalMcpProjectScope"],
+          [81, "AutomationProposals"],
+          [82, "AutomationMemory"],
+          [83, "AutomationHeartbeatEligibility"],
+          [84, "AutomationNotificationPolicy"],
+          [85, "AutomationSettings"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

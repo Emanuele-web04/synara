@@ -65,9 +65,20 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
-import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  type ProviderThreadSnapshot,
+} from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import {
+  compactProviderRuntimeEventForIngress,
+  isTerminalProviderRuntimeEvent,
+  PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+  PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+  providerRuntimeEventBytes,
+} from "../providerRuntimeEventIngress.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
@@ -1259,7 +1270,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
-    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
     const sessions = new Map<ThreadId, PiSessionContext>();
     const modelRegistries = new Map<string, ModelRegistry>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
@@ -1268,6 +1281,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       (options?.nativeEventLogPath !== undefined
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
+    const runtimeEventIngress = yield* makeBoundedCallbackIngress<
+      ProviderRuntimeEvent,
+      never,
+      never
+    >(
+      (event) =>
+        (nativeEventLogger && event.raw
+          ? nativeEventLogger.write(event.raw, event.threadId).pipe(Effect.ignore)
+          : Effect.void
+        ).pipe(Effect.andThen(Queue.offer(runtimeEventQueue, event)), Effect.asVoid),
+      {
+        capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+        maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+        terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+        isTerminal: isTerminalProviderRuntimeEvent,
+        sizeOf: providerRuntimeEventBytes,
+      },
+    );
 
     const loadPiSdk = (method: string) =>
       Effect.tryPromise({
@@ -1295,12 +1326,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const makeEventBase = makePiRuntimeEventBase;
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) => {
-      Effect.runPromise(Queue.offer(runtimeEventQueue, event)).catch(() => undefined);
-      if (nativeEventLogger && event.raw) {
-        Effect.runPromise(nativeEventLogger.write(event.raw, event.threadId)).catch(
-          () => undefined,
-        );
-      }
+      runtimeEventIngress.offer(compactProviderRuntimeEventForIngress(event));
     };
 
     const offerRuntimeError = (
@@ -2808,6 +2834,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     yield* Effect.addFinalizer(() =>
       stopAll().pipe(
         Effect.orDie,
+        Effect.andThen(runtimeEventIngress.stop),
         Effect.ensuring(
           ownsNativeEventLogger && nativeEventLogger
             ? nativeEventLogger.close().pipe(Effect.ignore)

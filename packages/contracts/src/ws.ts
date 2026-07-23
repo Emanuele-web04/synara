@@ -6,8 +6,10 @@ import {
   AutomationArchiveRunInput,
   AutomationCreateInput,
   AutomationDeleteInput,
+  AutomationGetMemoryInput,
   AutomationListInput,
   AutomationMarkRunReadInput,
+  AutomationResolveProposalInput,
   AutomationRunNowInput,
   AutomationStreamEvent,
   AutomationUpdateInput,
@@ -236,6 +238,7 @@ export const WS_METHODS = {
 
   // Automation methods
   automationList: "automation.list",
+  automationGetMemory: "automation.getMemory",
   automationCreate: "automation.create",
   automationUpdate: "automation.update",
   automationDelete: "automation.delete",
@@ -243,6 +246,7 @@ export const WS_METHODS = {
   automationCancelRun: "automation.cancelRun",
   automationMarkRunRead: "automation.markRunRead",
   automationArchiveRun: "automation.archiveRun",
+  automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
 } as const;
 
@@ -395,6 +399,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Automation methods
   tagRequestBody(WS_METHODS.automationList, AutomationListInput),
+  tagRequestBody(WS_METHODS.automationGetMemory, AutomationGetMemoryInput),
   tagRequestBody(WS_METHODS.automationCreate, AutomationCreateInput),
   tagRequestBody(WS_METHODS.automationUpdate, AutomationUpdateInput),
   tagRequestBody(WS_METHODS.automationDelete, AutomationDeleteInput),
@@ -402,6 +407,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationCancelRun, AutomationCancelRunInput),
   tagRequestBody(WS_METHODS.automationMarkRunRead, AutomationMarkRunReadInput),
   tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
+  tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
 ]);
 

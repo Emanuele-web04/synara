@@ -2812,11 +2812,12 @@ const make = Effect.gen(function* () {
       processMessageEditResendRequestedWithoutLease(event),
     );
 
-  const processSessionStopRequested = Effect.fnUntraced(function* (
-    event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
-  ) {
-    const thread = yield* resolveThread(event.payload.threadId);
-    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+  const processThreadSessionStop = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    const providerThread = yield* resolveProviderSessionThread(input.threadId);
     if (!thread) {
       return;
     }
@@ -2836,7 +2837,7 @@ const make = Effect.gen(function* () {
     for (const queuedThreadId of clearedQueuedThreadIds) {
       yield* queuedTurnPromotions.cancelThread({
         threadId: queuedThreadId,
-        updatedAt: event.payload.createdAt,
+        updatedAt: input.createdAt,
       });
       yield* clearEditResendTurnStartKeysForThread(queuedThreadId);
       drainingQueuedTurns.delete(queuedThreadId);
@@ -2855,7 +2856,6 @@ const make = Effect.gen(function* () {
     clearPendingContextBootstraps(thread.id);
     suppressContextBootstrapOnNextStartThreadIds.add(thread.id);
 
-    const now = event.payload.createdAt;
     const providerThreadId =
       providerThread !== null
         ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
@@ -2889,9 +2889,9 @@ const make = Effect.gen(function* () {
           // Preserve the active turn until the provider emits the terminal child event.
           activeTurnId: thread.session.activeTurnId,
           lastError: null,
-          updatedAt: now,
+          updatedAt: input.createdAt,
         },
-        createdAt: now,
+        createdAt: input.createdAt,
       });
       return;
     }
@@ -2910,11 +2910,19 @@ const make = Effect.gen(function* () {
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
-        updatedAt: now,
+        updatedAt: input.createdAt,
       },
-      createdAt: now,
+      createdAt: input.createdAt,
     });
   });
+
+  const processSessionStopRequested = (
+    event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
+  ) =>
+    processThreadSessionStop({
+      threadId: event.payload.threadId,
+      createdAt: event.payload.createdAt,
+    });
 
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
@@ -2942,6 +2950,15 @@ const make = Effect.gen(function* () {
             updatedAt: event.payload.deletedAt,
           });
           yield* clearThreadRuntimeCaches(event.payload.threadId);
+          return;
+        case "thread.archived":
+          // Archive cleanup shares this durable, sequence-ordered provider
+          // source with later turn-start intents. An immediate unarchive/send
+          // therefore cannot race an older archive stop against the new turn.
+          yield* processThreadSessionStop({
+            threadId: event.payload.threadId,
+            createdAt: event.payload.archivedAt,
+          });
           return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);

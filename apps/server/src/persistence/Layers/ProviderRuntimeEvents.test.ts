@@ -4,11 +4,13 @@ import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  PROVIDER_RUNTIME_EVENT_MAX_BYTES,
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
 } from "../Services/ProviderRuntimeEvents.ts";
 import { ProviderRuntimeEventRepositoryLive } from "./ProviderRuntimeEvents.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
+import { assignDerivedProviderRuntimeEventIds } from "../../provider/providerRuntimeEventIdentity.ts";
 
 const layer = it.layer(
   ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
@@ -180,6 +182,81 @@ layer("ProviderRuntimeEventRepository", (it) => {
         }),
         0,
       );
+    }),
+  );
+
+  it.effect("compacts oversized raw provider payloads without losing the canonical event", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const oversized = {
+        ...runtimeEvent("runtime-event-oversized-raw", "terminal-safe"),
+        raw: {
+          source: "codex.eventmsg" as const,
+          method: "codex/event/task_complete",
+          payload: {
+            transcript: "x".repeat(PROVIDER_RUNTIME_EVENT_MAX_BYTES),
+          },
+        },
+      } satisfies ProviderRuntimeEvent;
+
+      const persisted = yield* repository.append(oversized);
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: persisted.sequence - 1,
+        throughSequenceInclusive: persisted.sequence,
+        limit: 1,
+      });
+
+      assert.strictEqual(persisted.event.eventId, oversized.eventId);
+      assert.deepStrictEqual(persisted.event.payload, oversized.payload);
+      const compactedRaw = rows[0]?.event.raw?.payload as
+        | {
+            readonly synaraTruncated?: unknown;
+            readonly reason?: unknown;
+            readonly originalBytes?: unknown;
+          }
+        | undefined;
+      assert.deepInclude(compactedRaw, {
+        synaraTruncated: true,
+        reason: "provider runtime event exceeded the durable journal size limit",
+      });
+      assert.isNumber(compactedRaw?.originalBytes);
+    }),
+  );
+
+  it.effect("journals every canonical event derived from one provider notification", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const common = {
+        eventId: EventId.makeUnsafe("native-task-complete"),
+        provider: "codex" as const,
+        createdAt: "2026-07-14T00:02:00.000Z",
+        threadId: ThreadId.makeUnsafe("thread-derived-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-derived-runtime-journal"),
+      };
+      const derived = assignDerivedProviderRuntimeEventIds([
+        {
+          ...common,
+          type: "task.completed",
+          payload: { taskId: "task-1", status: "completed" },
+        },
+        {
+          ...common,
+          type: "turn.proposed.completed",
+          payload: { planMarkdown: "# Plan" },
+        },
+      ]);
+
+      const persisted = yield* Effect.forEach(derived, repository.append, {
+        concurrency: 1,
+      });
+      assert.deepStrictEqual(
+        persisted.map(({ event }) => event.eventId),
+        [
+          "native-task-complete:task.completed:0",
+          "native-task-complete:turn.proposed.completed:1",
+        ],
+      );
+      assert.notStrictEqual(persisted[0]?.sequence, persisted[1]?.sequence);
     }),
   );
 });

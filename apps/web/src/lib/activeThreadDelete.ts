@@ -63,29 +63,16 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
       ].join("\n"),
     ));
 
-  if (thread.session && thread.session.status !== "closed") {
-    await api.orchestration
-      .dispatchCommand({
-        type: "thread.session.stop",
-        commandId: newCommandId(),
-        threadId: input.threadId,
-        createdAt: new Date().toISOString(),
-      })
-      .catch(() => undefined);
-  }
-  try {
-    terminalRuntimeRegistry.disposeThread(input.threadId);
-    await api.terminal.close({ threadId: input.threadId, deleteHistory: true });
-  } catch {
-    // Terminal may already be closed.
-  }
-
   const prepared = input.prepareForDelete?.(thread);
   await api.orchestration.dispatchCommand({
     type: "thread.delete",
     commandId: newCommandId(),
     threadId: input.threadId,
   });
+  // Provider and terminal cleanup are owned by the server-side lifecycle
+  // reactor. Dispose only the local renderer after the durable delete intent
+  // was accepted, so a rejected delete never tears down a live client session.
+  terminalRuntimeRegistry.disposeThread(input.threadId);
   if (input.reconcileDeletedThread ?? true) {
     void reconcileDeletedThreadFromClient({
       threadId: input.threadId,

@@ -45,6 +45,7 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   buildOpenCodePermissionRules,
   KILO_CLI_SPEC,
@@ -778,9 +779,7 @@ function isOpenCodeToolCallFinish(value: unknown): boolean {
   return finish === "tool-call" || finish === "tool-calls" || finish === "function-call";
 }
 
-function isOpenCodeCompletedAssistantMessage(
-  entry: OpenCodeMessageSnapshot & { readonly info: Record<string, unknown> },
-): boolean {
+function isOpenCodeCompletedAssistantMessage(entry: OpenCodeMessageSnapshot): boolean {
   if (entry.info.role !== "assistant") {
     return false;
   }
@@ -803,7 +802,7 @@ function isOpenCodeCompletedAssistantMessage(
 function trackActiveTurnAssistantFinish(
   context: OpenCodeSessionContext,
   turnId: TurnId | undefined,
-  entry: OpenCodeMessageSnapshot & { readonly info: Record<string, unknown> },
+  entry: OpenCodeMessageSnapshot,
 ): void {
   if (!turnId || context.activeTurnId !== turnId || entry.info.role !== "assistant") {
     return;
@@ -1168,7 +1167,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           : undefined);
       const managedNativeEventLogger =
         options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
-      const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const runtimeEvents = yield* Queue.bounded<ProviderRuntimeEvent>(
+        PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+      );
       const sessions = new Map<ThreadId, OpenCodeSessionContext>();
 
       yield* Effect.addFinalizer(() =>
@@ -1685,9 +1686,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context: OpenCodeSessionContext,
         input: {
           readonly turnId: TurnId;
-          readonly assistantEntry: OpenCodeMessageSnapshot & {
-            readonly info: Record<string, unknown>;
-          };
+          readonly assistantEntry: OpenCodeMessageSnapshot;
           readonly raw: unknown;
         },
       ) {
@@ -1772,16 +1771,20 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           if (context.activeTurnId !== input.turnId) {
             return false;
           }
-          const assistantEntry = (messagesResponse?.data ?? []).find(
-            (entry) =>
-              entry.info.id === input.messageId && isOpenCodeCompletedAssistantMessage(entry),
-          );
-          if (!assistantEntry) {
+          const assistantEntry = (messagesResponse?.data ?? []).find((entry) => {
+            if (entry.info.id !== input.messageId || entry.info.role !== "assistant") {
+              return false;
+            }
+            // The generated SDK response keeps `info` typed as the broad Message union
+            // even after its role discriminator is checked.
+            return isOpenCodeCompletedAssistantMessage(entry as unknown as OpenCodeMessageSnapshot);
+          });
+          if (!assistantEntry || assistantEntry.info.role !== "assistant") {
             return false;
           }
           return yield* recoverOpenCodeTurnFromAssistantMessage(context, {
             turnId: input.turnId,
-            assistantEntry,
+            assistantEntry: assistantEntry as unknown as OpenCodeMessageSnapshot,
             raw: input.raw,
           });
         },
@@ -1820,9 +1823,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     {
                       info: entry.info,
                       parts: entry.parts,
-                    } satisfies OpenCodeMessageSnapshot & {
-                      readonly info: Record<string, unknown>;
-                    },
+                    } satisfies OpenCodeMessageSnapshot,
                   ]
                 : [],
             )
@@ -1959,9 +1960,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ? ({
                       info: response.data.info,
                       parts: response.data.parts,
-                    } satisfies OpenCodeMessageSnapshot & {
-                      readonly info: Record<string, unknown>;
-                    })
+                    } satisfies OpenCodeMessageSnapshot)
                   : null;
               if (assistantEntry && isOpenCodeCompletedAssistantMessage(assistantEntry)) {
                 yield* recoverOpenCodeTurnFromAssistantMessage(context, {

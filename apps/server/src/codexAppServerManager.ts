@@ -148,6 +148,10 @@ interface CodexSessionContext {
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
+  taskCompleteFallback?: {
+    readonly turnId: TurnId;
+    readonly timeout: ReturnType<typeof setTimeout>;
+  };
   nextRequestId: number;
   stopping: boolean;
   stopPromise?: Promise<void>;
@@ -778,6 +782,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
+  private readonly taskCompleteFallbackGraceMs: number;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -787,6 +792,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
       };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+      readonly taskCompleteFallbackGraceMs?: number;
     },
   ) {
     super();
@@ -794,6 +800,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.synaraSkillsDir = options?.synaraSkillsDir;
     this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
+    this.taskCompleteFallbackGraceMs = Math.max(
+      0,
+      options?.taskCompleteFallbackGraceMs ?? 750,
+    );
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -1758,6 +1768,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.stopping = true;
+    this.clearTaskCompleteFallback(context);
     context.gatewaySessionLease?.release();
 
     this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
@@ -2242,6 +2253,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       context.detachStdout?.();
+      this.clearTaskCompleteFallback(context);
       context.gatewaySessionLease?.release();
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
@@ -2396,6 +2408,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
+      this.clearTaskCompleteFallback(context);
       const turnId = toTurnId(this.readString(this.readObject(notification.params)?.turn, "id"));
       if (
         turnId !== undefined &&
@@ -2420,6 +2433,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
+      this.clearTaskCompleteFallback(context, rawRoute.turnId);
       context.collabReceiverTurns.clear();
       context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
@@ -2444,6 +2458,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
+      this.clearTaskCompleteFallback(context, rawRoute.turnId);
       context.collabReceiverTurns.clear();
       context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
@@ -2454,6 +2469,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: undefined,
       });
+      return;
+    }
+
+    if (notification.method === "codex/event/task_complete") {
+      if (isChildConversation || rawRoute.turnId === undefined) {
+        return;
+      }
+      this.scheduleTaskCompleteFallback(context, rawRoute.turnId);
       return;
     }
 
@@ -2533,6 +2556,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
 
+      this.clearTaskCompleteFallback(context);
       this.updateSession(context, {
         status: "error",
         lastError: message ?? context.session.lastError,
@@ -2726,6 +2750,74 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
+  private clearTaskCompleteFallback(
+    context: CodexSessionContext,
+    turnId?: TurnId,
+  ): void {
+    const pending = context.taskCompleteFallback;
+    if (!pending || (turnId !== undefined && pending.turnId !== turnId)) {
+      return;
+    }
+    clearTimeout(pending.timeout);
+    context.taskCompleteFallback = undefined;
+  }
+
+  private scheduleTaskCompleteFallback(context: CodexSessionContext, turnId: TurnId): void {
+    if (
+      context.stopping ||
+      context.session.status !== "running" ||
+      (context.session.activeTurnId !== undefined && context.session.activeTurnId !== turnId)
+    ) {
+      return;
+    }
+
+    this.clearTaskCompleteFallback(context);
+    const timeout = setTimeout(() => {
+      if (context.taskCompleteFallback?.turnId !== turnId) {
+        return;
+      }
+      context.taskCompleteFallback = undefined;
+      if (
+        context.stopping ||
+        context.session.status !== "running" ||
+        (context.session.activeTurnId !== undefined && context.session.activeTurnId !== turnId)
+      ) {
+        return;
+      }
+
+      context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
+      context.reviewTurnIds.delete(turnId);
+      this.updateSession(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      this.emitEvent({
+        id: EventId.makeUnsafe(randomUUID()),
+        kind: "notification",
+        provider: "codex",
+        threadId: context.session.threadId,
+        createdAt: new Date().toISOString(),
+        ...(context.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: context.lifecycleGeneration }
+          : {}),
+        method: "turn/completed",
+        turnId,
+        message: "Recovered a missing turn/completed notification after task_complete.",
+        payload: {
+          turn: {
+            id: turnId,
+            status: "completed",
+          },
+          recoveredFrom: "codex/event/task_complete",
+        },
+      });
+    }, this.taskCompleteFallbackGraceMs);
+    timeout.unref();
+    context.taskCompleteFallback = { turnId, timeout };
+  }
+
   private settleTrackedReview(
     context: CodexSessionContext,
     input: {
@@ -2897,7 +2989,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {};
 
     const turnId = toTurnId(
-      this.readString(params, "turnId") ?? this.readString(this.readObject(params, "turn"), "id"),
+      this.readString(params, "turnId") ??
+        this.readString(this.readObject(params, "turn"), "id") ??
+        this.readString(this.readObject(params, "msg"), "turn_id") ??
+        this.readString(this.readObject(params, "msg"), "turnId"),
     );
     const itemId = toProviderItemId(
       this.readString(params, "itemId") ?? this.readString(this.readObject(params, "item"), "id"),

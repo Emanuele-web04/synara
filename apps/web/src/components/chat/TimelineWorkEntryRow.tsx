@@ -607,8 +607,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     return (
       <div className={cn(compact ? "py-0.5" : "py-1")}>
         <AutomationCreatedCard
+          automationId={automation.id}
           name={automation.name}
           cadenceLabel={automation.cadenceLabel}
+          {...(automation.proposalState ? { proposalState: automation.proposalState } : {})}
           textFontSizePx={textFontSizePx}
           metaFontSizePx={chatMetaFontSizePx}
           {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
