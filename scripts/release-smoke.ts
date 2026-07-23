@@ -289,6 +289,16 @@ function verifyDesktopStageLockAuthority(): void {
     "bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop",
     "Expected desktop staging to install only from the repository's frozen workspace lockfile.",
   );
+  assertContains(
+    buildScript,
+    ")`bun pm trust node-pty`,",
+    "Expected Linux desktop staging to build node-pty without enabling other dependency scripts.",
+  );
+  assertNotContains(
+    buildScript,
+    "bun pm trust --all",
+    "Desktop staging must never enable every dependency lifecycle script.",
+  );
   assertNotContains(
     buildScript,
     ")`bun install --production`,",

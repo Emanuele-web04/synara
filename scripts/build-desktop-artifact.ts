@@ -642,6 +642,7 @@ const verifyStagedPatchedDependencies = Effect.fn("verifyStagedPatchedDependenci
 const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies")(function* (
   repoRoot: string,
   stageAppDir: string,
+  platform: typeof BuildPlatform.Type,
   verbose: boolean,
 ) {
   const path = yield* Path.Path;
@@ -672,6 +673,19 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
       shell: process.platform === "win32",
     })`bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop`,
   );
+
+  if (platform === "linux") {
+    // node-pty's npm package does not ship Linux prebuilds. Keep the frozen
+    // install's blanket lifecycle-script block, then allow only node-pty to
+    // compile the native binding required by the packaged terminal.
+    yield* Effect.log("[desktop-artifact] Building staged Linux node-pty binding...");
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        ...commandOutputOptions(verbose),
+      })`bun pm trust node-pty`,
+    );
+  }
 
   yield* verifyStagedPatchedDependencies(repoRoot, stageAppDir);
 
@@ -1012,7 +1026,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     },
   };
 
-  yield* installFrozenStageDependencies(repoRoot, stageAppDir, options.verbose);
+  yield* installFrozenStageDependencies(repoRoot, stageAppDir, options.platform, options.verbose);
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
