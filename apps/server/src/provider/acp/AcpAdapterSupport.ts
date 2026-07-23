@@ -121,7 +121,11 @@ export function selectAcpPermissionOptionId(
 export function selectAcpFullAccessPermissionOptionId(
   options: ReadonlyArray<AcpPermissionOptionLike>,
 ): string | undefined {
-  return selectAcpPermissionOptionId("acceptForSession", options);
+  // Prefer a request-scoped grant, but Full Access must remain operational for
+  // ACP agents that expose only the protocol's persistent allow option. Every
+  // supported adapter re-applies its native interaction mode before a turn, and
+  // Plan-mode reverse requests are still rejected by resolveAcpPermissionPolicy.
+  return selectAcpPermissionOptionId("accept", options);
 }
 
 /** Full access never blocks on a human prompt, even if an agent offers no allow option. */

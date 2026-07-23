@@ -65,6 +65,10 @@ const dialogFooterButtonClassName = dialogActionButtonClassName
   .map((className) => `${dialogFooterButtonSlotSelector}:${className.replace(/!/g, "\\!")}`)
   .join(" ");
 
+/** Shared label style for form fields inside dialogs (SpaceEditorDialog, CreateProjectDialog). */
+const dialogFieldLabelClassName =
+  "text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-foreground/80";
+
 const dialogPanelFieldClassName =
   "[&_[data-slot=textarea-control]]:min-h-24 [&_[data-slot=textarea-control]_[data-slot=textarea]]:px-2.5 [&_[data-slot=textarea-control]_[data-slot=textarea]]:py-2";
 
@@ -188,6 +192,7 @@ function DialogPanel({
 }
 
 export {
+  dialogFieldLabelClassName,
   dialogFooterButtonClassName,
   DialogCreateHandle,
   Dialog,

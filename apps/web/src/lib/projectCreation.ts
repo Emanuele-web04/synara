@@ -3,7 +3,12 @@
 // Layer: Web orchestration helper
 // Exports: createOrRecoverProjectFromPath
 
-import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
+import {
+  type NativeApi,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
+  type SpaceId,
+} from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 
 import { readActiveSpaceId } from "../spacesUiStore";
@@ -32,6 +37,8 @@ export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   createIfMissing?: boolean;
+  /** Overrides the active-space default; `null` files the project in Void. */
+  spaceId?: SpaceId | null;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
   maxAttempts?: number;
   delayMs?: number;
@@ -67,7 +74,8 @@ export async function createOrRecoverProjectFromPath(input: {
       },
       // A project created while a space is active belongs to that space — filing it
       // afterwards would bounce the sidebar back to Void to follow the new project.
-      spaceId: readActiveSpaceId(),
+      // Callers with an explicit destination (the Create Project dialog) override it.
+      spaceId: input.spaceId !== undefined ? input.spaceId : readActiveSpaceId(),
       createdAt,
     });
 

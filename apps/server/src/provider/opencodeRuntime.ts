@@ -760,6 +760,26 @@ export function buildOpenCodePermissionRules(
   runtimeMode: RuntimeMode,
   interactionMode: "default" | "plan" = "default",
 ): PermissionRuleset {
+  if (interactionMode === "plan") {
+    // OpenCode evaluates the last matching rule. Start closed, then allow only
+    // read-only planning tools. This also blocks custom/MCP tools and future
+    // mutating tools that a short denylist would accidentally leave enabled.
+    return [
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "read", pattern: "*", action: "allow" },
+      { permission: "glob", pattern: "*", action: "allow" },
+      { permission: "grep", pattern: "*", action: "allow" },
+      { permission: "list", pattern: "*", action: "allow" },
+      { permission: "lsp", pattern: "*", action: "allow" },
+      { permission: "webfetch", pattern: "*", action: "allow" },
+      { permission: "websearch", pattern: "*", action: "allow" },
+      { permission: "codesearch", pattern: "*", action: "allow" },
+      { permission: "todoread", pattern: "*", action: "allow" },
+      { permission: "todowrite", pattern: "*", action: "allow" },
+      { permission: "question", pattern: "*", action: "allow" },
+    ];
+  }
+
   const runtimeRules: PermissionRuleset =
     runtimeMode === "full-access"
       ? [{ permission: "*", pattern: "*", action: "allow" }]
@@ -775,18 +795,7 @@ export function buildOpenCodePermissionRules(
           { permission: "question", pattern: "*", action: "allow" },
         ];
 
-  if (interactionMode !== "plan") {
-    return runtimeRules;
-  }
-
-  // Session rules are merged after agent rules and use last-match-wins. Keep these
-  // final denials here so the full-access wildcard cannot defeat OpenCode's plan agent.
-  return [
-    ...runtimeRules,
-    { permission: "bash", pattern: "*", action: "deny" },
-    { permission: "edit", pattern: "*", action: "deny" },
-    { permission: "task", pattern: "*", action: "deny" },
-  ];
+  return runtimeRules;
 }
 
 export function buildOpenCodeServerProcessEnv(input: {

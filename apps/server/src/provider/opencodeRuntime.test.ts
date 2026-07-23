@@ -29,10 +29,18 @@ describe("OpenCode permission policy", () => {
       { permission: "*", pattern: "*", action: "allow" },
     ]);
     expect(buildOpenCodePermissionRules("full-access", "plan")).toEqual([
-      { permission: "*", pattern: "*", action: "allow" },
-      { permission: "bash", pattern: "*", action: "deny" },
-      { permission: "edit", pattern: "*", action: "deny" },
-      { permission: "task", pattern: "*", action: "deny" },
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "read", pattern: "*", action: "allow" },
+      { permission: "glob", pattern: "*", action: "allow" },
+      { permission: "grep", pattern: "*", action: "allow" },
+      { permission: "list", pattern: "*", action: "allow" },
+      { permission: "lsp", pattern: "*", action: "allow" },
+      { permission: "webfetch", pattern: "*", action: "allow" },
+      { permission: "websearch", pattern: "*", action: "allow" },
+      { permission: "codesearch", pattern: "*", action: "allow" },
+      { permission: "todoread", pattern: "*", action: "allow" },
+      { permission: "todowrite", pattern: "*", action: "allow" },
+      { permission: "question", pattern: "*", action: "allow" },
     ]);
   });
 });

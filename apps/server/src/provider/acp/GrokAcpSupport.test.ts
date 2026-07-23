@@ -20,7 +20,7 @@ describe("buildGrokAcpSpawnInput", () => {
   it("builds the default Grok ACP command", () => {
     expect(buildGrokAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
       command: "grok",
-      args: ["agent", "--no-leader", "stdio"],
+      args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
     });
   });
@@ -30,28 +30,28 @@ describe("buildGrokAcpSpawnInput", () => {
       buildGrokAcpSpawnInput({ binaryPath: "/usr/local/bin/grok" }, "/tmp/project"),
     ).toMatchObject({
       command: "/usr/local/bin/grok",
-      args: ["agent", "--no-leader", "stdio"],
+      args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
     });
   });
 
-  it("passes model and reasoning effort as Grok agent startup options", () => {
-    expect(
-      buildGrokAcpSpawnInput(
-        {
-          binaryPath: "/usr/local/bin/grok",
-          model: "grok-build",
-          reasoningEffort: "high",
-          alwaysApprove: true,
-        },
-        "/tmp/project",
-      ),
-    ).toMatchObject({
+  it("passes model and reasoning effort without process-wide approval overrides", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      {
+        binaryPath: "/usr/local/bin/grok",
+        model: "grok-build",
+        reasoningEffort: "high",
+      },
+      "/tmp/project",
+    );
+
+    expect(spawn).toMatchObject({
       command: "/usr/local/bin/grok",
       args: [
+        "--permission-mode",
+        "default",
         "agent",
         "--no-leader",
-        "--always-approve",
         "-m",
         "grok-build",
         "--reasoning-effort",
@@ -60,6 +60,7 @@ describe("buildGrokAcpSpawnInput", () => {
       ],
       cwd: "/tmp/project",
     });
+    expect(spawn.args).not.toContain("--always-approve");
   });
 });
 

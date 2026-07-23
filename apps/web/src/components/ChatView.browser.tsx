@@ -12,6 +12,7 @@ import {
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
+  SpaceId,
   ThreadId,
   TurnId,
   type WsWelcomePayload,
@@ -46,6 +47,7 @@ import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
+import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
 import {
   createShellSnapshotFromReadModel,
@@ -3910,7 +3912,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(newThreadButton).toBeInTheDocument();
       await newThreadButton.click();
 
-      await expect.element(page.getByText("Type path", { exact: true })).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .toBeInTheDocument();
       expect(mounted.router.state.location.pathname).toBe(initialPath);
     } finally {
       await mounted.cleanup();
@@ -3938,7 +3942,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await newThreadButton.click();
       await waitForLayout();
 
-      await expect.element(page.getByText("Type path", { exact: true })).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .not.toBeInTheDocument();
       expect(mounted.router.state.location.pathname).toBe(initialPath);
     } finally {
       await mounted.cleanup();
@@ -4370,6 +4376,151 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       expect(mounted.router.state.location.pathname).toBe(newThreadPath);
     } finally {
+      if (previousNativeApi) {
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      } else {
+        Reflect.deleteProperty(window, "nativeApi");
+      }
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates a project from the sidebar Create Project dialog and shows it in the sidebar", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-create-project-dialog-test" as MessageId,
+        targetText: "create project dialog test",
+      }),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Add project", exact: true }).click();
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .toBeInTheDocument();
+
+      await page.getByLabelText("Project folder path").fill("/repo/new-project");
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          const projectCreateRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              "command" in request &&
+              request.command &&
+              typeof request.command === "object" &&
+              "type" in request.command &&
+              request.command.type === "project.create" &&
+              "workspaceRoot" in request.command &&
+              request.command.workspaceRoot === "/repo/new-project",
+          );
+          expect(projectCreateRequest).toBeDefined();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The dialog closes on success and the sidebar picks the project up from
+      // the refreshed shell snapshot.
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(page.getByText("new-project", { exact: true }).first())
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("rolls back the provisional Space when project creation fails", async () => {
+    const currentSpaceId = SpaceId.makeUnsafe("space-current");
+    const destinationSpaceId = SpaceId.makeUnsafe("space-destination");
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-create-project-space-rollback" as MessageId,
+      targetText: "create project space rollback",
+    });
+    useSpacesUiStore.getState().setActiveSpaceId(currentSpaceId);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...baseSnapshot,
+        spaces: [
+          {
+            id: currentSpaceId,
+            name: "Current",
+            icon: "bag",
+            sortOrder: 0,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            deletedAt: null,
+          },
+          {
+            id: destinationSpaceId,
+            name: "Destination",
+            icon: "target",
+            sortOrder: 1,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            deletedAt: null,
+          },
+        ],
+        projects: baseSnapshot.projects.map((project) => ({
+          ...project,
+          spaceId: currentSpaceId,
+        })),
+      },
+    });
+    const previousNativeApi = window.nativeApi;
+    const wsNativeApi = readNativeApi();
+    expect(wsNativeApi).toBeDefined();
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...wsNativeApi,
+        orchestration: {
+          ...wsNativeApi?.orchestration,
+          dispatchCommand: vi.fn(async () => {
+            throw new Error("Project creation failed for test.");
+          }),
+        },
+      },
+    });
+
+    try {
+      await page.getByRole("button", { name: "Add project", exact: true }).click();
+      await page.getByLabelText("Project folder path").fill("/repo/failing-project");
+      const spaceTrigger = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            '[data-slot="dialog-popup"] [data-slot="select-trigger"]',
+          ),
+        "Unable to find the Create Project Space selector.",
+      );
+      spaceTrigger.click();
+      const destinationOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="select-item"]')).find(
+            (item) => item.textContent?.trim() === "Destination",
+          ) ?? null,
+        "Unable to find the destination Space option.",
+      );
+      destinationOption.click();
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+
+      await expect
+        .element(page.getByRole("alert"))
+        .toHaveTextContent("Project creation failed for test.");
+      expect(useSpacesUiStore.getState().activeSpaceId).toBe(currentSpaceId);
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .toBeInTheDocument();
+    } finally {
+      useSpacesUiStore.getState().setActiveSpaceId(null);
       if (previousNativeApi) {
         Object.defineProperty(window, "nativeApi", {
           configurable: true,

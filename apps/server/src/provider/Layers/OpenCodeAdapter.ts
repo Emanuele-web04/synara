@@ -178,6 +178,7 @@ interface OpenCodeSessionContext {
   activeTurnCompletionActivitySerial: number;
   activeTurnSawToolCallFinish: boolean;
   activeTurnSawFinalAssistant: boolean;
+  activeTurnFinalAssistantMessageId: string | undefined;
   activeTurnToolCallIdleWatchdogStarted: boolean;
   activeInteractionMode: "default" | "plan" | undefined;
   appliedPermissionInteractionMode: "default" | "plan";
@@ -212,6 +213,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly promptAcceptedActivityTimeoutMs?: number;
   readonly promptAcceptedRecoveryDelaysMs?: ReadonlyArray<number>;
   readonly promptSubmissionInlineWaitMs?: number;
+  readonly prematureIdleCompletionGraceMs?: number;
   readonly beforeSessionInstall?: Effect.Effect<void>;
   readonly resolveServerPassword?: (
     provider: OpenCodeCompatibleProvider,
@@ -696,6 +698,7 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeTurnCompletionActivitySerial = 0;
   context.activeTurnSawToolCallFinish = false;
   context.activeTurnSawFinalAssistant = false;
+  context.activeTurnFinalAssistantMessageId = undefined;
   context.activeTurnToolCallIdleWatchdogStarted = false;
   context.activeInteractionMode = undefined;
   context.activeAgent = undefined;
@@ -810,8 +813,45 @@ function trackActiveTurnAssistantFinish(
   }
   if (isOpenCodeCompletedAssistantMessage(entry)) {
     context.activeTurnSawFinalAssistant = true;
+    context.activeTurnFinalAssistantMessageId = entry.info.id;
     markOpenCodeTurnCompletionActivity(context, turnId);
   }
+}
+
+function areOpenCodeAssistantTextPartsSettled(parts: ReadonlyArray<Part>): boolean {
+  let sawTextPart = false;
+  for (const part of parts) {
+    if (part.type !== "text") {
+      continue;
+    }
+    sawTextPart = true;
+    if (!isCompletedOpenCodeAssistantTextPart(part)) {
+      return false;
+    }
+  }
+  return sawTextPart;
+}
+
+function isOpenCodeAssistantMessageTextSettled(
+  context: OpenCodeSessionContext,
+  messageId: string,
+): boolean {
+  const messageParts: Array<Part> = [];
+  for (const part of context.partById.values()) {
+    if (part.messageID === messageId) {
+      messageParts.push(part);
+    }
+  }
+  return (
+    areOpenCodeAssistantTextPartsSettled(messageParts) &&
+    messageParts.every(
+      (part) => part.type !== "text" || context.completedAssistantPartIds.has(part.id),
+    )
+  );
+}
+
+function isCompletedOpenCodeAssistantTextPart(part: Part): boolean {
+  return part.type === "text" && part.time?.end !== undefined;
 }
 
 function extractResumeSessionId(resumeCursor: unknown): string | undefined {
@@ -1118,6 +1158,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         ) ?? OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS;
       const promptSubmissionInlineWaitMs =
         options?.promptSubmissionInlineWaitMs ?? OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS;
+      const prematureIdleCompletionGraceMs = options?.prematureIdleCompletionGraceMs ?? 10_000;
       const nativeEventLogger =
         options?.nativeEventLogger ??
         (options?.nativeEventLogPath !== undefined
@@ -1445,8 +1486,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly errorMessage?: string | undefined;
         },
       ) {
+        if (context.activeTurnId !== input.turnId) {
+          return false;
+        }
         clearActiveTurnState(context);
-        updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
+        updateProviderSession(
+          context,
+          input.errorMessage
+            ? { status: "error", lastError: input.errorMessage }
+            : { status: "ready" },
+          { clearActiveTurnId: true },
+        );
         yield* emit(context, {
           ...buildEventBase({
             threadId: context.session.threadId,
@@ -1464,6 +1514,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ...(input.totalCostUsd !== undefined ? { totalCostUsd: input.totalCostUsd } : {}),
               },
         });
+        return true;
+      });
+
+      const waitForOpenCodeTurnCompletionQuiet = Effect.fn(
+        "waitForOpenCodeTurnCompletionQuiet",
+      )(function* (context: OpenCodeSessionContext, turnId: TurnId, quietMs: number) {
+        let observedActivitySerial = context.activeTurnCompletionActivitySerial;
+        while (true) {
+          yield* Effect.sleep(quietMs);
+          if ((yield* Ref.get(context.stopped)) || context.activeTurnId !== turnId) {
+            return false;
+          }
+          const currentActivitySerial = context.activeTurnCompletionActivitySerial;
+          if (currentActivitySerial === observedActivitySerial) {
+            return true;
+          }
+          observedActivitySerial = currentActivitySerial;
+        }
       });
 
       const deferPrematureIdleCompletion = Effect.fn("deferPrematureIdleCompletion")(function* (
@@ -1474,25 +1542,121 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const idleBeforeAssistantActivity = context.activeTurnCompletionActivitySerial === 0;
         const idleAfterToolCalls =
           context.activeTurnSawToolCallFinish && !context.activeTurnSawFinalAssistant;
-        if (!idleBeforeAssistantActivity && !idleAfterToolCalls) {
+        const finalAssistantMessageId = context.activeTurnFinalAssistantMessageId;
+        const idleBeforeFinalAssistantParts =
+          context.activeTurnSawFinalAssistant &&
+          finalAssistantMessageId !== undefined &&
+          !isOpenCodeAssistantMessageTextSettled(context, finalAssistantMessageId);
+        const idleAfterFinalAssistant =
+          context.activeTurnSawFinalAssistant && finalAssistantMessageId !== undefined;
+        if (!idleBeforeAssistantActivity && !idleAfterToolCalls && !idleAfterFinalAssistant) {
           return false;
         }
         if (!context.activeTurnToolCallIdleWatchdogStarted) {
           context.activeTurnToolCallIdleWatchdogStarted = true;
           yield* Effect.gen(function* () {
-            yield* Effect.sleep(10_000);
-            if (
-              (yield* Ref.get(context.stopped)) ||
-              context.activeTurnId !== turnId ||
-              context.activeTurnSawFinalAssistant
-            ) {
+            // A normal final response only needs a short event-stream quiet
+            // window. Early idle with no completed part keeps the longer grace
+            // period used for delayed provider recovery.
+            const needsRecoveryGrace =
+              idleBeforeAssistantActivity || idleAfterToolCalls || idleBeforeFinalAssistantParts;
+            const initialQuietMs = needsRecoveryGrace
+              ? prematureIdleCompletionGraceMs
+              : Math.min(prematureIdleCompletionGraceMs, 250);
+            if (!(yield* waitForOpenCodeTurnCompletionQuiet(context, turnId, initialQuietMs))) {
               return;
+            }
+
+            // Some OpenCode versions emit idle before the final assistant event
+            // and never emit idle again. A completed assistant message is enough
+            // to settle that deferred idle instead of leaving the turn running.
+            if (context.activeTurnSawFinalAssistant) {
+              // Re-read the id after the grace period: the final metadata may have
+              // arrived after the idle event that scheduled this watchdog.
+              const deferredFinalAssistantMessageId = context.activeTurnFinalAssistantMessageId;
+              if (
+                deferredFinalAssistantMessageId !== undefined &&
+                (yield* recoverOpenCodeTurnFromMessageId(context, {
+                  turnId,
+                  messageId: deferredFinalAssistantMessageId,
+                  raw: {
+                    source: "synara.opencode.deferred-idle-completion",
+                    event: raw,
+                  },
+                }))
+              ) {
+                return;
+              }
+              if (
+                deferredFinalAssistantMessageId !== undefined &&
+                isOpenCodeAssistantMessageTextSettled(
+                  context,
+                  deferredFinalAssistantMessageId,
+                )
+              ) {
+                // The event stream can be ahead of session.messages. Completion
+                // activity has now stayed quiet for a full grace window, so all
+                // locally delivered parts belong to this final response.
+                yield* completeOpenCodeTurn(context, {
+                  turnId,
+                  raw: {
+                    source: "synara.opencode.deferred-idle-local-part",
+                    event: raw,
+                  },
+                  totalCostUsd: context.latestTurnCostUsd,
+                });
+                return;
+              }
+
+              // A final message snapshot may be visible before its parts. Keep
+              // one additional bounded window for the SSE part or a fresher
+              // snapshot instead of failing a response that is still arriving.
+              if (
+                !(yield* waitForOpenCodeTurnCompletionQuiet(
+                  context,
+                  turnId,
+                  prematureIdleCompletionGraceMs,
+                ))
+              ) {
+                return;
+              }
+              const retriedFinalAssistantMessageId = context.activeTurnFinalAssistantMessageId;
+              if (
+                retriedFinalAssistantMessageId !== undefined &&
+                (yield* recoverOpenCodeTurnFromMessageId(context, {
+                  turnId,
+                  messageId: retriedFinalAssistantMessageId,
+                  raw: {
+                    source: "synara.opencode.deferred-idle-completion-retry",
+                    event: raw,
+                  },
+                }))
+              ) {
+                return;
+              }
+              if (
+                retriedFinalAssistantMessageId !== undefined &&
+                isOpenCodeAssistantMessageTextSettled(
+                  context,
+                  retriedFinalAssistantMessageId,
+                )
+              ) {
+                yield* completeOpenCodeTurn(context, {
+                  turnId,
+                  raw: {
+                    source: "synara.opencode.deferred-idle-local-part-retry",
+                    event: raw,
+                  },
+                  totalCostUsd: context.latestTurnCostUsd,
+                });
+                return;
+              }
             }
 
             const message = idleAfterToolCalls
               ? `${adapterConfig.displayName} became idle after tool calls without producing a final assistant response.`
               : `${adapterConfig.displayName} became idle before producing an assistant response.`;
-            yield* completeOpenCodeTurn(context, {
+            const completed = yield* completeOpenCodeTurn(context, {
               turnId,
               raw: {
                 source: "synara.opencode.idle-after-tool-calls",
@@ -1500,14 +1664,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               },
               errorMessage: message,
             });
-            updateProviderSession(
-              context,
-              {
-                status: "error",
-                lastError: message,
-              },
-              { clearActiveTurnId: true },
-            );
+            if (!completed) return;
             yield* emit(context, {
               ...buildEventBase({
                 threadId: context.session.threadId,
@@ -1540,11 +1697,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly raw: unknown;
         },
       ) {
+        if (context.activeTurnId !== input.turnId) {
+          return false;
+        }
+        if (!areOpenCodeAssistantTextPartsSettled(input.assistantEntry.parts)) {
+          return false;
+        }
         context.messageRoleById.set(input.assistantEntry.info.id, "assistant");
         trackActiveTurnAssistantFinish(context, input.turnId, input.assistantEntry);
         for (const part of input.assistantEntry.parts) {
+          if (context.activeTurnId !== input.turnId) {
+            return false;
+          }
           context.partById.set(part.id, part);
           yield* emitRecoveredAssistantTextDelta(context, part, input.turnId, input.raw);
+        }
+
+        if (context.activeTurnId !== input.turnId) {
+          return false;
         }
 
         const selectedModel = context.session.model;
@@ -1570,6 +1740,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             },
           });
         }
+        if (context.activeTurnId !== input.turnId) {
+          return false;
+        }
         const cost = nonNegativeFiniteNumber(
           (input.assistantEntry.info as Partial<AssistantMessage>).cost,
         );
@@ -1581,6 +1754,44 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
         return true;
       });
+
+      const recoverOpenCodeTurnFromMessageId = Effect.fn("recoverOpenCodeTurnFromMessageId")(
+        function* (
+          context: OpenCodeSessionContext,
+          input: {
+            readonly turnId: TurnId;
+            readonly messageId: string;
+            readonly raw: unknown;
+          },
+        ) {
+          const messagesResponse = yield* runOpenCodeSdk("session.messages", () =>
+            context.client.session.messages({
+              sessionID: context.openCodeSessionId,
+            }),
+          ).pipe(
+            Effect.catchCause(() =>
+              Effect.succeed(
+                null as Awaited<ReturnType<OpencodeClient["session"]["messages"]>> | null,
+              ),
+            ),
+          );
+          if (context.activeTurnId !== input.turnId) {
+            return false;
+          }
+          const assistantEntry = (messagesResponse?.data ?? []).find(
+            (entry) =>
+              entry.info.id === input.messageId && isOpenCodeCompletedAssistantMessage(entry),
+          );
+          if (!assistantEntry) {
+            return false;
+          }
+          return yield* recoverOpenCodeTurnFromAssistantMessage(context, {
+            turnId: input.turnId,
+            assistantEntry,
+            raw: input.raw,
+          });
+        },
+      );
 
       const recoverOpenCodeTurnFromMessages = Effect.fn("recoverOpenCodeTurnFromMessages")(
         function* (
@@ -1601,6 +1812,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ),
             ),
           );
+          if (context.activeTurnId !== input.turnId) {
+            return false;
+          }
           if (!messagesResponse) {
             return false;
           }
@@ -1698,19 +1912,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
               const message =
                 "OpenCode did not produce any activity for this prompt. The session may be stuck; try sending again or restart OpenCode.";
-              yield* completeOpenCodeTurn(context, {
+              const completed = yield* completeOpenCodeTurn(context, {
                 turnId: input.turnId,
                 raw: { source: "synara.opencode.prompt.watchdog" },
                 errorMessage: message,
               });
-              updateProviderSession(
-                context,
-                {
-                  status: "error",
-                  lastError: message,
-                },
-                { clearActiveTurnId: true },
-              );
+              if (!completed) return;
               yield* emit(context, {
                 ...buildEventBase({
                   threadId: context.session.threadId,
@@ -2090,6 +2297,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             const messageRole = messageRoleForPart(context, part);
 
             if (messageRole === "assistant") {
+              if (
+                turnId !== undefined &&
+                context.activeTurnId === turnId &&
+                context.activeTurnFinalAssistantMessageId === part.messageID
+              ) {
+                // Any final-message part restarts the deferred-idle quiet window.
+                // OpenCode may publish several completed text parts for one
+                // assistant message, especially around tool calls.
+                markOpenCodeTurnCompletionActivity(context, turnId);
+              }
               yield* emitAssistantTextDelta(context, part, turnId, event);
             }
 
@@ -2169,7 +2386,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               context.activeInteractionMode === "plan"
                 ? "reject"
                 : context.session.runtimeMode === "full-access"
-                  ? "always"
+                  ? "once"
                   : undefined;
             if (policyReply !== undefined) {
               context.policyResolvedPermissionIds.add(event.properties.id);
@@ -2708,15 +2925,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 raw: event,
                 errorMessage: message,
               });
+            } else {
+              updateProviderSession(
+                context,
+                {
+                  status: "error",
+                  lastError: message,
+                },
+                { clearActiveTurnId: true },
+              );
             }
-            updateProviderSession(
-              context,
-              {
-                status: "error",
-                lastError: message,
-              },
-              { clearActiveTurnId: true },
-            );
             yield* emit(context, {
               ...buildEventBase({
                 threadId: context.session.threadId,
@@ -3267,19 +3485,19 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     const createSessionId = resumedSessionId
                       ? // A resumed provider may still be executing an interrupted Plan turn.
                         // Install the read-only ruleset until Synara dispatches a new turn with a
-                        // known interaction mode. Non-fatal for older compatible servers: the
-                        // event pump independently rejects recovered permission requests.
+                        // known interaction mode. This must succeed before the event pump starts:
+                        // otherwise an already-running Full Access session could mutate state
+                        // without ever emitting a permission request for Synara to reject.
                         runOpenCodeSdk("session.update", () =>
                           client.session.update({
                             sessionID: resumedSessionId,
                             permission: buildOpenCodePermissionRules(input.runtimeMode, "plan"),
                           }),
                         ).pipe(
-                          Effect.catchCause((cause) =>
-                            Effect.logWarning(
-                              `${adapterConfig.displayName} failed to apply permission ruleset on resume`,
-                              Cause.squash(cause),
-                            ),
+                          Effect.tapError(() =>
+                            runOpenCodeSdk("session.abort", () =>
+                              client.session.abort({ sessionID: resumedSessionId }),
+                            ).pipe(Effect.ignore({ log: true })),
                           ),
                           Effect.as(resumedSessionId),
                         )
@@ -3412,6 +3630,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   activeTurnCompletionActivitySerial: 0,
                   activeTurnSawToolCallFinish: false,
                   activeTurnSawFinalAssistant: false,
+                  activeTurnFinalAssistantMessageId: undefined,
                   activeTurnToolCallIdleWatchdogStarted: false,
                   activeInteractionMode: undefined,
                   appliedPermissionInteractionMode: resumedSessionId ? "plan" : "default",
@@ -3531,6 +3750,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context.activeTurnCompletionActivitySerial = 0;
         context.activeTurnSawToolCallFinish = false;
         context.activeTurnSawFinalAssistant = false;
+        context.activeTurnFinalAssistantMessageId = undefined;
         context.activeTurnToolCallIdleWatchdogStarted = false;
         context.activeInteractionMode = interactionMode;
         // Always pin Synara's interaction mode to OpenCode's primary agent.

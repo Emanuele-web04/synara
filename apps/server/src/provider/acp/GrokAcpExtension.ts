@@ -108,3 +108,8 @@ export function makeGrokExitPlanModeCapturedResponse(): {
     feedback: SYNARA_PLAN_REVIEW_FEEDBACK,
   };
 }
+
+/** Synara has already received an implementation turn, so Grok may leave its native gate. */
+export function makeGrokExitPlanModeApprovedResponse(): { readonly outcome: "approved" } {
+  return { outcome: "approved" };
+}

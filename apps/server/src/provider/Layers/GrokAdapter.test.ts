@@ -14,16 +14,20 @@ import {
   GROK_EXIT_PLAN_MODE_METHODS,
   GrokAskUserQuestionRequest,
   GrokExitPlanModeRequest,
+  makeGrokExitPlanModeApprovedResponse,
   makeGrokExitPlanModeCapturedResponse,
   makeGrokQuestionResponse,
 } from "../acp/GrokAcpExtension.ts";
 
 import {
+  buildGrokPromptMeta,
+  buildGrokTurnPromptText,
+  extractGrokTerminalPlanMarkdown,
   isGrokContextCompactionToolCall,
   isRenderableGrokAssistantDelta,
   mergeGrokModelDescriptors,
   parseXaiLanguageModelDescriptors,
-  resolveGrokAcpSessionModeId,
+  resolveGrokPlanHookResponse,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
   takeGrokSynaraHarnessPolicyTextPart,
@@ -40,21 +44,65 @@ describe("Grok Synara harness policy", () => {
 });
 
 describe("Grok native plan approval", () => {
-  it("uses Grok's canonical mode ids when the CLI omits mode discovery", () => {
+  it("adds Plan instructions without sending a pager-only slash command as model text", () => {
     expect(
-      resolveGrokAcpSessionModeId({
+      buildGrokTurnPromptText({
+        text: "Design the change",
         interactionMode: "plan",
-        runtimeMode: "full-access",
-        modeState: undefined,
       }),
-    ).toBe("plan");
+    ).toMatch(/^Synara requested Grok's native plan mode\./u);
+  });
+
+  it("sets Grok's native prompt mode idempotently on every turn", () => {
+    expect(buildGrokPromptMeta("plan")).toEqual({ mode: "plan" });
+    expect(buildGrokPromptMeta("default")).toEqual({ mode: "agent" });
+  });
+
+  it("backs native Plan mode with a fail-closed pre-tool hook", () => {
     expect(
-      resolveGrokAcpSessionModeId({
-        interactionMode: "default",
-        runtimeMode: "approval-required",
-        modeState: undefined,
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "read_file",
       }),
-    ).toBe("default");
+    ).toEqual({});
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "run_terminal_cmd",
+      }),
+    ).toMatchObject({ decision: "deny" });
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "future_mutating_tool",
+      }),
+    ).toMatchObject({ decision: "deny" });
+    expect(
+      resolveGrokPlanHookResponse("default", {
+        hookCallbackId: "synara-plan-guard",
+        hookEventName: "pre_tool_use",
+        toolName: "run_terminal_cmd",
+      }),
+    ).toEqual({});
+    expect(
+      resolveGrokPlanHookResponse("plan", {
+        hookCallbackId: "another-client-hook",
+        hookEventName: "pre_tool_use",
+        toolName: "run_terminal_cmd",
+      }),
+    ).toEqual({});
+  });
+
+  it("leaves Default prompts untouched after the native gate is switched explicitly", () => {
+    expect(
+      buildGrokTurnPromptText({
+        text: "Implement the approved plan",
+        interactionMode: "default",
+      }),
+    ).toBe("Implement the approved plan");
   });
 
   it("accepts current and legacy ACP method names", () => {
@@ -87,6 +135,27 @@ describe("Grok native plan approval", () => {
       feedback:
         "Synara captured this plan for user review. Do not revise or implement it now. End this turn and wait for the user's next message.",
     });
+  });
+
+  it("approves leaving native plan mode only for a later implementation turn", () => {
+    expect(makeGrokExitPlanModeApprovedResponse()).toEqual({ outcome: "approved" });
+  });
+
+  it("uses a terminal Plan response as a proposal when Grok omits the extension", () => {
+    expect(
+      extractGrokTerminalPlanMarkdown({
+        interactionMode: "plan",
+        capturedPlanFingerprint: undefined,
+        assistantText: "\n# Plan\n\n- Implement safely\n",
+      }),
+    ).toBe("# Plan\n\n- Implement safely");
+    expect(
+      extractGrokTerminalPlanMarkdown({
+        interactionMode: "plan",
+        capturedPlanFingerprint: "# Native plan",
+        assistantText: "# Duplicate",
+      }),
+    ).toBeUndefined();
   });
 });
 

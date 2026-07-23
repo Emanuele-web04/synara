@@ -134,19 +134,47 @@ export function useSpacesController(input: {
     [setActiveSpaceId],
   );
 
+  // Bookmark the context being left so returning to that space restores it.
+  const rememberDepartingSpaceContext = useCallback(() => {
+    const currentRouteSpaceProject =
+      isOnKanban && routeProjectId ? (projectById.get(routeProjectId) ?? null) : activeRouteProject;
+    if (routeThreadId && isOrdinarySpaceProject(currentRouteSpaceProject, workspacePaths)) {
+      rememberSpaceThread(currentRouteSpaceProject.spaceId ?? null, routeThreadId);
+    } else if (isOnKanban && isOrdinarySpaceProject(currentRouteSpaceProject, workspacePaths)) {
+      rememberSpaceProject(currentRouteSpaceProject.spaceId ?? null, currentRouteSpaceProject.id);
+    }
+  }, [
+    activeRouteProject,
+    isOnKanban,
+    projectById,
+    rememberSpaceProject,
+    rememberSpaceThread,
+    routeProjectId,
+    routeThreadId,
+    workspacePaths,
+  ]);
+
+  /**
+   * Switch spaces without restoring the target space's last context. Used when the
+   * caller is about to navigate itself (creating a project files it into the target
+   * space and then opens its first thread) — the restore navigation would race it.
+   */
+  const handleSelectSpaceForIncomingProject = useCallback(
+    (spaceId: SpaceId | null) => {
+      // Read the live value so an async create flow can roll back a provisional
+      // selection with the same callback instance it used to select it.
+      if (spaceId === useSpacesUiStore.getState().activeSpaceId) return;
+      rememberDepartingSpaceContext();
+      selectSpaceForNavigation(spaceId);
+    },
+    [rememberDepartingSpaceContext, selectSpaceForNavigation],
+  );
+
   const handleSelectSpace = useCallback(
     (spaceId: SpaceId | null) => {
       if (spaceId === activeSpaceId) return;
 
-      const currentRouteSpaceProject =
-        isOnKanban && routeProjectId
-          ? (projectById.get(routeProjectId) ?? null)
-          : activeRouteProject;
-      if (routeThreadId && isOrdinarySpaceProject(currentRouteSpaceProject, workspacePaths)) {
-        rememberSpaceThread(currentRouteSpaceProject.spaceId ?? null, routeThreadId);
-      } else if (isOnKanban && isOrdinarySpaceProject(currentRouteSpaceProject, workspacePaths)) {
-        rememberSpaceProject(currentRouteSpaceProject.spaceId ?? null, currentRouteSpaceProject.id);
-      }
+      rememberDepartingSpaceContext();
 
       selectSpaceForNavigation(spaceId);
 
@@ -196,18 +224,13 @@ export function useSpacesController(input: {
     },
     [
       activateThreadFromSidebarIntent,
-      activeRouteProject,
       activeSpaceId,
       getLastSpaceProjectId,
       getLastSpaceThreadId,
-      isOnKanban,
       navigate,
       ordinarySpaceProjects,
       projectById,
-      rememberSpaceProject,
-      rememberSpaceThread,
-      routeProjectId,
-      routeThreadId,
+      rememberDepartingSpaceContext,
       selectSpaceForNavigation,
       sidebarThreadSortOrder,
       sidebarThreads,
@@ -453,6 +476,7 @@ export function useSpacesController(input: {
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
     handleSelectSpace,
+    handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
     handleDeleteSpace,

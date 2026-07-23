@@ -51,19 +51,19 @@ describe("AcpAdapterSupport", () => {
     expect(selectAcpPermissionOptionId("cancel", options)).toBeUndefined();
   });
 
-  it("selects the session-wide approval option for full-access ACP sessions", () => {
+  it("prefers request-scoped Full Access approvals and falls back to persistent grants", () => {
     expect(
       selectAcpFullAccessPermissionOptionId([
         { kind: "allow_once", optionId: "allow-once" },
         { kind: "allow_always", optionId: "allow-session" },
       ]),
-    ).toBe("allow-session");
-    expect(
-      selectAcpFullAccessPermissionOptionId([{ kind: "allow_once", optionId: "allow-once" }]),
     ).toBe("allow-once");
+    expect(
+      selectAcpFullAccessPermissionOptionId([{ kind: "allow_always", optionId: "allow-session" }]),
+    ).toBe("allow-session");
   });
 
-  it("never falls back to a human prompt in full-access mode", () => {
+  it("keeps Full Access operational with the allow options offered by the provider", () => {
     expect(
       resolveAcpFullAccessPermissionOutcome([{ kind: "allow_always", optionId: "allow-session" }]),
     ).toEqual({ outcome: "selected", optionId: "allow-session" });
@@ -74,7 +74,8 @@ describe("AcpAdapterSupport", () => {
 
   it("keeps Plan above Full Access and releases the gate for the next default turn", () => {
     const options = [
-      { kind: "allow_always", optionId: "implement" },
+      { kind: "allow_once", optionId: "implement-once" },
+      { kind: "allow_always", optionId: "implement-always" },
       { kind: "reject_once", optionId: "stay-in-plan" },
     ] as const;
 
@@ -98,7 +99,7 @@ describe("AcpAdapterSupport", () => {
         interactionMode: "default",
         options,
       }),
-    ).toEqual({ outcome: "selected", optionId: "implement" });
+    ).toEqual({ outcome: "selected", optionId: "implement-once" });
   });
 
   it("surfaces Default prompts only for active approval-required turns", () => {

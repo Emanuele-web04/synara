@@ -151,6 +151,7 @@ const DROID_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
 const DROID_TURN_WATCHDOG_INTERVAL_MS = 15_000;
 const DROID_NESTED_TASK_IDLE_TIMEOUT_MS = 60 * 60_000;
 const DROID_CANCEL_GRACE_MS = 5_000;
+const DROID_PLAN_CAPTURE_CANCEL_FALLBACK_MS = 1_000;
 const DROID_ACP_REQUEST_TIMEOUT_MS = 30_000;
 const DROID_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
 const DROID_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
@@ -211,6 +212,8 @@ interface DroidSessionContext {
   readonly activeAssistantItemsWithContent: Set<string>;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  /** Turns cancelled by Synara only because their Plan proposal was captured. */
+  readonly planCapturedTurnIds: Set<TurnId>;
   // Epoch-ms of the last inbound ACP activity for the active turn; drives the
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
@@ -265,6 +268,21 @@ export function isRenderableDroidAssistantDelta(input: {
   readonly text: string;
 }): boolean {
   return input.streamKind !== "reasoning_text" && input.text.trim().length > 0;
+}
+
+export function classifyDroidPromptTurnCompletion(input: {
+  readonly planCaptured: boolean;
+  readonly stopReason: string | null | undefined;
+  readonly failedToolDetail?: string | undefined;
+}): { readonly state: "completed" | "cancelled" | "failed"; readonly errorMessage?: string } {
+  return input.planCaptured
+    ? { state: "completed" }
+    : classifyAcpPromptTurnCompletion({
+        stopReason: input.stopReason,
+        ...(input.failedToolDetail !== undefined
+          ? { failedToolDetail: input.failedToolDetail }
+          : {}),
+      });
 }
 
 // Identifies Factory's parent `Task` tool row; child-session progress is not
@@ -633,6 +651,45 @@ export function makeDroidAdapter(
           });
         }
         return result;
+      });
+
+    const settleCapturedDroidPlanTurn = (
+      ctx: DroidSessionContext,
+      turnId: TurnId,
+      delayMs: number,
+    ) =>
+      Effect.gen(function* () {
+        if (ctx.activeTurnId !== turnId || ctx.stopped) {
+          return;
+        }
+        // Capture ownership immediately. The fallback delay is only for the
+        // cancellation attempt; the prompt may settle during that delay and
+        // must still complete as a successfully captured Plan turn.
+        ctx.planCapturedTurnIds.add(turnId);
+        // Only the cancellation work runs in the background. Keeping the marker
+        // in this caller fiber closes the scheduler window where the prompt
+        // could settle before a forked child executed its first instruction.
+        yield* Effect.gen(function* () {
+          // The expected rejected-tool update normally starts this immediately.
+          // The delayed capture path is a fallback for providers that omit it.
+          if (delayMs > 0) {
+            yield* Effect.sleep(delayMs);
+          }
+          if (ctx.activeTurnId !== turnId || ctx.stopped) {
+            return;
+          }
+          const result = yield* cancelDroidPromptWithGrace(ctx, ctx.activePromptFiber);
+          if (
+            result.prompt === "timedOut" ||
+            (result.prompt === "notStarted" && result.cancelRequest !== "sent")
+          ) {
+            yield* stopSessionInternal(ctx, {
+              exitKind: "error",
+              reason: "Droid Plan turn did not settle after its proposal was captured.",
+              awaitTermination: false,
+            });
+          }
+        }).pipe(Effect.forkIn(ctx.scope));
       });
 
     const activeTurnIdForDroidRuntimeEvent = (ctx: DroidSessionContext, eventTag: string) =>
@@ -1015,6 +1072,7 @@ export function makeDroidAdapter(
             activeAssistantItemsWithContent: new Set(),
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            planCapturedTurnIds: new Set(),
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
             activeNestedTaskToolCallIds: new Set(),
@@ -1148,6 +1206,11 @@ export function makeDroidAdapter(
                               payload: event.rawPayload,
                             },
                           });
+                          yield* settleCapturedDroidPlanTurn(
+                            ctx,
+                            activeTurnId,
+                            DROID_PLAN_CAPTURE_CANCEL_FALLBACK_MS,
+                          );
                         }
                         if (
                           event.toolCall.status === "pending" ||
@@ -1160,6 +1223,7 @@ export function makeDroidAdapter(
                         ctx.activeInteractionMode === "plan" &&
                         isExpectedDroidPlanRejection(event.toolCall)
                       ) {
+                        yield* settleCapturedDroidPlanTurn(ctx, activeTurnId, 0);
                         return;
                       }
                       yield* emitNestedTaskLifecycle(ctx, event.toolCall, activeTurnId);
@@ -1327,6 +1391,7 @@ export function makeDroidAdapter(
     const failDroidTurnAsTimedOut = (ctx: DroidSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
+        ctx.planCapturedTurnIds.delete(turnId);
         if (!clearAcpActiveTurn(ctx, turnId)) {
           return;
         }
@@ -1558,6 +1623,7 @@ export function makeDroidAdapter(
             onFailure: (error) =>
               Effect.gen(function* () {
                 yield* waitForDroidQueuedTurnEventsDrained(ctx);
+                ctx.planCapturedTurnIds.delete(turnId);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1600,6 +1666,7 @@ export function makeDroidAdapter(
                 yield* waitForDroidQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
+                const planCaptured = ctx.planCapturedTurnIds.delete(turnId);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1620,7 +1687,8 @@ export function makeDroidAdapter(
                     hasUsage: result.usage !== undefined,
                   });
                 }
-                const completion = classifyAcpPromptTurnCompletion({
+                const completion = classifyDroidPromptTurnCompletion({
+                  planCaptured,
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
@@ -1644,6 +1712,7 @@ export function makeDroidAdapter(
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
+              const planCaptured = ctx.planCapturedTurnIds.delete(turnId);
               if (!clearAcpActiveTurn(ctx, turnId)) {
                 return;
               }
@@ -1663,7 +1732,7 @@ export function makeDroidAdapter(
                 threadId: input.threadId,
                 turnId,
                 payload: {
-                  state: "cancelled",
+                  state: planCaptured ? "completed" : "cancelled",
                   stopReason: "cancelled",
                   ...completedCost,
                 },

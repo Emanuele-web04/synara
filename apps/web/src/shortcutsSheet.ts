@@ -61,7 +61,7 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "sidebar.addProject",
     label: "Add project",
-    description: "Open the folder picker to import a local project into the sidebar.",
+    description: "Open the Create project dialog to import a local folder.",
   },
   {
     command: "sidebar.search",

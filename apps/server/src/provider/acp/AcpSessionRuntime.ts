@@ -109,6 +109,8 @@ export interface AcpSessionRuntimeOptions {
   readonly cwd: string;
   readonly resumeSessionId?: string;
   readonly clientCapabilities?: Acp.InitializeRequest["clientCapabilities"];
+  /** Provider-specific metadata sent on session/new, session/load, and session/resume. */
+  readonly sessionMeta?: Record<string, unknown>;
   readonly clientInfo: {
     readonly name: string;
     readonly version: string;
@@ -989,6 +991,7 @@ const makeAcpSessionRuntime = (
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
           mcpServers,
+          ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.ResumeSessionRequest;
         const supportsResume =
           initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -1011,6 +1014,7 @@ const makeAcpSessionRuntime = (
                 sessionId: options.resumeSessionId,
                 cwd: options.cwd,
                 mcpServers,
+                ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
               } satisfies Acp.LoadSessionRequest;
               return runLoggedRequest(
                 "session/load",
@@ -1031,6 +1035,7 @@ const makeAcpSessionRuntime = (
         const createPayload = {
           cwd: options.cwd,
           mcpServers,
+          ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",

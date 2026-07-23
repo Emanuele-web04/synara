@@ -33,7 +33,6 @@ import {
   getBrowseDirectoryPath,
   getBrowseLeafPathSegment,
   getBrowseParentPath,
-  getInitialBrowseQuery,
   hasTrailingPathSeparator,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
@@ -85,7 +84,6 @@ interface SidebarSearchPaletteProps {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
-  initialBrowseQuery?: string | null;
   onOpenSettings: () => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
@@ -352,7 +350,7 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
-  const [query, setQuery] = useState(props.initialBrowseQuery ?? "");
+  const [query, setQuery] = useState("");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const [importProviderState, setImportProvider] = useState<ImportProviderKind>(
     props.importProviders[0] ?? "codex",
@@ -860,10 +858,6 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 setImportId("");
                                 setImportProvider(props.importProviders[0] ?? "codex");
                                 props.onModeChange("import");
-                                return;
-                              }
-                              if (action.id === "add-project") {
-                                setQuery(getInitialBrowseQuery(props.homeDir));
                                 return;
                               }
                               if (!onSelect) return;

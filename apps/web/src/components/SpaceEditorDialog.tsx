@@ -15,6 +15,7 @@ import {
   DialogPanel,
   DialogPopup,
   DialogTitle,
+  dialogFieldLabelClassName,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { SPACE_ICON_OPTIONS, SpaceIcon } from "./SpaceIcon";
@@ -22,8 +23,7 @@ import { cn } from "~/lib/utils";
 
 const DEFAULT_SPACE_ICON: SpaceIconName = "bag";
 
-const FIELD_LABEL_CLASS_NAME =
-  "text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-foreground/80";
+const FIELD_LABEL_CLASS_NAME = dialogFieldLabelClassName;
 
 const ICON_CELL_CLASS_NAME =
   "flex aspect-square cursor-pointer items-center justify-center rounded-lg border text-muted-foreground transition-colors outline-hidden hover:bg-foreground/6 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";

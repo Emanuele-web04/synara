@@ -37,7 +37,7 @@ import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox } from "react-icons/hi2";
-import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
+import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2 } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import {
   useCallback,
@@ -163,7 +163,6 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
-import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -265,7 +264,6 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
-  describeAddProjectError,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -316,7 +314,6 @@ import {
   disclosureShellClassName,
   DISCLOSURE_INNER_CLASS,
 } from "~/lib/disclosureMotion";
-import { getInitialBrowseQuery } from "~/lib/projectPaths";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import {
   canCreateThreadHandoff,
@@ -369,6 +366,7 @@ import {
   PROJECT_CREATE_EXISTING_SYNC_ERROR,
 } from "../lib/projectCreation";
 import { useSpacesUiStore } from "../spacesUiStore";
+import { CreateProjectDialog, type CreateProjectSubmitValue } from "./CreateProjectDialog";
 import { SpaceEditorDialog } from "./SpaceEditorDialog";
 import { useSpacesController } from "./useSpacesController";
 import { SpaceEmptyState } from "./SpaceEmptyState";
@@ -1423,21 +1421,11 @@ export default function Sidebar() {
   });
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
-  const [addingProject, setAddingProject] = useState(false);
-  const [newCwd, setNewCwd] = useState("");
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
-  const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
-  const [isPickingFolder, setIsPickingFolder] = useState(false);
-  const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
-  const [addProjectError, setAddProjectError] = useState<string | null>(null);
-  const addProjectErrorMeaning = useMemo(
-    () => (addProjectError ? describeAddProjectError(addProjectError) : null),
-    [addProjectError],
-  );
-  const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
@@ -1484,9 +1472,6 @@ export default function Sidebar() {
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
 
-  // Keep every platform on the same explicit submit path so desktop picker
-  // results do not depend on a separate immediate-add branch.
-  const shouldShowProjectPathEntry = addingProject;
   const routeActiveSidebarThreadId = routeThreadId;
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
@@ -2399,18 +2384,25 @@ export default function Sidebar() {
   );
 
   const addProjectFromPath = useCallback(
-    async (rawCwd: string, options: { createIfMissing?: boolean } = {}) => {
+    async (
+      rawCwd: string,
+      options: { createIfMissing?: boolean; spaceId?: SpaceId | null } = {},
+    ) => {
       const cwd = rawCwd.trim();
-      if (!cwd || isAddingProject) return;
+      if (!cwd) {
+        throw new Error("Project folder path is empty.");
+      }
+      if (isAddingProject) {
+        throw new Error("Another project is already being added.");
+      }
       const api = readNativeApi();
-      if (!api) return;
+      if (!api) {
+        throw new Error("The app server is unavailable.");
+      }
 
       setIsAddingProject(true);
       const finishAddingProject = () => {
         setIsAddingProject(false);
-        setNewCwd("");
-        setAddProjectError(null);
-        setAddingProject(false);
       };
 
       try {
@@ -2437,6 +2429,7 @@ export default function Sidebar() {
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
+          ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2500,55 +2493,8 @@ export default function Sidebar() {
     ],
   );
 
-  const handleAddProject = () => {
-    void addProjectFromPath(newCwd, { createIfMissing: true }).catch((error: unknown) => {
-      const description =
-        error instanceof Error ? error.message : "An error occurred while adding the project.";
-      setAddProjectError(description);
-    });
-  };
-
-  const canAddProject = newCwd.trim().length > 0 && !isAddingProject;
-
-  // Keep the native folder picker and project creation in one awaited flow so
-  // the UI can show whether we're still opening the dialog or creating the project.
-  const handlePickFolder = useCallback(async () => {
-    const api = readNativeApi();
-    if (!api || isPickingFolder) return;
-    setIsPickingFolder(true);
-    try {
-      const pickedPath = await api.dialogs.pickFolder();
-      setIsPickingFolder(false);
-      if (pickedPath) {
-        setAddProjectError(null);
-        await addProjectFromPath(pickedPath).catch((error: unknown) => {
-          const description =
-            error instanceof Error ? error.message : "An error occurred while adding the project.";
-          setAddProjectError(description);
-          toastManager.add({
-            type: "error",
-            title: "Unable to add project",
-            description,
-          });
-        });
-      }
-    } catch (error) {
-      const description =
-        error instanceof Error ? error.message : "Unable to open the folder picker.";
-      setAddProjectError(description);
-      toastManager.add({
-        type: "error",
-        title: "Unable to open folder picker",
-        description,
-      });
-      setIsPickingFolder(false);
-    }
-  }, [isPickingFolder, addProjectFromPath]);
-
   const handleStartAddProject = useCallback(() => {
-    setAddProjectError(null);
-    setShowManualPathInput(false);
-    setAddingProject((prev) => !prev);
+    setCreateProjectDialogOpen(true);
   }, []);
 
   const activeSpaceProjects = useMemo(
@@ -3216,6 +3162,7 @@ export default function Sidebar() {
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
     handleSelectSpace,
+    handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
     handleDeleteSpace,
@@ -3235,6 +3182,35 @@ export default function Sidebar() {
     activateThreadFromSidebarIntent,
     onCloseProjectContextMenu: handleCloseProjectContextMenu,
   });
+  const handleCreateProjectSubmit = useCallback(
+    async (value: CreateProjectSubmitValue) => {
+      const previousSpaceId = activeSpaceId;
+      const existingProject = findWorkspaceRootMatch(projects, value.workspaceRoot, (project) =>
+        project.cwd,
+      );
+      // Reopening an existing project must follow the Space where that project
+      // actually lives. New projects use the destination selected in the dialog.
+      const destinationSpaceId = existingProject
+        ? (existingProject.spaceId ?? null)
+        : value.spaceId;
+      // Land on the destination space before creating so the sidebar follows the
+      // new project's thread instead of bouncing back to the previous space.
+      handleSelectSpaceForIncomingProject(destinationSpaceId);
+      try {
+        await addProjectFromPath(value.workspaceRoot, {
+          createIfMissing: value.createIfMissing,
+          spaceId: value.spaceId,
+        });
+      } catch (error) {
+        // Project creation is one UI transaction: a failed command must not
+        // strand the sidebar in a Space unrelated to the current route.
+        handleSelectSpaceForIncomingProject(previousSpaceId);
+        throw error;
+      }
+    },
+    [activeSpaceId, addProjectFromPath, handleSelectSpaceForIncomingProject, projects],
+  );
+
   // Tab index 0 is Void, then spaces in strip order — the same mapping the
   // space.jump.N dispatch below uses, surfaced in each tab's tooltip.
   const jumpShortcutLabelForSpaceTab = useCallback(
@@ -3638,7 +3614,7 @@ export default function Sidebar() {
   );
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
-    shouldShowProjectPathEntry,
+    shouldShowProjectPathEntry: createProjectDialogOpen,
     threadsHydrated,
   });
   const standardProjectSidebarDataById = useMemo<ReadonlyMap<ProjectId, SidebarDerivedProjectData>>(
@@ -4953,23 +4929,19 @@ export default function Sidebar() {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(null);
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
         return;
       }
       if (command === "sidebar.addProject") {
         event.preventDefault();
         event.stopPropagation();
-        setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(getInitialBrowseQuery(homeDir));
-        setSearchPaletteOpen(true);
+        setCreateProjectDialogOpen(true);
         return;
       }
       if (command === "sidebar.importThread") {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteMode("import");
-        setSearchPaletteInitialQuery(null);
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "import");
         return;
       }
@@ -5281,6 +5253,7 @@ export default function Sidebar() {
         description: "Open a repository or folder in the sidebar.",
         keywords: ["folder", "repo", "repository", "open"],
         shortcutLabel: addProjectShortcutLabel,
+        run: handleStartAddProject,
       },
       {
         id: "import-thread",
@@ -5360,6 +5333,7 @@ export default function Sidebar() {
     [
       addProjectShortcutLabel,
       handleSelectSpace,
+      handleStartAddProject,
       importThreadShortcutLabel,
       newChatShortcutLabel,
       newThreadShortcutLabel,
@@ -5985,93 +5959,12 @@ export default function Sidebar() {
                       />
                       <SidebarIconButton
                         icon={FiPlus}
-                        label={shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
-                        aria-pressed={shouldShowProjectPathEntry}
+                        label="Add project"
                         onClick={handleStartAddProject}
-                        tooltip={shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
+                        tooltip="Add project"
                         tooltipSide="right"
                       />
                     </>,
-                  )}
-
-                  {shouldShowProjectPathEntry && (
-                    <div className="mb-2.5 px-1">
-                      {!showManualPathInput ? (
-                        <div className="flex gap-1.5">
-                          {isElectron && (
-                            <button
-                              type="button"
-                              className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:opacity-50"
-                              onClick={() => void handlePickFolder()}
-                              disabled={isPickingFolder || isAddingProject}
-                            >
-                              <FolderClosed className={sidebarGlyphClass("chrome")} />
-                              {isPickingFolder
-                                ? "Opening..."
-                                : isAddingProject
-                                  ? "Adding..."
-                                  : "Browse"}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                            onClick={() => setShowManualPathInput(true)}
-                          >
-                            <SidebarGlyph icon={TbCursorText} variant="chrome" />
-                            Type path
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="relative">
-                          <Input
-                            ref={addProjectInputRef}
-                            nativeInput
-                            size="sm"
-                            variant="soft"
-                            autoFocus
-                            spellCheck={false}
-                            autoCorrect="off"
-                            autoCapitalize="off"
-                            aria-invalid={addProjectError ? true : undefined}
-                            aria-label="Project path"
-                            className="[&>[data-slot=input]]:pe-9"
-                            placeholder="/path/to/project"
-                            value={newCwd}
-                            onChange={(event) => {
-                              setNewCwd(event.target.value);
-                              setAddProjectError(null);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") handleAddProject();
-                              if (event.key === "Escape") {
-                                setShowManualPathInput(false);
-                                setAddProjectError(null);
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="-translate-y-1/2 absolute end-1.5 top-1/2 rounded-md px-1.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
-                            onClick={handleAddProject}
-                            disabled={!canAddProject}
-                            aria-label="Add project"
-                          >
-                            {isAddingProject ? "..." : "↵"}
-                          </button>
-                        </div>
-                      )}
-                      {addProjectError && (
-                        <div className="mt-1 space-y-1 px-0.5">
-                          <p className="text-xs leading-tight text-red-400">{addProjectError}</p>
-                          {addProjectErrorMeaning && (
-                            <p className="text-xs leading-tight text-muted-foreground/70">
-                              {addProjectErrorMeaning}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
                   )}
 
                   {isManualProjectSorting ? (
@@ -6322,6 +6215,14 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <CreateProjectDialog
+        open={createProjectDialogOpen}
+        spaces={spaces}
+        activeSpaceId={activeSpaceId}
+        onOpenChange={setCreateProjectDialogOpen}
+        onSubmit={handleCreateProjectSubmit}
+      />
 
       <SpaceEditorDialog
         open={spaceEditorOpen}
@@ -6667,13 +6568,11 @@ export default function Sidebar() {
         <SidebarSearchPaletteController
           open={searchPaletteOpen}
           mode={searchPaletteMode}
-          initialBrowseQuery={searchPaletteInitialQuery}
           onModeChange={setSearchPaletteMode}
           onOpenChange={(open) => {
             setSearchPaletteOpen(open);
             if (!open) {
               setSearchPaletteMode("search");
-              setSearchPaletteInitialQuery(null);
             }
           }}
           actions={searchPaletteActions}
@@ -6720,7 +6619,6 @@ function SidebarSearchPaletteController(props: {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
-  initialBrowseQuery: string | null;
   onOpenSettings: () => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
@@ -6784,7 +6682,6 @@ function SidebarSearchPaletteController(props: {
       onCreateThread={props.onCreateThread}
       onAddProjectPath={props.onAddProjectPath}
       homeDir={props.homeDir}
-      initialBrowseQuery={props.initialBrowseQuery}
       onOpenSettings={props.onOpenSettings}
       onOpenFeedback={props.onOpenFeedback}
       onOpenUsageSettings={props.onOpenUsageSettings}

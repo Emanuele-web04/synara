@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 
 import {
+  classifyDroidPromptTurnCompletion,
   extractDroidApproveSpecPlanMarkdown,
   isDroidNestedTaskToolCall,
   isExpectedDroidPlanRejection,
@@ -72,6 +73,22 @@ describe("DroidAdapter runtime event scoping", () => {
           "Error: Plan not approved - remaining in Spec Mode. Provide feedback to refine the spec.",
       }),
     ).toBe(true);
+  });
+
+  it("treats cancellation used to settle a captured Plan as successful completion", () => {
+    expect(
+      classifyDroidPromptTurnCompletion({
+        planCaptured: true,
+        stopReason: "cancelled",
+        failedToolDetail: "Plan not approved - remaining in Spec Mode.",
+      }),
+    ).toEqual({ state: "completed" });
+    expect(
+      classifyDroidPromptTurnCompletion({
+        planCaptured: false,
+        stopReason: "cancelled",
+      }),
+    ).toEqual({ state: "cancelled" });
   });
 
   it("preserves the provider tool id while scoping the runtime item id", () => {

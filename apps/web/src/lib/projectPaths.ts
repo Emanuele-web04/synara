@@ -180,9 +180,3 @@ export function getBrowseParentPath(currentPath: string): string | null {
 export function canNavigateUp(currentPath: string): boolean {
   return hasTrailingPathSeparator(currentPath) && getBrowseParentPath(currentPath) !== null;
 }
-
-export function getInitialBrowseQuery(homeDir: string | null): string {
-  if (!homeDir) return "~/";
-  const separator = homeDir.includes("\\") && !homeDir.startsWith("/") ? "\\" : "/";
-  return homeDir.endsWith(separator) ? homeDir : `${homeDir}${separator}`;
-}
