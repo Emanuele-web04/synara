@@ -107,6 +107,10 @@ interface GitActionsControlProps {
   // `header` renders the split quick-action button; `panel` collapses every git
   // action into a single "Commit and Push" Environment panel row + dropdown.
   variant?: "header" | "panel";
+  // Lets a parent capture "run commit & push for this instance's repo" so a global
+  // keyboard shortcut can trigger it without duplicating the action logic. Called with
+  // `null` on unmount/dependency change so a stale trigger never lingers.
+  onRegisterCommitAndPushTrigger?: ((trigger: (() => void) | null) => void) | undefined;
 }
 
 interface PendingDefaultBranchAction {
@@ -297,6 +301,17 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   return <InfoIcon className={GIT_ACTION_ICON_CLASS} />;
 }
 
+// The commit-and-push behavior moves between menu items with git state: on a feature
+// branch with pending changes it is the `commit_push` item, while on the default branch
+// (or with ahead-only commits) it lives under the `push` item. Both the panel row's
+// enabled state and the global shortcut resolve their target through this one rule.
+function findRunnableCommitPushMenuItem(items: GitActionMenuItem[]): GitActionMenuItem | null {
+  return (
+    items.find((item) => (item.id === "commit_push" || item.id === "push") && !item.disabled) ??
+    null
+  );
+}
+
 function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
   return (
     <MenuItem disabled={item.disabled} onClick={item.onSelect}>
@@ -313,6 +328,7 @@ export default function GitActionsControl({
   activeThreadId,
   hideQuickActionLabel = false,
   variant = "header",
+  onRegisterCommitAndPushTrigger,
 }: GitActionsControlProps) {
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
@@ -1119,6 +1135,17 @@ export default function GitActionsControl({
     [openCommitDialog, openExistingPr, runGitActionWithToast],
   );
 
+  useEffect(() => {
+    if (!onRegisterCommitAndPushTrigger) return;
+    const target = findRunnableCommitPushMenuItem(gitActionMenuItems);
+    if (!target) {
+      onRegisterCommitAndPushTrigger(null);
+      return;
+    }
+    onRegisterCommitAndPushTrigger(() => openDialogForMenuItem(target));
+    return () => onRegisterCommitAndPushTrigger(null);
+  }, [gitActionMenuItems, onRegisterCommitAndPushTrigger, openDialogForMenuItem]);
+
   const gitPickerMenuItems = useMemo<GitPickerMenuItem[]>(() => {
     const items: GitPickerMenuItem[] = [];
     const commitMenuItem = gitActionMenuItems.find((item) => item.id === "commit");
@@ -1276,9 +1303,7 @@ export default function GitActionsControl({
 
   if (!gitCwd) return null;
 
-  const hasRunnableCommitPushAction = gitActionMenuItems.some(
-    (item) => (item.id === "commit_push" || item.id === "push") && !item.disabled,
-  );
+  const hasRunnableCommitPushAction = findRunnableCommitPushMenuItem(gitActionMenuItems) !== null;
   const shouldDimPanelCommitPushRow = isGitActionRunning || !hasRunnableCommitPushAction;
 
   // Shared dropdown body — the picker rows plus the contextual git-status warnings.

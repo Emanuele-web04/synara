@@ -191,6 +191,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     label: "Open in favorite editor",
     description: "Send the current thread or workspace target to your preferred editor.",
   },
+  {
+    command: "git.commitAndPush",
+    label: "Commit and push",
+    description: "Commit pending changes and push the active thread's repo.",
+  },
 ] as const;
 
 const THREAD_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(

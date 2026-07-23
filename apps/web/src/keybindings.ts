@@ -176,6 +176,19 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("u", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
   },
+  // Cmd+Ctrl+P on macOS. On Windows/Linux the literal chord would require the
+  // Super/Windows key, which window managers routinely swallow before it reaches
+  // the app, so those platforms get Ctrl+Alt+P instead (see the sibling entry below).
+  {
+    command: "git.commitAndPush",
+    shortcut: commandShortcut("p", { metaKey: true, ctrlKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenIdentifier("isMac")),
+  },
+  {
+    command: "git.commitAndPush",
+    shortcut: commandShortcut("p", { ctrlKey: true, altKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
   // Numbered space jumps target the switcher's visual tab order (mod+alt+1 = Void).
   // Same guard as the creation chords: Cmd+Alt never reaches the PTY on macOS, while
   // Ctrl+Alt+digit doubles as AltGr input on Linux/Windows and must yield to terminals.

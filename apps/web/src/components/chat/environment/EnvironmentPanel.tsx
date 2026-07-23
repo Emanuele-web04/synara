@@ -174,6 +174,8 @@ export interface EnvironmentPanelProps {
   onOpenEditorView?: (() => void) | null;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
+  /** Registers the panel's "Commit and Push" row as the target for the global shortcut. */
+  onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
 }
 
 function EnvironmentRecapSection({
@@ -251,6 +253,7 @@ export function EnvironmentPanel({
   onNotesChange,
   onOpenEditorView = null,
   onClose,
+  onRegisterCommitAndPushTrigger,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
   const { settings } = useAppSettings();
@@ -363,7 +366,12 @@ export function EnvironmentPanel({
       {isGitRepo ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
 
       {showGitActions ? (
-        <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} variant="panel" />
+        <GitActionsControl
+          gitCwd={gitCwd}
+          activeThreadId={activeThreadId}
+          variant="panel"
+          onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
+        />
       ) : null}
 
       <EnvironmentLocalServersSection enabled={open} />

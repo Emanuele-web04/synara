@@ -58,7 +58,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "General",
     description: "Default provider, thread mode, and sidebar organization.",
-    icon: "settings-gear-1",
+    icon: "settings-gear-4",
     eyebrow: "Workflow defaults",
   },
   {
