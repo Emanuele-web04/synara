@@ -999,7 +999,7 @@ export class DesktopBrowserAutomationHost {
           code: "BrowserNavigationBlocked",
           retryable: false,
           phase: "navigation",
-          tabId: targetTabId,
+          tabId: targetTabId as BrowserTabId,
           effectMayHaveCommitted: false,
         });
       }

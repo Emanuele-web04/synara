@@ -3418,9 +3418,11 @@ function createWindow(): BrowserWindow {
 
   const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    const partition = params.partition;
     if (
+      partition === undefined ||
       !hardenBrowserAnnotationWebviewPreferences({
-        partition: params.partition,
+        partition,
         expectedPartition: BROWSER_SESSION_PARTITION,
         preloadPath: annotationGuestPreload,
         webPreferences,
