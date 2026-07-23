@@ -76,6 +76,13 @@ export interface TerminalRuntimeEntry {
   visualResizeTimer: number | null;
   lastVisualResizeAt: number;
   lastSentResize: { cols: number; rows: number } | null;
+  backendOpenDimensions: { cols: number; rows: number } | null;
+  backendResizeEpoch: number;
+  backendResizeSettlement: Promise<void> | null;
+  appliedHistoryRecordIdentity: string | null;
+  pendingHistoryRecordIdentity: string | null;
+  pendingHistoryReplayPromise: Promise<void> | null;
+  recoveredGridReplayInProgress: boolean;
   pendingResize: { cols: number; rows: number } | null;
   writeRafHandle: number | null;
   writeFlushTimeout: number | null;

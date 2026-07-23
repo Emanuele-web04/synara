@@ -24,6 +24,10 @@ import {
 } from "./Manager";
 import type { ProcessTreeKiller } from "../processTreeKiller";
 import { Effect, Encoding } from "effect";
+import {
+  createTerminalHistoryMetadata,
+  terminalHistoryMetadataPath,
+} from "../terminalHistoryRecord";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
@@ -419,6 +423,9 @@ describe("TerminalManager", () => {
     await waitFor(() => fs.existsSync(historyLogPath(logsDir)));
     await manager.clear({ threadId: "thread-1" });
     await waitFor(() => fs.readFileSync(historyLogPath(logsDir), "utf8") === "");
+    expect(
+      JSON.parse(fs.readFileSync(terminalHistoryMetadataPath(historyLogPath(logsDir)), "utf8")),
+    ).toEqual(createTerminalHistoryMetadata("", 100, 24));
 
     expect(events.some((event) => event.type === "cleared")).toBe(true);
     expect(
@@ -444,6 +451,7 @@ describe("TerminalManager", () => {
 
       expect(fs.statSync(logsDir).mode & 0o777).toBe(0o700);
       expect(fs.statSync(historyPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(terminalHistoryMetadataPath(historyPath)).mode & 0o777).toBe(0o600);
 
       manager.dispose();
     },
@@ -466,6 +474,133 @@ describe("TerminalManager", () => {
       manager.dispose();
     },
   );
+
+  it("restores validated source dimensions and identity through open snapshots", async () => {
+    const history = "recovered history\n";
+    const { manager } = makeManager(5, {
+      prepareLogs: (directory) => {
+        const historyPath = historyLogPath(directory);
+        fs.writeFileSync(historyPath, history);
+        fs.writeFileSync(
+          terminalHistoryMetadataPath(historyPath),
+          JSON.stringify(createTerminalHistoryMetadata(history, 77, 19)),
+        );
+      },
+    });
+    const snapshot = await manager.open(openInput({ cols: 120, rows: 30 }));
+    expect(snapshot.history).toBe(history);
+    expect(snapshot.recoveredCols).toBe(77);
+    expect(snapshot.recoveredRows).toBe(19);
+    expect(snapshot.historyRecordIdentity).toBe(
+      createTerminalHistoryMetadata(history, 77, 19).recordIdentity,
+    );
+    manager.dispose();
+  });
+
+  it("invalidates recovered dimensions after live output and reopens updated history dimensionless", async () => {
+    const recoveredHistory = "recovered history\n";
+    const liveOutput = "live after recovery\n";
+    const { manager, ptyAdapter, logsDir } = makeManager(5, {
+      prepareLogs: (directory) => {
+        const historyPath = historyLogPath(directory);
+        fs.writeFileSync(historyPath, recoveredHistory);
+        fs.writeFileSync(
+          terminalHistoryMetadataPath(historyPath),
+          JSON.stringify(createTerminalHistoryMetadata(recoveredHistory, 77, 19)),
+        );
+      },
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => events.push(event));
+
+    const initialSnapshot = await manager.open(openInput({ cols: 120, rows: 30 }));
+    expect(initialSnapshot.history).toBe(recoveredHistory);
+    expect(initialSnapshot.recoveredCols).toBe(77);
+    expect(initialSnapshot.recoveredRows).toBe(19);
+    expect(initialSnapshot.historyRecordIdentity).toBeTypeOf("string");
+
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+    process.emitData(liveOutput);
+    await waitFor(() =>
+      events.some((event) => event.type === "output" && event.data === liveOutput),
+    );
+    const expectedHistory = `${recoveredHistory}${liveOutput}`;
+    await waitFor(() => fs.readFileSync(historyLogPath(logsDir), "utf8") === expectedHistory);
+
+    const reopenedSnapshot = await manager.open(openInput({ cols: 120, rows: 30 }));
+    expect(reopenedSnapshot.history).toBe(expectedHistory);
+    expect(reopenedSnapshot.recoveredCols).toBeUndefined();
+    expect(reopenedSnapshot.recoveredRows).toBeUndefined();
+    expect(reopenedSnapshot.historyRecordIdentity).toBeUndefined();
+
+    manager.dispose();
+  });
+
+  it("persists reattach dimensions-only changes with a new record identity", async () => {
+    const { manager, ptyAdapter, logsDir } = makeManager();
+    await manager.open(openInput({ cols: 100, rows: 24 }));
+    ptyAdapter.processes[0]?.emitData("same bytes\n");
+    const metadataPath = terminalHistoryMetadataPath(historyLogPath(logsDir));
+    await waitFor(() => fs.existsSync(metadataPath));
+    const first = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+      recordIdentity: string;
+    };
+    await manager.open(openInput({ cols: 120, rows: 40 }));
+    await waitFor(() => {
+      const current = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        cols: number;
+        recordIdentity: string;
+      };
+      return current.cols === 120 && current.recordIdentity !== first.recordIdentity;
+    });
+    manager.dispose();
+  });
+
+  it("rewrites normalized legacy bytes and hashes the exact capped source", async () => {
+    const raw = "drop\nkeep-1\n\u001b[2Jkeep-2\n";
+    const expected = "keep-1\nkeep-2\n";
+    const { manager, logsDir } = makeManager(2, {
+      prepareLogs: (directory) => {
+        const historyPath = historyLogPath(directory);
+        fs.writeFileSync(historyPath, raw);
+        fs.writeFileSync(
+          terminalHistoryMetadataPath(historyPath),
+          JSON.stringify(createTerminalHistoryMetadata(raw, 77, 19)),
+        );
+      },
+    });
+
+    const snapshot = await manager.open(openInput());
+    const historyPath = historyLogPath(logsDir);
+    const metadataPath = terminalHistoryMetadataPath(historyPath);
+    expect(snapshot.history).toBe(expected);
+    expect(snapshot.recoveredCols).toBeUndefined();
+    expect(snapshot.recoveredRows).toBeUndefined();
+    expect(snapshot.historyRecordIdentity).toBeUndefined();
+    expect(fs.readFileSync(historyPath, "utf8")).toBe(expected);
+    expect(fs.existsSync(metadataPath)).toBe(false);
+
+    await manager.resize({ threadId: "thread-1", cols: 100, rows: 24 });
+    await waitFor(() => fs.existsSync(metadataPath));
+    expect(fs.readFileSync(historyPath, "utf8")).toBe(expected);
+    expect(JSON.parse(fs.readFileSync(metadataPath, "utf8"))).toEqual(
+      createTerminalHistoryMetadata(expected, 100, 24),
+    );
+    manager.dispose();
+  });
+
+  it("removes sidecar and history when close deletes history", async () => {
+    const { manager, ptyAdapter, logsDir } = makeManager();
+    await manager.open(openInput());
+    ptyAdapter.processes[0]?.emitData("delete me\n");
+    const historyPath = historyLogPath(logsDir);
+    await waitFor(() => fs.existsSync(terminalHistoryMetadataPath(historyPath)));
+    await manager.close({ threadId: "thread-1", deleteHistory: true });
+    expect(fs.existsSync(terminalHistoryMetadataPath(historyPath))).toBe(false);
+    expect(fs.existsSync(historyPath)).toBe(false);
+  });
 
   it("keeps pty reads paused until renderer output ACKs drain", async () => {
     const { manager, ptyAdapter } = makeManager();
@@ -952,16 +1087,60 @@ describe("TerminalManager", () => {
 
     defaultProcess.emitData("default\n");
     sidecarProcess.emitData("sidecar\n");
-    await waitFor(() => fs.existsSync(multiTerminalHistoryLogPath(logsDir, "thread-1", "default")));
-    await waitFor(() => fs.existsSync(multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar")));
+    const defaultHistoryPath = multiTerminalHistoryLogPath(logsDir, "thread-1", "default");
+    const sidecarHistoryPath = multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar");
+    await waitFor(() => fs.existsSync(defaultHistoryPath));
+    await waitFor(() => fs.existsSync(sidecarHistoryPath));
+    expect(fs.existsSync(terminalHistoryMetadataPath(defaultHistoryPath))).toBe(true);
+    expect(fs.existsSync(terminalHistoryMetadataPath(sidecarHistoryPath))).toBe(true);
 
     await manager.close({ threadId: "thread-1", deleteHistory: true });
 
     expect(defaultProcess.killed).toBe(true);
     expect(sidecarProcess.killed).toBe(true);
-    expect(fs.existsSync(multiTerminalHistoryLogPath(logsDir, "thread-1", "default"))).toBe(false);
-    expect(fs.existsSync(multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar"))).toBe(false);
+    expect(fs.existsSync(defaultHistoryPath)).toBe(false);
+    expect(fs.existsSync(sidecarHistoryPath)).toBe(false);
+    expect(fs.existsSync(terminalHistoryMetadataPath(defaultHistoryPath))).toBe(false);
+    expect(fs.existsSync(terminalHistoryMetadataPath(sidecarHistoryPath))).toBe(false);
 
+    manager.dispose();
+  });
+
+  it("deletes orphaned thread metadata temporaries without touching adjacent artifacts", async () => {
+    const { manager, logsDir } = makeManager();
+    const ownedHistoryPath = multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar");
+    const ownedMetadataTemp = `${terminalHistoryMetadataPath(ownedHistoryPath)}.tmp-4100-7`;
+    const adjacentMetadataTemp = `${terminalHistoryMetadataPath(
+      multiTerminalHistoryLogPath(logsDir, "thread-10", "sidecar"),
+    )}.tmp-4100-7`;
+    const unknownSuffix = `${terminalHistoryMetadataPath(ownedHistoryPath)}.tmp-4100-7.keep`;
+    fs.writeFileSync(ownedMetadataTemp, "orphaned metadata");
+    fs.writeFileSync(adjacentMetadataTemp, "adjacent thread");
+    fs.writeFileSync(unknownSuffix, "unknown transaction suffix");
+
+    await manager.close({ threadId: "thread-1", deleteHistory: true });
+
+    expect(fs.existsSync(ownedMetadataTemp)).toBe(false);
+    expect(fs.readFileSync(adjacentMetadataTemp, "utf8")).toBe("adjacent thread");
+    expect(fs.readFileSync(unknownSuffix, "utf8")).toBe("unknown transaction suffix");
+    manager.dispose();
+  });
+
+  it("deletes orphaned thread history temporaries without touching adjacent artifacts", async () => {
+    const { manager, logsDir } = makeManager();
+    const ownedHistoryPath = historyLogPath(logsDir, "thread-1");
+    const ownedHistoryTemp = `${ownedHistoryPath}.tmp-4200-8`;
+    const adjacentHistoryTemp = `${historyLogPath(logsDir, "thread-10")}.tmp-4200-8`;
+    const unknownSuffix = `${ownedHistoryPath}.tmp-manual`;
+    fs.writeFileSync(ownedHistoryTemp, "orphaned history");
+    fs.writeFileSync(adjacentHistoryTemp, "adjacent thread");
+    fs.writeFileSync(unknownSuffix, "unknown transaction suffix");
+
+    await manager.close({ threadId: "thread-1", deleteHistory: true });
+
+    expect(fs.existsSync(ownedHistoryTemp)).toBe(false);
+    expect(fs.readFileSync(adjacentHistoryTemp, "utf8")).toBe("adjacent thread");
+    expect(fs.readFileSync(unknownSuffix, "utf8")).toBe("unknown transaction suffix");
     manager.dispose();
   });
 
@@ -1092,8 +1271,12 @@ describe("TerminalManager", () => {
     const snapshot = await manager.open(openInput());
 
     expect(snapshot.history).toBe("legacy-line\n");
+    expect(snapshot.recoveredCols).toBeUndefined();
+    expect(snapshot.recoveredRows).toBeUndefined();
+    expect(snapshot.historyRecordIdentity).toBeUndefined();
     expect(fs.existsSync(nextPath)).toBe(true);
     expect(fs.readFileSync(nextPath, "utf8")).toBe("legacy-line\n");
+    expect(fs.existsSync(terminalHistoryMetadataPath(nextPath))).toBe(false);
     expect(fs.existsSync(legacyPath)).toBe(false);
     if (process.platform !== "win32") {
       expect(fs.statSync(nextPath).mode & 0o777).toBe(0o600);

@@ -53,6 +53,18 @@ import type {
 } from "./terminalRuntimeTypes";
 import { waitForTerminalFontReady } from "./terminalFontSettle";
 import { observeTerminalWriteParsed } from "./terminalPerformance";
+import {
+  applyReplayOnce,
+  createRecoveredGridOutputBuffer,
+  hasRecoveredGrid,
+  RecoveredGridFinalizationError,
+  replaySnapshotAtBackendOpenGrid,
+  replaySnapshotAtDestinationGrid,
+  replaySnapshotAtRecoveredGrid,
+  shouldReplayColdSnapshot,
+  snapshotHasReplayPayload,
+  snapshotReplayIdentity,
+} from "./terminalSnapshotReplay";
 
 const ENABLE_TERMINAL_WEBGL = true;
 const VISUAL_RESIZE_MIN_INTERVAL_MS = 64;
@@ -61,8 +73,14 @@ const WRITE_BATCH_SIZE_LIMIT = 262_144;
 const WRITE_BATCH_MAX_LATENCY_MS = 50;
 const LINK_MATCH_CACHE_LIMIT = 512;
 const OPEN_SNAPSHOT_RECONCILE_DELAY_MS = 250;
+const TERMINAL_ACK_MAX_BYTES = 8_388_608;
 const TERMINAL_TEXT_ENCODER = new TextEncoder();
 const TERMINAL_PARKING_CONTAINER_ID = "synara-terminal-parking";
+const recoveredGridOutputBuffers = new WeakMap<
+  TerminalRuntimeEntry,
+  ReturnType<typeof createRecoveredGridOutputBuffer>
+>();
+const recoveredGridClearsPending = new WeakSet<TerminalRuntimeEntry>();
 
 type SynaraTerminalOptions = NonNullable<ConstructorParameters<typeof Terminal>[0]> & {
   fontWeight?: string | number;
@@ -84,19 +102,24 @@ function terminalByteLength(data: string): number {
 }
 
 function acknowledgeParsedOutput(entry: TerminalRuntimeEntry, bytes: number): void {
-  if (bytes <= 0) return;
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) return;
   const api = readNativeApi();
   if (!api) return;
   const ackOutput = api.terminal.ackOutput;
   if (typeof ackOutput !== "function") return;
 
-  void ackOutput({
-    threadId: entry.threadId,
-    terminalId: entry.terminalId,
-    bytes,
-  }).catch(() => {
-    // Flow control is best-effort; reconnect/replay will recover from a missed ACK.
-  });
+  let remaining = bytes;
+  while (remaining > 0) {
+    const chunk = Math.min(remaining, TERMINAL_ACK_MAX_BYTES);
+    remaining -= chunk;
+    void ackOutput({
+      threadId: entry.threadId,
+      terminalId: entry.terminalId,
+      bytes: chunk,
+    }).catch(() => {
+      // Flow control is best-effort; reconnect/replay will recover from a missed ACK.
+    });
+  }
 }
 
 function setRuntimeStatus(
@@ -146,19 +169,10 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
   });
 }
 
-function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
+function prepareForSnapshotReplay(entry: TerminalRuntimeEntry): void {
   entry.titleInputBuffer = "";
   entry.linkMatchCache.clear();
   clearPendingWrites(entry);
-  entry.terminal.write("\u001bc");
-}
-
-function snapshotReplayPayload(snapshot: TerminalSessionSnapshot): string {
-  return `${snapshot.replayPreamble ?? ""}${snapshot.history}`;
-}
-
-function snapshotHasReplayPayload(snapshot: TerminalSessionSnapshot): boolean {
-  return snapshot.history.length > 0 || (snapshot.replayPreamble?.length ?? 0) > 0;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -180,6 +194,66 @@ function fitTerminal(entry: TerminalRuntimeEntry): void {
   }
 }
 
+function measureTerminalFit(
+  entry: TerminalRuntimeEntry,
+): { cols: number; rows: number } | undefined {
+  const dimensions = entry.fitAddon.proposeDimensions();
+  if (!dimensions || !Number.isFinite(dimensions.cols) || !Number.isFinite(dimensions.rows)) {
+    return undefined;
+  }
+
+  return {
+    cols: clamp(Math.trunc(dimensions.cols), TERMINAL_MIN_COLS, TERMINAL_MAX_COLS),
+    rows: clamp(Math.trunc(dimensions.rows), TERMINAL_MIN_ROWS, TERMINAL_MAX_ROWS),
+  };
+}
+
+function hasRetainedRecoveredOutput(entry: TerminalRuntimeEntry): boolean {
+  return recoveredGridOutputBuffers.has(entry);
+}
+
+function discardRecoveredGridOutput(
+  entry: TerminalRuntimeEntry,
+  outputBuffer: ReturnType<typeof createRecoveredGridOutputBuffer>,
+  count = outputBuffer.size(),
+): void {
+  const discardedBytes = outputBuffer
+    .drainPrefix(count)
+    .reduce((total, output) => total + output.byteLength, 0);
+  acknowledgeParsedOutput(entry, discardedBytes);
+}
+
+function applyPendingRecoveredGridClear(entry: TerminalRuntimeEntry): boolean {
+  if (!recoveredGridClearsPending.delete(entry)) return false;
+  entry.terminal.clear();
+  entry.terminal.write("\u001bc");
+  return true;
+}
+
+function restoreBackendOpenGridAfterClear(entry: TerminalRuntimeEntry): boolean {
+  const backendOpenDimensions = entry.backendOpenDimensions;
+  if (!backendOpenDimensions) return false;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      if (
+        entry.terminal.cols !== backendOpenDimensions.cols ||
+        entry.terminal.rows !== backendOpenDimensions.rows
+      ) {
+        entry.terminal.resize(backendOpenDimensions.cols, backendOpenDimensions.rows);
+      }
+    } catch {
+      // Verify below; a resize can throw after partially applying dimensions.
+    }
+    if (
+      entry.terminal.cols === backendOpenDimensions.cols &&
+      entry.terminal.rows === backendOpenDimensions.rows
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildOpenInput(entry: TerminalRuntimeEntry) {
   return {
     threadId: entry.threadId,
@@ -195,15 +269,180 @@ function replaySnapshot(
   entry: TerminalRuntimeEntry,
   snapshot: TerminalSessionSnapshot,
   onParsed?: () => void,
+  options?: { allowExistingOutput?: boolean; allowRecoveredGrid?: boolean },
 ): void {
-  resetForSnapshotReplay(entry);
-  const payload = snapshotReplayPayload(snapshot);
-  if (payload.length > 0) {
-    setRuntimeStatus(entry, "replaying");
-    entry.terminal.write(payload, onParsed);
+  const retainedOutputBuffer = recoveredGridOutputBuffers.get(entry);
+  const retryingRetainedOutput = retainedOutputBuffer !== undefined;
+  const clearPendingAtRequest = recoveredGridClearsPending.has(entry);
+  const retainedOutputBoundary = clearPendingAtRequest ? 0 : (retainedOutputBuffer?.size() ?? 0);
+  const replayCandidate = clearPendingAtRequest
+    ? { ...snapshot, history: "", replayPreamble: "" }
+    : snapshot;
+  const recoveredSnapshot =
+    ((options?.allowRecoveredGrid ?? true) || retryingRetainedOutput) &&
+    hasRecoveredGrid(replayCandidate) &&
+    entry.backendOpenDimensions
+      ? replayCandidate
+      : null;
+  const retainedDimensionlessSnapshot =
+    retryingRetainedOutput && !hasRecoveredGrid(replayCandidate) && entry.backendOpenDimensions
+      ? replayCandidate
+      : null;
+  const outputEventVersionAtRequest = entry.outputEventVersion;
+
+  // Retained output can only be released after replay at a grid that is known
+  // to match the backend. A dimensionless snapshot is authoritative after the
+  // Manager invalidates recovered-grid metadata on fresh live output.
+  if (
+    retryingRetainedOutput &&
+    !recoveredSnapshot &&
+    !retainedDimensionlessSnapshot &&
+    !clearPendingAtRequest
+  ) {
+    setRuntimeStatus(entry, "error");
     return;
   }
-  onParsed?.();
+
+  const replay = async (): Promise<void> => {
+    if (recoveredSnapshot || retainedDimensionlessSnapshot || clearPendingAtRequest) {
+      if (
+        entry.disposed ||
+        !entry.opened ||
+        (retainedOutputBuffer && recoveredGridOutputBuffers.get(entry) !== retainedOutputBuffer) ||
+        (!retryingRetainedOutput &&
+          ((!options?.allowExistingOutput && outputEventVersionAtRequest !== 0) ||
+            entry.outputEventVersion !== outputEventVersionAtRequest))
+      ) {
+        throw new Error("Terminal replay was aborted");
+      }
+
+      prepareForSnapshotReplay(entry);
+      cancelScheduledVisualResize(entry);
+      const outputBuffer = retainedOutputBuffer ?? createRecoveredGridOutputBuffer();
+      recoveredGridOutputBuffers.set(entry, outputBuffer);
+      entry.recoveredGridReplayInProgress = true;
+      setRuntimeStatus(entry, "replaying");
+      let releaseBufferedOutput = false;
+      try {
+        await settleBackendResizesForRecovery(entry);
+        if (
+          entry.disposed ||
+          !entry.opened ||
+          (!retryingRetainedOutput && entry.outputEventVersion !== outputEventVersionAtRequest)
+        ) {
+          releaseBufferedOutput = true;
+          throw new Error("Terminal replay was aborted");
+        }
+
+        const backendOpenDimensions = entry.backendOpenDimensions;
+        if (!backendOpenDimensions) {
+          throw new RecoveredGridFinalizationError(
+            "Terminal replay has no verified backend-open grid",
+            new Error("Missing backend-open dimensions"),
+          );
+        }
+
+        if (recoveredGridClearsPending.has(entry)) {
+          if (!restoreBackendOpenGridAfterClear(entry)) {
+            throw new RecoveredGridFinalizationError(
+              "Terminal clear could not restore the backend-open grid",
+              new Error("Backend-open grid restoration failed"),
+            );
+          }
+        } else if (recoveredSnapshot) {
+          await replaySnapshotAtRecoveredGrid({
+            terminal: entry.terminal,
+            snapshot: recoveredSnapshot,
+            backendOpenDimensions,
+            measureFinalGrid: () => measureTerminalFit(entry),
+            resizeBackend: async ({ cols, rows }) => {
+              const api = readNativeApi();
+              if (!api) throw new Error("Terminal backend is unavailable");
+              await api.terminal.resize({
+                threadId: entry.threadId,
+                terminalId: entry.terminalId,
+                cols,
+                rows,
+              });
+              entry.lastSentResize = { cols, rows };
+              entry.backendOpenDimensions = { cols, rows };
+            },
+            isActive: () =>
+              !entry.disposed &&
+              entry.opened &&
+              entry.outputEventVersion === outputEventVersionAtRequest,
+          });
+        } else if (retainedDimensionlessSnapshot) {
+          await replaySnapshotAtBackendOpenGrid({
+            terminal: entry.terminal,
+            snapshot: retainedDimensionlessSnapshot,
+            backendOpenDimensions,
+          });
+          // The Manager flushes output before returning its snapshot. Bytes
+          // retained when that response arrived are already represented by the
+          // authoritative history and must be ACKed, not rendered a second time.
+          // A concurrent clear already discarded the superseded prefix itself.
+          if (!recoveredGridClearsPending.has(entry)) {
+            discardRecoveredGridOutput(entry, outputBuffer, retainedOutputBoundary);
+          }
+          if (entry.outputEventVersion !== outputEventVersionAtRequest) {
+            releaseBufferedOutput = true;
+            throw new Error("Terminal replay was aborted");
+          }
+        }
+        releaseBufferedOutput = true;
+      } catch (error) {
+        releaseBufferedOutput = !(error instanceof RecoveredGridFinalizationError);
+        if (!releaseBufferedOutput && !entry.disposed) setRuntimeStatus(entry, "error");
+        throw error;
+      } finally {
+        if (
+          (releaseBufferedOutput || entry.disposed) &&
+          recoveredGridOutputBuffers.get(entry) === outputBuffer
+        ) {
+          recoveredGridOutputBuffers.delete(entry);
+        }
+        entry.recoveredGridReplayInProgress = false;
+        if (releaseBufferedOutput && !entry.disposed) {
+          if (applyPendingRecoveredGridClear(entry)) setRuntimeStatus(entry, "ready");
+          for (const output of outputBuffer.drain()) {
+            scheduleWrite(entry, output.data, output.byteLength);
+          }
+        }
+      }
+      return;
+    }
+
+    if (
+      entry.disposed ||
+      !entry.opened ||
+      (!options?.allowExistingOutput && outputEventVersionAtRequest !== 0) ||
+      entry.outputEventVersion !== outputEventVersionAtRequest
+    ) {
+      throw new Error("Terminal replay was aborted");
+    }
+    prepareForSnapshotReplay(entry);
+    if (snapshotHasReplayPayload(snapshot)) setRuntimeStatus(entry, "replaying");
+    await new Promise<void>((resolve, reject) => {
+      try {
+        replaySnapshotAtDestinationGrid(entry.terminal, snapshot, resolve);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  };
+
+  void snapshotReplayIdentity(snapshot)
+    .then((identity) => applyReplayOnce(entry, identity, replay))
+    .then(() => {
+      if (clearPendingAtRequest) entry.appliedHistoryRecordIdentity = null;
+      onParsed?.();
+    })
+    .catch(() => {
+      if (!entry.disposed && entry.outputEventVersion === outputEventVersionAtRequest) {
+        setRuntimeStatus(entry, "error");
+      }
+    });
 }
 
 function clearBackendResizeTimer(entry: TerminalRuntimeEntry): void {
@@ -295,19 +534,57 @@ function flushPendingResize(entry: TerminalRuntimeEntry): void {
 
   entry.pendingResize = null;
   entry.lastSentResize = pendingResize;
-  void api.terminal
-    .resize({
-      threadId: entry.threadId,
-      terminalId: entry.terminalId,
-      cols: pendingResize.cols,
-      rows: pendingResize.rows,
+  const resizeEpoch = entry.backendResizeEpoch;
+  const previousSettlement = entry.backendResizeSettlement ?? Promise.resolve();
+  let trackedSettlement!: Promise<void>;
+  trackedSettlement = previousSettlement
+    .catch(() => undefined)
+    .then(async () => {
+      if (entry.disposed || entry.backendResizeEpoch !== resizeEpoch) {
+        const current = entry.lastSentResize;
+        if (current && current.cols === pendingResize.cols && current.rows === pendingResize.rows) {
+          entry.lastSentResize = null;
+        }
+        return;
+      }
+      try {
+        await api.terminal.resize({
+          threadId: entry.threadId,
+          terminalId: entry.terminalId,
+          cols: pendingResize.cols,
+          rows: pendingResize.rows,
+        });
+        entry.backendOpenDimensions = pendingResize;
+      } catch {
+        const current = entry.lastSentResize;
+        if (current && current.cols === pendingResize.cols && current.rows === pendingResize.rows) {
+          entry.lastSentResize = null;
+        }
+      }
     })
-    .catch(() => {
-      const current = entry.lastSentResize;
-      if (current && current.cols === pendingResize.cols && current.rows === pendingResize.rows) {
-        entry.lastSentResize = null;
+    .finally(() => {
+      if (entry.backendResizeSettlement === trackedSettlement) {
+        entry.backendResizeSettlement = null;
       }
     });
+  entry.backendResizeSettlement = trackedSettlement;
+}
+
+async function settleBackendResizesForRecovery(entry: TerminalRuntimeEntry): Promise<void> {
+  clearBackendResizeTimer(entry);
+  entry.pendingResize = null;
+  entry.backendResizeEpoch += 1;
+  const settlement = entry.backendResizeSettlement;
+  if (settlement) await settlement;
+  const current = entry.lastSentResize;
+  if (
+    current &&
+    entry.backendOpenDimensions &&
+    (current.cols !== entry.backendOpenDimensions.cols ||
+      current.rows !== entry.backendOpenDimensions.rows)
+  ) {
+    entry.lastSentResize = null;
+  }
 }
 
 function queueBackendResize(entry: TerminalRuntimeEntry, cols: number, rows: number): void {
@@ -331,7 +608,9 @@ function runTerminalResize(
   entry: TerminalRuntimeEntry,
   options?: { clearTextureAtlas?: boolean; refresh?: boolean; dispatchBackend?: boolean },
 ): void {
-  if (!entry.container || !entry.viewState.isVisible) return;
+  if (!entry.container || !entry.viewState.isVisible || entry.recoveredGridReplayInProgress) {
+    return;
+  }
 
   const { clearTextureAtlas = false, refresh = false, dispatchBackend = true } = options ?? {};
   const buffer = entry.terminal.buffer.active;
@@ -703,11 +982,12 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
         return;
       }
 
-      if (entry.outputEventVersion !== outputEventVersionAtRequest) {
+      const retainedOutput = hasRetainedRecoveredOutput(entry);
+      if (entry.outputEventVersion !== outputEventVersionAtRequest && !retainedOutput) {
         return;
       }
 
-      if (snapshotHasReplayPayload(snapshot)) {
+      if (snapshotHasReplayPayload(snapshot) || retainedOutput) {
         replaySnapshot(entry, snapshot, () => {
           if (!entry.disposed && entry.snapshotReconcileRequestId === requestId) {
             setRuntimeStatus(entry, "ready");
@@ -815,6 +1095,13 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     visualResizeTimer: null,
     lastVisualResizeAt: 0,
     lastSentResize: null,
+    backendOpenDimensions: null,
+    backendResizeEpoch: 0,
+    backendResizeSettlement: null,
+    appliedHistoryRecordIdentity: null,
+    pendingHistoryRecordIdentity: null,
+    pendingHistoryReplayPromise: null,
+    recoveredGridReplayInProgress: false,
     pendingResize: null,
     writeRafHandle: null,
     writeFlushTimeout: null,
@@ -1006,18 +1293,43 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     entry.terminalId,
     (event) => {
       if (event.type === "output") {
-        setRuntimeStatus(entry, "ready");
+        const outputBuffer = recoveredGridOutputBuffers.get(entry);
+        if (!outputBuffer || entry.recoveredGridReplayInProgress) {
+          setRuntimeStatus(entry, "ready");
+        }
         entry.outputEventVersion += 1;
-        scheduleWrite(entry, event.data, event.byteLength ?? terminalByteLength(event.data));
+        entry.appliedHistoryRecordIdentity = null;
+        const output = {
+          data: event.data,
+          byteLength: event.byteLength ?? terminalByteLength(event.data),
+        };
+        if (outputBuffer) {
+          outputBuffer.enqueue(output);
+        } else {
+          scheduleWrite(entry, output.data, output.byteLength);
+        }
         return;
       }
 
       if (event.type === "started" || event.type === "restarted") {
         entry.hasHandledExit = false;
+        const retainedOutput = hasRetainedRecoveredOutput(entry);
         const shouldReplaySnapshot =
-          event.type === "restarted" || snapshotHasReplayPayload(event.snapshot);
+          retainedOutput || event.type === "restarted" || snapshotHasReplayPayload(event.snapshot);
         if (shouldReplaySnapshot) {
-          replaySnapshot(entry, event.snapshot, () => setRuntimeStatus(entry, "ready"));
+          const allowRecoveredGrid =
+            event.type === "restarted" ||
+            retainedOutput ||
+            !hasRecoveredGrid(event.snapshot) ||
+            shouldReplayColdSnapshot(event.snapshot, 0, entry.outputEventVersion);
+          if (event.type === "started" && hasRecoveredGrid(event.snapshot) && !allowRecoveredGrid) {
+            setRuntimeStatus(entry, "ready");
+            return;
+          }
+          replaySnapshot(entry, event.snapshot, () => setRuntimeStatus(entry, "ready"), {
+            allowExistingOutput: event.type === "restarted",
+            allowRecoveredGrid,
+          });
         } else {
           setRuntimeStatus(entry, "ready");
         }
@@ -1025,9 +1337,29 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       }
 
       if (event.type === "cleared") {
+        entry.outputEventVersion += 1;
+        entry.appliedHistoryRecordIdentity = null;
         entry.titleInputBuffer = "";
         entry.linkMatchCache.clear();
         clearPendingWrites(entry);
+        const retainedOutputBuffer = recoveredGridOutputBuffers.get(entry);
+        if (retainedOutputBuffer) {
+          // A backend clear supersedes output received before it. Discard those
+          // retained bytes, then either clear immediately at the known backend
+          // grid or defer the clear until a recovered-grid retry is safe.
+          discardRecoveredGridOutput(entry, retainedOutputBuffer);
+          recoveredGridClearsPending.add(entry);
+          if (!entry.recoveredGridReplayInProgress) {
+            if (restoreBackendOpenGridAfterClear(entry)) {
+              recoveredGridOutputBuffers.delete(entry);
+              applyPendingRecoveredGridClear(entry);
+              setRuntimeStatus(entry, "ready");
+            } else {
+              setRuntimeStatus(entry, "error");
+            }
+          }
+          return;
+        }
         terminal.clear();
         terminal.write("\u001bc");
         return;
@@ -1093,14 +1425,20 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   setRuntimeStatus(entry, "connecting");
   const outputEventVersionAtOpen = entry.outputEventVersion;
   const openInput = buildOpenInput(entry);
+  entry.backendOpenDimensions = { cols: openInput.cols, rows: openInput.rows };
 
   void api.terminal
     .open(openInput)
     .then((snapshot) => {
       if (entry.disposed) return;
+      const retainedOutput = hasRetainedRecoveredOutput(entry);
       if (
-        snapshotHasReplayPayload(snapshot) &&
-        entry.outputEventVersion === outputEventVersionAtOpen
+        shouldReplayColdSnapshot(
+          snapshot,
+          outputEventVersionAtOpen,
+          entry.outputEventVersion,
+          retainedOutput,
+        )
       ) {
         replaySnapshot(entry, snapshot, () => setRuntimeStatus(entry, "ready"));
       } else if (entry.outputEventVersion === outputEventVersionAtOpen) {
@@ -1109,17 +1447,23 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
           if (
             entry.disposed ||
             !entry.opened ||
-            entry.outputEventVersion !== outputEventVersionAtOpen
+            (entry.outputEventVersion !== outputEventVersionAtOpen &&
+              !hasRetainedRecoveredOutput(entry))
           ) {
             return;
           }
           void api.terminal
             .open(openInput)
             .then((nextSnapshot) => {
+              const retainedOutput = hasRetainedRecoveredOutput(entry);
+              if (entry.disposed) return;
               if (
-                entry.disposed ||
-                entry.outputEventVersion !== outputEventVersionAtOpen ||
-                !snapshotHasReplayPayload(nextSnapshot)
+                !shouldReplayColdSnapshot(
+                  nextSnapshot,
+                  outputEventVersionAtOpen,
+                  entry.outputEventVersion,
+                  retainedOutput,
+                )
               ) {
                 return;
               }
@@ -1209,6 +1553,11 @@ export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   // Closing a terminal should not synchronously paint queued output into a buffer
   // that is about to be destroyed; acknowledge and drop it to keep close latency low.
   clearPendingWrites(entry);
+  const retainedOutputBuffer = recoveredGridOutputBuffers.get(entry);
+  if (retainedOutputBuffer) discardRecoveredGridOutput(entry, retainedOutputBuffer);
+  recoveredGridOutputBuffers.delete(entry);
+  recoveredGridClearsPending.delete(entry);
+  entry.recoveredGridReplayInProgress = false;
   entry.unsubscribeTerminalEvents?.();
   entry.unsubscribeTerminalEvents = null;
   entry.querySuppressionDispose?.();

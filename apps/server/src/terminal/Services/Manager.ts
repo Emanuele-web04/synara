@@ -37,6 +37,11 @@ export interface TerminalSessionState {
   pid: number | null;
   /** Append-optimized scrollback buffer (sanitized visible text, capped on read). */
   history: TerminalHistoryBuffer;
+  /** Validated source grid associated with the recovered on-disk history. */
+  recoveredCols: number | null;
+  recoveredRows: number | null;
+  /** Stable identity of the exact recovered bytes and source dimensions. */
+  historyRecordIdentity: string | null;
   pendingHistoryControlSequence: string;
   exitCode: number | null;
   exitSignal: number | null;

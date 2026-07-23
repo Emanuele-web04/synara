@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Option, Schema, SchemaIssue } from "effect";
 import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
 
 export const DEFAULT_TERMINAL_ID = "default";
@@ -93,6 +93,8 @@ export type TerminalCloseInput = Schema.Codec.Encoded<typeof TerminalCloseInput>
 export const TerminalSessionStatus = Schema.Literals(["starting", "running", "exited", "error"]);
 export type TerminalSessionStatus = typeof TerminalSessionStatus.Type;
 
+const TerminalHistoryRecordIdentitySchema = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
+
 export const TerminalSessionSnapshot = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
@@ -100,11 +102,33 @@ export const TerminalSessionSnapshot = Schema.Struct({
   status: TerminalSessionStatus,
   pid: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
   history: Schema.String,
+  recoveredCols: Schema.optional(TerminalColsSchema),
+  recoveredRows: Schema.optional(TerminalRowsSchema),
+  historyRecordIdentity: Schema.optional(TerminalHistoryRecordIdentitySchema),
   replayPreamble: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
   exitCode: Schema.NullOr(Schema.Int),
   exitSignal: Schema.NullOr(Schema.Int),
   updatedAt: Schema.String,
-});
+}).check(
+  Schema.makeFilter(
+    (snapshot) => {
+      const recoveredFieldCount = [
+        snapshot.recoveredCols,
+        snapshot.recoveredRows,
+        snapshot.historyRecordIdentity,
+      ].filter((value) => value !== undefined).length;
+      return (
+        recoveredFieldCount === 0 ||
+        recoveredFieldCount === 3 ||
+        new SchemaIssue.InvalidValue(Option.some(snapshot), {
+          message:
+            "Recovered terminal columns, rows, and history record identity must be provided together.",
+        })
+      );
+    },
+    { identifier: "TerminalRecoveredHistoryRecord" },
+  ),
+);
 export type TerminalSessionSnapshot = typeof TerminalSessionSnapshot.Type;
 
 const TerminalEventBaseSchema = Schema.Struct({

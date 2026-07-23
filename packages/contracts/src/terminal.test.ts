@@ -212,6 +212,56 @@ describe("TerminalSessionSnapshot", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts optional recovered grid dimensions and stable record identity", () => {
+    expect(
+      decodes(TerminalSessionSnapshot, {
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        cwd: "/tmp/project",
+        status: "running",
+        pid: 1234,
+        history: "hello\n",
+        recoveredCols: 80,
+        recoveredRows: 24,
+        historyRecordIdentity: "a".repeat(64),
+        exitCode: null,
+        exitSignal: null,
+        updatedAt: new Date().toISOString(),
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects invalid, partial, and malformed recovered records", () => {
+    const base = {
+      threadId: "thread-1",
+      terminalId: DEFAULT_TERMINAL_ID,
+      cwd: "/tmp/project",
+      status: "running",
+      pid: 1234,
+      history: "hello\n",
+      exitCode: null,
+      exitSignal: null,
+      updatedAt: new Date().toISOString(),
+    };
+    expect(decodes(TerminalSessionSnapshot, { ...base, recoveredCols: 2 })).toBe(false);
+    expect(decodes(TerminalSessionSnapshot, { ...base, recoveredCols: 80 })).toBe(false);
+    expect(
+      decodes(TerminalSessionSnapshot, {
+        ...base,
+        recoveredCols: 80,
+        recoveredRows: 24,
+      }),
+    ).toBe(false);
+    expect(
+      decodes(TerminalSessionSnapshot, {
+        ...base,
+        recoveredCols: 80,
+        recoveredRows: 24,
+        historyRecordIdentity: "not-a-sha256",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("TerminalEvent", () => {
