@@ -1517,22 +1517,22 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         return true;
       });
 
-      const waitForOpenCodeTurnCompletionQuiet = Effect.fn(
-        "waitForOpenCodeTurnCompletionQuiet",
-      )(function* (context: OpenCodeSessionContext, turnId: TurnId, quietMs: number) {
-        let observedActivitySerial = context.activeTurnCompletionActivitySerial;
-        while (true) {
-          yield* Effect.sleep(quietMs);
-          if ((yield* Ref.get(context.stopped)) || context.activeTurnId !== turnId) {
-            return false;
+      const waitForOpenCodeTurnCompletionQuiet = Effect.fn("waitForOpenCodeTurnCompletionQuiet")(
+        function* (context: OpenCodeSessionContext, turnId: TurnId, quietMs: number) {
+          let observedActivitySerial = context.activeTurnCompletionActivitySerial;
+          while (true) {
+            yield* Effect.sleep(quietMs);
+            if ((yield* Ref.get(context.stopped)) || context.activeTurnId !== turnId) {
+              return false;
+            }
+            const currentActivitySerial = context.activeTurnCompletionActivitySerial;
+            if (currentActivitySerial === observedActivitySerial) {
+              return true;
+            }
+            observedActivitySerial = currentActivitySerial;
           }
-          const currentActivitySerial = context.activeTurnCompletionActivitySerial;
-          if (currentActivitySerial === observedActivitySerial) {
-            return true;
-          }
-          observedActivitySerial = currentActivitySerial;
-        }
-      });
+        },
+      );
 
       const deferPrematureIdleCompletion = Effect.fn("deferPrematureIdleCompletion")(function* (
         context: OpenCodeSessionContext,
@@ -1589,10 +1589,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }
               if (
                 deferredFinalAssistantMessageId !== undefined &&
-                isOpenCodeAssistantMessageTextSettled(
-                  context,
-                  deferredFinalAssistantMessageId,
-                )
+                isOpenCodeAssistantMessageTextSettled(context, deferredFinalAssistantMessageId)
               ) {
                 // The event stream can be ahead of session.messages. Completion
                 // activity has now stayed quiet for a full grace window, so all
@@ -1636,10 +1633,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }
               if (
                 retriedFinalAssistantMessageId !== undefined &&
-                isOpenCodeAssistantMessageTextSettled(
-                  context,
-                  retriedFinalAssistantMessageId,
-                )
+                isOpenCodeAssistantMessageTextSettled(context, retriedFinalAssistantMessageId)
               ) {
                 yield* completeOpenCodeTurn(context, {
                   turnId,

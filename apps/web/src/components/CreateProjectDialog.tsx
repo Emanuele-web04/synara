@@ -36,7 +36,7 @@ import { CentralIcon } from "~/lib/central-icons";
 
 // Inputs share one fixed height + radius so every control in the dialog reads
 // as the same size (mirrors EditProfileDialog's field styling).
-const fieldControlClassName = "h-9 rounded-xl border-foreground/12";
+const fieldControlClassName = "h-9 rounded-lg border-foreground/12";
 
 function isFileDrag(event: globalThis.DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
