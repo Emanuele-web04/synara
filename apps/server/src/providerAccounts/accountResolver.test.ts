@@ -48,6 +48,34 @@ const codexAccount = (input: {
   },
 });
 
+const cursorAccount = (input: {
+  readonly ordinal: number;
+  readonly generation?: number;
+  readonly state?: "connected" | "needs-auth";
+  readonly authMethod?: "oauth" | "apiKey";
+  readonly app?: boolean;
+}): ProviderAccountRecord => ({
+  schemaVersion: 1,
+  provider: "cursor",
+  ordinal: input.ordinal,
+  createdAt: "2026-07-24T00:00:00.000Z",
+  agent: {
+    generation: input.generation ?? 1,
+    state: input.state ?? "connected",
+    authMethod: input.authMethod ?? "apiKey",
+  },
+  ...(input.app
+    ? {
+        app: {
+          generation: input.generation ?? 1,
+          state: "connected" as const,
+          authMethod: "oauth" as const,
+          supportLevel: "beta" as const,
+        },
+      }
+    : {}),
+});
+
 const expectResolutionFailure = async (
   effect: Effect.Effect<unknown, unknown>,
   code: ProviderAccountResolutionError["code"],
@@ -173,6 +201,28 @@ describe("accountResolver", () => {
     );
     expect(resolved.environment.OPENAI_API_KEY).toBe("sk-managed");
     expect(resolved.environment.CODEX_HOME).toBe(resolved.profilePath);
+  });
+
+  it("injects the stored Cursor API key for managed Cursor accounts", async () => {
+    await Effect.runPromise(storage.writeAccount(cursorAccount({ ordinal: 1 })));
+    await Effect.runPromise(storage.writeSecret("cursor", 1, "agent", "key_managed"));
+
+    const resolved = await Effect.runPromise(
+      resolver.resolveAccountLaunch({ provider: "cursor", surface: "agent", explicitOrdinal: 1 }),
+    );
+    expect(resolved.environment.CURSOR_API_KEY).toBe("key_managed");
+    expect(resolved.environment.CURSOR_CONFIG_DIR).toBe(resolved.profilePath);
+    expect(resolved.supportLevel).toBe("supported");
+  });
+
+  it("resolves the Cursor app OAuth binding as beta without injecting a key", async () => {
+    await Effect.runPromise(storage.writeAccount(cursorAccount({ ordinal: 1, app: true })));
+
+    const resolved = await Effect.runPromise(
+      resolver.resolveAccountLaunch({ provider: "cursor", surface: "app", explicitOrdinal: 1 }),
+    );
+    expect(resolved.environment.CURSOR_API_KEY).toBe("");
+    expect(resolved.supportLevel).toBe("beta");
   });
 
   it("keeps OAuth launches free of injected API keys", async () => {
