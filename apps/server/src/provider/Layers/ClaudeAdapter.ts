@@ -101,6 +101,7 @@ import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
 import { applyAccountEnvironmentOverrides } from "../../providerAccounts/accountEnvironment.ts";
+import { buildClaudeDesktopLaunchPlan } from "../../providerAccounts/claudeAppLaunch.ts";
 import {
   CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
   decideClaudeContextUsageWarnings,
@@ -5348,6 +5349,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       ).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
     );
 
+    const launchApp: NonNullable<ClaudeAdapterShape["launchApp"]> = (input) =>
+      Effect.suspend(() => {
+        const plan = buildClaudeDesktopLaunchPlan(input);
+        if (plan === undefined) {
+          return Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "launchApp",
+              issue: "The official Claude desktop app is not available on this platform.",
+            }),
+          );
+        }
+        return Effect.succeed(plan);
+      });
+
     const composerCapabilities: ProviderComposerCapabilities = {
       provider: PROVIDER,
       supportsSkillMentions: false,
@@ -5450,6 +5466,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       listSkills,
       listModels,
       listAgents,
+      launchApp,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies ClaudeAdapterShape;
   });
