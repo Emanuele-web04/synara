@@ -1,5 +1,6 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
 import {
+  ApprovalRequestId,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -29,6 +30,7 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ThreadApprovalResponseRequestedPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
@@ -235,6 +237,35 @@ function compareThreadActivities(
   }
 
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+/**
+ * Returns the responded-request list with the failed request re-opened, or null
+ * when the activity does not undo an approval response. Only `retryable`
+ * failures re-open: the pending-interaction projection keeps `uncertain`
+ * failures non-actionable, so the decider keeps rejecting retries for those.
+ */
+function reopenedApprovalRequestIds(
+  responded: OrchestrationThread["respondedApprovalRequestIds"],
+  activity: OrchestrationThread["activities"][number],
+): OrchestrationThread["respondedApprovalRequestIds"] | null {
+  if (activity.kind !== "provider.approval.respond.failed") {
+    return null;
+  }
+  const payload =
+    typeof activity.payload === "object" &&
+    activity.payload !== null &&
+    !Array.isArray(activity.payload)
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  if (payload?.settlementStatus !== "retryable" || typeof payload.requestId !== "string") {
+    return null;
+  }
+  const requestId = payload.requestId;
+  if (!responded?.includes(ApprovalRequestId.makeUnsafe(requestId))) {
+    return null;
+  }
+  return responded.filter((entry) => entry !== requestId);
 }
 
 function upsertThreadActivity(
@@ -1194,6 +1225,34 @@ export function projectEvent(
         }),
       );
 
+    case "thread.approval-response-requested":
+      return decodeForEvent(
+        ThreadApprovalResponseRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          const responded = thread.respondedApprovalRequestIds ?? [];
+          if (responded.includes(payload.requestId)) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              respondedApprovalRequestIds: [...responded, payload.requestId],
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
     case "thread.activity-appended":
       return decodeForEvent(
         ThreadActivityAppendedPayload,
@@ -1212,10 +1271,19 @@ export function projectEvent(
             sequence: event.sequence,
           });
 
+          // A retryable delivery failure re-opens the approval request (matching
+          // the pending-interaction projection), so the decider must accept the
+          // retry instead of rejecting it as already answered.
+          const respondedApprovalRequestIds = reopenedApprovalRequestIds(
+            thread.respondedApprovalRequestIds,
+            payload.activity,
+          );
+
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
+              ...(respondedApprovalRequestIds !== null ? { respondedApprovalRequestIds } : {}),
               updatedAt: event.occurredAt,
             }),
           };
