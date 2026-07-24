@@ -2,6 +2,7 @@ import type { ProviderKind } from "@synara/contracts";
 import type { Effect } from "effect";
 
 import type { AgentGatewayTargetError } from "./targetResolver.ts";
+import type { AgentGatewayCapability } from "./Services/AgentGatewaySessionRegistry.ts";
 import {
   mcpToolResultJson,
   type JsonRpcId,
@@ -23,11 +24,28 @@ export const WRITE_TOOL_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
+export interface ProviderSessionPrincipal {
+  readonly kind: "provider-session";
+  readonly sessionKey: string;
+  readonly threadId: string;
+  readonly provider: ProviderKind;
+  readonly turnId: string | null;
+}
+
+export interface ExternalClientPrincipal {
+  readonly kind: "external-client";
+  readonly integrationId: string;
+  readonly name: string;
+}
+
+export type AgentGatewayPrincipal = ProviderSessionPrincipal | ExternalClientPrincipal;
+
 export interface ToolContext {
+  readonly principal: ProviderSessionPrincipal;
   readonly callerThreadId: string;
   readonly callerSessionKey: string;
   readonly callerProvider: ProviderKind;
-  readonly callerCapabilities: ReadonlySet<"thread:read" | "thread:write" | "automation:write">;
+  readonly callerCapabilities: ReadonlySet<AgentGatewayCapability>;
   readonly callerTurnId: string | null;
   readonly assertCallerTurnActive: () => Effect.Effect<void, GatewayToolError>;
   readonly jsonRpcRequestId: JsonRpcId;
@@ -41,7 +59,17 @@ export type ToolHandler = (
 export interface ToolEntry {
   readonly definition: McpToolDefinition;
   readonly handler: ToolHandler;
+  readonly requiredCapability: AgentGatewayCapability;
   readonly requiresActiveTurn?: boolean;
+}
+
+export interface McpToolEntry<Context, Capability extends string> {
+  readonly definition: McpToolDefinition;
+  readonly handler: (
+    args: Record<string, unknown>,
+    context: Context,
+  ) => Effect.Effect<McpToolCallResult>;
+  readonly requiredCapability: Capability;
 }
 
 export class GatewayToolError extends Error {

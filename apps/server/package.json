@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -50,7 +50,6 @@
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "^8.5.13",
-    "effect-acp": "workspace:*",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",

@@ -82,10 +82,30 @@ describe("matchComposerSlashCommandChipToken", () => {
 });
 
 describe("splitPromptIntoComposerSegments", () => {
+  it("marks structured thread mentions as thread chips", () => {
+    expect(
+      splitPromptIntoComposerSegments(
+        'Compare @"Release planning" please',
+        [],
+        [{ name: "Release planning", path: "thread://thread-123" }],
+      ),
+    ).toEqual([
+      { type: "text", text: "Compare " },
+      {
+        type: "mention",
+        path: "Release planning",
+        kind: "thread",
+        threadId: "thread-123",
+        tokenLength: '@"Release planning"'.length,
+      },
+      { type: "text", text: " please" },
+    ]);
+  });
+
   it("splits mention tokens followed by whitespace into mention segments", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md please")).toEqual([
       { type: "text", text: "Inspect " },
-      { type: "mention", path: "AGENTS.md" },
+      { type: "mention", path: "AGENTS.md", tokenLength: "@AGENTS.md".length },
       { type: "text", text: " please" },
     ]);
   });
@@ -99,7 +119,7 @@ describe("splitPromptIntoComposerSegments", () => {
       ),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "Gmail", kind: "plugin" },
+      { type: "mention", path: "Gmail", kind: "plugin", tokenLength: "@Gmail".length },
       { type: "text", text: " please" },
     ]);
   });
@@ -169,7 +189,7 @@ describe("splitPromptIntoComposerSegments", () => {
   it("keeps newlines around mention tokens", () => {
     expect(splitPromptIntoComposerSegments("one\n@src/index.ts \ntwo")).toEqual([
       { type: "text", text: "one\n" },
-      { type: "mention", path: "src/index.ts" },
+      { type: "mention", path: "src/index.ts", tokenLength: "@src/index.ts".length },
       { type: "text", text: " \ntwo" },
     ]);
   });
@@ -179,7 +199,11 @@ describe("splitPromptIntoComposerSegments", () => {
       splitPromptIntoComposerSegments('Inspect @"/Users/test/Application Support" please'),
     ).toEqual([
       { type: "text", text: "Inspect " },
-      { type: "mention", path: "/Users/test/Application Support" },
+      {
+        type: "mention",
+        path: "/Users/test/Application Support",
+        tokenLength: '@"/Users/test/Application Support"'.length,
+      },
       { type: "text", text: " please" },
     ]);
   });
@@ -192,7 +216,7 @@ describe("splitPromptIntoComposerSegments", () => {
     ).toEqual([
       { type: "text", text: "Inspect " },
       { type: "terminal-context", context: null },
-      { type: "mention", path: "AGENTS.md" },
+      { type: "mention", path: "AGENTS.md", tokenLength: "@AGENTS.md".length },
       { type: "text", text: " please" },
     ]);
   });
@@ -253,7 +277,11 @@ describe("splitPromptIntoDisplaySegments", () => {
   it("renders trailing quoted mention tokens at the end of text", () => {
     expect(splitPromptIntoDisplaySegments('Use @"/Users/test/Application Support"')).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "/Users/test/Application Support" },
+      {
+        type: "mention",
+        path: "/Users/test/Application Support",
+        tokenLength: '@"/Users/test/Application Support"'.length,
+      },
     ]);
   });
 
@@ -291,7 +319,7 @@ describe("splitPromptIntoDisplaySegments", () => {
   it("uses explicit mention references instead of inferring plugins from plain @text", () => {
     expect(splitPromptIntoDisplaySegments("Use @linear")).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "linear" },
+      { type: "mention", path: "linear", tokenLength: "@linear".length },
     ]);
     expect(
       splitPromptIntoDisplaySegments("Use @linear", [
@@ -299,7 +327,7 @@ describe("splitPromptIntoDisplaySegments", () => {
       ]),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "linear", kind: "plugin" },
+      { type: "mention", path: "linear", kind: "plugin", tokenLength: "@linear".length },
     ]);
     expect(
       splitPromptIntoDisplaySegments("Use @linear", [
@@ -307,7 +335,7 @@ describe("splitPromptIntoDisplaySegments", () => {
       ]),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "linear", kind: "plugin" },
+      { type: "mention", path: "linear", kind: "plugin", tokenLength: "@linear".length },
     ]);
   });
 });

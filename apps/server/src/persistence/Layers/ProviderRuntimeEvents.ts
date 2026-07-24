@@ -25,20 +25,52 @@ const StoredRowSchema = Schema.Struct({
 });
 const decodeStoredRow = Schema.decodeUnknownEffect(StoredRowSchema);
 
+const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
+  Effect.gen(function* () {
+    const eventJson = yield* encodeEvent(event).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
+    );
+    const originalBytes = Buffer.byteLength(eventJson, "utf8");
+    if (originalBytes <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
+      return { event, eventJson };
+    }
+
+    if (event.raw !== undefined) {
+      const compactedEvent = {
+        ...event,
+        raw: {
+          source: event.raw.source,
+          ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
+          ...(event.raw.messageType !== undefined ? { messageType: event.raw.messageType } : {}),
+          payload: {
+            synaraTruncated: true,
+            reason: "provider runtime event exceeded the durable journal size limit",
+            originalBytes,
+          },
+        },
+      } satisfies ProviderRuntimeEvent;
+      const compactedJson = yield* encodeEvent(compactedEvent).pipe(
+        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
+      );
+      if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
+        return { event: compactedEvent, eventJson: compactedJson };
+      }
+    }
+
+    return yield* new PersistenceDecodeError({
+      operation: "ProviderRuntimeEvent.append",
+      issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes after raw payload compaction.`,
+    });
+  });
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const append: ProviderRuntimeEventRepositoryShape["append"] = (event) =>
     Effect.gen(function* () {
-      const eventJson = yield* encodeEvent(event).pipe(
-        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
-      );
-      if (Buffer.byteLength(eventJson, "utf8") > PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-        return yield* new PersistenceDecodeError({
-          operation: "ProviderRuntimeEvent.append",
-          issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes.`,
-        });
-      }
+      const persistable = yield* encodePersistableEvent(event);
+      const persistedEvent = persistable.event;
+      const eventJson = persistable.eventJson;
       const rows = yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -71,7 +103,10 @@ const make = Effect.gen(function* () {
           issue: `Provider event '${event.eventId}' was reused with different content.`,
         });
       }
-      return { sequence: row.sequence, event } satisfies PersistedProviderRuntimeEvent;
+      return {
+        sequence: row.sequence,
+        event: persistedEvent,
+      } satisfies PersistedProviderRuntimeEvent;
     });
 
   const getHighWaterSequence = sql<{ readonly highWaterSequence: number }>`
@@ -104,6 +139,67 @@ const make = Effect.gen(function* () {
               Effect.mapError(
                 toPersistenceDecodeError(
                   `ProviderRuntimeEvent.readAfter(sequence=${row.sequence})`,
+                ),
+              ),
+            );
+            return { sequence: row.sequence, event } satisfies PersistedProviderRuntimeEvent;
+          }),
+        { concurrency: 1 },
+      );
+    });
+  };
+
+  const getThreadCoverage: ProviderRuntimeEventRepositoryShape["getThreadCoverage"] = (threadId) =>
+    sql<{
+      readonly retainedCount: number;
+      readonly oldestSequence: number | null;
+      readonly highWaterSequence: number;
+    }>`
+      SELECT
+        COUNT(*) AS "retainedCount",
+        MIN(sequence) AS "oldestSequence",
+        COALESCE(MAX(sequence), 0) AS "highWaterSequence"
+      FROM provider_runtime_events
+      WHERE thread_id = ${threadId}
+    `.pipe(
+      Effect.map(
+        (rows) => rows[0] ?? { retainedCount: 0, oldestSequence: null, highWaterSequence: 0 },
+      ),
+      Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.getThreadCoverage")),
+    );
+
+  const readThreadEvents: ProviderRuntimeEventRepositoryShape["readThreadEvents"] = (input) => {
+    const beforeSequence = input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER;
+    const turnFilter = input.turnId === undefined ? sql`` : sql`AND turn_id = ${input.turnId}`;
+    const typeFilter =
+      input.eventTypes === undefined || input.eventTypes.length === 0
+        ? sql``
+        : sql`AND event_type IN ${sql.in(input.eventTypes)}`;
+    return Effect.gen(function* () {
+      const rows = yield* sql<Record<string, unknown>>`
+        SELECT sequence, event_json AS "eventJson"
+        FROM provider_runtime_events
+        WHERE thread_id = ${input.threadId}
+          AND sequence <= ${input.throughSequenceInclusive}
+          AND sequence < ${beforeSequence}
+          ${turnFilter}
+          ${typeFilter}
+        ORDER BY sequence DESC
+        LIMIT ${Math.max(1, Math.min(201, Math.floor(input.limit)))}
+      `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readThreadEvents")));
+      return yield* Effect.forEach(
+        rows,
+        (unknownRow) =>
+          Effect.gen(function* () {
+            const row = yield* decodeStoredRow(unknownRow).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError("ProviderRuntimeEvent.readThreadEvents.row"),
+              ),
+            );
+            const event = yield* decodeEvent(row.eventJson).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError(
+                  `ProviderRuntimeEvent.readThreadEvents(sequence=${row.sequence})`,
                 ),
               ),
             );
@@ -156,6 +252,20 @@ const make = Effect.gen(function* () {
         );
       });
     };
+
+  const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] = sql`
+      DELETE FROM provider_runtime_open_turns
+      WHERE EXISTS (
+        SELECT 1
+        FROM projection_turns AS turn
+        WHERE turn.thread_id = provider_runtime_open_turns.thread_id
+          AND turn.turn_id = provider_runtime_open_turns.turn_id
+          AND turn.state IN ('interrupted', 'completed', 'error')
+      )
+    `.pipe(
+    Effect.asVoid,
+    Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
+  );
 
   const getConsumerCursor: ProviderRuntimeEventRepositoryShape["getConsumerCursor"] = (
     consumerName,
@@ -297,7 +407,10 @@ const make = Effect.gen(function* () {
     append,
     getHighWaterSequence,
     readAfter,
+    getThreadCoverage,
+    readThreadEvents,
     readAcceptedOpenTurnEvents,
+    pruneSettledOpenTurns,
     getConsumerCursor,
     advanceConsumerCursor,
   } satisfies ProviderRuntimeEventRepositoryShape;

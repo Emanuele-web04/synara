@@ -1,0 +1,164 @@
+import {
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type OrchestrationCommand,
+  type OrchestrationShellSnapshot,
+  type ProviderSession,
+} from "@synara/contracts";
+import { Effect, Layer, Option } from "effect";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "../../orchestration/Services/OrchestrationEngine.ts";
+import {
+  OrchestrationReactor,
+  type OrchestrationReactorShape,
+} from "../../orchestration/Services/OrchestrationReactor.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderRuntimeReconciler } from "../Services/ProviderRuntimeReconciler.ts";
+import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
+import {
+  ProviderSessionDirectory,
+  type ProviderSessionDirectoryShape,
+} from "../Services/ProviderSessionDirectory.ts";
+import { makeProviderRuntimeReconcilerLive } from "./ProviderRuntimeReconciler.ts";
+
+const THREAD_ID = ThreadId.makeUnsafe("thread-runtime-reconciler");
+const TURN_ID = TurnId.makeUnsafe("turn-runtime-reconciler");
+
+function staleShellSnapshot(): OrchestrationShellSnapshot {
+  const updatedAt = "2026-07-23T19:00:00.000Z";
+  return {
+    snapshotSequence: 1,
+    spaces: [],
+    projects: [],
+    threads: [
+      {
+        id: THREAD_ID,
+        projectId: ProjectId.makeUnsafe("project-runtime-reconciler"),
+        runtimeMode: "full-access",
+        updatedAt,
+        latestTurn: {
+          turnId: TURN_ID,
+          state: "running",
+          requestedAt: updatedAt,
+          startedAt: updatedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: TURN_ID,
+          lastError: null,
+          updatedAt,
+        },
+      },
+    ],
+    updatedAt,
+  } as unknown as OrchestrationShellSnapshot;
+}
+
+function readyProviderSession(): ProviderSession {
+  return {
+    provider: "codex",
+    status: "ready",
+    runtimeMode: "full-access",
+    threadId: THREAD_ID,
+    createdAt: "2026-07-23T19:00:00.000Z",
+    updatedAt: "2026-07-23T20:00:00.000Z",
+  };
+}
+
+describe("ProviderRuntimeReconcilerLive", () => {
+  it("persists an interrupted terminal state when the live provider has already settled", async () => {
+    const commands: OrchestrationCommand[] = [];
+    const reconcileSettledOpenTurns = vi.fn();
+
+    const engine = {
+      dispatch: (command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return { sequence: commands.length };
+        }),
+    } as unknown as OrchestrationEngineShape;
+    const reactor = {
+      start: Effect.void,
+      reconcileSettledOpenTurns: Effect.sync(reconcileSettledOpenTurns),
+    } satisfies OrchestrationReactorShape;
+    const snapshotQuery = {
+      listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
+      getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+      getThreadShellById: () => Effect.succeed(Option.some(staleShellSnapshot().threads[0]!)),
+      getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
+    } as unknown as ProjectionSnapshotQueryShape;
+    const directory = {
+      listBindings: () =>
+        Effect.succeed([
+          {
+            threadId: THREAD_ID,
+            provider: "codex" as const,
+            status: "running" as const,
+            runtimePayload: { activeTurnId: TURN_ID },
+          },
+        ]),
+    } as unknown as ProviderSessionDirectoryShape;
+    const provider = {
+      listSessions: () => Effect.succeed([readyProviderSession()]),
+      getRuntimeEventPumpHealth: () =>
+        Effect.succeed([
+          {
+            provider: "codex" as const,
+            status: "recovering" as const,
+            consecutiveFailures: 1,
+            updatedAt: "2026-07-23T20:00:00.000Z",
+          },
+        ]),
+    } as unknown as ProviderServiceShape;
+
+    const layer = makeProviderRuntimeReconcilerLive({ staleAfterMs: 1 }).pipe(
+      Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+      Layer.provide(Layer.succeed(OrchestrationReactor, reactor)),
+      Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
+      Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
+      Layer.provide(Layer.succeed(ProviderService, provider)),
+    );
+
+    await Effect.gen(function* () {
+      const reconciler = yield* ProviderRuntimeReconciler;
+      yield* reconciler.reconcileNow;
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.activity.append",
+      "thread.session.set",
+    ]);
+    const activityCommand = commands[0];
+    expect(activityCommand?.type).toBe("thread.activity.append");
+    if (activityCommand?.type === "thread.activity.append") {
+      expect(activityCommand.activity.kind).toBe("provider.runtime.reconciled");
+      expect(activityCommand.activity.summary).toContain("recovered");
+      expect(activityCommand.activity.payload).toMatchObject({
+        action: "settle-interrupted",
+      });
+    }
+    const sessionCommand = commands[1];
+    expect(sessionCommand?.type).toBe("thread.session.set");
+    if (sessionCommand?.type === "thread.session.set") {
+      expect(sessionCommand.session).toMatchObject({
+        status: "interrupted",
+        activeTurnId: null,
+        lastError: null,
+      });
+    }
+    expect(reconcileSettledOpenTurns).toHaveBeenCalledOnce();
+  });
+});

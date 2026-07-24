@@ -44,11 +44,24 @@ interface ShortcutDefinition {
   description: string;
 }
 
+// Space jumps address the switcher's visual tab order, so slot 1 is always Void.
+const SPACE_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
+  { length: 9 },
+  (_, index) => ({
+    command: `space.jump.${index + 1}` as KeybindingCommand,
+    label: index === 0 ? "Jump to Void" : `Jump to space ${index + 1}`,
+    description:
+      index === 0
+        ? "Switch straight to the Void tab of the space switcher."
+        : "Switch straight to this tab of the space switcher.",
+  }),
+);
+
 const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "sidebar.addProject",
     label: "Add project",
-    description: "Open the folder picker to import a local project into the sidebar.",
+    description: "Open the Create project dialog to import a local folder.",
   },
   {
     command: "sidebar.search",
@@ -60,6 +73,17 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     label: "Import thread",
     description: "Bring an existing conversation into the current workspace.",
   },
+  {
+    command: "space.previous",
+    label: "Previous space",
+    description: "Switch to the previous project space and restore its last working context.",
+  },
+  {
+    command: "space.next",
+    label: "Next space",
+    description: "Switch to the next project space and restore its last working context.",
+  },
+  ...SPACE_JUMP_DEFINITIONS,
   {
     command: "chat.new",
     label: "New thread",
@@ -167,6 +191,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     label: "Open in favorite editor",
     description: "Send the current thread or workspace target to your preferred editor.",
   },
+  {
+    command: "git.commitAndPush",
+    label: "Commit and push",
+    description: "Commit pending changes and push the active thread's repo.",
+  },
 ] as const;
 
 const THREAD_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
@@ -203,6 +232,23 @@ const WORKSPACE_DEFINITIONS: readonly ShortcutDefinition[] = [
 
 function modSlashLabel(platform: string): string {
   return isMacPlatform(platform) ? "⌘/" : "Ctrl+/";
+}
+
+/** Human-readable sheet label for a keybinding command, e.g. `chat.new` → "New thread". */
+export function shortcutSheetCommandLabel(command: KeybindingCommand): string | null {
+  for (const definitions of [
+    AVAILABLE_NOW_DEFINITIONS,
+    WORKSPACE_DEFINITIONS,
+    THREAD_JUMP_DEFINITIONS,
+  ]) {
+    for (const definition of definitions) {
+      const commands = Array.isArray(definition.command)
+        ? definition.command
+        : [definition.command];
+      if (commands.includes(command)) return definition.label;
+    }
+  }
+  return null;
 }
 
 function definitionToEntry(

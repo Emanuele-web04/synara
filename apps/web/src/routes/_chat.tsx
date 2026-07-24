@@ -1,7 +1,7 @@
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   goBackInAppHistory,
@@ -22,14 +22,17 @@ import { useLatestProjectStore } from "../latestProjectStore";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
+  resolveLatestProjectTargetIdWithFallback,
   resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
 import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
+import { isOrdinarySpaceProject } from "../lib/spaces";
 import { resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
+import { useSpacesUiStore } from "../spacesUiStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
@@ -235,6 +238,7 @@ function ChatRouteGlobalShortcuts() {
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
@@ -254,16 +258,50 @@ function ChatRouteGlobalShortcuts() {
     presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
-  const currentProjectId = resolveCurrentProjectTargetId(projects, activeProject?.id ?? null);
-  const latestUsableProjectId = resolveLatestProjectTargetId(projects, latestProjectId);
-  const handleNewChatForActiveSurface = () =>
-    startFreshChatForActiveSurface({
+  // Shortcuts that target "a project" must stay inside the Space you are looking at, or
+  // mod+alt+arrow would switch Space and the next new-thread shortcut would drop you back
+  // out of it.
+  const activeSpaceProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          isOrdinarySpaceProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }) &&
+          (project.spaceId ?? null) === activeSpaceId,
+      ),
+    [activeSpaceId, chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+  );
+  const currentProjectId = resolveCurrentProjectTargetId(
+    activeSpaceProjects,
+    activeProject?.id ?? null,
+  );
+  // The remembered project is global, so it is unusable the moment you switch Space. Fall
+  // back to this Space's most recently touched project rather than to nothing.
+  const latestUsableProjectId = useMemo(
+    () => resolveLatestProjectTargetIdWithFallback(activeSpaceProjects, latestProjectId),
+    [activeSpaceProjects, latestProjectId],
+  );
+  // Deliberately unscoped: the persisted id is only cleared once the project is gone from
+  // the app entirely, not merely absent from the Space you happen to be in.
+  const persistedLatestProjectStillExists = resolveLatestProjectTargetId(projects, latestProjectId);
+  const handleNewChatForActiveSurface = useCallback(
+    () =>
+      startFreshChatForActiveSurface({
+        activeProject,
+        isStudioRoute,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot },
+        handleNewChat,
+        handleNewStudioChat,
+      }),
+    [
       activeProject,
-      isStudioRoute,
-      paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot },
+      chatWorkspaceRoot,
       handleNewChat,
       handleNewStudioChat,
-    });
+      homeDir,
+      isStudioRoute,
+      studioWorkspaceRoot,
+    ],
+  );
 
   useEffect(() => {
     if (!currentProjectId) {
@@ -273,10 +311,10 @@ function ChatRouteGlobalShortcuts() {
   }, [currentProjectId, setLatestProjectId]);
 
   useEffect(() => {
-    if (threadsHydrated && latestProjectId && latestUsableProjectId === null) {
+    if (threadsHydrated && latestProjectId && persistedLatestProjectStillExists === null) {
       clearLatestProjectId(latestProjectId);
     }
-  }, [clearLatestProjectId, latestProjectId, latestUsableProjectId, threadsHydrated]);
+  }, [clearLatestProjectId, latestProjectId, persistedLatestProjectStillExists, threadsHydrated]);
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {

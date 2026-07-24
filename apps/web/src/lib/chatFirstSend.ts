@@ -71,15 +71,18 @@ export function resolveFirstSendTarget(input: {
     };
   }
 
-  // Folder mentions intentionally escape the generic-chat workspace and become normal projects.
-  if (!selectedWorkspaceRoot) {
-    if (isStudioContainer) {
-      return {
-        kind: "current",
-        target: buildProjectTarget(activeProject),
-      };
-    }
+  // Studio chats never leave the Studio container: a picked folder stays attached to the
+  // thread as its workspace root instead of becoming (or joining) a Projects entry.
+  if (isStudioContainer) {
+    return {
+      kind: "current",
+      target: buildProjectTarget(activeProject),
+    };
+  }
 
+  // Home-chat folder mentions intentionally escape the generic-chat workspace and become
+  // normal projects.
+  if (!selectedWorkspaceRoot) {
     if (!chatWorkspaceRoot) {
       return {
         kind: "current",

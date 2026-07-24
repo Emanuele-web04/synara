@@ -94,6 +94,7 @@ describe("threadCreatePromotion", () => {
     useComposerDraftStore.getState().setProjectDraftThreadId(projectId, threadId);
     useStore.getState().syncServerShellSnapshot({
       snapshotSequence: 1,
+      spaces: [],
       projects: [
         {
           id: projectId,
@@ -163,6 +164,7 @@ describe("threadCreatePromotion", () => {
     const getShellSnapshot = vi.fn(() =>
       Promise.resolve({
         snapshotSequence: 1,
+        spaces: [],
         projects: [
           {
             id: projectId,

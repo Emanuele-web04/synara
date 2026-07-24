@@ -7,6 +7,12 @@ import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import {
+  isSummarizableToolCallEntry,
+  MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
+  summarizeToolCallGroup,
+  type ToolCallGroupSummary,
+} from "./toolCallGroup.logic";
+import {
   type ChatMessage,
   type ProposedPlan,
   type TurnDiffSummary,
@@ -22,6 +28,168 @@ export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 export type CollapsedTurnItem =
   | { kind: "work"; id: string; entry: WorkLogEntry }
   | { kind: "narration"; id: string; message: ChatMessage };
+
+// A settled turn's collapsed items re-chunked for rendering: consecutive
+// summarizable tool rows fold into one "Ran N commands..." disclosure while
+// narration and rich rows pass through individually.
+export type CollapsedTurnChunk =
+  | { kind: "item"; item: CollapsedTurnItem }
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
+
+export type WorkEntryChunk =
+  | { kind: "item"; id: string; entry: WorkLogEntry }
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
+
+export function chunkCollapsedTurnItems(
+  items: ReadonlyArray<CollapsedTurnItem>,
+): CollapsedTurnChunk[] {
+  const chunks: CollapsedTurnChunk[] = [];
+  let pendingRun: Extract<CollapsedTurnItem, { kind: "work" }>[] = [];
+
+  const flushPendingRun = () => {
+    if (pendingRun.length === 0) return;
+    if (pendingRun.length >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
+      chunks.push({
+        kind: "tool-group",
+        id: pendingRun[0]!.id,
+        entries: pendingRun.map((item) => item.entry),
+      });
+    } else {
+      for (const item of pendingRun) {
+        chunks.push({ kind: "item", item });
+      }
+    }
+    pendingRun = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === "work" && isSummarizableToolCallEntry(item.entry)) {
+      pendingRun.push(item);
+      continue;
+    }
+    flushPendingRun();
+    chunks.push({ kind: "item", item });
+  }
+  flushPendingRun();
+  return chunks;
+}
+
+export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntryChunk[] {
+  return chunkCollapsedTurnItems(
+    entries.map((entry) => ({ kind: "work" as const, id: entry.id, entry })),
+  ).map((chunk) => {
+    if (chunk.kind === "tool-group") return chunk;
+    if (chunk.item.kind !== "work") {
+      throw new Error("Work-entry chunking produced an unexpected narration item.");
+    }
+    return { kind: "item", id: chunk.item.id, entry: chunk.item.entry };
+  });
+}
+
+// One renderable block of a work group: `summary` is non-null when the block
+// renders collapsed behind a "Ran N commands..." disclosure.
+export interface WorkEntryRenderPlanChunk {
+  id: string;
+  entries: WorkLogEntry[];
+  summary: ToolCallGroupSummary | null;
+}
+
+// Plans a work group's entries block by block. Boundaries are the entries a
+// summary can never absorb — thinking/info narration, errors, rich cards — so
+// each tool run between boundaries folds independently. A run stays expanded
+// only while it still has running work, or while it is the trailing block of
+// the live transcript tail (`tailIsLive`): the moment a new narration block
+// starts after it, it stops being the tail and collapses mid-turn.
+export function planWorkEntryRenderChunks(
+  entries: ReadonlyArray<WorkLogEntry>,
+  options: { tailIsLive: boolean },
+): WorkEntryRenderPlanChunk[] {
+  const chunks = chunkWorkEntries(entries);
+  return chunks.map((chunk, index) => {
+    if (chunk.kind === "item") {
+      return { id: chunk.id, entries: [chunk.entry], summary: null };
+    }
+    const summary = summarizeToolCallGroup(chunk.entries);
+    const isLiveTail = options.tailIsLive && index === chunks.length - 1;
+    const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
+    return { id: chunk.id, entries: chunk.entries, summary: collapsed ? summary : null };
+  });
+}
+
+export interface CappedWorkEntryRenderPlan {
+  chunks: WorkEntryRenderPlanChunk[];
+  hasOverflow: boolean;
+  hiddenEntryCount: number;
+}
+
+// Keeps collapsed summaries intact while bounding only the entries that still
+// render openly. Callers can exclude boundary/status rows from the budget when
+// those rows are rendered separately from tool calls.
+export function capOpenWorkEntryRenderChunks(
+  chunks: ReadonlyArray<WorkEntryRenderPlanChunk>,
+  options: {
+    expanded: boolean;
+    maxVisibleEntries: number;
+    keep: "first" | "last";
+    shouldCapEntry?: (entry: WorkLogEntry) => boolean;
+  },
+): CappedWorkEntryRenderPlan {
+  const shouldCapEntry = options.shouldCapEntry ?? (() => true);
+  const openEntries = chunks.flatMap((chunk) =>
+    chunk.summary === null ? chunk.entries.filter(shouldCapEntry) : [],
+  );
+  const maxVisibleEntries = Math.max(0, options.maxVisibleEntries);
+  const hiddenEntryCount = Math.max(0, openEntries.length - maxVisibleEntries);
+  const hasOverflow = hiddenEntryCount > 0;
+
+  if (!hasOverflow || options.expanded) {
+    return { chunks: [...chunks], hasOverflow, hiddenEntryCount: 0 };
+  }
+
+  const visibleEntries =
+    maxVisibleEntries === 0
+      ? []
+      : options.keep === "last"
+        ? openEntries.slice(-maxVisibleEntries)
+        : openEntries.slice(0, maxVisibleEntries);
+  const visibleEntrySet = new Set(visibleEntries);
+
+  return {
+    chunks: chunks.map((chunk) => {
+      if (chunk.summary !== null) return chunk;
+      return {
+        ...chunk,
+        entries: chunk.entries.filter(
+          (entry) => !shouldCapEntry(entry) || visibleEntrySet.has(entry),
+        ),
+      };
+    }),
+    hasOverflow,
+    hiddenEntryCount,
+  };
+}
+
+// The newest work group in the transcript — the one still allowed to render its
+// rows inline while the turn is live. Everything older collapses to a summary.
+export function findLastLiveWorkGroupId(rows: ReadonlyArray<MessagesTimelineRow>): string | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.kind === "work") {
+      return row.id;
+    }
+    if (row.kind === "message") {
+      const groupId = row.inlineWorkGroupId ?? row.leadingWorkGroupId;
+      if (groupId) {
+        return groupId;
+      }
+      // A user message closes the previous turn: nothing before it is live.
+      if (row.message.role === "user") {
+        return null;
+      }
+    }
+  }
+  return null;
+}
 
 export interface TimelineDurationMessage {
   id: string;
@@ -720,7 +888,12 @@ function workLogSubagentsEqual(
 function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry["automation"]) {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.id === b.id && a.name === b.name && a.cadenceLabel === b.cadenceLabel;
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.cadenceLabel === b.cadenceLabel &&
+    a.proposalState === b.proposalState
+  );
 }
 
 function workLogSynaraThreadCreationsEqual(
@@ -854,15 +1027,6 @@ function collapsedTurnItemsEqual(
     }
     return false;
   });
-}
-
-function shallowEqualEntryArray<T>(
-  left: ReadonlyArray<T> | undefined,
-  right: ReadonlyArray<T> | undefined,
-) {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return left.length === right.length && left.every((entry, index) => entry === right[index]);
 }
 
 function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean {

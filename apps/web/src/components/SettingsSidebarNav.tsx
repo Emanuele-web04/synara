@@ -52,7 +52,7 @@ function SettingsSearchResultRow(props: {
 }) {
   const { entry, onSelect } = props;
   const t = useUiText();
-  const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-1";
+  const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-4";
   // Mirrors the project header + nested thread layout: the section reuses the nav row
   // (muted icon + label) and the matched setting sits below as an indented thread-style row.
   return (

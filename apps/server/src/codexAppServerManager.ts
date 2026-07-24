@@ -1,7 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import path from "node:path";
 
 import {
   ApprovalRequestId,
@@ -11,9 +10,6 @@ import {
   type ProviderListModelsResult,
   type ProviderListPluginsResult,
   type ProviderMentionReference,
-  type ProviderPluginAppSummary,
-  type ProviderPluginDescriptor,
-  type ProviderPluginDetail,
   type ProviderForkThreadInput,
   type ProviderReadPluginResult,
   type ProviderForkThreadResult,
@@ -21,7 +17,6 @@ import {
   type ProviderListPluginsInput,
   type ProviderReadPluginInput,
   type ProviderStartReviewInput,
-  type ProviderSkillDescriptor,
   type ProviderSkillReference,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
@@ -55,6 +50,7 @@ import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
 import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -67,6 +63,13 @@ import {
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport.ts";
+import { buildCodexTurnInput, type CodexTurnInputItem } from "./codexTurnInput.ts";
+import {
+  parseCodexModelListResponse,
+  parseCodexPluginListResponse,
+  parseCodexPluginReadResponse,
+  parseCodexSkillsListResponse,
+} from "./provider/codexDiscoveryCatalog.ts";
 
 const log = createLogger("codex");
 
@@ -145,6 +148,12 @@ interface CodexSessionContext {
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
+  taskCompleteFallback?:
+    | {
+        readonly turnId: TurnId;
+        readonly timeout: ReturnType<typeof setTimeout>;
+      }
+    | undefined;
   nextRequestId: number;
   stopping: boolean;
   stopPromise?: Promise<void>;
@@ -775,6 +784,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
+  private readonly taskCompleteFallbackGraceMs: number;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -784,6 +794,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
       };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+      readonly taskCompleteFallbackGraceMs?: number;
     },
   ) {
     super();
@@ -791,6 +802,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.synaraSkillsDir = options?.synaraSkillsDir;
     this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
+    this.taskCompleteFallbackGraceMs = Math.max(0, options?.taskCompleteFallbackGraceMs ?? 750);
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -1065,41 +1077,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
-    const turnInput: Array<
-      | { type: "text"; text: string; text_elements: [] }
-      | { type: "image"; url: string }
-      | { type: "skill"; name: string; path: string }
-      | { type: "mention"; name: string; path: string }
-    > = [];
-    if (input.input) {
-      turnInput.push({
-        type: "text",
-        text: input.input,
-        text_elements: [],
-      });
-    }
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type === "image") {
-        turnInput.push({
-          type: "image",
-          url: attachment.url,
-        });
-      }
-    }
-    for (const skill of input.skills ?? []) {
-      turnInput.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-    for (const mention of input.mentions ?? []) {
-      turnInput.push({
-        type: "mention",
-        name: mention.name,
-        path: mention.path,
-      });
-    }
+    const turnInput = buildCodexTurnInput(input);
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -1114,12 +1092,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnStartParams: {
       threadId: string;
-      input: Array<
-        | { type: "text"; text: string; text_elements: [] }
-        | { type: "image"; url: string }
-        | { type: "skill"; name: string; path: string }
-        | { type: "mention"; name: string; path: string }
-      >;
+      input: CodexTurnInputItem[];
       model?: string;
       serviceTier?: string | null;
       effort?: string;
@@ -1200,41 +1173,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return this.sendTurn(input);
     }
 
-    const turnInput: Array<
-      | { type: "text"; text: string; text_elements: [] }
-      | { type: "image"; url: string }
-      | { type: "skill"; name: string; path: string }
-      | { type: "mention"; name: string; path: string }
-    > = [];
-    if (input.input) {
-      turnInput.push({
-        type: "text",
-        text: input.input,
-        text_elements: [],
-      });
-    }
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type === "image") {
-        turnInput.push({
-          type: "image",
-          url: attachment.url,
-        });
-      }
-    }
-    for (const skill of input.skills ?? []) {
-      turnInput.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-    for (const mention of input.mentions ?? []) {
-      turnInput.push({
-        type: "mention",
-        name: mention.name,
-        path: mention.path,
-      });
-    }
+    const turnInput = buildCodexTurnInput(input);
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -1828,6 +1767,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.stopping = true;
+    this.clearTaskCompleteFallback(context);
     context.gatewaySessionLease?.release();
 
     this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
@@ -1908,7 +1848,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(input.forceReload ? { forceReload: true } : {}),
       });
     }
-    const skills = this.parseSkillsListResponse(response, cwd);
+    const skills = parseCodexSkillsListResponse(response, cwd);
     const result: ProviderListSkillsResult = {
       skills,
       source: "codex-app-server",
@@ -1941,7 +1881,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
     });
     const result: ProviderListPluginsResult = {
-      ...this.parsePluginListResponse(response),
+      ...parseCodexPluginListResponse(response),
       source: "codex-app-server",
       cached: false,
     };
@@ -1970,7 +1910,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pluginName,
     });
     const result: ProviderReadPluginResult = {
-      plugin: this.parsePluginReadResponse(response),
+      plugin: parseCodexPluginReadResponse(response),
       source: "codex-app-server",
       cached: false,
     };
@@ -1994,7 +1934,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       limit: 50,
       includeHidden: false,
     });
-    const models = this.parseModelListResponse(response);
+    const models = parseCodexModelListResponse(response);
     const result: ProviderListModelsResult = {
       models,
       source: "codex-app-server",
@@ -2312,6 +2252,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       context.detachStdout?.();
+      this.clearTaskCompleteFallback(context);
       context.gatewaySessionLease?.release();
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
@@ -2466,6 +2407,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
+      this.clearTaskCompleteFallback(context);
       const turnId = toTurnId(this.readString(this.readObject(notification.params)?.turn, "id"));
       if (
         turnId !== undefined &&
@@ -2490,6 +2432,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
+      this.clearTaskCompleteFallback(context, rawRoute.turnId);
       context.collabReceiverTurns.clear();
       context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
@@ -2514,6 +2457,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
+      this.clearTaskCompleteFallback(context, rawRoute.turnId);
       context.collabReceiverTurns.clear();
       context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
@@ -2524,6 +2468,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: undefined,
       });
+      return;
+    }
+
+    if (notification.method === "codex/event/task_complete") {
+      if (isChildConversation || rawRoute.turnId === undefined) {
+        return;
+      }
+      this.scheduleTaskCompleteFallback(context, rawRoute.turnId);
       return;
     }
 
@@ -2603,6 +2555,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
 
+      this.clearTaskCompleteFallback(context);
       this.updateSession(context, {
         status: "error",
         lastError: message ?? context.session.lastError,
@@ -2796,6 +2749,71 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
+  private clearTaskCompleteFallback(context: CodexSessionContext, turnId?: TurnId): void {
+    const pending = context.taskCompleteFallback;
+    if (!pending || (turnId !== undefined && pending.turnId !== turnId)) {
+      return;
+    }
+    clearTimeout(pending.timeout);
+    context.taskCompleteFallback = undefined;
+  }
+
+  private scheduleTaskCompleteFallback(context: CodexSessionContext, turnId: TurnId): void {
+    if (
+      context.stopping ||
+      context.session.status !== "running" ||
+      (context.session.activeTurnId !== undefined && context.session.activeTurnId !== turnId)
+    ) {
+      return;
+    }
+
+    this.clearTaskCompleteFallback(context);
+    const timeout = setTimeout(() => {
+      if (context.taskCompleteFallback?.turnId !== turnId) {
+        return;
+      }
+      context.taskCompleteFallback = undefined;
+      if (
+        context.stopping ||
+        context.session.status !== "running" ||
+        (context.session.activeTurnId !== undefined && context.session.activeTurnId !== turnId)
+      ) {
+        return;
+      }
+
+      context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
+      context.reviewTurnIds.delete(turnId);
+      this.updateSession(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      this.emitEvent({
+        id: EventId.makeUnsafe(randomUUID()),
+        kind: "notification",
+        provider: "codex",
+        threadId: context.session.threadId,
+        createdAt: new Date().toISOString(),
+        ...(context.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: context.lifecycleGeneration }
+          : {}),
+        method: "turn/completed",
+        turnId,
+        message: "Recovered a missing turn/completed notification after task_complete.",
+        payload: {
+          turn: {
+            id: turnId,
+            status: "completed",
+          },
+          recoveredFrom: "codex/event/task_complete",
+        },
+      });
+    }, this.taskCompleteFallbackGraceMs);
+    timeout.unref();
+    context.taskCompleteFallback = { turnId, timeout };
+  }
+
   private settleTrackedReview(
     context: CodexSessionContext,
     input: {
@@ -2967,7 +2985,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {};
 
     const turnId = toTurnId(
-      this.readString(params, "turnId") ?? this.readString(this.readObject(params, "turn"), "id"),
+      this.readString(params, "turnId") ??
+        this.readString(this.readObject(params, "turn"), "id") ??
+        this.readString(this.readObject(params, "msg"), "turn_id") ??
+        this.readString(this.readObject(params, "msg"), "turnId"),
     );
     const itemId = toProviderItemId(
       this.readString(params, "itemId") ?? this.readString(this.readObject(params, "item"), "id"),
@@ -3200,390 +3221,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const turn = snapshot.turns.find((entry) => entry.id === turnId);
     return turn ? this.turnHasReviewItem(turn, "exited") : false;
   }
-
-  private parseSkillDescriptor(skill: unknown): ProviderSkillDescriptor | undefined {
-    const record = this.readObject(skill);
-    if (!record) return undefined;
-    const name = this.readString(record, "name")?.trim();
-    const path = this.readString(record, "path")?.trim();
-    if (!name || !path) {
-      return undefined;
-    }
-    const description = this.readString(record, "description")?.trim();
-    const scope = this.readString(record, "scope")?.trim();
-    const display = this.readObject(record, "interface");
-    return {
-      name,
-      path,
-      enabled: record.enabled !== false,
-      ...(description ? { description } : {}),
-      ...(scope ? { scope } : {}),
-      ...(display
-        ? {
-            interface: {
-              ...(this.readString(display, "displayName")
-                ? { displayName: this.readString(display, "displayName") }
-                : {}),
-              ...(this.readString(display, "shortDescription")
-                ? {
-                    shortDescription: this.readString(display, "shortDescription"),
-                  }
-                : {}),
-            },
-          }
-        : {}),
-      ...(record.dependencies !== undefined ? { dependencies: record.dependencies } : {}),
-    } satisfies ProviderSkillDescriptor;
-  }
-
-  private parseSkillsListResponse(response: unknown, cwd: string): ProviderSkillDescriptor[] {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const dataItems = this.readArray(resultRecord, "data") ?? [];
-    const scopedData = dataItems.find((value) => {
-      const item = this.readObject(value);
-      const itemCwd = this.readString(item, "cwd");
-      return itemCwd === cwd;
-    });
-    const scopedSkills = this.readArray(this.readObject(scopedData), "skills");
-    const directSkills = this.readArray(resultRecord, "skills");
-    const rawSkills = scopedSkills ?? directSkills ?? [];
-
-    const parsedSkills = rawSkills.flatMap((skill) => {
-      const parsedSkill = this.parseSkillDescriptor(skill);
-      return parsedSkill ? [parsedSkill] : [];
-    });
-
-    return parsedSkills.toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  private parsePluginListResponse(
-    response: unknown,
-  ): Omit<ProviderListPluginsResult, "source" | "cached"> {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const marketplaces = (this.readArray(resultRecord, "marketplaces") ?? []).flatMap(
-      (marketplace) => {
-        const record = this.readObject(marketplace);
-        if (!record) return [];
-        const name = this.readString(record, "name")?.trim();
-        const path = this.readString(record, "path")?.trim();
-        if (!name || !path) {
-          return [];
-        }
-        const rawPlugins = this.readArray(record, "plugins") ?? [];
-        const plugins = rawPlugins.flatMap((plugin) => {
-          const parsedPlugin = this.parsePluginSummary(plugin);
-          return parsedPlugin ? [parsedPlugin] : [];
-        });
-        const marketplaceInterface = this.readObject(record, "interface");
-        const marketplaceDisplayName = this.readString(marketplaceInterface, "displayName")?.trim();
-        return [
-          {
-            name,
-            path,
-            ...(marketplaceDisplayName
-              ? {
-                  interface: {
-                    displayName: marketplaceDisplayName,
-                  },
-                }
-              : {}),
-            plugins,
-          },
-        ];
-      },
-    );
-    const marketplaceLoadErrors = (this.readArray(resultRecord, "marketplaceLoadErrors") ?? [])
-      .map((error) => this.readObject(error))
-      .flatMap((error) => {
-        if (!error) return [];
-        const marketplacePath = this.readString(error, "marketplacePath")?.trim();
-        const message = this.readString(error, "message")?.trim();
-        if (!marketplacePath || !message) {
-          return [];
-        }
-        return [{ marketplacePath, message }];
-      });
-    const featuredPluginIds = (this.readArray(resultRecord, "featuredPluginIds") ?? [])
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
-      .filter((value) => value.length > 0);
-    const remoteSyncError = this.readString(resultRecord, "remoteSyncError")?.trim() ?? null;
-
-    return {
-      marketplaces,
-      marketplaceLoadErrors,
-      remoteSyncError: remoteSyncError?.length ? remoteSyncError : null,
-      featuredPluginIds,
-    };
-  }
-
-  private parsePluginSummary(plugin: unknown): ProviderPluginDescriptor | undefined {
-    const record = this.readObject(plugin);
-    if (!record) return undefined;
-    const id = this.readString(record, "id")?.trim();
-    const name = this.readString(record, "name")?.trim();
-    const source = this.readObject(record, "source");
-    const sourcePath = this.readString(source, "path")?.trim();
-    const installPolicy = this.readString(record, "installPolicy");
-    const authPolicy = this.readString(record, "authPolicy");
-    if (
-      !id ||
-      !name ||
-      !sourcePath ||
-      (installPolicy !== "NOT_AVAILABLE" &&
-        installPolicy !== "AVAILABLE" &&
-        installPolicy !== "INSTALLED_BY_DEFAULT") ||
-      (authPolicy !== "ON_INSTALL" && authPolicy !== "ON_USE")
-    ) {
-      return undefined;
-    }
-
-    const pluginInterface = this.parsePluginInterface(this.readObject(record, "interface"));
-
-    return {
-      id,
-      name,
-      source: {
-        type: "local",
-        path: sourcePath,
-      },
-      installed: record.installed === true,
-      enabled: record.enabled === true,
-      installPolicy,
-      authPolicy,
-      ...(pluginInterface ? { interface: pluginInterface } : {}),
-    } satisfies ProviderPluginDescriptor;
-  }
-
-  private parsePluginInterface(value: unknown): ProviderPluginDescriptor["interface"] | undefined {
-    const record = this.readObject(value);
-    if (!record) return undefined;
-    const capabilities = (this.readArray(record, "capabilities") ?? [])
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
-    const defaultPrompt = (this.readArray(record, "defaultPrompt") ?? [])
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
-    const screenshots = (this.readArray(record, "screenshots") ?? [])
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
-
-    return {
-      ...(this.readString(record, "displayName")?.trim()
-        ? { displayName: this.readString(record, "displayName")?.trim() }
-        : {}),
-      ...(this.readString(record, "shortDescription")?.trim()
-        ? {
-            shortDescription: this.readString(record, "shortDescription")?.trim(),
-          }
-        : {}),
-      ...(this.readString(record, "longDescription")?.trim()
-        ? {
-            longDescription: this.readString(record, "longDescription")?.trim(),
-          }
-        : {}),
-      ...(this.readString(record, "developerName")?.trim()
-        ? { developerName: this.readString(record, "developerName")?.trim() }
-        : {}),
-      ...(this.readString(record, "category")?.trim()
-        ? { category: this.readString(record, "category")?.trim() }
-        : {}),
-      ...(capabilities.length > 0 ? { capabilities } : {}),
-      ...(this.readString(record, "websiteUrl")?.trim()
-        ? { websiteUrl: this.readString(record, "websiteUrl")?.trim() }
-        : {}),
-      ...(this.readString(record, "privacyPolicyUrl")?.trim()
-        ? {
-            privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim(),
-          }
-        : {}),
-      ...(this.readString(record, "termsOfServiceUrl")?.trim()
-        ? {
-            termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim(),
-          }
-        : {}),
-      ...(defaultPrompt.length > 0 ? { defaultPrompt } : {}),
-      ...(this.readString(record, "brandColor")?.trim()
-        ? { brandColor: this.readString(record, "brandColor")?.trim() }
-        : {}),
-      ...(this.readString(record, "composerIcon")?.trim()
-        ? { composerIcon: this.readString(record, "composerIcon")?.trim() }
-        : {}),
-      ...(this.readString(record, "logo")?.trim()
-        ? { logo: this.readString(record, "logo")?.trim() }
-        : {}),
-      ...(screenshots.length > 0 ? { screenshots } : {}),
-    };
-  }
-
-  private parsePluginReadResponse(response: unknown): ProviderPluginDetail {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const pluginRecord = this.readObject(resultRecord, "plugin") ?? resultRecord;
-    const marketplaceName = this.readString(pluginRecord, "marketplaceName")?.trim();
-    const marketplacePath = this.readString(pluginRecord, "marketplacePath")?.trim();
-    const summary = this.parsePluginSummary(this.readObject(pluginRecord, "summary"));
-    if (!marketplaceName || !marketplacePath || !summary) {
-      throw new Error("plugin/read response did not include a valid plugin payload.");
-    }
-    const skills = (this.readArray(pluginRecord, "skills") ?? []).flatMap((skill) => {
-      const parsedSkill = this.parseSkillDescriptor(skill);
-      return parsedSkill ? [parsedSkill] : [];
-    });
-    const apps = (this.readArray(pluginRecord, "apps") ?? []).flatMap((app) => {
-      const parsedApp = this.parsePluginAppSummary(app);
-      return parsedApp ? [parsedApp] : [];
-    });
-    const mcpServers = (this.readArray(pluginRecord, "mcpServers") ?? [])
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
-      .filter((value) => value.length > 0);
-    const description = this.readString(pluginRecord, "description")?.trim();
-
-    return {
-      marketplaceName,
-      marketplacePath,
-      summary,
-      ...(description ? { description } : {}),
-      skills,
-      apps,
-      mcpServers,
-    };
-  }
-
-  private parsePluginAppSummary(value: unknown): ProviderPluginAppSummary | undefined {
-    const record = this.readObject(value);
-    if (!record) return undefined;
-    const id = this.readString(record, "id")?.trim();
-    const name = this.readString(record, "name")?.trim();
-    if (!id || !name) {
-      return undefined;
-    }
-    const description = this.readString(record, "description")?.trim();
-    const installUrl = this.readString(record, "installUrl")?.trim();
-    return {
-      id,
-      name,
-      ...(description ? { description } : {}),
-      ...(installUrl ? { installUrl } : {}),
-      needsAuth: record.needsAuth === true,
-    };
-  }
-
-  private parseModelListResponse(response: unknown): ProviderListModelsResult["models"] {
-    const responseRecord = this.readObject(response);
-    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
-    const rawModels =
-      this.readArray(resultRecord, "items") ??
-      this.readArray(resultRecord, "data") ??
-      this.readArray(resultRecord, "models") ??
-      [];
-    const seen = new Set<string>();
-
-    return rawModels.flatMap((value) => {
-      const model = this.readObject(value);
-      if (!model) {
-        return [];
-      }
-
-      const slug =
-        this.readString(model, "id") ??
-        this.readString(model, "slug") ??
-        this.readString(model, "model");
-      const trimmedSlug = slug?.trim();
-      if (!trimmedSlug) {
-        return [];
-      }
-
-      const name =
-        this.readString(model, "name") ??
-        this.readString(model, "displayName") ??
-        this.readString(model, "display_name") ??
-        trimmedSlug;
-      const trimmedName = name.trim();
-      if (!trimmedName || seen.has(trimmedSlug)) {
-        return [];
-      }
-
-      // Accept both Synara's legacy string array and Remodex-style reasoning objects.
-      const supportedReasoningEfforts = Array.from(
-        new Map(
-          (
-            this.readArray(model, "supportedReasoningEfforts") ??
-            this.readArray(model, "supported_reasoning_efforts") ??
-            []
-          )
-            .flatMap((entry) => {
-              if (typeof entry === "string") {
-                const value = entry.trim();
-                return value.length > 0 ? [{ value }] : [];
-              }
-
-              const descriptor = this.readObject(entry);
-              if (!descriptor) {
-                return [];
-              }
-
-              const value =
-                this.readString(descriptor, "reasoningEffort") ??
-                this.readString(descriptor, "reasoning_effort") ??
-                this.readString(descriptor, "value");
-              const trimmedValue = value?.trim();
-              if (!trimmedValue) {
-                return [];
-              }
-
-              const label =
-                this.readString(descriptor, "description") ?? this.readString(descriptor, "label");
-              const trimmedLabel = label?.trim();
-              return [
-                {
-                  value: trimmedValue,
-                  ...(trimmedLabel ? { description: trimmedLabel } : {}),
-                },
-              ];
-            })
-            .map((descriptor) => [descriptor.value, descriptor] as const),
-        ).values(),
-      );
-      const defaultReasoningEffort =
-        this.readString(model, "defaultReasoningEffort") ??
-        this.readString(model, "default_reasoning_effort");
-      const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
-      const additionalSpeedTiers =
-        this.readArray(model, "additionalSpeedTiers") ??
-        this.readArray(model, "additional_speed_tiers") ??
-        [];
-      const hasFastSpeedTier = additionalSpeedTiers.some(
-        (tier) => typeof tier === "string" && tier.trim().toLowerCase() === "fast",
-      );
-      const supportsFastMode =
-        this.readFirstBoolean(model, [
-          "supportsFastMode",
-          "supports_fast_mode",
-          "fastMode",
-          "fast_mode",
-          "fastServiceTier",
-          "fast_service_tier",
-        ]) ?? (hasFastSpeedTier ? true : undefined);
-
-      seen.add(trimmedSlug);
-      return [
-        {
-          slug: trimmedSlug,
-          name: trimmedName,
-          ...(supportedReasoningEfforts.length > 0 ? { supportedReasoningEfforts } : {}),
-          ...(trimmedDefaultReasoningEffort &&
-          supportedReasoningEfforts.some(
-            (descriptor) => descriptor.value === trimmedDefaultReasoningEffort,
-          )
-            ? { defaultReasoningEffort: trimmedDefaultReasoningEffort }
-            : {}),
-          ...(supportsFastMode !== undefined ? { supportsFastMode } : {}),
-        },
-      ];
-    });
-  }
 }
 
 function brandIfNonEmpty<T extends string>(
@@ -3612,11 +3249,25 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   };
 }
 
+function isMissingExecutableSpawnError(error: Error): boolean {
+  const lower = error.message.toLowerCase();
+  return (
+    lower.includes("enoent") ||
+    lower.includes("command not found") ||
+    lower.includes("not found") ||
+    lower.includes("filesystem.access")
+  );
+}
+
 async function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
 }): Promise<void> {
+  // Prefer an explicit cwd check before spawning. A missing working directory
+  // produces ENOENT that is otherwise misreported as a missing Codex binary.
+  assertCodexWorkingDirectoryExists(input.cwd);
+
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
@@ -3637,12 +3288,9 @@ async function assertSupportedCodexCliVersion(input: {
   });
 
   if (result.error) {
-    const lower = result.error.message.toLowerCase();
-    if (
-      lower.includes("enoent") ||
-      lower.includes("command not found") ||
-      lower.includes("not found")
-    ) {
+    if (isMissingExecutableSpawnError(result.error)) {
+      // Race: cwd may have disappeared between the pre-check and spawn.
+      assertCodexWorkingDirectoryExists(input.cwd);
       throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
     }
     throw new Error(

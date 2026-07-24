@@ -54,6 +54,7 @@ import {
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
+import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
@@ -429,6 +430,7 @@ describe("ProviderCommandReactor", () => {
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provideMerge(TurnCheckpointCoordinatorLive),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(Layer.succeed(StudioOutputReactor, studioOutputReactor)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
@@ -1649,6 +1651,38 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
       PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
     );
+  });
+
+  it("keeps thread mention context within the provider input limit", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const messageText = "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-max-input-with-thread-mention"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("max-input-with-thread-mention"),
+          role: "user",
+          text: messageText,
+          attachments: [],
+          mentions: [{ name: "Current thread", path: "thread://thread-1" }],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as
+      | { input?: string; mentions?: ReadonlyArray<unknown> }
+      | undefined;
+    expect(input?.input).toBe(messageText);
+    expect(input?.input?.length).toBe(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+    expect(input?.mentions).toBeUndefined();
   });
 
   it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
@@ -5352,7 +5386,6 @@ describe("ProviderCommandReactor", () => {
     };
     const harness = await createHarness({ threadModelSelection: initialSelection });
     const threadId = ThreadId.makeUnsafe("thread-1");
-    const now = new Date().toISOString();
 
     // Mirrors native import: ProviderService owns the runtime start directly,
     // while the reactor learns the original selection from thread.created.
@@ -7337,6 +7370,50 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("stopped");
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("serializes archive cleanup through the durable provider intent source", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-for-archive"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.makeUnsafe("cmd-archive-active-provider-session"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+      }),
+    );
+
+    await waitFor(async () => {
+      if (harness.stopSession.mock.calls.length !== 1) return false;
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return thread?.archivedAt !== null && thread?.session?.status === "stopped";
+    });
+
+    expect(harness.stopSession).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
   });
 
   it("does not restore pending sidechat context after an explicit session stop", async () => {

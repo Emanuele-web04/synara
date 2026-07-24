@@ -33,13 +33,40 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
+
+const makeThreadEventReadMethods = (
+  events: ReadonlyArray<OrchestrationEvent>,
+): Pick<OrchestrationEventStoreShape, "getThreadHighWaterSequence" | "readThreadEvents"> => ({
+  getThreadHighWaterSequence: (threadId) =>
+    Effect.succeed(
+      events
+        .filter((event) => event.aggregateKind === "thread" && event.aggregateId === threadId)
+        .at(-1)?.sequence ?? 0,
+    ),
+  readThreadEvents: (input) =>
+    Effect.succeed(
+      events
+        .filter(
+          (event) =>
+            event.aggregateKind === "thread" &&
+            event.aggregateId === input.threadId &&
+            event.sequence <= input.throughSequenceInclusive &&
+            event.sequence < (input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER) &&
+            (input.eventTypes === undefined || input.eventTypes.includes(event.type)),
+        )
+        .toSorted((left, right) => right.sequence - left.sequence)
+        .slice(0, input.limit),
+    ),
+});
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.makeUnsafe(value);
 
+const TestServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "synara-orchestration-engine-test-",
+});
+
 async function createOrchestrationSystem() {
-  const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-    prefix: "synara-orchestration-engine-test-",
-  });
+  const ServerConfigLayer = TestServerConfigLayer;
   const orchestrationLayer = OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -620,6 +647,7 @@ describe("OrchestrationEngine", () => {
       getHighWaterSequence() {
         return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
+      ...makeThreadEventReadMethods(events),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
       },
@@ -628,10 +656,6 @@ describe("OrchestrationEngine", () => {
       },
     };
 
-    const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-      prefix: "synara-orchestration-engine-test-",
-    });
-
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
         Layer.provide(OrchestrationProjectionPipelineLive),
@@ -639,7 +663,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(Layer.succeed(OrchestrationEventStore, flakyStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
-        Layer.provideMerge(ServerConfigLayer),
+        Layer.provideMerge(TestServerConfigLayer),
         Layer.provideMerge(NodeServices.layer),
       ),
     );
@@ -738,6 +762,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -848,6 +874,7 @@ describe("OrchestrationEngine", () => {
       getHighWaterSequence() {
         return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
+      ...makeThreadEventReadMethods(events),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
       },
@@ -881,6 +908,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -959,6 +988,7 @@ describe("OrchestrationEngine", () => {
       getHighWaterSequence() {
         return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
+      ...makeThreadEventReadMethods(events),
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
       },
@@ -997,6 +1027,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -1130,6 +1162,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -1219,6 +1253,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));

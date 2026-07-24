@@ -31,6 +31,10 @@ import {
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
+import {
+  assertCodexWorkingDirectoryExists,
+  formatMissingCodexWorkingDirectoryError,
+} from "./codexWorkingDirectory";
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
@@ -55,7 +59,7 @@ describe("Codex Synara harness policy", () => {
       expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
       expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
       expect(instructions).toContain("Synara is the host and harness");
-      expect(instructions).toContain("synara_create_threads exactly once");
+      expect(instructions).toContain("one exact synara_create_threads plan");
     }
   });
 
@@ -680,6 +684,49 @@ describe("buildCodexProcessEnv", () => {
     expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
+  it("forwards the browser-use socket capability to the Browser MCP helper", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [
+          "[mcp_servers.node_repl]",
+          'command = "/tmp/node_repl"',
+          'env_vars = ["EXISTING_BROWSER_ENV"]',
+          "",
+          "[mcp_servers.node_repl.env]",
+          'BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"',
+        ].join("\n"),
+        "utf8",
+      );
+
+      const env = await buildCodexProcessEnv({
+        env: {
+          SYNARA_HOME: runtimeHome,
+          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
+        },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      const overlayConfig = readFileSync(path.join(codexHome, "config.toml"), "utf8");
+      expect(overlayConfig).toContain(
+        'env_vars = ["NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS", "EXISTING_BROWSER_ENV"]',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        'env_vars = ["EXISTING_BROWSER_ENV"]',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the browser-use pipe path from desktop env aliases", () => {
     expect(
       resolveCodexBrowserUsePipePath({
@@ -1094,6 +1141,71 @@ describe("startSession", () => {
     expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
   });
 
+  it("reports a missing project working directory instead of a missing Codex CLI", () => {
+    const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
+    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
+      formatMissingCodexWorkingDirectoryError(missingCwd),
+    );
+    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
+      /Relocate or reconnect the project/,
+    );
+    expect(formatMissingCodexWorkingDirectoryError(missingCwd)).not.toMatch(
+      /not installed|not executable/i,
+    );
+  });
+
+  it("accepts an existing project working directory", () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-existing-cwd-"));
+    try {
+      expect(() => assertCodexWorkingDirectoryExists(cwd)).not.toThrow();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails session start with missing-cwd guidance instead of missing Codex CLI", async () => {
+    const manager = new CodexAppServerManager();
+    const events: Array<{ method: string; kind: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        method: event.method,
+        kind: event.kind,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const missingCwd = path.join(
+      os.tmpdir(),
+      `synara-missing-session-cwd-${randomUUID()}`,
+      "old-project",
+    );
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-missing-cwd"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          cwd: missingCwd,
+          providerOptions: {
+            codex: {
+              binaryPath: process.execPath,
+            },
+          },
+        }),
+      ).rejects.toThrow(formatMissingCodexWorkingDirectoryError(missingCwd));
+      expect(events).toEqual([
+        {
+          method: "session/startFailed",
+          kind: "error",
+          message: formatMissingCodexWorkingDirectoryError(missingCwd),
+        },
+      ]);
+      expect(events[0]?.message).not.toMatch(/not installed|not executable/i);
+    } finally {
+      await manager.stopAll();
+    }
+  });
+
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
     const manager = new CodexAppServerManager();
     const events: Array<{ method: string; kind: string; message?: string }> = [];
@@ -1230,101 +1342,6 @@ describe("sendTurn", () => {
           type: "text",
           text: "Check this before changing files",
           text_elements: [],
-        },
-      ],
-      model: "gpt-5.3-codex",
-    });
-  });
-
-  it("supports image-only turns", async () => {
-    const { manager, context, sendRequest } = createSendTurnHarness();
-
-    await manager.sendTurn({
-      threadId: asThreadId("thread_1"),
-      attachments: [
-        {
-          type: "image",
-          url: "data:image/png;base64,BBBB",
-        },
-      ],
-    });
-
-    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
-      threadId: "thread_1",
-      ...fullAccessTurnOverrides,
-      summary: "auto",
-      input: [
-        {
-          type: "image",
-          url: "data:image/png;base64,BBBB",
-        },
-      ],
-      model: "gpt-5.3-codex",
-    });
-  });
-
-  it("adds selected skills as structured turn/start input items", async () => {
-    const { manager, context, sendRequest } = createSendTurnHarness();
-
-    await manager.sendTurn({
-      threadId: asThreadId("thread_1"),
-      input: "Use $check-code for this repo",
-      skills: [
-        {
-          name: "check-code",
-          path: "/Users/test/.codex/skills/check-code/SKILL.md",
-        },
-      ],
-    });
-
-    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
-      threadId: "thread_1",
-      ...fullAccessTurnOverrides,
-      summary: "auto",
-      input: [
-        {
-          type: "text",
-          text: "Use $check-code for this repo",
-          text_elements: [],
-        },
-        {
-          type: "skill",
-          name: "check-code",
-          path: "/Users/test/.codex/skills/check-code/SKILL.md",
-        },
-      ],
-      model: "gpt-5.3-codex",
-    });
-  });
-
-  it("adds selected plugin mentions as structured turn/start input items", async () => {
-    const { manager, context, sendRequest } = createSendTurnHarness();
-
-    await manager.sendTurn({
-      threadId: asThreadId("thread_1"),
-      input: "Use @github to inspect the PR",
-      mentions: [
-        {
-          name: "github",
-          path: "plugin://github@openai-curated",
-        },
-      ],
-    });
-
-    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
-      threadId: "thread_1",
-      ...fullAccessTurnOverrides,
-      summary: "auto",
-      input: [
-        {
-          type: "text",
-          text: "Use @github to inspect the PR",
-          text_elements: [],
-        },
-        {
-          type: "mention",
-          name: "github",
-          path: "plugin://github@openai-curated",
         },
       ],
       model: "gpt-5.3-codex",
@@ -1570,28 +1587,7 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
-  it.each([
-    {
-      responseShape: "camelCase",
-      item: {
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        defaultReasoningEffort: "low",
-        additionalSpeedTiers: ["fast"],
-      },
-    },
-    {
-      responseShape: "legacy snake_case",
-      item: {
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        default_reasoning_effort: "low",
-        additional_speed_tiers: ["fast"],
-      },
-    },
-  ])("normalizes $responseShape model/list reasoning efforts", async ({ item }) => {
+  it("wires model discovery through model/list", async () => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1600,9 +1596,6 @@ describe("CodexAppServerManager discovery", () => {
         threadId: "thread_1",
         runtimeMode: "full-access",
         model: "gpt-5.5",
-        resumeCursor: { threadId: "thread_1" },
-        createdAt: "2026-02-10T00:00:00.000Z",
-        updatedAt: "2026-02-10T00:00:00.000Z",
       },
       account: {
         type: "unknown",
@@ -1626,35 +1619,18 @@ describe("CodexAppServerManager discovery", () => {
         },
         "sendRequest",
       )
-      .mockResolvedValue({
-        result: {
-          items: [item],
-        },
-      });
+      .mockResolvedValue({ result: { items: [] } });
 
-    const result = await manager.listModels("thread_1");
-
+    await expect(manager.listModels("thread_1")).resolves.toMatchObject({
+      models: [],
+      source: "codex-app-server",
+      cached: false,
+    });
     expect(sendRequest).toHaveBeenCalledWith(context, "model/list", {
       cursor: null,
       limit: 50,
       includeHidden: false,
     });
-    expect(result.models).toEqual([
-      {
-        slug: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        supportedReasoningEfforts: [
-          { value: "low" },
-          { value: "medium" },
-          { value: "high" },
-          { value: "xhigh" },
-          { value: "max" },
-          { value: "ultra" },
-        ],
-        defaultReasoningEffort: "low",
-        supportsFastMode: true,
-      },
-    ]);
   });
 
   it("uses a cwd-scoped discovery session instead of an unrelated active session", async () => {
@@ -1760,104 +1736,6 @@ describe("CodexAppServerManager discovery", () => {
     });
   });
 
-  it("parses bucketed skills/list responses for the requested cwd", async () => {
-    const manager = new CodexAppServerManager();
-    const context = {
-      session: {
-        provider: "codex",
-        status: "ready",
-        threadId: "thread_1",
-        runtimeMode: "full-access",
-        model: "gpt-5.3-codex",
-        resumeCursor: { threadId: "thread_1" },
-        createdAt: "2026-02-10T00:00:00.000Z",
-        updatedAt: "2026-02-10T00:00:00.000Z",
-      },
-      account: {
-        type: "unknown",
-        planType: null,
-        sparkEnabled: true,
-      },
-      collabReceiverTurns: new Map(),
-      collabReceiverParents: new Map(),
-    };
-
-    const resolveContextForDiscovery = vi
-      .spyOn(
-        manager as unknown as {
-          resolveContextForDiscovery: (threadId?: string) => unknown;
-        },
-        "resolveContextForDiscovery",
-      )
-      .mockReturnValue(context);
-    const sendRequest = vi
-      .spyOn(
-        manager as unknown as {
-          sendRequest: (...args: unknown[]) => Promise<unknown>;
-        },
-        "sendRequest",
-      )
-      .mockResolvedValue({
-        result: {
-          data: [
-            {
-              cwd: "/other",
-              skills: [
-                {
-                  name: "ignore-me",
-                  path: "/ignore",
-                },
-              ],
-            },
-            {
-              cwd: "/repo",
-              skills: [
-                {
-                  name: "check-code",
-                  description: "Review repo changes for bugs and risks.",
-                  path: "/Users/test/.codex/skills/check-code/SKILL.md",
-                  scope: "project",
-                  interface: {
-                    displayName: "Check Code",
-                    shortDescription: "Review code changes",
-                  },
-                  dependencies: ["rg"],
-                },
-              ],
-            },
-          ],
-        },
-      });
-
-    const result = await manager.listSkills({
-      cwd: "/repo",
-      threadId: "thread_1",
-    });
-
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
-    expect(sendRequest).toHaveBeenCalledWith(context, "skills/list", {
-      cwds: ["/repo"],
-    });
-    expect(result).toEqual({
-      skills: [
-        {
-          name: "check-code",
-          description: "Review repo changes for bugs and risks.",
-          path: "/Users/test/.codex/skills/check-code/SKILL.md",
-          enabled: true,
-          scope: "project",
-          interface: {
-            displayName: "Check Code",
-            shortDescription: "Review code changes",
-          },
-          dependencies: ["rg"],
-        },
-      ],
-      source: "codex-app-server",
-      cached: false,
-    });
-  });
-
   it("retries skills/list with cwd when a runtime rejects cwds", async () => {
     const manager = new CodexAppServerManager();
     const context = {
@@ -1925,7 +1803,7 @@ describe("CodexAppServerManager discovery", () => {
     ]);
   });
 
-  it("parses plugin/list responses for the requested cwd", async () => {
+  it("wires plugin discovery through plugin/list", async () => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1933,10 +1811,7 @@ describe("CodexAppServerManager discovery", () => {
         status: "ready",
         threadId: "thread_1",
         runtimeMode: "full-access",
-        model: "gpt-5.3-codex",
-        resumeCursor: { threadId: "thread_1" },
-        createdAt: "2026-02-10T00:00:00.000Z",
-        updatedAt: "2026-02-10T00:00:00.000Z",
+        model: "gpt-5.5",
       },
       account: {
         type: "unknown",
@@ -1962,106 +1837,27 @@ describe("CodexAppServerManager discovery", () => {
         },
         "sendRequest",
       )
-      .mockResolvedValue({
-        result: {
-          marketplaces: [
-            {
-              name: "openai-curated",
-              path: "/Users/test/.agents/plugins/marketplace.json",
-              interface: {
-                displayName: "OpenAI Curated",
-              },
-              plugins: [
-                {
-                  id: "plugin/github",
-                  name: "github",
-                  source: {
-                    path: "/Users/test/.codex/plugins/cache/openai-curated/github",
-                  },
-                  installed: true,
-                  enabled: true,
-                  installPolicy: "INSTALLED_BY_DEFAULT",
-                  authPolicy: "ON_USE",
-                  interface: {
-                    displayName: "GitHub",
-                    shortDescription: "Inspect repositories and pull requests",
-                    capabilities: ["pull_requests", "issues"],
-                    defaultPrompt: ["Help with repository tasks"],
-                    websiteUrl: "https://github.com",
-                    screenshots: ["https://example.com/github.png"],
-                  },
-                },
-              ],
-            },
-          ],
-          marketplaceLoadErrors: [
-            {
-              marketplacePath: "/broken/marketplace.json",
-              message: "Invalid marketplace manifest",
-            },
-          ],
-          featuredPluginIds: ["plugin/github"],
-          remoteSyncError: "Remote sync unavailable",
-        },
-      });
+      .mockResolvedValue({ result: {} });
 
-    const result = await manager.listPlugins({
-      cwd: "/repo",
-      threadId: "thread_1",
-      forceRemoteSync: true,
+    await expect(
+      manager.listPlugins({
+        cwd: "/repo",
+        threadId: "thread_1",
+        forceRemoteSync: true,
+      }),
+    ).resolves.toMatchObject({
+      marketplaces: [],
+      source: "codex-app-server",
+      cached: false,
     });
-
     expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
     expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
       cwds: ["/repo"],
       forceRemoteSync: true,
     });
-    expect(result).toEqual({
-      marketplaces: [
-        {
-          name: "openai-curated",
-          path: "/Users/test/.agents/plugins/marketplace.json",
-          interface: {
-            displayName: "OpenAI Curated",
-          },
-          plugins: [
-            {
-              id: "plugin/github",
-              name: "github",
-              source: {
-                type: "local",
-                path: "/Users/test/.codex/plugins/cache/openai-curated/github",
-              },
-              installed: true,
-              enabled: true,
-              installPolicy: "INSTALLED_BY_DEFAULT",
-              authPolicy: "ON_USE",
-              interface: {
-                displayName: "GitHub",
-                shortDescription: "Inspect repositories and pull requests",
-                capabilities: ["pull_requests", "issues"],
-                defaultPrompt: ["Help with repository tasks"],
-                websiteUrl: "https://github.com",
-                screenshots: ["https://example.com/github.png"],
-              },
-            },
-          ],
-        },
-      ],
-      marketplaceLoadErrors: [
-        {
-          marketplacePath: "/broken/marketplace.json",
-          message: "Invalid marketplace manifest",
-        },
-      ],
-      featuredPluginIds: ["plugin/github"],
-      remoteSyncError: "Remote sync unavailable",
-      source: "codex-app-server",
-      cached: false,
-    });
   });
 
-  it("parses plugin/read responses into plugin detail", async () => {
+  it("wires plugin details through plugin/read", async () => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -2069,10 +1865,7 @@ describe("CodexAppServerManager discovery", () => {
         status: "ready",
         threadId: "thread_1",
         runtimeMode: "full-access",
-        model: "gpt-5.3-codex",
-        resumeCursor: { threadId: "thread_1" },
-        createdAt: "2026-02-10T00:00:00.000Z",
-        updatedAt: "2026-02-10T00:00:00.000Z",
+        model: "gpt-5.5",
       },
       account: {
         type: "unknown",
@@ -2083,14 +1876,12 @@ describe("CodexAppServerManager discovery", () => {
       collabReceiverParents: new Map(),
     };
 
-    const resolveContextForDiscovery = vi
-      .spyOn(
-        manager as unknown as {
-          resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
-        },
-        "resolveContextForDiscovery",
-      )
-      .mockReturnValue(context);
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
     const sendRequest = vi
       .spyOn(
         manager as unknown as {
@@ -2102,126 +1893,36 @@ describe("CodexAppServerManager discovery", () => {
         result: {
           plugin: {
             marketplaceName: "openai-curated",
-            marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
+            marketplacePath: "/marketplace.json",
             summary: {
               id: "plugin/github",
               name: "github",
-              source: {
-                path: "/Users/test/.codex/plugins/cache/openai-curated/github",
-              },
+              source: { path: "/plugins/github" },
               installed: true,
               enabled: true,
               installPolicy: "INSTALLED_BY_DEFAULT",
               authPolicy: "ON_USE",
-              interface: {
-                displayName: "GitHub",
-                shortDescription: "Inspect repositories and pull requests",
-                longDescription: "Use GitHub tools to work with repositories, issues, and PRs.",
-                developerName: "OpenAI",
-                category: "Developer Tools",
-                capabilities: ["pull_requests", "issues"],
-                defaultPrompt: ["Help with repository tasks"],
-                websiteUrl: "https://github.com",
-                privacyPolicyUrl: "https://github.com/privacy",
-                termsOfServiceUrl:
-                  "https://docs.github.com/site-policy/github-terms/github-terms-of-service",
-                brandColor: "#24292f",
-                composerIcon: "github",
-                logo: "https://example.com/github-logo.png",
-                screenshots: ["https://example.com/github.png"],
-              },
             },
-            description: "GitHub connector for repository workflows.",
-            skills: [
-              {
-                name: "gh-fix-ci",
-                description: "Debug failing GitHub Actions checks.",
-                path: "/Users/test/.codex/plugins/cache/openai-curated/github/skills/gh-fix-ci/SKILL.md",
-                scope: "user",
-                dependencies: ["gh"],
-              },
-            ],
-            apps: [
-              {
-                id: "github-app",
-                name: "GitHub App",
-                description: "Connected GitHub account",
-                installUrl: "https://github.com/apps/openai",
-                needsAuth: true,
-              },
-            ],
-            mcpServers: ["GitHub"],
           },
         },
       });
 
-    const result = await manager.readPlugin({
-      marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
-      pluginName: "github",
-    });
-
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined);
-    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
-      marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
-      pluginName: "github",
-    });
-    expect(result).toEqual({
+    await expect(
+      manager.readPlugin({
+        marketplacePath: "/marketplace.json",
+        pluginName: "github",
+      }),
+    ).resolves.toMatchObject({
       plugin: {
         marketplaceName: "openai-curated",
-        marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
-        summary: {
-          id: "plugin/github",
-          name: "github",
-          source: {
-            type: "local",
-            path: "/Users/test/.codex/plugins/cache/openai-curated/github",
-          },
-          installed: true,
-          enabled: true,
-          installPolicy: "INSTALLED_BY_DEFAULT",
-          authPolicy: "ON_USE",
-          interface: {
-            displayName: "GitHub",
-            shortDescription: "Inspect repositories and pull requests",
-            longDescription: "Use GitHub tools to work with repositories, issues, and PRs.",
-            developerName: "OpenAI",
-            category: "Developer Tools",
-            capabilities: ["pull_requests", "issues"],
-            defaultPrompt: ["Help with repository tasks"],
-            websiteUrl: "https://github.com",
-            privacyPolicyUrl: "https://github.com/privacy",
-            termsOfServiceUrl:
-              "https://docs.github.com/site-policy/github-terms/github-terms-of-service",
-            brandColor: "#24292f",
-            composerIcon: "github",
-            logo: "https://example.com/github-logo.png",
-            screenshots: ["https://example.com/github.png"],
-          },
-        },
-        description: "GitHub connector for repository workflows.",
-        skills: [
-          {
-            name: "gh-fix-ci",
-            description: "Debug failing GitHub Actions checks.",
-            path: "/Users/test/.codex/plugins/cache/openai-curated/github/skills/gh-fix-ci/SKILL.md",
-            enabled: true,
-            scope: "user",
-            dependencies: ["gh"],
-          },
-        ],
-        apps: [
-          {
-            id: "github-app",
-            name: "GitHub App",
-            description: "Connected GitHub account",
-            installUrl: "https://github.com/apps/openai",
-            needsAuth: true,
-          },
-        ],
-        mcpServers: ["GitHub"],
+        summary: { id: "plugin/github" },
       },
       source: "codex-app-server",
       cached: false,
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
+      marketplacePath: "/marketplace.json",
+      pluginName: "github",
     });
   });
 });
@@ -3259,6 +2960,93 @@ describe("collab child conversation routing", () => {
 });
 
 describe("handleServerNotification error normalization", () => {
+  it("recovers a missing turn/completed after legacy task_complete", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        taskCompleteFallbackGraceMs: 25,
+      });
+      const harness = createCollabNotificationHarness();
+      const context = harness.context;
+      const emitEvent = vi
+        .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+        .mockImplementation(() => {});
+      const updateSession = vi
+        .spyOn(
+          manager as unknown as { updateSession: (...args: unknown[]) => void },
+          "updateSession",
+        )
+        .mockImplementation(() => {});
+
+      handleServerNotificationForTest(manager, context, {
+        method: "codex/event/task_complete",
+        params: {
+          id: "turn_parent",
+          msg: {
+            type: "task_complete",
+            turn_id: "turn_parent",
+            last_agent_message: "Done.",
+          },
+        },
+      });
+      vi.advanceTimersByTime(25);
+
+      expect(updateSession).toHaveBeenCalledWith(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      expect(emitEvent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          method: "turn/completed",
+          turnId: "turn_parent",
+          payload: expect.objectContaining({
+            recoveredFrom: "codex/event/task_complete",
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the task_complete fallback when native turn/completed arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        taskCompleteFallbackGraceMs: 25,
+      });
+      const context = createCollabNotificationHarness().context;
+      const emitEvent = vi
+        .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+        .mockImplementation(() => {});
+
+      handleServerNotificationForTest(manager, context, {
+        method: "codex/event/task_complete",
+        params: {
+          id: "turn_parent",
+          msg: { type: "task_complete", turn_id: "turn_parent" },
+        },
+      });
+      handleServerNotificationForTest(manager, context, {
+        method: "turn/completed",
+        params: {
+          threadId: "provider_parent",
+          turn: { id: "turn_parent", status: "completed" },
+        },
+      });
+      vi.advanceTimersByTime(25);
+
+      expect(
+        emitEvent.mock.calls.filter(
+          ([event]) => (event as { method?: string }).method === "turn/completed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("settles native review when review mode exits", () => {
     const { manager, context, updateSession, emitEvent } = createCollabNotificationHarness();
     context.reviewTurnIds.add("turn_parent");

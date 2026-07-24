@@ -1,15 +1,16 @@
 import { Effect } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
   resolveGrokAcpAuthMethodId,
+  runGrokAcpCompactionCommand,
 } from "./GrokAcpSupport.ts";
 
-function initializeWithAuthMethods(ids: ReadonlyArray<string>): EffectAcpSchema.InitializeResponse {
+function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeResponse {
   return {
     protocolVersion: 1,
     authMethods: ids.map((id) => ({ id, name: id })),
@@ -20,7 +21,7 @@ describe("buildGrokAcpSpawnInput", () => {
   it("builds the default Grok ACP command", () => {
     expect(buildGrokAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
       command: "grok",
-      args: ["agent", "--no-leader", "stdio"],
+      args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
     });
   });
@@ -30,28 +31,28 @@ describe("buildGrokAcpSpawnInput", () => {
       buildGrokAcpSpawnInput({ binaryPath: "/usr/local/bin/grok" }, "/tmp/project"),
     ).toMatchObject({
       command: "/usr/local/bin/grok",
-      args: ["agent", "--no-leader", "stdio"],
+      args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
     });
   });
 
-  it("passes model and reasoning effort as Grok agent startup options", () => {
-    expect(
-      buildGrokAcpSpawnInput(
-        {
-          binaryPath: "/usr/local/bin/grok",
-          model: "grok-build",
-          reasoningEffort: "high",
-          alwaysApprove: true,
-        },
-        "/tmp/project",
-      ),
-    ).toMatchObject({
+  it("passes model and reasoning effort without process-wide approval overrides", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      {
+        binaryPath: "/usr/local/bin/grok",
+        model: "grok-build",
+        reasoningEffort: "high",
+      },
+      "/tmp/project",
+    );
+
+    expect(spawn).toMatchObject({
       command: "/usr/local/bin/grok",
       args: [
+        "--permission-mode",
+        "default",
         "agent",
         "--no-leader",
-        "--always-approve",
         "-m",
         "grok-build",
         "--reasoning-effort",
@@ -60,6 +61,7 @@ describe("buildGrokAcpSpawnInput", () => {
       ],
       cwd: "/tmp/project",
     });
+    expect(spawn.args).not.toContain("--always-approve");
   });
 });
 
@@ -120,7 +122,7 @@ describe("resolveGrokAcpAuthMethodId", () => {
       resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["browser_login"])).pipe(Effect.flip),
     );
 
-    expect(error).toBeInstanceOf(EffectAcpErrors.AcpRequestError);
+    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
     expect(error.message).toBe("Grok ACP authentication is unavailable.");
   });
 });
@@ -147,7 +149,7 @@ describe("applyGrokAcpModelSelection", () => {
             { value: "high", name: "High" },
           ],
         },
-      ] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      ] as ReadonlyArray<Acp.SessionConfigOption>),
       setConfigOption: (id: string, value: string | boolean) =>
         Effect.sync(() => {
           calls.push({ type: "config", id, value: String(value) });
@@ -165,5 +167,73 @@ describe("applyGrokAcpModelSelection", () => {
     );
 
     expect(calls).toEqual([]);
+  });
+});
+
+describe("runGrokAcpCompactionCommand", () => {
+  it("runs Grok's advertised /compact command explicitly in agent mode", async () => {
+    const prompts: Array<Omit<Acp.PromptRequest, "sessionId">> = [];
+    const runtime = {
+      getAvailableCommands: Effect.succeed([
+        {
+          name: "compact",
+          description: "Compress conversation history to save context window",
+        },
+      ]),
+      prompt: (payload: Omit<Acp.PromptRequest, "sessionId">) =>
+        Effect.sync(() => {
+          prompts.push(payload);
+          return { stopReason: "end_turn" } satisfies Acp.PromptResponse;
+        }),
+    };
+
+    await expect(Effect.runPromise(runGrokAcpCompactionCommand(runtime))).resolves.toEqual({
+      stopReason: "end_turn",
+    });
+    expect(prompts).toEqual([
+      {
+        prompt: [{ type: "text", text: "/compact" }],
+        _meta: { mode: "agent" },
+      },
+    ]);
+  });
+
+  it("keeps /compact compatible when an older Grok ACP advertises no commands", async () => {
+    const prompts: Array<Omit<Acp.PromptRequest, "sessionId">> = [];
+    const runtime = {
+      getAvailableCommands: Effect.succeed([]),
+      prompt: (payload: Omit<Acp.PromptRequest, "sessionId">) =>
+        Effect.sync(() => {
+          prompts.push(payload);
+          return { stopReason: "end_turn" } satisfies Acp.PromptResponse;
+        }),
+    };
+
+    await Effect.runPromise(runGrokAcpCompactionCommand(runtime));
+
+    expect(prompts).toHaveLength(1);
+  });
+
+  it("fails clearly when Grok advertises commands without /compact", async () => {
+    let promptCalled = false;
+    const runtime = {
+      getAvailableCommands: Effect.succeed([
+        {
+          name: "review",
+          description: "Review changes",
+        },
+      ]),
+      prompt: (_payload: Omit<Acp.PromptRequest, "sessionId">) =>
+        Effect.sync(() => {
+          promptCalled = true;
+          return { stopReason: "end_turn" } satisfies Acp.PromptResponse;
+        }),
+    };
+
+    const error = await Effect.runPromise(runGrokAcpCompactionCommand(runtime).pipe(Effect.flip));
+
+    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
+    expect(error.message).toContain("does not advertise the /compact command");
+    expect(promptCalled).toBe(false);
   });
 });

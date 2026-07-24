@@ -419,6 +419,9 @@ describe("wsNativeApi", () => {
     const unsubscribe = api.automation.onEvent(onAutomationEvent);
 
     await api.automation.list({ projectId: ProjectId.makeUnsafe("project-1") });
+    await api.automation.getMemory({
+      automationId: AutomationId.makeUnsafe("automation-1"),
+    });
     await api.automation.runNow({ automationId: AutomationId.makeUnsafe("automation-1") });
     await api.automation.markRunRead({
       runId: AutomationRunId.makeUnsafe("automation-run-1"),
@@ -427,6 +430,10 @@ describe("wsNativeApi", () => {
     await api.automation.archiveRun({
       runId: AutomationRunId.makeUnsafe("automation-run-1"),
       archived: true,
+    });
+    await api.automation.resolveProposal({
+      automationId: AutomationId.makeUnsafe("automation-1"),
+      resolution: "accepted",
     });
 
     const event = {
@@ -443,6 +450,9 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationList, {
       projectId: "project-1",
     });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationGetMemory, {
+      automationId: "automation-1",
+    });
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationRunNow, {
       automationId: "automation-1",
     });
@@ -453,6 +463,10 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationArchiveRun, {
       runId: "automation-run-1",
       archived: true,
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationResolveProposal, {
+      automationId: "automation-1",
+      resolution: "accepted",
     });
     expect(onAutomationEvent).toHaveBeenCalledTimes(1);
     expect(onAutomationEvent).toHaveBeenCalledWith(event);
@@ -608,6 +622,42 @@ describe("wsNativeApi", () => {
     await api.server.getEnvironment();
 
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
+  });
+
+  it("uses websocket RPC for external MCP management in packaged and browser builds", async () => {
+    requestMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } })
+      .mockResolvedValueOnce({ revoked: true })
+      .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const createInput = {
+      name: "Desktop MCP",
+      capabilities: ["projects:read", "tasks:create", "tasks:read"] as const,
+      projectIds: [ProjectId.makeUnsafe("project-1")],
+    };
+
+    await api.server.listExternalMcpIntegrations();
+    await api.server.createExternalMcpIntegration(createInput);
+    await api.server.revokeExternalMcpIntegration({ integrationId: "integration-1" });
+    await api.server.refreshExternalMcpPairing({ integrationId: "integration-1" });
+
+    expect(requestMock).toHaveBeenNthCalledWith(1, WS_METHODS.serverListExternalMcpIntegrations);
+    expect(requestMock).toHaveBeenNthCalledWith(
+      2,
+      WS_METHODS.serverCreateExternalMcpIntegration,
+      createInput,
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(3, WS_METHODS.serverRevokeExternalMcpIntegration, {
+      integrationId: "integration-1",
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(4, WS_METHODS.serverRefreshExternalMcpPairing, {
+      integrationId: "integration-1",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fetches auth session state over HTTP", async () => {

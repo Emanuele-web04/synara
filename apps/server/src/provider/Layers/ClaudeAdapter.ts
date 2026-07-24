@@ -11,8 +11,6 @@ import {
   type AgentInfo,
   type CanUseTool,
   type AgentDefinition,
-  ModelUsage,
-  NonNullableUsage,
   query,
   type HookInput,
   type HookJSONOutput,
@@ -64,11 +62,9 @@ import {
 } from "@synara/contracts";
 import {
   applyClaudePromptEffortPrefix,
-  getDefaultAutoCompactWindow,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
-  hasAutoCompactWindowOption,
   hasEffortLevel,
   resolveApiModelId,
   trimOrNull,
@@ -96,6 +92,7 @@ import {
 import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
 import { renderSynaraHarnessPolicy } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
   type AgentGatewaySessionLease,
@@ -104,6 +101,19 @@ import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
+import {
+  CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
+  decideClaudeContextUsageWarnings,
+  maxClaudeContextWindowFromModelUsage,
+  mergeClaudeTokenUsageSnapshot,
+  normalizeClaudeTokenUsage,
+  resolveClaudeApiModelIdContextWindowMaxTokens,
+  resolveClaudeEffectiveContextBudget,
+  resolveEffectiveClaudeContextWindow,
+  resolveSelectedClaudeAutoCompactWindow,
+  snapshotFromClaudeContextUsage,
+  stripClaudeContextWindowSuffix,
+} from "../claudeTokenUsage.ts";
 import {
   applyClaudeTaskToolResult,
   claudeTrackedTasksPayload,
@@ -180,6 +190,11 @@ interface ClaudeTurnState {
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
   nextSyntheticAssistantBlockIndex: number;
+  // Offset into assistantTextBlockOrder where the current assistant API
+  // message's blocks begin. A turn spans many API messages (tool-use round
+  // trips; a subagent's whole conversation shares one synthetic turn), while
+  // snapshot backfill aligns by position within a single message.
+  assistantMessageBlockBase: number;
 }
 
 interface AssistantTextBlockState {
@@ -555,51 +570,12 @@ function asRuntimeItemId(value: string): RuntimeItemId {
   return RuntimeItemId.makeUnsafe(value);
 }
 
-function maxClaudeContextWindowFromModelUsage(
-  modelUsage: Record<string, ModelUsage> | undefined,
-): number | undefined {
-  if (!modelUsage) return undefined;
-
-  let maxContextWindow: number | undefined;
-  for (const value of Object.values(modelUsage)) {
-    const contextWindow = positiveFiniteNumber(value.contextWindow);
-    if (contextWindow === undefined) {
-      continue;
-    }
-    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
-  }
-
-  return maxContextWindow;
-}
-
-function finiteTokenCountOrZero(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function claudePromptTokensFromRawUsage(usage: Record<string, unknown>): number {
-  return (
-    finiteTokenCountOrZero(usage.input_tokens) +
-    finiteTokenCountOrZero(usage.cache_creation_input_tokens) +
-    finiteTokenCountOrZero(usage.cache_read_input_tokens)
-  );
-}
-
-function formatApproxTokens(tokens: number): string {
-  return tokens >= 1_000 ? `~${Math.round(tokens / 1_000)}k` : String(Math.round(tokens));
-}
-
 function claudeEffectiveContextBudget(context: ClaudeSessionContext): number | undefined {
-  const autoCompactBudget =
-    context.lastKnownAutoCompactThreshold ?? context.currentAutoCompactWindow;
-  const modelCapacity = context.lastKnownContextWindow;
-  if (autoCompactBudget !== undefined && modelCapacity !== undefined) {
-    return Math.min(autoCompactBudget, modelCapacity);
-  }
-  return autoCompactBudget ?? modelCapacity;
-}
-
-function stripClaudeContextWindowSuffix(apiModelId: string): string {
-  return apiModelId.replace(/\[[^\]]+\]$/u, "");
+  return resolveClaudeEffectiveContextBudget(
+    context.lastKnownAutoCompactThreshold,
+    context.currentAutoCompactWindow,
+    context.lastKnownContextWindow,
+  );
 }
 
 // Safeguard reroutes (e.g. Fable 5 refusal -> Opus fallback) stream as an
@@ -648,136 +624,10 @@ function readClaudeModelRefusalFallback(message: unknown): ClaudeModelRefusalFal
   };
 }
 
-function normalizeClaudeTokenUsage(
-  value: NonNullableUsage | Record<string, unknown> | undefined,
-  contextWindow?: number,
-): ThreadTokenUsageSnapshot | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-
-  const usage = value as Record<string, unknown>;
-  const inputTokens =
-    (typeof usage.input_tokens === "number" && Number.isFinite(usage.input_tokens)
-      ? usage.input_tokens
-      : 0) +
-    (typeof usage.cache_creation_input_tokens === "number" &&
-    Number.isFinite(usage.cache_creation_input_tokens)
-      ? usage.cache_creation_input_tokens
-      : 0) +
-    (typeof usage.cache_read_input_tokens === "number" &&
-    Number.isFinite(usage.cache_read_input_tokens)
-      ? usage.cache_read_input_tokens
-      : 0);
-  const outputTokens =
-    typeof usage.output_tokens === "number" && Number.isFinite(usage.output_tokens)
-      ? usage.output_tokens
-      : 0;
-  const derivedTotalProcessedTokens = inputTokens + outputTokens;
-  const totalProcessedTokens =
-    (typeof usage.total_tokens === "number" && Number.isFinite(usage.total_tokens)
-      ? usage.total_tokens
-      : undefined) ?? (derivedTotalProcessedTokens > 0 ? derivedTotalProcessedTokens : undefined);
-  if (totalProcessedTokens === undefined || totalProcessedTokens <= 0) {
-    return undefined;
-  }
-
-  const maxTokens =
-    typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
-      ? contextWindow
-      : undefined;
-  const usedTokens =
-    maxTokens !== undefined ? Math.min(totalProcessedTokens, maxTokens) : totalProcessedTokens;
-
-  return {
-    usedTokens,
-    lastUsedTokens: usedTokens,
-    ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
-    ...(inputTokens > 0 ? { inputTokens } : {}),
-    ...(outputTokens > 0 ? { outputTokens } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(typeof usage.tool_uses === "number" && Number.isFinite(usage.tool_uses)
-      ? { toolUses: usage.tool_uses }
-      : {}),
-    ...(typeof usage.duration_ms === "number" && Number.isFinite(usage.duration_ms)
-      ? { durationMs: usage.duration_ms }
-      : {}),
-  };
-}
-
-function mergeClaudeTokenUsageSnapshot(
-  previous: ThreadTokenUsageSnapshot,
-  accumulated: ThreadTokenUsageSnapshot | undefined,
-  contextWindow?: number,
-): ThreadTokenUsageSnapshot {
-  const maxTokens = positiveFiniteNumber(contextWindow);
-  const usedTokens =
-    maxTokens !== undefined ? Math.min(previous.usedTokens, maxTokens) : previous.usedTokens;
-  const lastUsedTokens =
-    previous.lastUsedTokens !== undefined
-      ? maxTokens !== undefined
-        ? Math.min(previous.lastUsedTokens, maxTokens)
-        : previous.lastUsedTokens
-      : usedTokens;
-  const totalProcessedTokens = Math.max(
-    previous.totalProcessedTokens ?? previous.usedTokens,
-    accumulated?.totalProcessedTokens ?? accumulated?.usedTokens ?? 0,
-    usedTokens,
-  );
-
-  return {
-    ...previous,
-    usedTokens,
-    lastUsedTokens,
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
-  };
-}
-
-const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
-  "200k": 200_000,
-  "1m": 1_000_000,
-} as const;
-
 const DEFAULT_WORKFLOW_RUNTIME_POLL_INTERVAL_MS = 2_000;
 // Synthetic description for poller-emitted task.progress events; consumers key
 // off payload.workflowAgents, not this text.
 const WORKFLOW_AGENTS_PROGRESS_DESCRIPTION = "Workflow agents";
-
-function resolveClaudeApiModelIdContextWindowMaxTokens(
-  apiModelId: string | undefined,
-): number | undefined {
-  if (!apiModelId) {
-    return undefined;
-  }
-  return positiveFiniteNumber(
-    getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
-      .contextWindowTokens,
-  );
-}
-
-function resolveSelectedClaudeAutoCompactWindow(
-  model: string | null | undefined,
-  selectedAutoCompactWindow: string | null | undefined,
-): number | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
-  const resolvedAutoCompactWindow =
-    trimOrNull(selectedAutoCompactWindow) ?? getDefaultAutoCompactWindow(caps) ?? null;
-  if (
-    !resolvedAutoCompactWindow ||
-    !hasAutoCompactWindowOption(caps, resolvedAutoCompactWindow) ||
-    !Object.prototype.hasOwnProperty.call(
-      CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
-      resolvedAutoCompactWindow,
-    )
-  ) {
-    return undefined;
-  }
-
-  return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[
-    resolvedAutoCompactWindow as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS
-  ];
-}
 
 function resolveSelectedClaudeThinkingToggle(
   model: string | null | undefined,
@@ -789,19 +639,6 @@ function resolveSelectedClaudeThinkingToggle(
   return getModelCapabilities("claudeAgent", model).supportsThinkingToggle
     ? selectedThinking
     : undefined;
-}
-
-function resolveEffectiveClaudeContextWindow(input: {
-  reportedContextWindow: number | undefined;
-  lastKnownContextWindow: number | undefined;
-}): number | undefined {
-  const { reportedContextWindow, lastKnownContextWindow } = input;
-  if (reportedContextWindow !== undefined && lastKnownContextWindow !== undefined) {
-    // Some SDK result payloads still report the historical 200k window for
-    // native-1M models. Never downgrade a known model capacity from that field.
-    return Math.max(reportedContextWindow, lastKnownContextWindow);
-  }
-  return reportedContextWindow ?? lastKnownContextWindow;
 }
 
 function asCanonicalTurnId(value: TurnId): TurnId {
@@ -1043,14 +880,6 @@ const CLAUDE_SETTING_SOURCES = [
   "project",
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
-const CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
-const CLAUDE_CONTEXT_WARNING_RATIO = 0.8;
-// Uncached-ingestion guardrail: a request that pays for a large uncached prompt
-// usually means a fresh session, a restart's resume replay, or a first turn
-// over a large context — the most expensive request shapes for usage limits.
-const CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS = 50_000;
-const CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS = 20_000;
-const CLAUDE_LOW_CACHE_READ_RATIO = 0.2;
 const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
 export const buildEmbeddedClaudeSystemPromptAppend = (gatewayControlAvailable: boolean) =>
   [
@@ -1580,7 +1409,7 @@ function sdkNativeItemId(message: SDKMessage): string | undefined {
   return undefined;
 }
 
-function subagentParentToolUseId(message: SDKMessage): string | undefined {
+function parentToolUseId(message: SDKMessage): string | undefined {
   if (
     message.type !== "assistant" &&
     message.type !== "user" &&
@@ -1592,6 +1421,26 @@ function subagentParentToolUseId(message: SDKMessage): string | undefined {
   return typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
     ? message.parent_tool_use_id
     : undefined;
+}
+
+function isRecognizedSubagentToolUseId(context: ClaudeSessionContext, toolUseId: string): boolean {
+  if (context.subagentRuns.has(toolUseId) || context.settledSubagentToolUseIds.has(toolUseId)) {
+    return true;
+  }
+  for (const tool of context.inFlightTools.values()) {
+    if (tool.itemId === toolUseId && tool.itemType === "collab_agent_tool_call") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function recognizedSubagentParentToolUseId(
+  context: ClaudeSessionContext,
+  message: SDKMessage,
+): string | undefined {
+  const toolUseId = parentToolUseId(message);
+  return toolUseId && isRecognizedSubagentToolUseId(context, toolUseId) ? toolUseId : undefined;
 }
 
 function claudeTaskTurnStatus(
@@ -1676,7 +1525,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sessionLifecycleLocks = new Map<ThreadId, Semaphore.Semaphore>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
-    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
@@ -1994,10 +1845,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        const orderedBlocks = turnState.assistantTextBlockOrder.map((block) => ({
-          blockIndex: block.blockIndex,
-          block,
-        }));
+        // Align against only the current API message's blocks: aligning from
+        // position 0 would collide with completed blocks from earlier messages
+        // in the same turn and silently drop this snapshot's text (subagent
+        // conversations arrive as complete messages under one synthetic turn).
+        const orderedBlocks = turnState.assistantTextBlockOrder
+          .slice(turnState.assistantMessageBlockBase)
+          .map((block) => ({
+            blockIndex: block.blockIndex,
+            block,
+          }));
 
         for (const [position, text] of snapshotTextBlocks.entries()) {
           const existingEntry = orderedBlocks[position];
@@ -2027,6 +1884,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
           }
         }
+
+        // Without stream events there is no message_start to advance the base,
+        // so move it past this snapshot's blocks once they are settled.
+        turnState.assistantMessageBlockBase = turnState.assistantTextBlockOrder.length;
       });
 
     const ensureThreadId = (
@@ -2126,51 +1987,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       rawUsage: Record<string, unknown>,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const promptTokens = claudePromptTokensFromRawUsage(rawUsage);
-        if (promptTokens <= 0) {
+        const warnings = decideClaudeContextUsageWarnings(
+          rawUsage,
+          claudeEffectiveContextBudget(context),
+          context.emittedContextUsageWarnings,
+        );
+        if (!warnings) {
           return;
         }
-        const cachedReadTokens = finiteTokenCountOrZero(rawUsage.cache_read_input_tokens);
-        const uncachedTokens = Math.max(0, promptTokens - cachedReadTokens);
-        const composition =
-          cachedReadTokens > 0
-            ? ` (${formatApproxTokens(cachedReadTokens)} cached reads, ${formatApproxTokens(uncachedTokens)} new/cache-write)`
-            : "";
-        const cacheReadRatio = cachedReadTokens / promptTokens;
-        if (
-          (uncachedTokens > CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS ||
-            (promptTokens > CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS &&
-              cacheReadRatio < CLAUDE_LOW_CACHE_READ_RATIO)) &&
-          !context.emittedContextUsageWarnings.has("uncached-ingestion")
-        ) {
-          context.emittedContextUsageWarnings.add("uncached-ingestion");
-          yield* emitRuntimeWarning(
-            context,
-            `Claude ingested ${formatApproxTokens(uncachedTokens)} uncached prompt tokens in one request (${Math.round(cacheReadRatio * 100)}% cache reads). This usually means a fresh session, a session restart replaying history via resume, or a first turn over a large context; uncached input consumes usage limits fastest.`,
-          );
-        }
-        const contextBudget =
-          claudeEffectiveContextBudget(context) ?? CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS;
-        if (
-          promptTokens > contextBudget * CLAUDE_CONTEXT_WARNING_RATIO &&
-          !context.emittedContextUsageWarnings.has("near-window")
-        ) {
-          context.emittedContextUsageWarnings.add("near-window");
-          yield* emitRuntimeWarning(
-            context,
-            `Claude context is above 80% of the ${Math.round(contextBudget / 1_000)}k auto-compact budget (${formatApproxTokens(promptTokens)} logical prompt tokens${composition}). Consider compacting or starting a fresh thread; cached reads cost less than fresh input.`,
-          );
-          return;
-        }
-        if (
-          promptTokens > CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS &&
-          !context.emittedContextUsageWarnings.has("large-prompt")
-        ) {
-          context.emittedContextUsageWarnings.add("large-prompt");
-          yield* emitRuntimeWarning(
-            context,
-            `Claude is processing ${formatApproxTokens(promptTokens)} logical prompt tokens per request${composition}. Large active contexts can consume usage faster; cached reads cost less than fresh input.`,
-          );
+
+        context.emittedContextUsageWarnings.add(warnings.first.key);
+        yield* emitRuntimeWarning(context, warnings.first.message);
+        if (warnings.second) {
+          context.emittedContextUsageWarnings.add(warnings.second.key);
+          yield* emitRuntimeWarning(context, warnings.second.message);
         }
       });
 
@@ -2197,50 +2027,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         ),
         Effect.catch(() => Effect.succeed(undefined)),
       );
-    };
-
-    const snapshotFromClaudeContextUsage = (
-      usage: SDKControlGetContextUsageResponse,
-      totalProcessedTokens?: number,
-    ): ThreadTokenUsageSnapshot => {
-      const effectiveMaxTokens =
-        positiveFiniteNumber(usage.autoCompactThreshold) ??
-        positiveFiniteNumber(usage.maxTokens) ??
-        positiveFiniteNumber(usage.rawMaxTokens);
-      const usedTokens = Math.max(0, Math.round(usage.totalTokens));
-      const inputTokens = Math.max(
-        0,
-        Math.round(
-          (usage.apiUsage?.input_tokens ?? 0) +
-            (usage.apiUsage?.cache_creation_input_tokens ?? 0) +
-            (usage.apiUsage?.cache_read_input_tokens ?? 0),
-        ),
-      );
-      const cachedInputTokens = Math.max(
-        0,
-        Math.round(usage.apiUsage?.cache_read_input_tokens ?? 0),
-      );
-      const outputTokens = Math.max(0, Math.round(usage.apiUsage?.output_tokens ?? 0));
-      return {
-        usedTokens:
-          effectiveMaxTokens !== undefined ? Math.min(usedTokens, effectiveMaxTokens) : usedTokens,
-        lastUsedTokens: usedTokens,
-        ...(effectiveMaxTokens !== undefined
-          ? {
-              maxTokens: effectiveMaxTokens,
-              usedPercent: Math.min(100, (usedTokens / effectiveMaxTokens) * 100),
-            }
-          : {}),
-        ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
-          ? { totalProcessedTokens }
-          : {}),
-        ...(inputTokens > 0 ? { inputTokens, lastInputTokens: inputTokens } : {}),
-        ...(cachedInputTokens > 0
-          ? { cachedInputTokens, lastCachedInputTokens: cachedInputTokens }
-          : {}),
-        ...(outputTokens > 0 ? { outputTokens, lastOutputTokens: outputTokens } : {}),
-        compactsAutomatically: usage.isAutoCompactEnabled,
-      };
     };
 
     // Surfaces each distinct unrecognized SDK message kind at most once per session.
@@ -2688,6 +2474,74 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       return run;
     };
 
+    // Opens a tool item and emits item.started. Streaming turns key the entry
+    // by stream block index; complete-message turns (subagent conversations
+    // arrive without stream events) use synthetic negative keys that stream
+    // deltas can never reference.
+    const openInFlightTool = (
+      context: ClaudeSessionContext,
+      input: {
+        readonly blockIndex: number;
+        readonly toolName: string;
+        readonly itemId: string;
+        readonly toolInput: Record<string, unknown>;
+        readonly rawMethod: string;
+        readonly rawPayload: unknown;
+      },
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const itemType = classifyToolItemType(input.toolName);
+        const detail = summarizeToolRequest(input.toolName, input.toolInput);
+        const inputFingerprint =
+          Object.keys(input.toolInput).length > 0
+            ? toolInputFingerprint(input.toolInput)
+            : undefined;
+
+        const tool: ToolInFlight = {
+          itemId: input.itemId,
+          itemType,
+          toolName: input.toolName,
+          title: titleForTool(itemType),
+          detail,
+          input: input.toolInput,
+          partialInputJson: "",
+          ...(inputFingerprint ? { lastEmittedInputFingerprint: inputFingerprint } : {}),
+        };
+        context.inFlightTools.set(input.blockIndex, tool);
+
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent(context, {
+          type: "item.started",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+          itemId: asRuntimeItemId(tool.itemId),
+          payload: {
+            itemType: tool.itemType,
+            status: "inProgress",
+            title: tool.title,
+            ...(tool.detail ? { detail: tool.detail } : {}),
+            data: toolLifecycleEventData(tool),
+          },
+          providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
+          raw: {
+            source: "claude.sdk.message",
+            method: input.rawMethod,
+            payload: input.rawPayload,
+          },
+        });
+        if (tool.toolName === "TodoWrite") {
+          yield* emitTodoTasksUpdated(context, {
+            toolInput: input.toolInput,
+            toolUseId: tool.itemId,
+            rawMethod: input.rawMethod,
+            rawPayload: input.rawPayload,
+          });
+        }
+      });
+
     const handleStreamEvent = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -2847,59 +2701,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           if (isClientSurfacedClaudeTool(toolName)) {
             return;
           }
-          const itemType = classifyToolItemType(toolName);
-          const toolInput =
-            typeof block.input === "object" && block.input !== null
-              ? (block.input as Record<string, unknown>)
-              : {};
-          const itemId = block.id;
-          const detail = summarizeToolRequest(toolName, toolInput);
-          const inputFingerprint =
-            Object.keys(toolInput).length > 0 ? toolInputFingerprint(toolInput) : undefined;
-
-          const tool: ToolInFlight = {
-            itemId,
-            itemType,
+          yield* openInFlightTool(context, {
+            blockIndex: index,
             toolName,
-            title: titleForTool(itemType),
-            detail,
-            input: toolInput,
-            partialInputJson: "",
-            ...(inputFingerprint ? { lastEmittedInputFingerprint: inputFingerprint } : {}),
-          };
-          context.inFlightTools.set(index, tool);
-
-          const stamp = yield* makeEventStamp();
-          yield* offerRuntimeEvent(context, {
-            type: "item.started",
-            eventId: stamp.eventId,
-            provider: PROVIDER,
-            createdAt: stamp.createdAt,
-            threadId: context.session.threadId,
-            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
-            itemId: asRuntimeItemId(tool.itemId),
-            payload: {
-              itemType: tool.itemType,
-              status: "inProgress",
-              title: tool.title,
-              ...(tool.detail ? { detail: tool.detail } : {}),
-              data: toolLifecycleEventData(tool),
-            },
-            providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
-            raw: {
-              source: "claude.sdk.message",
-              method: "claude/stream_event/content_block_start",
-              payload: message,
-            },
+            itemId: block.id,
+            toolInput:
+              typeof block.input === "object" && block.input !== null
+                ? (block.input as Record<string, unknown>)
+                : {},
+            rawMethod: "claude/stream_event/content_block_start",
+            rawPayload: message,
           });
-          if (toolName === "TodoWrite") {
-            yield* emitTodoTasksUpdated(context, {
-              toolInput,
-              toolUseId: tool.itemId,
-              rawMethod: "claude/stream_event/content_block_start",
-              rawPayload: message,
-            });
-          }
           return;
         }
 
@@ -3122,6 +2934,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
           nextSyntheticAssistantBlockIndex: -1,
+          assistantMessageBlockBase: 0,
         };
         context.session = {
           ...context.session,
@@ -3205,6 +3018,47 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               name?: unknown;
               input?: unknown;
             };
+            const isToolUseBlock =
+              toolUse.type === "tool_use" ||
+              toolUse.type === "server_tool_use" ||
+              toolUse.type === "mcp_tool_use";
+            if (
+              isToolUseBlock &&
+              context.subagentRefs !== undefined &&
+              typeof toolUse.id === "string" &&
+              typeof toolUse.name === "string" &&
+              !isClientSurfacedClaudeTool(toolUse.name)
+            ) {
+              // Subagent conversations are forwarded as complete messages only
+              // (no stream events), so this snapshot is the sole chance to open
+              // their tool items. The parent thread always streams and opens
+              // tools from content_block_start — which can arrive after this
+              // snapshot, so registering here for the parent would duplicate
+              // the item. Dedupe by tool-use id in case a subagent ever streams.
+              const toolUseId = toolUse.id;
+              const alreadyOpen = Array.from(context.inFlightTools.values()).some(
+                (tool) => tool.itemId === toolUseId,
+              );
+              if (!alreadyOpen) {
+                let syntheticIndex = -1;
+                for (const key of context.inFlightTools.keys()) {
+                  if (key <= syntheticIndex) {
+                    syntheticIndex = key - 1;
+                  }
+                }
+                yield* openInFlightTool(context, {
+                  blockIndex: syntheticIndex,
+                  toolName: toolUse.name,
+                  itemId: toolUseId,
+                  toolInput:
+                    typeof toolUse.input === "object" && toolUse.input !== null
+                      ? (toolUse.input as Record<string, unknown>)
+                      : {},
+                  rawMethod: "claude/assistant",
+                  rawPayload: message,
+                });
+              }
+            }
             if (toolUse.type !== "tool_use" || toolUse.name !== "ExitPlanMode") {
               continue;
             }
@@ -3972,11 +3826,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       Effect.gen(function* () {
         yield* logNativeSdkMessage(context, message);
 
-        // Subagent traffic (Task tool spawns) is tagged with parent_tool_use_id.
-        // Route it through the run's scoped context so it projects onto the child
-        // thread instead of folding into the parent turn, and keep it away from
-        // the parent's resume cursor.
-        const subagentToolUseId = subagentParentToolUseId(message);
+        // Claude also sets parent_tool_use_id on async Bash progress, so route only
+        // ids already recognized as Task/Agent tools onto child threads.
+        const subagentToolUseId = recognizedSubagentParentToolUseId(context, message);
         if (subagentToolUseId !== undefined) {
           // A settled task's zombie tail (messages already in flight when the
           // stop landed) is dropped, not projected onto the settled child.
@@ -4874,9 +4726,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 config: {
                   ...(modelSelection?.model ? { model: modelSelection.model } : {}),
                   ...(apiModelId ? { apiModelId } : {}),
-                  ...(requestedAutoCompactWindow
-                    ? { autoCompactWindow: requestedAutoCompactWindow }
-                    : {}),
+                  autoCompactWindow: requestedAutoCompactWindowTokens ?? null,
                   ...(input.cwd ? { cwd: input.cwd } : {}),
                   ...(effectiveEffort ? { effort: effectiveEffort } : {}),
                   ...(permissionMode ? { permissionMode } : {}),
@@ -5007,6 +4857,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.lastKnownAutoCompactThreshold = requestedAutoCompactWindow;
           context.emittedContextUsageWarnings.delete("near-window");
           context.emittedContextUsageWarnings.delete("large-prompt");
+
+          const configuredWindow =
+            requestedAutoCompactWindow !== undefined
+              ? { autoCompactWindow: requestedAutoCompactWindow }
+              : context.lastKnownContextWindow !== undefined
+                ? { contextWindow: context.lastKnownContextWindow }
+                : { autoCompactWindow: null };
+          const configuredStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "session.configured",
+            eventId: configuredStamp.eventId,
+            provider: PROVIDER,
+            createdAt: configuredStamp.createdAt,
+            threadId: input.threadId,
+            payload: { config: configuredWindow },
+            providerRefs: nativeProviderRefs(context),
+          });
         }
 
         // The thinking toggle mirrors the spawn-time `alwaysThinkingEnabled`
@@ -5107,6 +4974,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
           nextSyntheticAssistantBlockIndex: -1,
+          assistantMessageBlockBase: 0,
         };
 
         const updatedAt = yield* nowIso;

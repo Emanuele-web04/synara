@@ -30,6 +30,20 @@ export function resolveLatestProjectTargetId(
   return resolveUsableProjectId(projects, latestProjectId);
 }
 
+export function resolveLatestProjectTargetIdWithFallback(
+  projects: readonly Project[],
+  latestProjectId: ProjectId | null,
+): ProjectId | null {
+  return (
+    resolveLatestProjectTargetId(projects, latestProjectId) ??
+    projects
+      .filter((project) => project.kind === "project")
+      .toSorted((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))
+      .at(0)?.id ??
+    null
+  );
+}
+
 export interface NewThreadTarget {
   readonly projectId: ProjectId;
   /**

@@ -70,6 +70,9 @@ export const SynaraCreateThreadSpec = Schema.Struct({
   target: ModelSelection,
   projectId: Schema.optional(ProjectId),
   environment: Schema.optional(Schema.Literals(["local", "worktree"])),
+  baseRef: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
+  // Legacy inputs remain decodable for replay/backward compatibility, but the
+  // MCP catalog no longer advertises branch-backed worktree creation.
   baseBranch: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   branchName: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   runtimeMode: Schema.optional(Schema.Literals(["approval-required", "full-access"])),

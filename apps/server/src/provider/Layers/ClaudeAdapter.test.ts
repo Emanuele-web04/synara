@@ -1787,6 +1787,17 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       harness.query.emit({
+        type: "tool_progress",
+        tool_use_id: "tool-subagent-heartbeat-1",
+        tool_name: "Grep",
+        parent_tool_use_id: "tool-task-1",
+        elapsed_time_seconds: 5,
+        heartbeat: true,
+        session_id: "sdk-session-subagent",
+        uuid: "tool-progress-subagent-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
         type: "system",
         subtype: "task_progress",
         task_id: "task-1",
@@ -1828,6 +1839,12 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(
         childEvents.some((event) => event.type === "turn.started"),
+        true,
+      );
+      assert.equal(
+        childEvents.some(
+          (event) => event.type === "tool.progress" && event.payload.toolName === "Grep",
+        ),
         true,
       );
 
@@ -1874,6 +1891,287 @@ describe("ClaudeAdapterLive", () => {
       if (childTurnCompleted?.type === "turn.completed") {
         assert.equal(childTurnCompleted.payload.state, "completed");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps async Bash progress on the parent thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "run the browser tests",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-async-bash",
+        uuid: "stream-async-bash-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-bash-1",
+            name: "Bash",
+            input: { command: "bun run test:browser" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bash-1",
+        task_type: "local_bash",
+        tool_use_id: "tool-bash-1",
+        description: "Run browser tests",
+        session_id: "sdk-session-async-bash",
+        uuid: "task-started-async-bash-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "tool_progress",
+        tool_use_id: "tool-bash-1-heartbeat-0",
+        tool_name: "Bash",
+        parent_tool_use_id: "tool-bash-1",
+        elapsed_time_seconds: 30,
+        heartbeat: true,
+        session_id: "sdk-session-async-bash",
+        uuid: "tool-progress-async-bash-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-async-bash",
+        uuid: "user-async-bash-result-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-bash-1",
+              content: "Tests passed",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-async-bash",
+        uuid: "result-async-bash-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(
+        runtimeEvents.some((event) => event.providerRefs?.providerThreadId !== undefined),
+        false,
+      );
+      const progress = runtimeEvents.find(
+        (event) => event.type === "tool.progress" && event.payload.toolName === "Bash",
+      );
+      assert.equal(progress?.type, "tool.progress");
+      assert.equal(progress?.providerRefs?.providerThreadId, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // Subagent conversations arrive as complete assistant/user messages only — the CLI
+  // forwards no stream events for them — so every message after the first, and every
+  // tool call, must project from the snapshots alone.
+  it.effect("projects a complete-message subagent conversation onto the child thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate this",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-subagent",
+        uuid: "stream-subagent-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-task-1",
+            name: "Task",
+            input: {
+              description: "Explore the codebase",
+              prompt: "Find the relevant modules",
+              subagent_type: "explore",
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-subagent",
+        uuid: "assistant-subagent-1",
+        parent_tool_use_id: "tool-task-1",
+        message: {
+          id: "assistant-message-subagent-1",
+          content: [{ type: "text", text: "First update from the subagent." }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-subagent",
+        uuid: "assistant-subagent-2",
+        parent_tool_use_id: "tool-task-1",
+        message: {
+          id: "assistant-message-subagent-2",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-grep-1",
+              name: "Bash",
+              input: { command: "rg foo" },
+            },
+          ],
+          usage: { input_tokens: 20, output_tokens: 8 },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-subagent",
+        uuid: "user-subagent-1",
+        parent_tool_use_id: "tool-task-1",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-grep-1",
+              content: [{ type: "text", text: "2 matches" }],
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-subagent",
+        uuid: "assistant-subagent-3",
+        parent_tool_use_id: "tool-task-1",
+        message: {
+          id: "assistant-message-subagent-3",
+          content: [{ type: "text", text: "Final summary: everything checks out." }],
+          usage: { input_tokens: 30, output_tokens: 12 },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-subagent",
+        uuid: "result-subagent-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const childEvents = runtimeEvents.filter(
+        (event) => event.providerRefs?.providerThreadId === "tool-task-1",
+      );
+      assert.equal(
+        childEvents.every((event) => event.providerRefs?.providerParentThreadId === THREAD_ID),
+        true,
+      );
+
+      // Every assistant message's text projects — not just the first one.
+      const childDeltaText = childEvents
+        .filter((event) => event.type === "content.delta")
+        .map((event) => (event.type === "content.delta" ? event.payload.delta : ""))
+        .join("");
+      assert.equal(childDeltaText.includes("First update from the subagent."), true);
+      assert.equal(childDeltaText.includes("Final summary: everything checks out."), true);
+      const childMessageCompletions = childEvents.filter(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "assistant_message",
+      );
+      assert.equal(childMessageCompletions.length, 2);
+
+      // Tool calls from complete assistant messages open on the child thread and
+      // complete when the matching tool_result arrives.
+      const toolStarted = childEvents.find(
+        (event) =>
+          event.type === "item.started" && event.providerRefs?.providerItemId === "tool-grep-1",
+      );
+      assert.equal(toolStarted?.type, "item.started");
+      if (toolStarted?.type === "item.started") {
+        const data = toolStarted.payload.data as Record<string, unknown>;
+        assert.equal(data.toolName, "Bash");
+        assert.deepEqual(data.input, { command: "rg foo" });
+      }
+      const toolCompleted = childEvents.find(
+        (event) =>
+          event.type === "item.completed" && event.providerRefs?.providerItemId === "tool-grep-1",
+      );
+      assert.equal(toolCompleted?.type, "item.completed");
+      if (toolCompleted?.type === "item.completed") {
+        assert.equal(toolCompleted.payload.status, "completed");
+      }
+
+      // The subagent's internal tool never leaks onto the parent thread.
+      assert.equal(
+        runtimeEvents.some(
+          (event) =>
+            event.providerRefs?.providerThreadId === undefined &&
+            event.providerRefs?.providerItemId === "tool-grep-1",
+        ),
+        false,
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -6179,6 +6477,61 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("emits the configured window when the auto-compact budget changes live", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const configuredEventsFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.configured",
+      ).pipe(Stream.take(3), Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: { autoCompactWindow: "1m" },
+        },
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "use the default auto-compact budget",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+        },
+        attachments: [],
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "switch to a discovered model",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude/custom-opus",
+        },
+        attachments: [],
+      });
+
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
+        { autoCompactWindow: 200_000 },
+        { autoCompactWindow: null },
+      ]);
+      const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
+      assert.deepEqual(
+        configuredEvents.map((event) =>
+          event.type === "session.configured" ? event.payload.config.autoCompactWindow : undefined,
+        ),
+        [1_000_000, 200_000, null],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("updates the thinking toggle live instead of restarting the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -6397,6 +6750,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      const configuredEventFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "session.configured",
+      ).pipe(Stream.runHead, Effect.forkChild);
 
       yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -6408,6 +6765,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.ok(settings && typeof settings === "object");
       assert.equal((settings as { autoCompactEnabled?: boolean }).autoCompactEnabled, true);
       assert.equal((settings as { autoCompactWindow?: number }).autoCompactWindow, 200_000);
+
+      const configuredEvent = yield* Fiber.join(configuredEventFiber);
+      assert.equal(configuredEvent._tag, "Some");
+      if (configuredEvent._tag === "Some" && configuredEvent.value.type === "session.configured") {
+        assert.equal(configuredEvent.value.payload.config.autoCompactWindow, 200_000);
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

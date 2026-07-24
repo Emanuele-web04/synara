@@ -8,7 +8,7 @@ import {
   type TerminalOpenInput,
   type TerminalRestartInput,
 } from "@synara/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   PtySpawnError,
@@ -187,6 +187,7 @@ describe("TerminalManager", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const dir of tempDirs.splice(0, tempDirs.length)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -962,6 +963,33 @@ describe("TerminalManager", () => {
     expect(fs.existsSync(multiTerminalHistoryLogPath(logsDir, "thread-1", "default"))).toBe(false);
     expect(fs.existsSync(multiTerminalHistoryLogPath(logsDir, "thread-1", "sidecar"))).toBe(false);
 
+    manager.dispose();
+  });
+
+  it("keeps terminals reattached after an archive cleanup fence", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-23T20:00:00.000Z"));
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput({ terminalId: "default" }));
+    await manager.open(openInput({ terminalId: "sidecar" }));
+    const defaultProcess = ptyAdapter.processes[0];
+    const sidecarProcess = ptyAdapter.processes[1];
+    expect(defaultProcess).toBeDefined();
+    expect(sidecarProcess).toBeDefined();
+    if (!defaultProcess || !sidecarProcess) return;
+
+    const archivedAt = "2026-07-23T20:00:05.000Z";
+    vi.setSystemTime(new Date("2026-07-23T20:00:10.000Z"));
+    await manager.open(openInput({ terminalId: "sidecar" }));
+
+    await manager.closeSessionsOpenedAtOrBefore({
+      threadId: "thread-1",
+      openedAtOrBefore: archivedAt,
+    });
+
+    expect(defaultProcess.killed).toBe(true);
+    expect(sidecarProcess.killed).toBe(false);
+    await manager.close({ threadId: "thread-1" });
     manager.dispose();
   });
 

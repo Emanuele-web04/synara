@@ -1,4 +1,6 @@
-import type { AutomationSchedule } from "@synara/contracts";
+import { createHash } from "node:crypto";
+
+import type { AutomationId, AutomationSchedule } from "@synara/contracts";
 
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -6,6 +8,50 @@ const MAX_CRON_SEARCH_DAYS = 366;
 const TIMEZONE_FORMATTER_CACHE_LIMIT = 64;
 
 const timezoneFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+export interface AutomationScheduleJitterContext {
+  readonly installSalt: string;
+  readonly automationId: AutomationId;
+}
+
+function scheduleUsesJitter(schedule: AutomationSchedule): boolean {
+  return (
+    schedule.type === "daily" ||
+    schedule.type === "weekdays" ||
+    schedule.type === "weekly" ||
+    schedule.type === "cron"
+  );
+}
+
+export function deterministicAutomationJitterSeconds(input: {
+  readonly installSalt: string;
+  readonly automationId: AutomationId;
+}): number {
+  const digest = createHash("sha256")
+    .update(`${input.installSalt}:${input.automationId}`, "utf8")
+    .digest();
+  let remainder = 0;
+  for (const byte of digest) {
+    remainder = (remainder * 256 + byte) % 120;
+  }
+  return remainder;
+}
+
+function scheduleJitterMilliseconds(
+  schedule: AutomationSchedule,
+  context: AutomationScheduleJitterContext | undefined,
+): number {
+  if (!context || !scheduleUsesJitter(schedule)) {
+    return 0;
+  }
+  return deterministicAutomationJitterSeconds(context) * 1_000;
+}
+
+function applyScheduleJitter(occurrence: string | null, jitterMilliseconds: number): string | null {
+  return occurrence === null
+    ? null
+    : new Date(Date.parse(occurrence) + jitterMilliseconds).toISOString();
+}
 
 function parseTimeOfDay(value: string) {
   const [hoursRaw = "0", minutesRaw = "0"] = value.split(":");
@@ -364,6 +410,7 @@ function computeNextCronRunAt(
 export function computeNextAutomationRunAt(
   schedule: AutomationSchedule,
   fromIso: string,
+  jitterContext?: AutomationScheduleJitterContext,
 ): string | null {
   if (schedule.type === "manual") {
     return null;
@@ -380,11 +427,19 @@ export function computeNextAutomationRunAt(
     return new Date(from.getTime() + schedule.everySeconds * 1000).toISOString();
   }
 
+  // Search on the original schedule phase, not from the previously jittered
+  // occurrence. Otherwise an offset longer than a dense cron cadence advances
+  // the base cursor into the following slot and silently skips executions.
+  const jitterMilliseconds = scheduleJitterMilliseconds(schedule, jitterContext);
+  const baseFrom = new Date(from.getTime() - jitterMilliseconds);
   if (schedule.type === "cron") {
-    return computeNextCronRunAt(schedule, from);
+    return applyScheduleJitter(computeNextCronRunAt(schedule, baseFrom), jitterMilliseconds);
   }
 
-  return computeNextZonedWallClockRunAt(schedule, from);
+  return applyScheduleJitter(
+    computeNextZonedWallClockRunAt(schedule, baseFrom),
+    jitterMilliseconds,
+  );
 }
 
 /**
@@ -397,6 +452,7 @@ export function computeNextAutomationRunAtAfter(
   schedule: AutomationSchedule,
   fromIso: string,
   notBeforeIso: string,
+  jitterContext?: AutomationScheduleJitterContext,
 ): string | null {
   if (schedule.type === "manual") {
     return null;
@@ -420,7 +476,7 @@ export function computeNextAutomationRunAtAfter(
     return new Date(next).toISOString();
   }
 
-  return computeNextAutomationRunAt(schedule, notBeforeIso);
+  return computeNextAutomationRunAt(schedule, notBeforeIso, jitterContext);
 }
 
 /**

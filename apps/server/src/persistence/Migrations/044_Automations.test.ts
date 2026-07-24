@@ -44,7 +44,7 @@ layer("automation migration", (it) => {
 
       yield* runMigrations();
 
-      assert.deepStrictEqual(yield* tableNames(sql), [
+      assert.includeMembers(yield* tableNames(sql), [
         "automation_definitions",
         "automation_runs",
         "automation_scheduler_leases",

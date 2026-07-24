@@ -137,6 +137,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
@@ -529,6 +530,7 @@ export function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onRegisterCommitAndPushTrigger,
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
@@ -785,7 +787,8 @@ export function ChatHeader({
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
               {handoffActionTargetProviders.map((provider) => (
                 <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
+                  {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
+                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
                   <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
                 </MenuItem>
               ))}
@@ -866,6 +869,7 @@ export function ChatHeader({
                 gitCwd={gitCwd}
                 activeThreadId={activeThreadId}
                 hideQuickActionLabel={compact}
+                onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
               />
             ) : null}
             {diffToggleControl}

@@ -41,7 +41,11 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import {
+  makeProviderServiceLive,
+  PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES,
+  summarizeProviderRuntimeQuarantineCause,
+} from "./ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
@@ -71,6 +75,19 @@ type LegacyProviderRuntimeEvent = {
 };
 
 type ReleaseListSessions = (sessions: ReadonlyArray<ProviderSession>) => void;
+
+it("bounds durable quarantine cause details while preserving diagnostics", () => {
+  const cause = "💥 failure ".repeat(PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES);
+  const summary = summarizeProviderRuntimeQuarantineCause(cause);
+
+  assert.equal(summary.causeTruncated, true);
+  assert.equal(summary.causeOriginalBytes, Buffer.byteLength(cause, "utf8"));
+  assert.equal(summary.causeSha256?.length, 64);
+  assert.ok(
+    Buffer.byteLength(summary.cause, "utf8") <= PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES,
+  );
+  assert.equal(summary.cause.includes("\uFFFD"), false);
+});
 
 // Converts deferred listSessions callbacks into typed release handles for race tests.
 function requireReleaseListSessions(release: ReleaseListSessions | undefined): ReleaseListSessions {
@@ -679,6 +696,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(typeof firstGeneration, "string");
 
       yield* provider.stopSession({ threadId });
+      yield* provider.stopSession({ threadId });
       yield* provider.startSession(threadId, startInput);
       const secondBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const secondGeneration = secondBinding?.lifecycleGeneration;
@@ -1164,7 +1182,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("rejects a stale interrupt instead of cancelling the current provider turn", () =>
+  it.effect("uses the authoritative active turn when an interrupt carries stale UI state", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-exact-interrupt");
@@ -1178,23 +1196,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
       routing.codex.interruptTurn.mockClear();
 
-      const staleInterrupt = yield* Effect.result(
-        provider.interruptTurn({
-          threadId,
-          turnId: asTurnId("turn-stale"),
-        }),
-      );
-      assertFailure(
-        staleInterrupt,
-        new ProviderValidationError({
-          operation: "ProviderService.interruptTurn",
-          issue:
-            "Cannot interrupt stale turn 'turn-stale' because 'turn-thread-exact-interrupt' is active.",
-        }),
-      );
-      assert.equal(routing.codex.interruptTurn.mock.calls.length, 0);
-
-      yield* provider.interruptTurn({ threadId });
+      yield* provider.interruptTurn({
+        threadId,
+        turnId: asTurnId("turn-stale"),
+      });
       assert.deepEqual(routing.codex.interruptTurn.mock.calls, [
         [threadId, asTurnId("turn-thread-exact-interrupt"), undefined],
       ]);

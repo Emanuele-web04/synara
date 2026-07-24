@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import {
   CommandId,
@@ -14,6 +14,7 @@ import {
   type SynaraCreateThreadsResult,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { Cause, Effect, Option, Semaphore } from "effect";
 
 import type { ServerConfigShape } from "../config.ts";
@@ -21,12 +22,20 @@ import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
-import type { AgentGatewayOperationRepositoryShape } from "./Services/AgentGatewayOperationRepository.ts";
+import { runWorktreeSetupScript } from "../worktreeSetup.ts";
+import type {
+  AgentGatewayOperationRecord,
+  AgentGatewayOperationRepositoryShape,
+} from "./Services/AgentGatewayOperationRepository.ts";
+import type {
+  ExternalMcpRepositoryShape,
+  ExternalMcpOperationRecord,
+} from "../externalMcp/Services/ExternalMcpRepository.ts";
+import { resolveExternalMcpRuntimePolicy } from "../externalMcp/runtimePolicy.ts";
 import {
   canonicalJson,
   gatewayIsoNow,
   makeAgentCreationIds,
-  slugifyAgentTask,
   stableGatewayDigest,
 } from "./creationUtils.ts";
 import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
@@ -36,9 +45,34 @@ import {
   type AgentGatewayProviderAvailability,
 } from "./targetResolver.ts";
 import { ToolInputError, errorText } from "./toolInput.ts";
-import { GatewayToolError, gatewayToolErrorResult, type ToolContext } from "./toolRuntime.ts";
+import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
 
 const CREATION_REPLAY_WAIT_MS = 60_000;
+
+interface PullRequestSelector {
+  readonly number: number;
+  readonly repositoryNameWithOwner?: string;
+}
+
+function parsePullRequestSelector(ref: string): PullRequestSelector | null {
+  const trimmed = ref.trim();
+  const shorthandMatch = /^#(\d+)$/u.exec(trimmed);
+  const urlMatch = /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/iu.exec(
+    trimmed,
+  );
+  const rawNumber = shorthandMatch?.[1] ?? urlMatch?.[1];
+  if (!rawNumber) return null;
+  const value = Number(rawNumber);
+  if (!Number.isSafeInteger(value) || value <= 0) return null;
+  const repositoryNameWithOwner = urlMatch
+    ? parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(trimmed)
+    : null;
+  if (urlMatch && !repositoryNameWithOwner) return null;
+  return {
+    number: value,
+    ...(repositoryNameWithOwner ? { repositoryNameWithOwner } : {}),
+  };
+}
 
 interface CreationCoordinatorDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
@@ -46,6 +80,7 @@ interface CreationCoordinatorDependencies {
   readonly git: GitCoreShape;
   readonly providerDiscovery: ProviderDiscoveryServiceShape;
   readonly operationRepository: AgentGatewayOperationRepositoryShape;
+  readonly externalMcpRepository?: ExternalMcpRepositoryShape;
   readonly serverConfig: ServerConfigShape;
   readonly loadProviderAvailabilities: Effect.Effect<
     ReadonlyMap<ProviderKind, AgentGatewayProviderAvailability>,
@@ -54,6 +89,64 @@ interface CreationCoordinatorDependencies {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, ToolInputError>;
+}
+
+export type GatewayCreationContext =
+  | {
+      readonly kind: "provider-session";
+      readonly callerThreadId: string;
+      readonly callerTurnId: string | null;
+      readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
+    }
+  | {
+      readonly kind: "external-client";
+      readonly integrationId: string;
+      readonly allowedProjectIds: ReadonlySet<string>;
+      readonly capabilities: ReadonlySet<string>;
+      readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
+    };
+
+type CreationOperationRecord = AgentGatewayOperationRecord | ExternalMcpOperationRecord;
+
+interface CreationOperationStore {
+  readonly getExisting: () => Effect.Effect<CreationOperationRecord | null, Error>;
+  readonly getById: (operationId: string) => Effect.Effect<CreationOperationRecord | null, Error>;
+  readonly reserve: (input: {
+    readonly operationId: string;
+    readonly requestId: string;
+    readonly fingerprint: string;
+    readonly requestedCount: number;
+    readonly planJson: string;
+    readonly now: string;
+  }) => Effect.Effect<
+    | {
+        readonly kind: "reserved" | "replay" | "idempotency_conflict" | "creation_plan_locked";
+        readonly operation: CreationOperationRecord;
+      }
+    | {
+        readonly kind: "concurrency_limited";
+        readonly activeCount: number;
+        readonly limit: number;
+      },
+    Error
+  >;
+  readonly markDispatching: AgentGatewayOperationRepositoryShape["markDispatching"];
+  readonly recordWorktreeCreated: AgentGatewayOperationRepositoryShape["recordWorktreeCreated"];
+  readonly markCompensating: AgentGatewayOperationRepositoryShape["markCompensating"];
+  readonly recordCompensationFailure: AgentGatewayOperationRepositoryShape["recordCompensationFailure"];
+  readonly complete: AgentGatewayOperationRepositoryShape["complete"];
+  readonly fail: AgentGatewayOperationRepositoryShape["fail"];
+  readonly registerTask: (input: {
+    readonly operationId: string;
+    readonly requestId: string;
+    readonly threadId: string;
+    readonly projectId: string;
+    readonly now: string;
+  }) => Effect.Effect<void, Error>;
+  readonly markTaskStatus: (
+    operationId: string,
+    status: "created" | "failed",
+  ) => Effect.Effect<void, Error>;
 }
 
 /**
@@ -72,6 +165,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     git,
     providerDiscovery,
     operationRepository,
+    externalMcpRepository,
     serverConfig,
     loadProviderAvailabilities,
     requireThreadShell,
@@ -104,11 +198,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     );
 
   const awaitCreationReplay = (
+    operationStore: CreationOperationStore,
     operationId: string,
+    assertAuthority: () => Effect.Effect<void, GatewayToolError>,
   ): Effect.Effect<McpToolCallResult, GatewayToolError | ToolInputError> =>
     Effect.gen(function* () {
       const deadline = Date.now() + CREATION_REPLAY_WAIT_MS;
-      let operation = yield* operationRepository
+      let operation = yield* operationStore
         .getById(operationId)
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       while (
@@ -117,11 +213,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         operation.status !== "failed" &&
         Date.now() < deadline
       ) {
+        yield* assertAuthority();
         yield* Effect.sleep(25);
-        operation = yield* operationRepository
+        operation = yield* operationStore
           .getById(operationId)
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       }
+      yield* assertAuthority();
       if (operation?.status === "completed") {
         return mcpToolResultJson(JSON.parse(operation.resultJson ?? "{}"));
       }
@@ -191,9 +289,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       );
   };
 
-  const run = (input: typeof SynaraCreateThreadsInput.Type, context: ToolContext) => {
+  const run = (input: typeof SynaraCreateThreadsInput.Type, context: GatewayCreationContext) => {
     return Effect.gen(function* () {
-      if (context.callerTurnId === null) {
+      if (context.kind === "provider-session" && context.callerTurnId === null) {
         return yield* Effect.fail(
           new GatewayToolError(
             "caller_turn_inactive",
@@ -201,23 +299,104 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           ),
         );
       }
-      const callerTurnId = context.callerTurnId;
-      const caller = yield* requireThreadShell(context.callerThreadId);
+      if (context.kind === "external-client" && input.threads.length !== 1) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "creation_limit_exceeded",
+            "External MCP integrations may create exactly one task per request.",
+          ),
+        );
+      }
+      const callerTurnId = context.kind === "provider-session" ? context.callerTurnId! : null;
+      const caller =
+        context.kind === "provider-session"
+          ? yield* requireThreadShell(context.callerThreadId)
+          : null;
       const operationId = `gateway:create:${stableGatewayDigest({
-        callerThreadId: context.callerThreadId,
-        callerTurnId,
+        principalKind: context.kind,
+        principalId:
+          context.kind === "provider-session" ? context.callerThreadId : context.integrationId,
+        ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
       const fingerprint = stableGatewayDigest(input, 64);
-      const existingOperation = yield* operationRepository
-        .getByScope({
-          callerThreadId: context.callerThreadId,
-          callerTurnId,
-          operationKind: "create_threads",
-        })
+      const externalOperationRepository =
+        context.kind === "external-client" ? externalMcpRepository : undefined;
+      if (context.kind === "external-client" && externalOperationRepository === undefined) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "external_mcp_unavailable",
+            "External MCP persistence is unavailable.",
+          ),
+        );
+      }
+      const operationStore: CreationOperationStore =
+        context.kind === "provider-session"
+          ? {
+              getExisting: () =>
+                operationRepository.getByScope({
+                  callerThreadId: context.callerThreadId,
+                  callerTurnId: context.callerTurnId!,
+                  operationKind: "create_threads",
+                }),
+              getById: operationRepository.getById,
+              reserve: (reservation) =>
+                operationRepository.reserve({
+                  ...reservation,
+                  callerThreadId: context.callerThreadId,
+                  callerTurnId: context.callerTurnId!,
+                  operationKind: "create_threads",
+                }),
+              markDispatching: operationRepository.markDispatching,
+              recordWorktreeCreated: operationRepository.recordWorktreeCreated,
+              markCompensating: operationRepository.markCompensating,
+              recordCompensationFailure: operationRepository.recordCompensationFailure,
+              complete: operationRepository.complete,
+              fail: operationRepository.fail,
+              registerTask: () => Effect.void,
+              markTaskStatus: () => Effect.void,
+            }
+          : {
+              getExisting: () =>
+                externalOperationRepository!.getOperationByRequest({
+                  integrationId: context.integrationId,
+                  requestId: input.requestId,
+                }),
+              getById: externalOperationRepository!.getOperationById,
+              reserve: (reservation) =>
+                externalOperationRepository!.reserveOperation({
+                  ...reservation,
+                  integrationId: context.integrationId,
+                  requestedCount: 1,
+                }),
+              markDispatching: externalOperationRepository!.markOperationDispatching,
+              recordWorktreeCreated: externalOperationRepository!.recordOperationWorktreeCreated,
+              markCompensating: externalOperationRepository!.markOperationCompensating,
+              recordCompensationFailure:
+                externalOperationRepository!.recordOperationCompensationFailure,
+              complete: externalOperationRepository!.completeOperation,
+              fail: externalOperationRepository!.failOperation,
+              registerTask: (task) =>
+                externalOperationRepository!.registerTask({
+                  ...task,
+                  integrationId: context.integrationId,
+                }),
+              markTaskStatus: (operationId, status) =>
+                externalOperationRepository!.markTaskStatus({
+                  operationId,
+                  status,
+                  now: gatewayIsoNow(),
+                }),
+            };
+      const existingOperation = yield* operationStore
+        .getExisting()
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       if (existingOperation !== null) {
-        if (existingOperation.requestId !== input.requestId) {
+        yield* context.assertAuthority();
+        if (
+          context.kind === "provider-session" &&
+          existingOperation.requestId !== input.requestId
+        ) {
           return yield* Effect.fail(
             new GatewayToolError(
               "creation_plan_locked",
@@ -255,14 +434,39 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             ),
           );
         }
-        return yield* awaitCreationReplay(existingOperation.operationId);
+        return yield* awaitCreationReplay(
+          operationStore,
+          existingOperation.operationId,
+          context.assertAuthority,
+        );
       }
-      const callerIsolatedInWorktree = caller.envMode === "worktree";
+      const deprecatedBranchName = input.threads.find((spec) => spec.branchName !== undefined);
+      if (deprecatedBranchName) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            '"branchName" is no longer supported for managed worktrees. Synara creates a detached HEAD; create a branch inside the new thread when the work is ready.',
+          ),
+        );
+      }
+      const callerIsolatedInWorktree = caller?.envMode === "worktree";
       const providerAvailabilities = yield* loadProviderAvailabilities;
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
-          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller.projectId);
+          if (context.kind === "external-client" && spec.projectId === undefined) {
+            return yield* Effect.fail(
+              new ToolInputError("External MCP task creation requires an explicit projectId."),
+            );
+          }
+          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
+          if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "capability_denied",
+                `This integration is not authorized for project "${projectId}".`,
+              ),
+            );
+          }
           const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
             Effect.mapError((error) => new ToolInputError(errorText(error))),
             Effect.flatMap(
@@ -281,7 +485,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               : {}),
             cwd: project.workspaceRoot,
           });
-          const environment = spec.environment ?? (callerIsolatedInWorktree ? "worktree" : "local");
+          const externalPolicy =
+            context.kind === "external-client"
+              ? resolveExternalMcpRuntimePolicy({
+                  ...(spec.environment ? { requestedEnvironment: spec.environment } : {}),
+                  ...(spec.runtimeMode ? { requestedRuntimeMode: spec.runtimeMode } : {}),
+                  capabilities: context.capabilities,
+                })
+              : null;
+          const environment =
+            externalPolicy?.environment ??
+            spec.environment ??
+            (callerIsolatedInWorktree ? "worktree" : "local");
           if (environment === "local" && callerIsolatedInWorktree) {
             return yield* Effect.fail(
               new ToolInputError(
@@ -289,60 +504,93 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
-          if (spec.runtimeMode === "full-access" && caller.runtimeMode !== "full-access") {
+          if (
+            context.kind === "provider-session" &&
+            spec.runtimeMode === "full-access" &&
+            caller!.runtimeMode !== "full-access"
+          ) {
             return yield* Effect.fail(
               new ToolInputError(
                 'Your thread runs in "approval-required" mode, so created threads cannot use "full-access".',
               ),
             );
           }
-          const runtimeMode = spec.runtimeMode ?? caller.runtimeMode;
+          const runtimeMode =
+            externalPolicy?.runtimeMode ??
+            spec.runtimeMode ??
+            (context.kind === "external-client" ? "approval-required" : caller!.runtimeMode);
           const title = spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
-          let baseBranch: string | null = null;
-          let newBranch: string | null = null;
+          let worktreeRef: string | null = null;
+          let copyChangesFrom: string | null = null;
           let plannedWorktreePath: string | null = null;
           if (environment === "worktree") {
-            const callerBranch =
-              callerIsolatedInWorktree && caller.projectId === projectId
-                ? (caller.branch ?? null)
-                : null;
-            baseBranch =
-              spec.baseBranch ??
-              callerBranch ??
-              (yield* git.statusDetails(project.workspaceRoot).pipe(
+            if (spec.baseRef && spec.baseBranch && spec.baseRef !== spec.baseBranch) {
+              return yield* Effect.fail(
+                new ToolInputError("baseRef and its deprecated baseBranch alias must match."),
+              );
+            }
+            const requestedRef = spec.baseRef ?? spec.baseBranch ?? "HEAD";
+            // Named refs are shared across linked worktrees, while HEAD is checkout-local.
+            // Always resolve same-project requests from the caller's selected checkout so
+            // an explicit baseRef:"HEAD" cannot silently jump back to the primary checkout.
+            const sourceCwd =
+              caller?.projectId === projectId
+                ? (caller.worktreePath ?? project.workspaceRoot)
+                : project.workspaceRoot;
+            const pullRequest = parsePullRequestSelector(requestedRef);
+            worktreeRef = yield* (
+              pullRequest === null
+                ? git.execute({
+                    operation: "AgentGateway.resolveWorktreeRef",
+                    cwd: sourceCwd,
+                    args: ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
+                    timeoutMs: 5_000,
+                  })
+                : git.withMutation(
+                    project.workspaceRoot,
+                    git
+                      .fetchPullRequestCommit({
+                        cwd: project.workspaceRoot,
+                        prNumber: pullRequest.number,
+                        ...(pullRequest.repositoryNameWithOwner
+                          ? { expectedRepositoryNameWithOwner: pullRequest.repositoryNameWithOwner }
+                          : {}),
+                      })
+                      .pipe(Effect.map((ref) => ({ code: 0, stdout: ref, stderr: "" }))),
+                  )
+            ).pipe(
+              Effect.map((result) => result.stdout.trim()),
+              Effect.filterOrFail(
+                (ref) => ref.length > 0,
+                () => new Error("git returned an empty commit id"),
+              ),
+              Effect.mapError(
+                (error) =>
+                  new ToolInputError(
+                    `Git revision "${requestedRef}" is unavailable. Pass a local ref/commit, #PR, or GitHub pull-request URL. ${errorText(error)}`,
+                  ),
+              ),
+            );
+            const sourceHead = yield* git
+              .execute({
+                operation: "AgentGateway.resolveWorktreeCopySource",
+                cwd: sourceCwd,
+                args: ["rev-parse", "--verify", "HEAD^{commit}"],
+                timeoutMs: 5_000,
+              })
+              .pipe(
+                Effect.map((result) => result.stdout.trim()),
                 Effect.mapError((error) => new ToolInputError(errorText(error))),
-                Effect.flatMap((status) =>
-                  status.isRepo && status.branch
-                    ? Effect.succeed(status.branch)
-                    : Effect.fail(
-                        new ToolInputError(
-                          'The project is not on a git branch; pass baseBranch or use environment "local".',
-                        ),
-                      ),
-                ),
-              ));
-            newBranch =
-              spec.branchName ??
-              `agent/${slugifyAgentTask(title)}-${stableGatewayDigest({ operationId, index }, 8)}`;
+              );
+            copyChangesFrom = sourceHead === worktreeRef ? sourceCwd : null;
             plannedWorktreePath = join(
               serverConfig.worktreesDir,
-              basename(project.workspaceRoot),
-              newBranch.replace(/\//g, "-"),
+              stableGatewayDigest({ operationId, index }, 12),
             );
             if (existsSync(plannedWorktreePath)) {
               return yield* Effect.fail(
                 new ToolInputError(
                   `Worktree path "${plannedWorktreePath}" already exists. Synara will not reuse or remove a pre-existing path.`,
-                ),
-              );
-            }
-            const branches = yield* git
-              .listBranches({ cwd: project.workspaceRoot })
-              .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-            if (branches.branches.some((branch) => !branch.isRemote && branch.name === newBranch)) {
-              return yield* Effect.fail(
-                new ToolInputError(
-                  `Branch "${newBranch}" already exists. Synara will not reuse or remove a pre-existing branch.`,
                 ),
               );
             }
@@ -356,8 +604,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             environment,
             runtimeMode,
             title,
-            baseBranch,
-            newBranch,
+            projectScripts: project.scripts,
+            worktreeRef,
+            copyChangesFrom,
+            newBranch: null,
             plannedWorktreePath,
             ownershipPreflightPassed: true,
             ids: makeAgentCreationIds(operationId, index),
@@ -371,23 +621,24 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       if (new Set(plannedWorktrees).size !== plannedWorktrees.length) {
         return yield* Effect.fail(
           new ToolInputError(
-            "The creation plan resolves multiple entries to the same worktree path. Use distinct branchName values.",
+            "The creation plan resolves multiple entries to the same generated worktree path.",
           ),
         );
       }
 
-      yield* context.assertCallerTurnActive();
+      yield* context.assertAuthority();
 
       const createdThreads: Array<(typeof prepared)[number]> = [];
       const createdWorktrees: Array<{
         readonly cwd: string;
         readonly path: string;
-        readonly branch: string;
+        readonly branch: string | null;
         proof: {
           readonly token: string;
           readonly gitDir: string;
-          readonly branch: string;
+          readonly branch: string | null;
           readonly head: string;
+          readonly stateHash?: string;
         } | null;
       }> = [];
 
@@ -397,7 +648,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const failureMessage = interrupted
             ? "The MCP request was interrupted after thread creation dispatch began."
             : errorText(Cause.squash(cause));
-          yield* operationRepository.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
+          yield* operationStore.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
             Effect.catch((error) =>
               Effect.logWarning("agent gateway could not persist compensating status", {
                 operationId,
@@ -442,15 +693,22 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         .removeWorktree({
                           cwd: worktree.cwd,
                           path: worktree.path,
-                          force: false,
+                          // Ownership was never recorded for this path: creation failed
+                          // right after the worktree appeared, or the interruptible setup
+                          // script failed or was interrupted. Copied baseline changes and
+                          // partial setup output make a non-forced removal fail by
+                          // construction.
+                          force: true,
                         })
                         .pipe(
                           Effect.flatMap(() =>
-                            git.deleteBranch({
-                              cwd: worktree.cwd,
-                              branch: worktree.branch,
-                              force: false,
-                            }),
+                            worktree.branch === null
+                              ? Effect.void
+                              : git.deleteBranch({
+                                  cwd: worktree.cwd,
+                                  branch: worktree.branch,
+                                  force: false,
+                                }),
                           ),
                         )
                     : git
@@ -472,15 +730,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                             git.removeWorktree({
                               cwd: worktree.cwd,
                               path: worktree.path,
-                              force: false,
+                              force: true,
                             }),
                           ),
                           Effect.flatMap(() =>
-                            git.deleteBranchIfUnchanged({
-                              cwd: worktree.cwd,
-                              branch: worktree.branch,
-                              expectedHead: worktree.proof!.head,
-                            }),
+                            worktree.branch === null
+                              ? Effect.void
+                              : git.deleteBranchIfUnchanged({
+                                  cwd: worktree.cwd,
+                                  branch: worktree.branch,
+                                  expectedHead: worktree.proof!.head,
+                                }),
                           ),
                         ),
                 )
@@ -498,6 +758,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 ),
             { discard: true },
           );
+          // Do not make a task terminal before cleanup has been attempted. The
+          // durable capacity view treats planned/created tasks and non-terminal
+          // failed compensation as active, so projector lag and restart cannot
+          // briefly admit a replacement while this task may still be running.
+          yield* operationStore.markTaskStatus(operationId, "failed").pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("agent gateway could not mark external task failed", {
+                operationId,
+                error: errorText(error),
+              }),
+            ),
+          );
           const failure = {
             code: interrupted ? "request_interrupted" : "dispatch_failed",
             message: failureMessage,
@@ -507,7 +779,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             compensationErrors,
           };
           if (compensationErrors.length > 0) {
-            yield* operationRepository
+            yield* operationStore
               .recordCompensationFailure({
                 operationId,
                 errorJson: JSON.stringify(failure),
@@ -532,7 +804,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             );
           }
 
-          const statusFailure = yield* operationRepository
+          const statusFailure = yield* operationStore
             .fail({
               operationId,
               errorJson: JSON.stringify(failure),
@@ -547,7 +819,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           if (statusFailure !== null) {
             const statusError = `operation status: ${errorText(statusFailure)}`;
             compensationErrors.push(statusError);
-            yield* operationRepository
+            yield* operationStore
               .recordCompensationFailure({
                 operationId,
                 errorJson: JSON.stringify(failure),
@@ -580,24 +852,20 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           // Reservation and claim form one uninterruptible handshake. Once the
           // durable reservation exists, this fiber either claims it while the
           // compensation boundary is already installed or returns a replay.
-          const reservation = yield* operationRepository
+          const reservation = yield* operationStore
             .reserve({
               operationId,
-              callerThreadId: context.callerThreadId,
-              callerTurnId,
-              operationKind: "create_threads",
               requestId: input.requestId,
               fingerprint,
               requestedCount: prepared.length,
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
-                  spec: entry.spec,
                   projectId: entry.projectId,
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,
                   runtimeMode: entry.runtimeMode,
-                  baseBranch: entry.baseBranch,
+                  worktreeRef: entry.worktreeRef,
                   newBranch: entry.newBranch,
                   plannedWorktreePath: entry.plannedWorktreePath,
                   ownershipPreflightPassed: entry.ownershipPreflightPassed,
@@ -614,6 +882,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 "idempotency_conflict",
                 `Request id "${input.requestId}" was already used with a different creation plan.`,
                 { operationId: reservation.operation.operationId },
+              ),
+            );
+          }
+          if (reservation.kind === "concurrency_limited") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "concurrency_limited",
+                `This integration already has ${reservation.activeCount} active externally created tasks/operations (limit ${reservation.limit}).`,
               ),
             );
           }
@@ -654,37 +930,57 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           if (reservation.kind === "replay" && reservation.operation.status !== "reserved") {
             return {
               kind: "replay" as const,
-              result: yield* restore(awaitCreationReplay(operationId)),
+              result: yield* restore(
+                awaitCreationReplay(operationStore, operationId, context.assertAuthority),
+              ),
             };
           }
 
-          const claimed = yield* operationRepository
+          const claimed = yield* operationStore
             .markDispatching({ operationId, now: gatewayIsoNow() })
             .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
           if (!claimed) {
             return {
               kind: "replay" as const,
-              result: yield* restore(awaitCreationReplay(operationId)),
+              result: yield* restore(
+                awaitCreationReplay(operationStore, operationId, context.assertAuthority),
+              ),
             };
           }
           claimedByThisFiber = true;
+
+          yield* Effect.forEach(
+            prepared,
+            (entry) =>
+              operationStore.registerTask({
+                operationId,
+                requestId: input.requestId,
+                threadId: entry.ids.threadId,
+                projectId: entry.projectId,
+                now: gatewayIsoNow(),
+              }),
+            { discard: true },
+          );
 
           const results = yield* restore(
             Effect.forEach(
               prepared,
               (entry) =>
                 Effect.gen(function* () {
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
                   let branch: string | null = null;
                   let worktreePath: string | null = null;
+                  let associatedWorktreeRef: string | null = null;
                   if (entry.environment === "worktree") {
-                    const created = yield* Effect.uninterruptible(
+                    const { created, trackedWorktree } = yield* Effect.uninterruptible(
                       Effect.gen(function* () {
-                        const created = yield* git.createWorktree({
+                        const created = yield* git.createDetachedWorktree({
                           cwd: entry.workspaceRoot,
-                          branch: entry.baseBranch!,
-                          newBranch: entry.newBranch!,
+                          ref: entry.worktreeRef!,
                           path: entry.plannedWorktreePath,
+                          ...(entry.copyChangesFrom
+                            ? { copyChangesFrom: entry.copyChangesFrom }
+                            : {}),
                         });
                         const trackedWorktree = {
                           cwd: entry.workspaceRoot,
@@ -693,13 +989,27 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           proof: null as (typeof createdWorktrees)[number]["proof"],
                         };
                         createdWorktrees.push(trackedWorktree);
+                        return { created, trackedWorktree };
+                      }),
+                    );
+                    // The setup script can run for minutes, so it must stay
+                    // interruptible: the abort signal kills the child process and
+                    // the tracked, still-ownerless worktree is compensated away.
+                    yield* Effect.tryPromise({
+                      try: (signal) =>
+                        runWorktreeSetupScript(entry.projectScripts, trackedWorktree.path, signal),
+                      catch: (cause) =>
+                        new Error(`Worktree setup script failed: ${errorText(cause)}`),
+                    });
+                    yield* Effect.uninterruptible(
+                      Effect.gen(function* () {
                         const proof = yield* git.recordWorktreeOwnership({
                           path: trackedWorktree.path,
                           branch: trackedWorktree.branch,
                           token: randomUUID(),
                         });
                         trackedWorktree.proof = proof;
-                        const ownershipRecorded = yield* operationRepository.recordWorktreeCreated({
+                        const ownershipRecorded = yield* operationStore.recordWorktreeCreated({
                           operationId,
                           index: entry.index,
                           workspaceRoot: entry.workspaceRoot,
@@ -708,6 +1018,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           token: proof.token,
                           gitDir: proof.gitDir,
                           head: proof.head,
+                          ...(proof.stateHash ? { stateHash: proof.stateHash } : {}),
                           now: gatewayIsoNow(),
                         });
                         if (!ownershipRecorded) {
@@ -717,14 +1028,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                             ),
                           );
                         }
-                        return created;
                       }),
                     );
                     branch = created.worktree.branch;
                     worktreePath = created.worktree.path;
+                    associatedWorktreeRef = created.worktree.ref;
                   }
 
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
                   yield* orchestrationEngine
                     .dispatch({
                       type: "thread.create",
@@ -738,16 +1049,21 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       envMode: entry.environment,
                       branch,
                       worktreePath,
-                      creationSource: "synara_mcp",
-                      sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
-                      sourceTurnId: TurnId.makeUnsafe(callerTurnId),
+                      creationSource:
+                        context.kind === "external-client" ? "external_mcp" : "synara_mcp",
+                      ...(context.kind === "provider-session"
+                        ? {
+                            sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+                            sourceTurnId: TurnId.makeUnsafe(callerTurnId!),
+                          }
+                        : {}),
                       gatewayOperationId: operationId,
                       gatewayOperationIndex: entry.index,
                       ...(worktreePath !== null
                         ? {
                             associatedWorktreePath: worktreePath,
                             associatedWorktreeBranch: branch,
-                            associatedWorktreeRef: branch,
+                            associatedWorktreeRef,
                           }
                         : {}),
                       createdAt: gatewayIsoNow(),
@@ -757,7 +1073,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       Effect.uninterruptible,
                     );
 
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
                   yield* orchestrationEngine.dispatch({
                     type: "thread.turn.start",
                     commandId: entry.ids.turnStartCommandId,
@@ -778,7 +1094,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   // The dispatch can outlive the caller turn. Recheck after it returns so
                   // a child started in that final race window is compensated as part of
                   // the same durable operation instead of being left detached.
-                  yield* context.assertCallerTurnActive();
+                  yield* context.assertAuthority();
+
+                  yield* operationStore.markTaskStatus(operationId, "created");
 
                   return {
                     index: entry.index,
@@ -809,7 +1127,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           // Once every deterministic dispatch succeeded, durable completion is
           // the commit point. A late client cancellation must not roll back a
           // fully-created operation or strand it between dispatching/completed.
-          yield* operationRepository.complete({
+          yield* operationStore.complete({
             operationId,
             resultJson: JSON.stringify(result),
             now: gatewayIsoNow(),
@@ -832,16 +1150,20 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       if (outcome.kind === "replay") return outcome.result;
       const result = outcome.result;
-      yield* appendThreadCreationRecap({
-        callerThreadId: context.callerThreadId,
-        callerTurnId,
-        result,
-      });
+      if (context.kind === "provider-session") {
+        yield* appendThreadCreationRecap({
+          callerThreadId: context.callerThreadId,
+          callerTurnId: callerTurnId!,
+          result,
+        });
+      }
       return mcpToolResultJson(result);
     }).pipe(
       (effect) =>
         withCreationPlanLock(
-          `${context.callerThreadId}\u0000${context.callerTurnId ?? "inactive"}`,
+          context.kind === "provider-session"
+            ? `${context.callerThreadId}\u0000${context.callerTurnId ?? "inactive"}`
+            : `${context.integrationId}\u0000${input.requestId}`,
           effect,
         ),
       Effect.catch((error) =>

@@ -5,20 +5,44 @@
 
 import { cn } from "~/lib/utils";
 
+// Geometry mirrors Remodex's RunningThreadSpinner (with a thinner stroke and
+// slower spin): a full track ring at 22% opacity (stroke ×0.7) and a rounded
+// arc trimmed 0.16→0.72 spinning linearly.
+const CANVAS = 15;
+const LINE_WIDTH = 2;
+const RADIUS = (CANVAS - LINE_WIDTH) / 2;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+const ARC_LENGTH = (0.72 - 0.16) * CIRCUMFERENCE;
+
 export function ThreadRunningSpinner({ className }: { className?: string }) {
   return (
-    <span
+    <svg
       aria-hidden="true"
+      viewBox={`0 0 ${CANVAS} ${CANVAS}`}
+      fill="none"
       className={cn(
-        "inline-block size-3 shrink-0 animate-spin rounded-full text-muted-foreground/55 [animation-duration:1.6s]",
+        "inline-block size-3 shrink-0 animate-spin text-muted-foreground/55 [animation-duration:1.3s] motion-reduce:animate-none",
         className,
       )}
-      style={{
-        background: "conic-gradient(from 0deg, transparent 25%, currentColor)",
-        mask: "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
-        WebkitMask:
-          "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
-      }}
-    />
+    >
+      <circle
+        cx={CANVAS / 2}
+        cy={CANVAS / 2}
+        r={RADIUS}
+        stroke="currentColor"
+        strokeOpacity={0.22}
+        strokeWidth={LINE_WIDTH * 0.7}
+      />
+      <circle
+        cx={CANVAS / 2}
+        cy={CANVAS / 2}
+        r={RADIUS}
+        stroke="currentColor"
+        strokeWidth={LINE_WIDTH}
+        strokeLinecap="round"
+        strokeDasharray={`${ARC_LENGTH} ${CIRCUMFERENCE}`}
+        strokeDashoffset={-0.16 * CIRCUMFERENCE}
+      />
+    </svg>
   );
 }

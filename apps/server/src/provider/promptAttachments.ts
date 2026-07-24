@@ -31,6 +31,10 @@ export function loadProviderPromptImageBlocks(input: {
   readonly method: string;
   readonly readFile: (path: string) => Effect.Effect<Uint8Array, unknown>;
   readonly readErrorDetail?: (cause: unknown) => string;
+  readonly invalidAttachmentError?: (
+    attachment: ChatImageAttachment,
+    cause: Error,
+  ) => ProviderAdapterRequestError;
 }): Effect.Effect<ProviderPromptImageBlock[], ProviderAdapterRequestError> {
   return Effect.forEach(
     filterProviderPromptImageAttachments(input.attachments),
@@ -40,12 +44,14 @@ export function loadProviderPromptImageBlocks(input: {
         attachment,
       });
       if (!attachmentPath) {
+        const cause = new Error(`Invalid attachment id '${attachment.id}'.`);
         return Effect.fail(
-          new ProviderAdapterRequestError({
-            provider: input.provider,
-            method: input.method,
-            detail: `Invalid attachment id '${attachment.id}'.`,
-          }),
+          input.invalidAttachmentError?.(attachment, cause) ??
+            new ProviderAdapterRequestError({
+              provider: input.provider,
+              method: input.method,
+              detail: cause.message,
+            }),
         );
       }
       return input.readFile(attachmentPath).pipe(

@@ -69,11 +69,7 @@ export function makeAgentGatewayMcpTransport(input: {
             typeof rawArgs === "object" && rawArgs !== null && !Array.isArray(rawArgs)
               ? (rawArgs as Record<string, unknown>)
               : {};
-          const requiredCapability = tool.requiresActiveTurn
-            ? toolName.includes("automation")
-              ? "automation:write"
-              : "thread:write"
-            : "thread:read";
+          const requiredCapability = tool.requiredCapability;
           if (!context.callerCapabilities.has(requiredCapability)) {
             return jsonRpcResult(
               request.id,
@@ -209,6 +205,13 @@ export function makeAgentGatewayMcpTransport(input: {
           }
         });
       const context: Omit<ToolContext, "jsonRpcRequestId"> = {
+        principal: {
+          kind: "provider-session",
+          sessionKey: callerSession.sessionKey,
+          threadId: callerThreadId,
+          provider: callerSession.provider,
+          turnId: callerWriteAuthority?.turnId ?? null,
+        },
         callerThreadId,
         callerSessionKey: callerSession.sessionKey,
         callerProvider: callerSession.provider,

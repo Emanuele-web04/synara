@@ -11,6 +11,7 @@ import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -60,6 +61,7 @@ function normalizeCodexError(
     if (
       error.message.includes(`Command not found: ${binaryPath}`) ||
       lower.includes(`spawn ${binaryPath.toLowerCase()}`) ||
+      lower.includes("notfound: childprocess.spawn") ||
       lower.includes("enoent")
     ) {
       return new TextGenerationError({
@@ -301,7 +303,21 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
+      const workingDirectoryExists = fileSystem.stat(cwd).pipe(
+        Effect.map((cwdInfo) => cwdInfo.type === "Directory"),
+        Effect.catch(() => Effect.succeed(false)),
+      );
+      const missingWorkingDirectoryError = () =>
+        new TextGenerationError({
+          operation,
+          detail: formatMissingCodexWorkingDirectoryError(cwd),
+        });
+
       const runCodexCommand = Effect.gen(function* () {
+        if (!(yield* workingDirectoryExists)) {
+          return yield* missingWorkingDirectoryError();
+        }
+
         const env = yield* Effect.promise(() =>
           buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
         );
@@ -338,12 +354,20 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         const child = yield* commandSpawner
           .spawn(command)
           .pipe(
-            Effect.mapError((cause) =>
-              normalizeCodexError(
-                codexBinaryPath,
-                operation,
-                cause,
-                "Failed to spawn Codex CLI process",
+            Effect.catch((cause) =>
+              workingDirectoryExists.pipe(
+                Effect.flatMap((exists) =>
+                  Effect.fail(
+                    exists
+                      ? normalizeCodexError(
+                          codexBinaryPath,
+                          operation,
+                          cause,
+                          "Failed to spawn Codex CLI process",
+                        )
+                      : missingWorkingDirectoryError(),
+                  ),
+                ),
               ),
             ),
           );

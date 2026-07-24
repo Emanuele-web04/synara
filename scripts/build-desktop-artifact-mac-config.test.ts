@@ -22,6 +22,7 @@ describe("createDesktopPlatformBuildConfig", () => {
       signed: true,
     });
     const mac = config.mac as Record<string, unknown>;
+    const dmg = config.dmg as Record<string, unknown>;
     const extendInfo = mac.extendInfo as Record<string, unknown>;
 
     assert.deepStrictEqual(mac.target, ["dmg", "zip"]);
@@ -29,6 +30,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.notarize, true);
+    assert.equal(dmg.sign, true);
+    assert.equal(dmg.writeUpdateInfo, false);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
     assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
@@ -48,6 +51,16 @@ describe("createDesktopPlatformBuildConfig", () => {
     ]);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
     assert.equal(extendInfo.NSScreenCaptureUsageDescription, undefined);
+  });
+
+  it("leaves the DMG container unsigned for build-only macOS artifacts", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "mac",
+      target: "dmg",
+      signed: false,
+    });
+
+    assert.deepStrictEqual(config.dmg, { sign: false, writeUpdateInfo: false });
   });
 
   it("leaves non-macOS platform configs unchanged", () => {

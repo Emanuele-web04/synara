@@ -7,6 +7,10 @@ import {
 } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
+import {
+  isOrdinaryProjectRow,
+  type SpaceAssignmentWorkspacePaths,
+} from "../orchestration/commandInvariants.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -19,6 +23,7 @@ import {
   type AgentGatewayProviderAvailability,
 } from "./targetResolver.ts";
 import {
+  deriveAgentThreadStatus,
   summarizeThreadDetail,
   summarizeThreadShell,
   summarizeWaitThreadText,
@@ -29,6 +34,7 @@ import {
   errorText,
   PROVIDER_KINDS,
   readBooleanArg,
+  readIsoTimestampArg,
   readNumberArg,
   readStringArg,
   ToolInputError,
@@ -55,6 +61,7 @@ export interface ThreadReadToolsInput {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
+  readonly workspacePaths: SpaceAssignmentWorkspacePaths;
 }
 
 export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<ToolEntry> {
@@ -64,9 +71,11 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     providerDiscovery,
     loadProviderAvailabilities,
     requireThreadShell,
+    workspacePaths,
   } = input;
 
   const contextTool: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_context",
       description:
@@ -96,6 +105,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             threadRead: context.callerCapabilities.has("thread:read"),
             threadCreate: turnId !== null && context.callerCapabilities.has("thread:write"),
             threadWait: context.callerCapabilities.has("thread:read"),
+            diagnostics: context.callerCapabilities.has("diagnostics:read"),
             automations: turnId !== null && context.callerCapabilities.has("automation:write"),
           },
         });
@@ -103,6 +113,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
   };
 
   const capabilitiesTool: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_capabilities",
       description: `List canonical Synara provider/model targets, exact provider option keys, examples, and gateway limits used to validate thread creation. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
@@ -161,10 +172,11 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
   };
 
   const listProjects: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_list_projects",
       description:
-        "List Synara projects (id, title, workspace root). Use before creating a thread in another project.",
+        "List Synara projects (id, title, workspace root). System-managed containers (the Chats and Studio surfaces) are not projects and are excluded. Use before creating a thread in another project.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { title: "List Synara projects", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
@@ -172,12 +184,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       snapshotQuery.getShellSnapshot().pipe(
         Effect.map((snapshot) =>
           mcpToolResultJson({
-            projects: snapshot.projects.map((project) => ({
-              projectId: project.id,
-              title: project.title,
-              workspaceRoot: project.workspaceRoot,
-              isPinned: project.isPinned,
-            })),
+            projects: snapshot.projects
+              .filter((project) =>
+                isOrdinaryProjectRow({
+                  projectKind: project.kind,
+                  projectTitle: project.title,
+                  projectWorkspaceRoot: project.workspaceRoot,
+                  workspacePaths,
+                }),
+              )
+              .map((project) => ({
+                projectId: project.id,
+                title: project.title,
+                workspaceRoot: project.workspaceRoot,
+                isPinned: project.isPinned,
+              })),
           }),
         ),
         Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error)))),
@@ -185,10 +206,11 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
   };
 
   const listThreads: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_list_threads",
       description:
-        "List Synara threads with status (working/idle/waiting-for-approval/...), provider, model and hierarchy. Filter by projectId or parentThreadId. Archived threads are hidden unless includeArchived is true.",
+        "Discover Synara threads by project, hierarchy, provider, model, status, title, creation source, or update window. Archived threads are hidden unless includeArchived is true.",
       inputSchema: {
         type: "object",
         properties: {
@@ -197,6 +219,17 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             type: "string",
             description: "Only child threads of this thread (e.g. your own thread id).",
           },
+          provider: { type: "string", enum: [...PROVIDER_KINDS] },
+          model: { type: "string", description: "Exact model slug." },
+          status: {
+            type: "string",
+            description:
+              "Derived thread status such as working, idle, error, or waiting-for-approval.",
+          },
+          titleContains: { type: "string", description: "Case-insensitive title substring." },
+          creationSource: { type: "string", description: "Exact thread creation source." },
+          updatedAfter: { type: "string", description: "ISO timestamp lower bound (inclusive)." },
+          updatedBefore: { type: "string", description: "ISO timestamp upper bound (inclusive)." },
           includeArchived: { type: "boolean", description: "Include archived threads." },
           limit: { type: "number", description: "Max results (default 50, max 200)." },
         },
@@ -208,6 +241,13 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       Effect.gen(function* () {
         const projectId = readStringArg(args, "projectId");
         const parentThreadId = readStringArg(args, "parentThreadId");
+        const provider = readStringArg(args, "provider");
+        const model = readStringArg(args, "model");
+        const status = readStringArg(args, "status");
+        const titleContains = readStringArg(args, "titleContains")?.toLocaleLowerCase();
+        const creationSource = readStringArg(args, "creationSource");
+        const updatedAfter = readIsoTimestampArg(args, "updatedAfter");
+        const updatedBefore = readIsoTimestampArg(args, "updatedBefore");
         const includeArchived = readBooleanArg(args, "includeArchived") ?? false;
         const limit = Math.max(
           1,
@@ -222,6 +262,17 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const matching = snapshot.threads
           .filter((thread) => (projectId ? thread.projectId === projectId : true))
           .filter((thread) => (parentThreadId ? thread.parentThreadId === parentThreadId : true))
+          .filter((thread) => (provider ? thread.modelSelection.provider === provider : true))
+          .filter((thread) => (model ? thread.modelSelection.model === model : true))
+          .filter((thread) => (status ? deriveAgentThreadStatus(thread) === status : true))
+          .filter((thread) =>
+            titleContains ? thread.title.toLocaleLowerCase().includes(titleContains) : true,
+          )
+          .filter((thread) =>
+            creationSource ? (thread.creationSource ?? null) === creationSource : true,
+          )
+          .filter((thread) => (updatedAfter ? thread.updatedAt >= updatedAfter : true))
+          .filter((thread) => (updatedBefore ? thread.updatedAt <= updatedBefore : true))
           .filter((thread) => (includeArchived ? true : (thread.archivedAt ?? null) === null))
           .toSorted((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
         const threads = matching
@@ -232,6 +283,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
   };
 
   const readThread: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_read_thread",
       description:
@@ -270,7 +322,6 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         return mcpToolResultJson(
           summarizeThreadDetail({
             thread: detail,
-            callerThreadId: context.callerThreadId,
             cursor,
             messageLimit,
             maxMessageChars,
@@ -280,6 +331,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
   };
 
   const waitForThreads: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_wait_for_threads",
       description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters; use each result's readThread call to page the full transcript. Timeouts only report progress; they never retry, replace, cancel, or create work.`,

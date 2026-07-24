@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.6.0 - 2026-07-24
+
+### Added
+
+- Added the Synara Agent Gateway, a built-in MCP app-control surface automatically available to supported provider sessions so agents can understand and operate Synara itself.
+- Added 23 internal Synara MCP tools for discovering context and capabilities; listing projects and tasks; reading transcripts; waiting for one or many tasks; creating one task or an exact parallel batch; continuing, steering, queuing, or interrupting work; renaming and archiving tasks; and inspecting activity, orchestration events, provider runtime events, and synthesized diagnostics.
+- Added durable, idempotent multi-task creation across providers and models, with isolated worktrees, explicit target selection, privilege caps, crash recovery, operation ownership, compensation, result waiting, and visible provenance for agent-created work.
+- Added agent-facing MCP tools for creating, suggesting, listing, viewing, replacing, pausing, deleting, remembering, and reporting results from Synara automations.
+- Added guided External MCP integrations for Codex, Claude Code, and other agentic MCP clients, plus copy-ready manual configuration for Claude Desktop and clients that cannot complete the setup prompt.
+- Added a one-prompt external setup flow for agentic clients with resumable pairing, automatic local stdio configuration, connection verification, and the exact executable and Synara data directory from the running installation.
+- Added External MCP tools for one-call workspace overview, allowed-project discovery, provider/model capability discovery, idempotent task creation, bounded task waiting, and paginated task reading.
+- Added all-or-selected project authorization, expiring and revocable credentials, capability-filtered tool catalogs, per-minute and active-task limits, durable request replay, and explicit advanced permissions for project-wide task reading, local-checkout execution, and full-access execution.
+- Added Project Spaces with names, curated icons, persisted ordering, project assignment, drag-and-drop movement, bulk moves, activity indicators, and a Void view for unassigned projects.
+- Added `Cmd/Ctrl+Alt+1–9` Space switching, shortcut labels in tooltips and the shortcuts sheet, and inline Space creation while adding a project.
+- Added first-class Claude Task subagents as navigable child tasks with live status, recent tool traces, usage, model and effort information, steering, stop-all, and foreground/background controls.
+- Added live workflow run cards with phases, agent metrics, saved run identity, pause and resume, optional phase filtering, and explicit background-state notices.
+- Added cross-task composer mentions that attach bounded recent transcript context from another Synara task with its project and provider identity.
+- Added a global Commit and Push shortcut that follows the active task's available Git action.
+- Added configurable AppSnap global shortcuts with validation, persistence, and conflict detection.
+- Added an isolated Synara Canary workflow for clean-checkout desktop testing and attachment uploads.
+- Added a Studio folder row that opens the selected folder in the platform file manager.
+
+### Changed
+
+- Agents now receive explicit Synara operating guidance: when to delegate parallel work, wait for every requested result, prefer Synara diagnostics over raw database inspection, respect worktree and full-access boundaries, and suggest rather than silently enable automations.
+- Agent-created and externally created work remains ordinary standalone Synara tasks with visible origin, independent lifecycle, and results that users and other agents can follow.
+- External MCP setup defaults new work to managed worktrees and approval-required execution; higher-impact runtime modes remain separate explicit grants.
+- External MCP credentials use a dedicated audience and never appear in client configuration. Pairing uses a short-lived code, stores the resulting credential privately, and verifies the live loopback runtime before forwarding authority.
+- Automations now support standalone and heartbeat modes, persistent memory, heartbeat cooldowns, notification and completion policies, maximum runs, proposal review, run envelopes, and runtime reconciliation after interruptions or restarts.
+- Automation lists now separate active and paused work, spell out cadence and next-run timing, and surface failed, cancelled, interrupted, approval-blocked, unread, and review-needed states directly in each row.
+- Manual turns preserve their selected runtime and environment modes when they supersede automation work, and superseded heartbeat runs settle as interrupted.
+- Project creation now uses a dedicated searchable dialog and shared picker surfaces across project, model, provider, and settings controls.
+- Studio shows Git controls only when its selected folder is a repository; ordinary folders no longer imply that Git must be initialized.
+- Live and attention-needing tasks receive clearer sidebar priority, while cross-task attribution is simplified to a single Synara label.
+- Workflow and subagent chrome now uses one calmer stacked surface with state-driven color, compact phase pills, aligned rows, hover actions, and concise model labels.
+- Chat Markdown headings now have visible hierarchy instead of rendering like body text.
+- Provider and model picker popups retain a stable width and use more consistent spacing.
+- Fast mode moved into the effort header.
+- New-thread model discovery begins from sidebar intent so the composer more often opens with provider choices already available.
+- New-chat navigation and persisted draft and terminal writes now defer non-critical work to improve first paint.
+- Independent attachment reads and checkpoint resolution run concurrently at turn start.
+- Streaming projection uses fewer SQL operations and avoids redundant nested savepoints.
+- The React Compiler was upgraded and enabled across substantially more of the web app; redundant memoization and dead interface code were removed.
+- The application architecture received a broad maintainability pass: the web store, composer drafts, chat, transcript, and sidebar controllers were decomposed; duplicated domain, protocol, browser, and runtime logic was consolidated; and obsolete modules and the retired internal ACP compatibility package were removed.
+- Provider ACP handling now uses the official Agent Client Protocol SDK rather than the retired internal compatibility package.
+- Provider callback and event ingress is now bounded, and restart reconciliation repairs provider and terminal activity that could otherwise drift during bursts or interrupted sessions.
+- Provider updates install into the same npm prefix as the detected executable, preventing a successful update from landing in a different Node installation.
+- The CLI publish flow now builds an isolated package stage and includes the migration-backup restore executable.
+- The running-task spinner is slimmer and slower, dialog and input chrome is more consistent, composer picker rows are easier to scan, sidebar branding is quieter, and the retired World Cup playground has been removed.
+- Bumped Synara release package versions to `0.6.0` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed Synara browser-control discovery and desktop browser RPC negotiation, session ownership, teardown, reconnect, and fixture readiness.
+- Fixed blank provider `PATH` defaults being rejected or replaced incorrectly.
+- Fixed MCP `serve` and `pair` ignoring `--home-dir`, which could connect an integration to the wrong Synara data directory.
+- Fixed External MCP trust and lifecycle boundaries around credential selection, pairing retries, restart discovery, concurrent waits, cancellation, capacity compensation, revoked or expired credential checks, and loopback-only enforcement.
+- Fixed External MCP documentation omitting the primary `synara_overview` discovery tool and describing a superseded client-picker setup flow.
+- Fixed Agent Gateway privilege-escalation paths so approval-required or worktree-isolated callers cannot create or control higher-privilege tasks by proxy.
+- Fixed gateway credentials leaking into spawned shell subprocesses and preserved that exclusion through Codex overlay rewrites.
+- Fixed agent task creation recovery, cleanup ownership, shared-session queue reservations, wait behavior, deleted-caller authority, and interrupted worktree cleanup.
+- Fixed `synara_list_projects` exposing system-managed Chat, Studio, and legacy Home containers as ordinary projects.
+- Fixed task-list truncation counts and pinned parent/child sidebar behavior.
+- Fixed active-turn checkpoint revert races; undo is rejected while provider work is genuinely in flight but remains available after terminal errors.
+- Fixed queued sends and steers racing task settlement or provider-session ownership.
+- Fixed manual turns inheriting stale automation or agent dispatch origin.
+- Fixed Claude reroute pinning, excessive transcript replay, thinking and effort restarts, stale resume behavior, rate-limit blowups, and background-task process shutdown.
+- Fixed Claude subagent stops being resurrected by late messages, parent interrupts being cleared by child events, background actions targeting already-backgrounded work, and final workflow snapshots being overwritten.
+- Fixed OpenCode quiet-completion detection following stale rather than latest activity.
+- Fixed OpenCode `/review` being forwarded as plain text instead of opening Synara's review flow.
+- Fixed unmapped Codex child events contaminating the owning task.
+- Fixed the Claude context meter ignoring `autoCompactWindow`, failing to refresh after live changes, or carrying stale values through handoffs.
+- Fixed Pi discovery omitting authenticated Claude Fable 5 and Opus 4.8 models.
+- Fixed namespaced Cursor and Grok ACP model identifiers and ACP permission-mode handling across Cursor, Droid, Grok, and OpenCode.
+- Fixed Antigravity's global capture hook launching the Synara GUI outside active sessions.
+- Fixed provider update success messages when a second Node or npm installation remained selected.
+- Fixed file-icon lookup keys such as `constructor` or `__proto__` crashing a conversation.
+- Fixed duplicate composer clearance and preserved transcript scroll position when stacked panels change.
+- Fixed global new-task creation using stale rather than latest project state.
+- Fixed Windows desktop shutdown so the backend and WebSocket clients stop reliably before quit.
+- Fixed macOS DMG and update finalization and preserved the x64 update manifest in universal release metadata.
+- Fixed durable secret writes and thread-deletion cleanup so interruption or restart cannot leave empty credentials, resurrect queued turns, or repeatedly retry deleted work.
+- Fixed pull-request review badges briefly showing incomplete counts.
+- Fixed macOS `Cmd+K` search while leaving native `Ctrl+K` line editing available.
+- Fixed missing project directories being reported as "Codex not installed"; Synara now identifies the missing working directory and offers relocation guidance.
+- Fixed automation heartbeat cooldown incorrectly throttling an automation's own next run.
+- Fixed automation memory writes requiring redundant IDs or content fields when the active automation context already identifies the target.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,490 files.
+- `bun run lint` passed with 286 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing TS44 informational JSON/schema-preference messages and Astro/Vite deprecation notices were reported.
+- `bun run release:smoke` passed with Bun temporary staging available and retained the pinned dependency graph.
+- `bun run build` passed with 5 successful Turbo tasks in 47.361s. The build still reports existing Astro/Vite deprecations, tsdown/plugin timing, desktop typeless-module and unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed with 8 successful Turbo tasks in 4m50.382s. Web passed 255 files / 3,038 tests; CLI passed 272 files / 2,814 tests with 2 skipped files and 7 skipped tests; all remaining package suites passed. No targeted reruns were required.
+- `bun install --frozen-lockfile` confirmed 1,448 pinned packages after the workspace-version update, with no dependency changes.
+
 ## 0.5.5 - 2026-07-17
 
 ### Added

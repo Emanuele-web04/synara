@@ -1,27 +1,44 @@
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
-import { Cause, Effect, Layer, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Stream } from "effect";
 
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
 import { TerminalManager } from "../../terminal/Services/Manager";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "../../threadRetention";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery";
 import {
   ThreadDeletionReactor,
   type ThreadDeletionReactorShape,
 } from "../Services/ThreadDeletionReactor";
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+type ThreadArchivedEvent = Extract<OrchestrationEvent, { type: "thread.archived" }>;
+type ThreadLifecycleCleanupEvent = ThreadDeletedEvent | ThreadArchivedEvent;
 
 // Crash recovery / backfill: threads soft-deleted before the purge could run
 // (or before purge existed) are archived and purged shortly after startup.
 const PURGE_STARTUP_SWEEP_DELAY_MS = 60 * 1000;
-const THREAD_DELETION_REACTOR_CAPACITY = 64;
+const THREAD_LIFECYCLE_REACTOR_CAPACITY = 64;
 const PURGE_FENCE_RETRY_ATTEMPTS = 20;
 const PURGE_FENCE_RETRY_DELAY_MS = 100;
+const ARCHIVE_CLEANUP_RETRY_ATTEMPTS = 5;
+const ARCHIVE_CLEANUP_RETRY_DELAY_MS = 100;
 
 const MISSING_PROVIDER_BINDING_DETAIL = "no persisted provider binding exists";
+
+export function isThreadLifecycleCleanupEvent(
+  event: OrchestrationEvent,
+): event is ThreadLifecycleCleanupEvent {
+  return event.type === "thread.deleted" || event.type === "thread.archived";
+}
+
+export function isThreadCurrentlyArchived(
+  thread: { readonly archivedAt?: string | null | undefined } | undefined,
+): boolean {
+  return thread?.archivedAt !== null && thread?.archivedAt !== undefined;
+}
 
 export const logCleanupCauseUnlessInterrupted = <R, E>({
   effect,
@@ -71,6 +88,7 @@ const make = Effect.gen(function* () {
   const profileStatsArchive = yield* ProfileStatsArchive;
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
   const refreshCommandReadModelAfterPurge = (threadId: string) =>
     orchestrationEngine.refreshCommandReadModel().pipe(
@@ -115,10 +133,20 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const closeThreadTerminals = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
+  const closeThreadTerminals = (
+    threadId: ThreadDeletedEvent["payload"]["threadId"],
+    deleteHistory: boolean,
+    openedAtOrBefore?: string,
+  ) =>
     cleanupSucceededUnlessInterrupted({
-      effect: terminalManager.close({ threadId, deleteHistory: true }),
-      message: "thread deletion cleanup skipped terminal close",
+      effect:
+        openedAtOrBefore === undefined
+          ? terminalManager.close({ threadId, deleteHistory })
+          : terminalManager.closeSessionsOpenedAtOrBefore({
+              threadId,
+              openedAtOrBefore,
+            }),
+      message: "thread lifecycle cleanup skipped terminal close",
       threadId,
     });
 
@@ -169,8 +197,41 @@ const make = Effect.gen(function* () {
     threadId: ThreadDeletedEvent["payload"]["threadId"],
   ) {
     const providerCleanupSucceeded = yield* stopProviderSession(threadId);
-    const terminalCleanupSucceeded = yield* closeThreadTerminals(threadId);
+    const terminalCleanupSucceeded = yield* closeThreadTerminals(threadId, true);
     return providerCleanupSucceeded && terminalCleanupSucceeded;
+  });
+
+  const cleanupArchivedThread = Effect.fn(function* (event: ThreadArchivedEvent) {
+    const threadId = event.payload.threadId;
+    for (let attempt = 1; attempt <= ARCHIVE_CLEANUP_RETRY_ATTEMPTS; attempt += 1) {
+      // The archive cleanup worker is asynchronous. An undo may already have
+      // projected thread.unarchived and opened a replacement terminal while
+      // this older event was waiting in the queue. Re-read authoritative state
+      // before every close attempt so stale archive work cannot kill it.
+      const currentThread = Option.getOrUndefined(
+        yield* projectionSnapshotQuery.getThreadShellById(threadId),
+      );
+      if (!isThreadCurrentlyArchived(currentThread)) {
+        yield* Effect.logDebug("thread archive cleanup ignored stale archive event", {
+          threadId,
+          archivedAt: event.payload.archivedAt,
+        });
+        return;
+      }
+      const terminalCleanupSucceeded = yield* closeThreadTerminals(
+        threadId,
+        false,
+        event.payload.archivedAt,
+      );
+      if (terminalCleanupSucceeded) return;
+      if (attempt < ARCHIVE_CLEANUP_RETRY_ATTEMPTS) {
+        yield* Effect.sleep(ARCHIVE_CLEANUP_RETRY_DELAY_MS);
+      }
+    }
+    yield* Effect.logWarning("thread archive cleanup exhausted retries", {
+      threadId,
+      attempts: ARCHIVE_CLEANUP_RETRY_ATTEMPTS,
+    });
   });
 
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {
@@ -185,13 +246,16 @@ const make = Effect.gen(function* () {
     yield* purgeThreadData(event);
   });
 
-  const processThreadDeletedSafely = (event: ThreadDeletedEvent) =>
-    processThreadDeleted(event).pipe(
+  const processThreadLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
+    event.type === "thread.deleted" ? processThreadDeleted(event) : cleanupArchivedThread(event);
+
+  const processThreadLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
+    processThreadLifecycleEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("thread deletion reactor failed to process event", {
+        return Effect.logWarning("thread lifecycle cleanup reactor failed to process event", {
           eventType: event.type,
           threadId: event.payload.threadId,
           cause: Cause.pretty(cause),
@@ -199,8 +263,8 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processThreadDeletedSafely, {
-    capacity: THREAD_DELETION_REACTOR_CAPACITY,
+  const worker = yield* makeDrainableWorker(processThreadLifecycleEventSafely, {
+    capacity: THREAD_LIFECYCLE_REACTOR_CAPACITY,
   });
 
   const start: ThreadDeletionReactorShape["start"] = Effect.fn(() =>
@@ -209,7 +273,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* Effect.forkScoped(
           Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-            if (event.type !== "thread.deleted") {
+            if (!isThreadLifecycleCleanupEvent(event)) {
               return Effect.void;
             }
             return worker.enqueue(event);

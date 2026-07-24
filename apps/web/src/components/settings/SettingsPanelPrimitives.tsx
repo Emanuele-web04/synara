@@ -43,7 +43,7 @@ export function SettingsSelectPopup({
   alignItemWithTrigger = false,
   shellClassName,
   ...props
-}: ComponentProps<typeof SelectPopup>) {
+}: Omit<ComponentProps<typeof SelectPopup>, "surface">) {
   return (
     <SelectPopup
       align={align}

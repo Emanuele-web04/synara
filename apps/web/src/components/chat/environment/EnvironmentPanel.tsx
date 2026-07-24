@@ -30,11 +30,16 @@ import {
 } from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
+import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
 import { IconButton } from "~/components/ui/icon-button";
+import { toastManager } from "~/components/ui/toast";
+import { isElectron } from "~/env";
+import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { readNativeApi } from "~/nativeApi";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
 import {
@@ -50,6 +55,7 @@ import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
+import { shouldShowStudioFolderRow } from "./EnvironmentPanel.logic";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentCollapsibleSection,
@@ -96,6 +102,12 @@ export interface EnvironmentPanelProps {
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
    */
   isStudioChat: boolean;
+  /**
+   * Folder a Studio chat picked via the composer's "Use a folder" (null when none). Rendered
+   * as its own desktop-only panel row that opens the platform file manager, replacing the git
+   * rows Studio chats do not show.
+   */
+  studioFolderPath?: string | null;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
@@ -162,6 +174,8 @@ export interface EnvironmentPanelProps {
   onOpenEditorView?: (() => void) | null;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
+  /** Registers the panel's "Commit and Push" row as the target for the global shortcut. */
+  onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
 }
 
 function EnvironmentRecapSection({
@@ -207,6 +221,7 @@ export function EnvironmentPanel({
   activeThreadId,
   activeProvider,
   isStudioChat,
+  studioFolderPath = null,
   showGitActions,
   diffOpen,
   threadAutomations,
@@ -238,6 +253,7 @@ export function EnvironmentPanel({
   onNotesChange,
   onOpenEditorView = null,
   onClose,
+  onRegisterCommitAndPushTrigger,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
   const { settings } = useAppSettings();
@@ -248,6 +264,11 @@ export function EnvironmentPanel({
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
   const markdownCwd = openInTarget ?? gitCwd ?? undefined;
+  const showStudioFolderRow = shouldShowStudioFolderRow({
+    isStudioChat,
+    studioFolderPath,
+    nativeShellAvailable: isElectron,
+  });
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
@@ -286,6 +307,42 @@ export function EnvironmentPanel({
         </IconButton>
       </div>
 
+      {showStudioFolderRow && studioFolderPath ? (
+        <EnvironmentRow
+          icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          label={
+            <span className="truncate" title={studioFolderPath}>
+              {basenameOfPath(studioFolderPath) || studioFolderPath}
+            </span>
+          }
+          trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          onClick={() => {
+            const api = readNativeApi();
+            if (!api) {
+              toastManager.add({
+                type: "error",
+                title: "Unable to open folder",
+                description: "The desktop connection is not available yet.",
+              });
+              return;
+            }
+            // showInFolder opens directories directly (and reveals plain files), so this
+            // lands the user inside the picked folder in the platform file manager.
+            void api.shell
+              .showInFolder(studioFolderPath)
+              .then(onClose)
+              .catch((error) => {
+                toastManager.add({
+                  type: "error",
+                  title: "Unable to open folder",
+                  description:
+                    error instanceof Error ? error.message : "An unknown error occurred.",
+                });
+              });
+          }}
+        />
+      ) : null}
+
       {isGitRepo ? (
         <EnvironmentRow
           icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
@@ -309,7 +366,12 @@ export function EnvironmentPanel({
       {isGitRepo ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
 
       {showGitActions ? (
-        <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} variant="panel" />
+        <GitActionsControl
+          gitCwd={gitCwd}
+          activeThreadId={activeThreadId}
+          variant="panel"
+          onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
+        />
       ) : null}
 
       <EnvironmentLocalServersSection enabled={open} />

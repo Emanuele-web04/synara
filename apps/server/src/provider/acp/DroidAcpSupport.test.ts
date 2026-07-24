@@ -7,8 +7,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Effect } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -20,7 +20,7 @@ import {
   resolveDroidCliBinaryPath,
 } from "./DroidAcpSupport.ts";
 
-function initializeWithAuthMethods(ids: ReadonlyArray<string>): EffectAcpSchema.InitializeResponse {
+function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeResponse {
   return {
     protocolVersion: 1,
     authMethods: ids.map((id) => ({ id, name: id })),
@@ -44,14 +44,13 @@ describe("buildDroidAcpSpawnInput", () => {
     expect(spawn.env).toBeDefined();
   });
 
-  it("passes model, reasoning effort, full-access, and an appended system prompt", () => {
+  it("passes model, reasoning effort, and an appended system prompt without bypassing permissions", () => {
     const spawn = buildDroidAcpSpawnInput(
       {
         appendSystemPrompt: "Run heavyweight validators serially.",
         binaryPath: "/usr/local/bin/droid",
         model: "claude-opus-4-8",
         reasoningEffort: "high",
-        skipPermissionsUnsafe: true,
       },
       "/tmp/project",
     );
@@ -61,7 +60,6 @@ describe("buildDroidAcpSpawnInput", () => {
       "exec",
       "--output-format",
       "acp",
-      "--skip-permissions-unsafe",
       "--append-system-prompt",
       "Run heavyweight validators serially.",
       "-m",
@@ -83,7 +81,7 @@ describe("applyDroidAcpModelSelection", () => {
         setConfigOption: (configId: string, value: string | boolean) => {
           if (configId === failFor) {
             return Effect.fail(
-              new EffectAcpErrors.AcpRequestError({
+              new AcpErrors.AcpRequestError({
                 code: -32602,
                 errorMessage: `Unknown config option: ${configId}`,
               }),
@@ -138,7 +136,7 @@ describe("applyDroidAcpModelSelection", () => {
 });
 
 describe("applyDroidAcpInteractionMode", () => {
-  it("uses native spec mode for plan turns and restores normal mode", async () => {
+  it("uses native spec mode for Plan and restores Full Access on the next turn", async () => {
     const calls: string[] = [];
     const runtime = {
       setMode: (modeId: string) => {
@@ -152,6 +150,7 @@ describe("applyDroidAcpInteractionMode", () => {
       applyDroidAcpInteractionMode({
         runtime,
         interactionMode: "plan",
+        runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );
@@ -159,11 +158,12 @@ describe("applyDroidAcpInteractionMode", () => {
       applyDroidAcpInteractionMode({
         runtime,
         interactionMode: "default",
+        runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );
 
-    expect(calls).toEqual(["spec", "normal"]);
+    expect(calls).toEqual(["spec", "auto-high"]);
   });
 
   it("uses Droid's highest native autonomy outside plan mode for full-access sessions", async () => {
@@ -190,7 +190,7 @@ describe("applyDroidAcpInteractionMode", () => {
     const runtime = {
       setMode: () =>
         Effect.fail(
-          new EffectAcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
+          new AcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
         ),
       setConfigOption: (configId: string, value: string | boolean) => {
         calls.push({ configId, value });
@@ -212,7 +212,7 @@ describe("applyDroidAcpInteractionMode", () => {
 describe("discoverDroidAcpModels", () => {
   it("reads each model's reasoning choices from session config options", async () => {
     let currentModel = "model-a";
-    const configOptions = (): ReadonlyArray<EffectAcpSchema.SessionConfigOption> => [
+    const configOptions = (): ReadonlyArray<Acp.SessionConfigOption> => [
       {
         id: "model",
         name: "Model",
@@ -252,7 +252,7 @@ describe("discoverDroidAcpModels", () => {
         if (configId === "model") {
           currentModel = String(value);
         }
-        return Effect.succeed({ configOptions: configOptions() });
+        return Effect.succeed({ configOptions: [...configOptions()] });
       },
     };
 
@@ -317,6 +317,6 @@ describe("resolveDroidAcpAuthMethodId", () => {
     const error = await Effect.runPromise(
       resolveDroidAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
     );
-    expect(error).toBeInstanceOf(EffectAcpErrors.AcpRequestError);
+    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
   });
 });

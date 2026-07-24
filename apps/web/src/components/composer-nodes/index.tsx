@@ -19,6 +19,7 @@ import {
   type SerializedTextNode,
   type Spread,
 } from "lexical";
+import type { ProviderKind } from "@synara/contracts";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -41,11 +42,12 @@ import {
   formatComposerSkillChipLabel,
   resolveAgentChipColor,
 } from "../composerInlineChip";
-import { AGENT_ROBOT_ICON_NAME, ClockIcon } from "~/lib/icons";
+import { AGENT_ROBOT_ICON_NAME, ClockIcon, MessageCircleIcon } from "~/lib/icons";
 import type { ComposerSlashCommand } from "~/composerSlashCommands";
 import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
+import { ProviderIcon } from "../ProviderIcon";
 
 // ── Serialized Types ──────────────────────────────────────────────────
 
@@ -53,6 +55,8 @@ export type SerializedComposerMentionNode = Spread<
   {
     kind?: MentionChipKind;
     path: string;
+    provider?: ProviderKind;
+    threadId?: string;
     type: "composer-mention";
     version: 1;
   },
@@ -119,18 +123,29 @@ function renderMentionChipDom(
   container: HTMLElement,
   pathValue: string,
   kind: MentionChipKind,
+  provider?: ProviderKind,
 ): void {
   resetInlineChipContainer(container);
 
-  const icon = createMentionChipIconElement(
-    pathValue,
-    kind,
-    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
-  );
+  const icon =
+    kind === "thread"
+      ? (() => {
+          const host = document.createElement("span");
+          host.className = COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME;
+          host.innerHTML = renderToStaticMarkup(
+            <ProviderIcon
+              provider={provider}
+              className="size-full"
+              fallback={<MessageCircleIcon className="size-full" />}
+            />,
+          );
+          return host;
+        })()
+      : createMentionChipIconElement(pathValue, kind, COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME);
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
-  label.textContent = basenameOfPath(pathValue);
+  label.textContent = kind === "thread" ? pathValue : basenameOfPath(pathValue);
 
   container.append(icon, label);
 }
@@ -204,24 +219,58 @@ function ComposerLinkDecorator(props: { url: string }) {
 export class ComposerMentionNode extends TextNode {
   __kind: MentionChipKind;
   __path: string;
+  __provider: ProviderKind | undefined;
+  __threadId: string | undefined;
 
   static override getType(): string {
     return "composer-mention";
   }
 
   static override clone(node: ComposerMentionNode): ComposerMentionNode {
-    return new ComposerMentionNode(node.__path, node.__kind, node.__key);
+    return new ComposerMentionNode(
+      node.__path,
+      node.__kind,
+      node.__provider,
+      node.__threadId,
+      node.__key,
+    );
   }
 
   static override importJSON(serializedNode: SerializedComposerMentionNode): ComposerMentionNode {
-    return $createComposerMentionNode(serializedNode.path, serializedNode.kind);
+    return $createComposerMentionNode(
+      serializedNode.path,
+      serializedNode.kind,
+      serializedNode.provider,
+      serializedNode.threadId,
+    );
   }
 
-  constructor(path: string, kind: MentionChipKind = "path", key?: NodeKey) {
+  constructor(
+    path: string,
+    kind: MentionChipKind = "path",
+    provider?: ProviderKind,
+    threadId?: string,
+    key?: NodeKey,
+  ) {
     const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
     super(formatComposerMentionToken(normalizedPath), key);
     this.__path = normalizedPath;
     this.__kind = kind;
+    this.__provider = provider;
+    this.__threadId = threadId;
+  }
+
+  getMentionThreadId(): string | undefined {
+    return this.getLatest().__threadId;
+  }
+
+  getMentionProvider(): ProviderKind | undefined {
+    return this.getLatest().__provider;
+  }
+
+  setMentionProvider(provider: ProviderKind): void {
+    const self = this.getWritable();
+    self.__provider = provider;
   }
 
   override exportJSON(): SerializedComposerMentionNode {
@@ -229,6 +278,8 @@ export class ComposerMentionNode extends TextNode {
       ...super.exportJSON(),
       kind: this.__kind,
       path: this.__path,
+      ...(this.__provider ? { provider: this.__provider } : {}),
+      ...(this.__threadId ? { threadId: this.__threadId } : {}),
       type: "composer-mention",
       version: 1,
     };
@@ -239,7 +290,7 @@ export class ComposerMentionNode extends TextNode {
     dom.className = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
     dom.contentEditable = "false";
     dom.setAttribute("spellcheck", "false");
-    renderMentionChipDom(dom, this.__path, this.__kind);
+    renderMentionChipDom(dom, this.__path, this.__kind, this.__provider);
     return dom;
   }
 
@@ -252,9 +303,10 @@ export class ComposerMentionNode extends TextNode {
     if (
       prevNode.__text !== this.__text ||
       prevNode.__path !== this.__path ||
-      prevNode.__kind !== this.__kind
+      prevNode.__kind !== this.__kind ||
+      prevNode.__provider !== this.__provider
     ) {
-      renderMentionChipDom(dom, this.__path, this.__kind);
+      renderMentionChipDom(dom, this.__path, this.__kind, this.__provider);
     }
     return false;
   }
@@ -279,8 +331,10 @@ export class ComposerMentionNode extends TextNode {
 export function $createComposerMentionNode(
   path: string,
   kind: MentionChipKind = "path",
+  provider?: ProviderKind,
+  threadId?: string,
 ): ComposerMentionNode {
-  return $applyNodeReplacement(new ComposerMentionNode(path, kind));
+  return $applyNodeReplacement(new ComposerMentionNode(path, kind, provider, threadId));
 }
 
 // ── ComposerSkillNode ─────────────────────────────────────────────────

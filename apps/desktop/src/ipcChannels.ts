@@ -35,6 +35,8 @@ export const DESKTOP_IPC_CHANNELS = {
   appSnap: {
     getState: "desktop:appsnap-get-state",
     setEnabled: "desktop:appsnap-set-enabled",
+    checkShortcut: "desktop:appsnap-check-shortcut",
+    setShortcut: "desktop:appsnap-set-shortcut",
     requestPermissions: "desktop:appsnap-request-permissions",
     listPendingCaptures: "desktop:appsnap-list-pending-captures",
     acknowledgeCapture: "desktop:appsnap-acknowledge-capture",
@@ -70,6 +72,5 @@ export const DESKTOP_IPC_CHANNELS = {
 
 export const BROWSER_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.browser;
 export const APPSNAP_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.appSnap;
-export const STORAGE_MIGRATION_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.storageMigration;
 export const DESKTOP_WS_URL_CHANNEL = DESKTOP_IPC_CHANNELS.wsUrl;
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = DESKTOP_IPC_CHANNELS.transcribeVoice;

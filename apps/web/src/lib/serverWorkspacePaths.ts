@@ -3,6 +3,8 @@
 // Layer: Web domain helper
 // Exports: ServerWorkspacePaths plus normalization and fallback helpers.
 
+import { resolveChatContainerWorkspaceRoot } from "@synara/shared/projectContainers";
+
 export interface ServerWorkspacePaths {
   readonly homeDir: string | null | undefined;
   readonly chatWorkspaceRoot?: string | null | undefined;
@@ -26,8 +28,7 @@ export function normalizeServerWorkspacePaths(
 }
 
 export function resolveServerChatWorkspaceRoot(paths: ServerWorkspacePaths): string | null {
-  const normalized = normalizeServerWorkspacePaths(paths);
-  return normalized.chatWorkspaceRoot || normalized.homeDir;
+  return resolveChatContainerWorkspaceRoot(paths);
 }
 
 export function resolveServerStudioWorkspaceRoot(paths: ServerWorkspacePaths): string | null {

@@ -66,6 +66,48 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("forwards provider session metadata when creating a session", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      const sessionStarted = requestEvents.find(
+        (event) => event.method === "session/new" && event.status === "started",
+      );
+      expect(sessionStarted?.payload).toMatchObject({
+        _meta: {
+          "x.ai/hooks": {
+            PreToolUse: [{ matcher: "*", hookCallbackIds: ["synara-plan-guard"] }],
+          },
+        },
+      });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          sessionMeta: {
+            "x.ai/hooks": {
+              PreToolUse: [{ matcher: "*", hookCallbackIds: ["synara-plan-guard"] }],
+            },
+          },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("loads a resumed session and still prompts normally", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
@@ -110,6 +152,39 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("forwards provider session metadata when loading a session", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+      expect(started.sessionSetupMethod).toBe("load");
+      expect(
+        requestEvents.find((event) => event.method === "session/load" && event.status === "started")
+          ?.payload,
+      ).toMatchObject({ _meta: { reconnectPolicy: "keep-hooks" } });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          resumeSessionId: "mock-session-1",
+          sessionMeta: { reconnectPolicy: "keep-hooks" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("prefers session/resume when the agent advertises it", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
@@ -118,6 +193,11 @@ describe("AcpSessionRuntime", () => {
       expect(started.sessionSetupMethod).toBe("resume");
       expect(requestEvents.some((event) => event.method === "session/resume")).toBe(true);
       expect(requestEvents.some((event) => event.method === "session/load")).toBe(false);
+      expect(
+        requestEvents.find(
+          (event) => event.method === "session/resume" && event.status === "started",
+        )?.payload,
+      ).toMatchObject({ _meta: { reconnectPolicy: "keep-hooks" } });
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
@@ -128,6 +208,7 @@ describe("AcpSessionRuntime", () => {
           },
           cwd: process.cwd(),
           resumeSessionId: "mock-session-1",
+          sessionMeta: { reconnectPolicy: "keep-hooks" },
           clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
           requestLogger: (event) =>

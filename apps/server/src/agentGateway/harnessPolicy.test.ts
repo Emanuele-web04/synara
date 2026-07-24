@@ -13,15 +13,21 @@ describe("Synara harness policy", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, SYNARA_HARNESS_POLICY_MARKER);
     assert.include(policy, "Synara is the host and harness");
-    assert.include(policy, "synara_create_threads exactly once");
+    assert.include(policy, "one exact synara_create_threads plan");
+    assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
     assert.include(policy, "do not create Synara threads");
+    assert.include(policy, "3–8 word outcome-oriented task label");
+    assert.include(policy, "no assumed chat context");
+    assert.include(policy, "notifying the user versus staying silent");
+    assert.include(policy, 'later manual follow-up such as "continue"');
+    assert.include(policy, "Never call this tool for a manual follow-up turn");
   });
 
   it("never advertises gateway mutation to providers without scoped MCP", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
     assert.include(policy, "Synara MCP control is unavailable");
-    assert.notInclude(policy, "call synara_create_threads exactly once");
+    assert.notInclude(policy, "one exact synara_create_threads plan");
   });
 
   it("delivers a private host-context block once per provider session", () => {
@@ -64,7 +70,7 @@ describe("Synara harness policy", () => {
         ) ?? "";
       assert.include(text, SYNARA_HARNESS_POLICY_MARKER, provider);
       assert.include(text, "Synara MCP control is unavailable", provider);
-      assert.notInclude(text, "call synara_create_threads exactly once", provider);
+      assert.notInclude(text, "one exact synara_create_threads plan", provider);
     }
   });
 });

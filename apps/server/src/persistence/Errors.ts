@@ -60,6 +60,16 @@ export function toPersistenceDecodeError(operation: string) {
     });
 }
 
+export function toPersistenceSqlOrDecodeError(
+  sqlOperation: string,
+  decodeOperation: string,
+): (cause: unknown) => PersistenceSqlError | PersistenceDecodeError {
+  return (cause) =>
+    Schema.isSchemaError(cause)
+      ? toPersistenceDecodeError(decodeOperation)(cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+}
+
 export function toPersistenceDecodeCauseError(operation: string) {
   return (cause: unknown): PersistenceDecodeError =>
     new PersistenceDecodeError({

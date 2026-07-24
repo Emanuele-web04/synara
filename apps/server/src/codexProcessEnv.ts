@@ -19,6 +19,7 @@ import { buildProviderChildEnvironment } from "./providerChildEnvironment.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
+const NODE_REPL_MCP_SERVER_HEADER = "[mcp_servers.node_repl]";
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
@@ -461,11 +462,17 @@ function findTomlArrayEnd(input: string, openBracketIndex: number): number | und
   return undefined;
 }
 
-export function mergeShellEnvPolicyExclude(config: string, envVarName: string): string {
-  if (!envVarName) {
+function mergeTomlStringArrayValues(
+  config: string,
+  tableHeader: string,
+  key: string,
+  values: readonly string[],
+): string {
+  const additions = [...new Set(values.filter(Boolean))];
+  if (additions.length === 0) {
     return config;
   }
-  const headerMatch = findTomlTableHeader(config, "[shell_environment_policy]");
+  const headerMatch = findTomlTableHeader(config, tableHeader);
   if (!headerMatch) {
     return config;
   }
@@ -473,28 +480,40 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
   const tableEnd = findNextTomlTableHeaderIndex(config, tableStart);
   const tableBody = config.slice(tableStart, tableEnd);
   const activeTableBody = maskTomlComments(tableBody);
-  const quotedVar = JSON.stringify(envVarName);
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const arrayPattern = new RegExp(`(^[\\t ]*${escapedKey}[\\t ]*=[\\t ]*\\[)`, "m");
+  const arrayMatch = arrayPattern.exec(activeTableBody);
 
-  const excludePattern = /(^[\t ]*exclude[\t ]*=[\t ]*\[)/m;
-  const excludeMatch = excludePattern.exec(activeTableBody);
-  if (excludeMatch) {
-    const openBracketIndex = excludeMatch.index + excludeMatch[0].lastIndexOf("[");
+  if (arrayMatch) {
+    const openBracketIndex = arrayMatch.index + arrayMatch[0].lastIndexOf("[");
     const closeBracketIndex = findTomlArrayEnd(activeTableBody, openBracketIndex);
-    const activeExcludeArray = activeTableBody.slice(
-      openBracketIndex + 1,
-      closeBracketIndex ?? activeTableBody.length,
-    );
-    const escapedEnvVarName = envVarName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const exactStringPattern = new RegExp(`(["'])${escapedEnvVarName}\\1`);
-    if (exactStringPattern.test(activeExcludeArray)) {
+    if (closeBracketIndex === undefined) {
+      return config;
+    }
+    const activeArray = activeTableBody.slice(openBracketIndex + 1, closeBracketIndex);
+    const missing = additions.filter((value) => {
+      const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return !new RegExp(`(["'])${escapedValue}\\1`).test(activeArray);
+    });
+    if (missing.length === 0) {
       return config;
     }
 
     const insertAt = tableStart + openBracketIndex + 1;
-    return `${config.slice(0, insertAt)}${quotedVar}, ${config.slice(insertAt)}`;
+    const separator = activeArray.trim().length > 0 ? ", " : "";
+    return `${config.slice(0, insertAt)}${missing.map((value) => JSON.stringify(value)).join(", ")}${separator}${config.slice(insertAt)}`;
   }
 
-  return `${config.slice(0, tableStart)}\nexclude = [${quotedVar}]${config.slice(tableStart)}`;
+  return `${config.slice(0, tableStart)}\n${key} = [${additions.map((value) => JSON.stringify(value)).join(", ")}]${config.slice(tableStart)}`;
+}
+
+export function mergeShellEnvPolicyExclude(config: string, envVarName: string): string {
+  return mergeTomlStringArrayValues(
+    config,
+    "[shell_environment_policy]",
+    "exclude",
+    envVarName ? [envVarName] : [],
+  );
 }
 
 function appendManagedCodexConfigSection(config: string, section: string): string {
@@ -600,6 +619,14 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       overlayConfig = mergeShellEnvPolicyExclude(overlayConfig, tokenEnvVar);
     }
   }
+  // Codex launches stdio MCP helpers with an environment allowlist, so the
+  // Browser helper must opt in to the socket capability set on its parent.
+  overlayConfig = mergeTomlStringArrayValues(
+    overlayConfig,
+    NODE_REPL_MCP_SERVER_HEADER,
+    "env_vars",
+    [NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS],
+  );
   await fs.writeFile(overlayConfigPath, overlayConfig, "utf8");
   await writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 

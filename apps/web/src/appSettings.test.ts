@@ -22,6 +22,7 @@ import {
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  isGitTextGenerationSettingsDirty,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
@@ -59,6 +60,10 @@ describe("normalizeCustomModelSlugs", () => {
 describe("getAppModelOptions", () => {
   it("does not expose a hardcoded Antigravity model catalog", () => {
     expect(getAppModelOptions("antigravity", [])).toEqual([]);
+  });
+
+  it("does not expose Anthropic models in Pi before authenticated discovery", () => {
+    expect(getAppModelOptions("pi", [])).toEqual([]);
   });
 
   it("appends saved custom models after the built-in options", () => {
@@ -182,6 +187,20 @@ describe("getGitTextGenerationModelOptions", () => {
       provider: "opencode",
       isCustom: true,
     });
+  });
+});
+
+describe("isGitTextGenerationSettingsDirty", () => {
+  it("compares the normalized provider and model defaults", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+
+    expect(isGitTextGenerationSettingsDirty(defaults, defaults)).toBe(false);
+    expect(
+      isGitTextGenerationSettingsDirty(
+        { ...defaults, textGenerationProvider: "opencode", textGenerationModel: "custom/model" },
+        defaults,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -804,6 +823,7 @@ describe("AppSettingsSchema", () => {
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
       enableAppSnap: false,
+      appSnapShortcut: { kind: "both-option-keys" },
       appSnapPlaySound: true,
       enableAssistantStreaming: true,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,

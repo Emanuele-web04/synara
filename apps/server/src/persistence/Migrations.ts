@@ -88,6 +88,19 @@ import Migration0069 from "./Migrations/069_ProjectPullRequestPins.ts";
 import Migration0070 from "./Migrations/070_AgentGatewayOperations.ts";
 import Migration0071 from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import Migration0072 from "./Migrations/072_AgentGatewayOperationRetention.ts";
+import Migration0073 from "./Migrations/073_OperationalDiagnostics.ts";
+import Migration0074 from "./Migrations/074_ExternalMcpIntegrations.ts";
+import Migration0075 from "./Migrations/075_ExternalMcpActiveCapacity.ts";
+import Migration0076 from "./Migrations/076_ExternalMcpHardening.ts";
+import Migration0077 from "./Migrations/077_ExternalMcpCompensatingCapacity.ts";
+import Migration0078 from "./Migrations/078_ExternalMcpLiveTurnCapacity.ts";
+import Migration0079 from "./Migrations/079_Spaces.ts";
+import Migration0080 from "./Migrations/080_ExternalMcpProjectScope.ts";
+import Migration0081 from "./Migrations/081_AutomationProposals.ts";
+import Migration0082 from "./Migrations/082_AutomationMemory.ts";
+import Migration0083 from "./Migrations/083_AutomationHeartbeatEligibility.ts";
+import Migration0084 from "./Migrations/084_AutomationNotificationPolicy.ts";
+import Migration0085 from "./Migrations/085_AutomationSettings.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -175,6 +188,19 @@ export const migrationEntries = [
   [70, "AgentGatewayOperations", Migration0070],
   [71, "ProjectionThreadsGatewayProvenance", Migration0071],
   [72, "AgentGatewayOperationRetention", Migration0072],
+  [73, "OperationalDiagnostics", Migration0073],
+  [74, "ExternalMcpIntegrations", Migration0074],
+  [75, "ExternalMcpActiveCapacity", Migration0075],
+  [76, "ExternalMcpHardening", Migration0076],
+  [77, "ExternalMcpCompensatingCapacity", Migration0077],
+  [78, "ExternalMcpLiveTurnCapacity", Migration0078],
+  [79, "Spaces", Migration0079],
+  [80, "ExternalMcpProjectScope", Migration0080],
+  [81, "AutomationProposals", Migration0081],
+  [82, "AutomationMemory", Migration0082],
+  [83, "AutomationHeartbeatEligibility", Migration0083],
+  [84, "AutomationNotificationPolicy", Migration0084],
+  [85, "AutomationSettings", Migration0085],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

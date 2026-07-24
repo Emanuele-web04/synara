@@ -45,6 +45,9 @@ it.effect("defaults automation runtime mode to approval-required", () =>
     assert.strictEqual(parsed.misfirePolicy, "coalesce");
     assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
     assert.deepStrictEqual(parsed.acknowledgedRisks, []);
+    assert.isNull(parsed.proposalState);
+    assert.strictEqual(parsed.notificationPolicy, "all");
+    assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
   }),
 );
 
@@ -84,6 +87,9 @@ it.effect("decodes legacy automation definitions without completion policies", (
     assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
     assert.strictEqual(parsed.completionPolicyVersion, 0);
     assert.strictEqual(parsed.completionPolicyUpdatedAt, "1970-01-01T00:00:00.000Z");
+    assert.isNull(parsed.proposalState);
+    assert.strictEqual(parsed.notificationPolicy, "all");
+    assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
   }),
 );
 
@@ -130,6 +136,7 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
           model: "gpt-5-codex",
         },
         completionPolicyVersion: 7,
+        iterationNumber: 3,
         runtimeMode: "approval-required",
         interactionMode: "default",
         worktreeMode: "worktree",
@@ -142,7 +149,9 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
 
     assert.strictEqual(parsed.permissionSnapshot.runtimeMode, "approval-required");
     assert.strictEqual(parsed.permissionSnapshot.completionPolicyVersion, 7);
+    assert.strictEqual(parsed.permissionSnapshot.iterationNumber, 3);
     assert.strictEqual(parsed.status, "running");
+    assert.isNull(parsed.deferredUntil);
   }),
 );
 
@@ -206,6 +215,23 @@ it.effect("accepts typed automation run results", () =>
 
     assert.strictEqual(parsed.outcome, "needs-attention");
     assert.strictEqual(parsed.unread, true);
+  }),
+);
+
+it.effect("accepts structured automation notify and silent decisions", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(AutomationRunResult, {
+      outcome: "unknown",
+      title: "Build is healthy",
+      summary: "No action is required.",
+      decision: "silent",
+      unread: false,
+      archivedAt: null,
+    });
+
+    assert.strictEqual(parsed.title, "Build is healthy");
+    assert.strictEqual(parsed.decision, "silent");
+    assert.strictEqual(parsed.unread, false);
   }),
 );
 

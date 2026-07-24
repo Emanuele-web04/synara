@@ -4,7 +4,7 @@
 // locally and only committed on Save.
 // Layer: web profile feature (all changes persist to localStorage via the parent hooks).
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import {
@@ -54,7 +54,7 @@ export function EditProfileDialog({
 }: EditProfileDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" showCloseButton={false} className="sm:max-w-[500px]">
+      <DialogPopup showCloseButton={false} className="sm:max-w-[500px]">
         {/* Draft state lives below DialogPopup, which unmounts its children on
             close — every open re-seeds from the live values with no reset
             effect. */}

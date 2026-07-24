@@ -6,6 +6,7 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  findThreadProviderMentionReferenceForToken,
   isPluginProviderMentionReference,
   providerMentionMatchesToken,
 } from "./lib/composerMentions";
@@ -16,6 +17,7 @@ import {
 } from "./lib/linkChips";
 import { resolveAgentAlias } from "@synara/contracts";
 import type { ProviderMentionReference } from "@synara/contracts";
+import { threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 
 export type ComposerPromptSegment =
   | {
@@ -25,7 +27,13 @@ export type ComposerPromptSegment =
   | {
       type: "mention";
       path: string;
-      kind?: "path" | "plugin";
+      kind?: "path" | "plugin" | "thread";
+      threadId?: string;
+      /**
+       * Raw token length in the source text (`@name` vs `@"name with spaces"`).
+       * Cursor math must use this — quoted tokens are longer than path.length + 1.
+       */
+      tokenLength?: number;
     }
   | {
       type: "skill";
@@ -314,16 +322,30 @@ function splitTextIntoPromptSegments(
         color: match.color,
       });
     } else if (match.kind === "mention") {
+      const threadMention = findThreadProviderMentionReferenceForToken(
+        match.value,
+        options.mentionReferences,
+      );
       const isPluginMention =
         options.mentionReferences?.some(
           (mention) =>
             isPluginProviderMentionReference(mention) &&
             providerMentionMatchesToken(mention, match.value),
         ) ?? false;
+      const tokenLength = match.end - match.start;
+      const threadId = threadMention ? threadIdFromThreadMentionPath(threadMention.path) : null;
       segments.push(
-        isPluginMention
-          ? { type: "mention", path: match.value, kind: "plugin" }
-          : { type: "mention", path: match.value },
+        threadMention
+          ? {
+              type: "mention",
+              path: match.value,
+              kind: "thread",
+              ...(threadId !== null ? { threadId } : {}),
+              tokenLength,
+            }
+          : isPluginMention
+            ? { type: "mention", path: match.value, kind: "plugin", tokenLength }
+            : { type: "mention", path: match.value, tokenLength },
       );
     } else if (match.kind === "slash-command") {
       segments.push({ type: "slash-command", command: match.command });

@@ -23,8 +23,15 @@ describe("agent gateway MCP protocol", () => {
   });
 
   it("classifies notifications by missing id", () => {
-    const parsed = parseMcpMessage({ jsonrpc: "2.0", method: "notifications/initialized" });
-    assert.deepEqual(parsed, { kind: "notification", method: "notifications/initialized" });
+    const parsed = parseMcpMessage({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: { ready: true },
+    });
+    assert.deepEqual(parsed, {
+      kind: "notification",
+      notification: { method: "notifications/initialized", params: { ready: true } },
+    });
   });
 
   it("preserves a null JSON-RPC id as a request id", () => {

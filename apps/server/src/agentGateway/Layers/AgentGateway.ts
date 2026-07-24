@@ -19,7 +19,6 @@ import {
   CommandId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
-  type OrchestrationThreadShell,
   ThreadId,
   type ProviderKind,
   type ServerProviderStatus,
@@ -32,7 +31,12 @@ import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
+import { buildAutomationProposalActivity } from "../../automation/proposalActivity.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
+import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import { ThreadDiagnosticsQuery } from "../../diagnostics/Services/ThreadDiagnosticsQuery.ts";
 import { AgentGateway, type AgentGatewayShape } from "../Services/AgentGateway.ts";
 import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts";
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
@@ -64,6 +68,8 @@ import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts"
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
+import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
+import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 
 const AGENT_GATEWAY_INSTRUCTIONS = SYNARA_GATEWAY_HARNESS_POLICY;
 
@@ -78,6 +84,10 @@ export const makeAgentGateway = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;
   const operationRepository = yield* AgentGatewayOperationRepository;
   const projectionTurns = yield* ProjectionTurnRepository;
+  const eventStore = yield* OrchestrationEventStore;
+  const eventDeliveries = yield* OrchestrationEventDeliveryRepository;
+  const providerRuntimeEvents = yield* ProviderRuntimeEventRepository;
+  const diagnostics = yield* ThreadDiagnosticsQuery;
   const serverConfig = yield* ServerConfig;
   const loadProviderAvailabilities = Effect.gen(function* () {
     const [settings, statuses] = yield* Effect.all([
@@ -160,6 +170,18 @@ export const makeAgentGateway = Effect.gen(function* () {
     providerDiscovery,
     loadProviderAvailabilities,
     requireThreadShell,
+    workspacePaths: {
+      homeDir: serverConfig.homeDir,
+      chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    },
+  });
+  const diagnosticTools = makeThreadDiagnosticTools({
+    snapshotQuery,
+    diagnostics,
+    eventStore,
+    providerRuntimeEvents,
+    eventDeliveries,
+    requireThreadShell,
   });
 
   // --- write tools ----------------------------------------------------------
@@ -176,11 +198,12 @@ export const makeAgentGateway = Effect.gen(function* () {
   });
 
   const createThreads: ToolEntry = {
+    requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Call once for plural requests; retries with the same requestId replay the same durable operation and never add replacement threads.",
+        "Create an exact batch of 1–20 standalone Synara threads. Worktree threads use a detached HEAD at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -203,8 +226,11 @@ export const makeAgentGateway = Effect.gen(function* () {
                 },
                 projectId: { type: "string" },
                 environment: { type: "string", enum: ["local", "worktree"] },
-                baseBranch: { type: "string" },
-                branchName: { type: "string" },
+                baseRef: {
+                  type: "string",
+                  description:
+                    "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
+                },
                 runtimeMode: {
                   type: "string",
                   enum: ["approval-required", "full-access"],
@@ -223,18 +249,25 @@ export const makeAgentGateway = Effect.gen(function* () {
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
-    handler: (args, context) => runCreateThreads(decodeCreateThreadsInput(args), context),
+    handler: (args, context) =>
+      runCreateThreads(decodeCreateThreadsInput(args), {
+        kind: "provider-session",
+        callerThreadId: context.callerThreadId,
+        callerTurnId: context.callerTurnId,
+        assertAuthority: context.assertCallerTurnActive,
+      }),
   };
 
   const createThread: ToolEntry = {
+    requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_create_thread",
       description:
-        "Create exactly one standalone Synara thread. For two or more threads use one synara_create_threads call instead.",
+        "Create exactly one standalone Synara thread. Worktree threads start at a detached HEAD. For two or more threads use one synara_create_threads call instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -252,8 +285,11 @@ export const makeAgentGateway = Effect.gen(function* () {
           },
           projectId: { type: "string" },
           environment: { type: "string", enum: ["local", "worktree"] },
-          baseBranch: { type: "string" },
-          branchName: { type: "string" },
+          baseRef: {
+            type: "string",
+            description:
+              "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
+          },
           runtimeMode: { type: "string", enum: ["approval-required", "full-access"] },
         },
         required: ["requestId", "prompt"],
@@ -264,7 +300,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     handler: (args, context) =>
@@ -287,6 +323,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           "title",
           "projectId",
           "environment",
+          "baseRef",
           "baseBranch",
           "branchName",
           "runtimeMode",
@@ -299,7 +336,12 @@ export const makeAgentGateway = Effect.gen(function* () {
             requestId: readStringArg(args, "requestId", { required: true }),
             threads: [spec],
           }),
-          context,
+          {
+            kind: "provider-session",
+            callerThreadId: context.callerThreadId,
+            callerTurnId: context.callerTurnId,
+            assertAuthority: context.assertCallerTurnActive,
+          },
         ).pipe(
           Effect.map((result) => {
             if (result.isError) return result;
@@ -319,6 +361,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const sendMessage: ToolEntry = {
+    requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_send_message",
@@ -375,6 +418,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const interruptThread: ToolEntry = {
+    requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_interrupt_thread",
@@ -409,6 +453,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const setThreadTitle: ToolEntry = {
+    requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_set_thread_title",
@@ -444,6 +489,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const setThreadArchived: ToolEntry = {
+    requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_set_thread_archived",
@@ -477,6 +523,22 @@ export const makeAgentGateway = Effect.gen(function* () {
             threadId: target.id,
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        if (archived) {
+          yield* Effect.forkDetach(
+            pruneProjectedArchivedManagedWorktrees({
+              homeDir: serverConfig.homeDir,
+              worktreesDir: serverConfig.worktreesDir,
+              snapshotQuery,
+              git,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("agent gateway managed worktree retention failed", {
+                  cause: String(cause),
+                }),
+              ),
+            ),
+          );
+        }
         return mcpToolResultJson({ threadId: target.id, archived });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
@@ -485,10 +547,26 @@ export const makeAgentGateway = Effect.gen(function* () {
     automationService,
     requireThreadShell,
     assertCallerMayDriveThread,
+    surfaceAutomationProposal: ({ callerThreadId, definition }) => {
+      const createdAt = isoNow();
+      return orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:automation-proposal`),
+          threadId: callerThreadId,
+          activity: buildAutomationProposalActivity({
+            definition,
+            proposalState: "pending",
+          }),
+          createdAt,
+        })
+        .pipe(Effect.asVoid);
+    },
   });
 
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
+    ...diagnosticTools,
     createThreads,
     createThread,
     sendMessage,

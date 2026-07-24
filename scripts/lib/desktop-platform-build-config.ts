@@ -18,6 +18,7 @@ export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly asarUnpack?: ReadonlyArray<string>;
+  readonly dmg?: Record<string, unknown>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
   readonly files?: ReadonlyArray<string>;
   readonly linux?: Record<string, unknown>;
@@ -86,6 +87,13 @@ export function createDesktopPlatformBuildConfig(
 
     return {
       ...nativePackaging,
+      dmg: {
+        sign: input.signed === true,
+        // The signed release flow notarizes and staples the DMG after electron-builder exits.
+        // Do not emit a blockmap/update entry whose hashes would describe the pre-stapled image;
+        // macOS auto-updates use the separately finalized ZIP artifact.
+        writeUpdateInfo: false,
+      },
       files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
       extraFiles: [
         {

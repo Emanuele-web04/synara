@@ -14,7 +14,7 @@
     },
     "apps/desktop": {
       "name": "@synara/desktop",
-      "version": "0.5.5",
+      "version": "0.6.0",
       "dependencies": {
         "effect": "catalog:",
         "electron": "40.10.6",
@@ -43,7 +43,7 @@
     },
     "apps/server": {
       "name": "@synara/cli",
-      "version": "0.5.5",
+      "version": "0.6.0",
       "bin": {
         "synara": "dist/index.mjs",
         "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
@@ -75,7 +75,6 @@
         "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "@types/ws": "^8.5.13",
-        "effect-acp": "workspace:*",
         "tsdown": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
@@ -84,7 +83,7 @@
     },
     "apps/web": {
       "name": "@synara/web",
-      "version": "0.5.5",
+      "version": "0.6.0",
       "dependencies": {
         "@base-ui/react": "^1.5.0",
         "@dnd-kit/core": "^6.3.1",
@@ -153,7 +152,7 @@
     },
     "packages/contracts": {
       "name": "@synara/contracts",
-      "version": "0.5.5",
+      "version": "0.6.0",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -163,17 +162,6 @@
         "tsdown": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
-      },
-    },
-    "packages/effect-acp": {
-      "name": "effect-acp",
-      "dependencies": {
-        "effect": "catalog:",
-      },
-      "devDependencies": {
-        "@effect/language-service": "catalog:",
-        "tsdown": "catalog:",
-        "typescript": "catalog:",
       },
     },
     "packages/shared": {
@@ -1475,8 +1463,6 @@
     "ee-first": ["ee-first@1.1.1", "", {}, "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow=="],
 
     "effect": ["effect@https://pkg.pr.new/Effect-TS/effect-smol/effect@8881a9b", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.5.3", "find-my-way-ts": "^0.1.6", "ini": "^6.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^1.11.8", "multipasta": "^0.2.7", "toml": "^3.0.0", "uuid": "^13.0.0", "yaml": "^2.8.2" } }],
-
-    "effect-acp": ["effect-acp@workspace:packages/effect-acp"],
 
     "ejs": ["ejs@3.1.10", "", { "dependencies": { "jake": "^10.8.5" }, "bin": { "ejs": "bin/cli.js" } }, "sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA=="],
 

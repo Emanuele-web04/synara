@@ -161,6 +161,23 @@ describe("contextWindow", () => {
     expect(snapshot?.maxTokens).toBe(1_000_000);
   });
 
+  it("falls back to runtime usage after the configured window is cleared", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.configured", {
+        contextWindow: "1m",
+        maxTokens: 1_000_000,
+      }),
+      makeActivity("activity-2", "context-window.updated", {
+        usedTokens: 23_000,
+        maxTokens: 200_000,
+      }),
+      makeActivity("activity-3", "context-window.configured", { cleared: true }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(23_000);
+    expect(snapshot?.maxTokens).toBe(200_000);
+  });
+
   it("returns a session snapshot from configured max tokens before usage arrives", () => {
     const snapshot = deriveLatestContextWindowSnapshot([
       makeActivity("activity-1", "context-window.configured", {

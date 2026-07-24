@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import { ProjectId, SpaceId, ThreadId, TurnId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -24,6 +24,60 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("clears active and soft-deleted project assignments for a deleted space", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectionProjectRepository;
+      const spaceId = SpaceId.makeUnsafe("space-delete-bulk");
+      const makeProject = (projectId: string, updatedAt: string, deletedAt: string | null) => ({
+        projectId: ProjectId.makeUnsafe(projectId),
+        kind: "project" as const,
+        title: projectId,
+        workspaceRoot: `/tmp/${projectId}`,
+        defaultModelSelection: null,
+        scripts: [],
+        isPinned: false,
+        spaceId,
+        createdAt: "2026-07-20T00:00:00.000Z",
+        updatedAt,
+        deletedAt,
+      });
+      yield* projects.upsert(makeProject("project-space-active", "2026-07-20T00:00:01.000Z", null));
+      yield* projects.upsert(
+        makeProject(
+          "project-space-deleted",
+          "2026-07-20T00:00:03.000Z",
+          "2026-07-20T00:00:02.000Z",
+        ),
+      );
+
+      yield* projects.clearSpaceAssignments({
+        spaceId,
+        updatedAt: "2026-07-20T00:00:02.000Z",
+      });
+
+      const rows = yield* projects.listAll();
+      assert.deepStrictEqual(
+        rows.map(({ projectId, spaceId: assignedSpaceId, updatedAt }) => ({
+          projectId,
+          assignedSpaceId,
+          updatedAt,
+        })),
+        [
+          {
+            projectId: ProjectId.makeUnsafe("project-space-active"),
+            assignedSpaceId: null,
+            updatedAt: "2026-07-20T00:00:02.000Z",
+          },
+          {
+            projectId: ProjectId.makeUnsafe("project-space-deleted"),
+            assignedSpaceId: null,
+            updatedAt: "2026-07-20T00:00:03.000Z",
+          },
+        ],
+      );
+    }),
+  );
+
   it.effect("stores SQL NULL for missing project model options", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;
@@ -40,6 +94,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         scripts: [],
         isPinned: false,
+        spaceId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         deletedAt: null,

@@ -1,16 +1,18 @@
 export interface RecoverableCreationPlanEntry {
   readonly workspaceRoot: string;
   readonly environment: "local" | "worktree";
+  readonly worktreeRef: string | null;
   readonly newBranch: string | null;
   readonly plannedWorktreePath: string | null;
   readonly ownershipPreflightPassed: boolean;
   readonly worktreeOwnership: {
     readonly operationId: string;
     readonly path: string;
-    readonly branch: string;
+    readonly branch: string | null;
     readonly token: string;
     readonly gitDir: string;
     readonly head: string;
+    readonly stateHash?: string;
     readonly recordedAt: string;
   } | null;
   readonly ids: {
@@ -45,6 +47,9 @@ export function parseRecoverableCreationPlan(
     if (
       typeof value.workspaceRoot !== "string" ||
       (value.environment !== "local" && value.environment !== "worktree") ||
+      (value.worktreeRef !== undefined &&
+        value.worktreeRef !== null &&
+        typeof value.worktreeRef !== "string") ||
       (value.newBranch !== null && typeof value.newBranch !== "string") ||
       (value.plannedWorktreePath !== null && typeof value.plannedWorktreePath !== "string") ||
       typeof idRecord.threadId !== "string" ||
@@ -60,10 +65,11 @@ export function parseRecoverableCreationPlan(
     const worktreeOwnership =
       ownership?.operationId === operationId &&
       typeof ownership.path === "string" &&
-      typeof ownership.branch === "string" &&
+      (ownership.branch === null || typeof ownership.branch === "string") &&
       typeof ownership.token === "string" &&
       typeof ownership.gitDir === "string" &&
       typeof ownership.head === "string" &&
+      (ownership.stateHash === undefined || typeof ownership.stateHash === "string") &&
       typeof ownership.recordedAt === "string" &&
       ownership.path === value.plannedWorktreePath &&
       ownership.branch === value.newBranch
@@ -74,12 +80,14 @@ export function parseRecoverableCreationPlan(
             token: ownership.token,
             gitDir: ownership.gitDir,
             head: ownership.head,
+            ...(typeof ownership.stateHash === "string" ? { stateHash: ownership.stateHash } : {}),
             recordedAt: ownership.recordedAt,
           }
         : null;
     return {
       workspaceRoot: value.workspaceRoot,
       environment: value.environment,
+      worktreeRef: typeof value.worktreeRef === "string" ? value.worktreeRef : null,
       newBranch: value.newBranch,
       plannedWorktreePath: value.plannedWorktreePath,
       // Older in-progress rows predate explicit ownership proof. They remain
@@ -101,10 +109,11 @@ export function recordCreatedWorktreeInPlan(input: {
   readonly index: number;
   readonly workspaceRoot: string;
   readonly path: string;
-  readonly branch: string;
+  readonly branch: string | null;
   readonly token: string;
   readonly gitDir: string;
   readonly head: string;
+  readonly stateHash?: string;
   readonly recordedAt: string;
 }): string {
   const plan = parsePlanArray(input.planJson);
@@ -130,6 +139,7 @@ export function recordCreatedWorktreeInPlan(input: {
     token: input.token,
     gitDir: input.gitDir,
     head: input.head,
+    ...(input.stateHash ? { stateHash: input.stateHash } : {}),
     recordedAt: input.recordedAt,
   };
   return JSON.stringify(plan);
@@ -143,6 +153,7 @@ export function redactCreationPlanForPurgedCaller(input: {
     parseRecoverableCreationPlan(input.planJson, input.operationId).map((entry) => ({
       workspaceRoot: entry.environment === "worktree" ? entry.workspaceRoot : "",
       environment: entry.environment,
+      ...(entry.worktreeRef ? { worktreeRef: entry.worktreeRef } : {}),
       newBranch: entry.newBranch,
       plannedWorktreePath: entry.plannedWorktreePath,
       ownershipPreflightPassed: entry.ownershipPreflightPassed,

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
+  buildTranscriptAutoFollowSignal,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
@@ -30,6 +31,7 @@ import {
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
+  resolveGitRepoUiState,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
@@ -46,6 +48,41 @@ import {
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("transcript auto-follow signal", () => {
+  it("stays stable when only non-message turn activity changes", () => {
+    const before = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: "assistant-3:assistant:streaming:content",
+    });
+    const afterWorkRow = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: "assistant-3:assistant:streaming:content",
+    });
+
+    expect(afterWorkRow).toBe(before);
+  });
+
+  it("changes for a real transcript append or tail lifecycle change", () => {
+    const streaming = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: "assistant-3:assistant:streaming:content",
+    });
+
+    expect(
+      buildTranscriptAutoFollowSignal({
+        messageCount: 4,
+        tailKey: "user-4:user:settled:content",
+      }),
+    ).not.toBe(streaming);
+    expect(
+      buildTranscriptAutoFollowSignal({
+        messageCount: 3,
+        tailKey: "assistant-3:assistant:settled:content",
+      }),
+    ).not.toBe(streaming);
+  });
+});
 
 describe("file undo completion", () => {
   const pending = {
@@ -847,6 +884,38 @@ describe("environment panel visibility", () => {
         environmentPanelOpen: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("git repository UI state", () => {
+  it("waits for positive repository detection in Studio", () => {
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: true,
+        queriedIsRepo: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: true,
+        queriedIsRepo: true,
+      }),
+    ).toBe(true);
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: true,
+        queriedIsRepo: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps normal project Git UI stable while discovery is pending", () => {
+    expect(
+      resolveGitRepoUiState({
+        isStudioContainer: false,
+        queriedIsRepo: undefined,
+      }),
+    ).toBe(true);
   });
 });
 

@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  EventId,
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
   ModelSelection,
@@ -31,6 +32,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@synara/contracts";
+import { createHash, randomUUID } from "node:crypto";
 import {
   Array as EffectArray,
   Cause,
@@ -56,6 +58,7 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { PersistenceDecodeError } from "../../persistence/Errors.ts";
 import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import {
   classifyTerminalTurnApplicability,
@@ -63,6 +66,10 @@ import {
 } from "../terminalTurnApplicability.ts";
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
+import {
+  makeProviderRuntimeEventPumpHealthRegistry,
+  runProviderRuntimeEventPump,
+} from "../providerRuntimeEventPump.ts";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -71,15 +78,46 @@ export interface ProviderServiceLiveOptions {
   /** Test/embedding override for the lossless runtime-event fan-out budget. */
   readonly runtimeEventBufferCapacity?: number;
   /** Production journal hook. The event must be durable before this effect returns. */
-  readonly persistRuntimeEvent?: (event: ProviderRuntimeEvent) => Effect.Effect<void>;
+  readonly persistRuntimeEvent?: (event: ProviderRuntimeEvent) => Effect.Effect<void, unknown>;
+  /** Durable fallback for events that can never be accepted by the canonical journal. */
+  readonly quarantineRuntimeEvent?: (
+    event: ProviderRuntimeEvent,
+    cause: string,
+  ) => Effect.Effect<void, unknown>;
+  /** Test override for supervised event retry timing. */
+  readonly runtimeEventRetryBaseDelayMs?: number;
+  readonly runtimeEventRetryMaxDelayMs?: number;
 }
 
 const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
 export const PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY = 2_048;
+export const PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES = 16 * 1024;
 const configuredProviderRuntimeIdleStopMs = process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS;
 const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
   ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
+
+export function summarizeProviderRuntimeQuarantineCause(cause: string): {
+  readonly cause: string;
+  readonly causeTruncated?: true;
+  readonly causeOriginalBytes?: number;
+  readonly causeSha256?: string;
+} {
+  const encoded = Buffer.from(cause, "utf8");
+  if (encoded.byteLength <= PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES) {
+    return { cause };
+  }
+  let prefixEnd = PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES;
+  while (prefixEnd > 0 && ((encoded[prefixEnd] ?? 0) & 0xc0) === 0x80) {
+    prefixEnd -= 1;
+  }
+  return {
+    cause: encoded.subarray(0, prefixEnd).toString("utf8"),
+    causeTruncated: true,
+    causeOriginalBytes: encoded.byteLength,
+    causeSha256: createHash("sha256").update(encoded).digest("hex"),
+  };
+}
 
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
@@ -464,7 +502,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
     };
 
-    const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+    const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void, unknown> =>
       Effect.uninterruptible(
         (options?.persistRuntimeEvent ? options.persistRuntimeEvent(event) : Effect.void).pipe(
           Effect.andThen(
@@ -955,7 +993,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const adapters = yield* Effect.forEach(providers, (provider) =>
       registry.getByProvider(provider),
     );
-    const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+    const runtimeEventPumpHealth = makeProviderRuntimeEventPumpHealthRegistry(providers);
+    const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void, unknown> =>
       Effect.uninterruptible(
         Effect.suspend(() => {
           if (
@@ -981,12 +1020,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }),
       );
 
-    // Fan provider events straight into the bounded pubsub so high-volume
-    // streams backpressure at one lossless owner without an extra queue hop.
+    // Each Adapter has one supervised journal-first pump. Per-event retry holds
+    // the current queue item until durable acceptance succeeds; stream restart
+    // covers unexpected completion/defects without provider-specific fallbacks.
     yield* Effect.forEach(adapters, (adapter) =>
-      Stream.runForEach(adapter.streamEvents, processRuntimeEvent).pipe(
-        Effect.forkIn(runtimeEventProducerScope),
-      ),
+      runProviderRuntimeEventPump({
+        provider: adapter.provider,
+        stream: adapter.streamEvents,
+        processEvent: processRuntimeEvent,
+        updateHealth: runtimeEventPumpHealth.update,
+        isPermanentFailure: (cause) =>
+          Option.match(Cause.findErrorOption(cause), {
+            onNone: () => false,
+            onSome: (error) => error instanceof PersistenceDecodeError,
+          }),
+        ...(options?.quarantineRuntimeEvent !== undefined
+          ? { quarantineEvent: options.quarantineRuntimeEvent }
+          : {}),
+        ...(options?.runtimeEventRetryBaseDelayMs !== undefined
+          ? { retryBaseDelayMs: options.runtimeEventRetryBaseDelayMs }
+          : {}),
+        ...(options?.runtimeEventRetryMaxDelayMs !== undefined
+          ? { retryMaxDelayMs: options.runtimeEventRetryMaxDelayMs }
+          : {}),
+      }).pipe(Effect.forkIn(runtimeEventProducerScope)),
     ).pipe(Effect.asVoid);
 
     const recoverSessionForThread = (input: {
@@ -1585,9 +1642,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               input.turnId !== undefined &&
               input.turnId !== providerTurnId
             ) {
-              return yield* toValidationError(
-                "ProviderService.interruptTurn",
-                `Cannot interrupt stale turn '${input.turnId}' because '${providerTurnId}' is active.`,
+              yield* Effect.logWarning(
+                "provider interrupt received stale projection turn; using authoritative active turn",
+                {
+                  threadId: input.threadId,
+                  requestedTurnId: input.turnId,
+                  activeTurnId: providerTurnId,
+                  provider: routed.adapter.provider,
+                },
               );
             }
 
@@ -1803,7 +1865,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               threadId: input.threadId,
               operation: "ProviderService.stopSession",
               allowRecovery: false,
-            });
+            }).pipe(
+              Effect.catchTag("ProviderValidationError", (error) =>
+                error.issue.includes("no persisted provider binding exists")
+                  ? Effect.succeed(null)
+                  : Effect.fail(error),
+              ),
+            );
+            if (routed === null) {
+              liveRuntimeTaskIds.delete(input.threadId);
+              lease.retire();
+              retireRuntimeIdleGeneration(input.threadId);
+              return;
+            }
             if (routed.isActive) {
               yield* routed.adapter.stopSession(input.threadId);
             }
@@ -2235,6 +2309,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       rollbackConversation,
       compactThread,
       closeRuntimeEvents,
+      getRuntimeEventPumpHealth: () => Effect.sync(runtimeEventPumpHealth.snapshot),
       // Each access creates a fresh PubSub subscription so that multiple
       // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
       // independently receive all runtime events.
@@ -2258,8 +2333,29 @@ export function makeDurableProviderServiceLive(options?: ProviderServiceLiveOpti
       const runtimeEvents = yield* ProviderRuntimeEventRepository;
       return yield* makeProviderService({
         ...options,
-        persistRuntimeEvent: (event) =>
-          runtimeEvents.append(event).pipe(Effect.asVoid, Effect.orDie),
+        persistRuntimeEvent: (event) => runtimeEvents.append(event).pipe(Effect.asVoid),
+        quarantineRuntimeEvent: (event, cause) =>
+          runtimeEvents
+            .append({
+              type: "runtime.warning",
+              eventId: EventId.makeUnsafe(randomUUID()),
+              provider: event.provider,
+              threadId: event.threadId,
+              createdAt: new Date().toISOString(),
+              ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
+              ...(event.lifecycleGeneration !== undefined
+                ? { lifecycleGeneration: event.lifecycleGeneration }
+                : {}),
+              payload: {
+                message: `Quarantined provider runtime event '${event.type}' after a permanent journal failure.`,
+                detail: {
+                  originalEventId: event.eventId,
+                  originalEventType: event.type,
+                  ...summarizeProviderRuntimeQuarantineCause(cause),
+                },
+              },
+            })
+            .pipe(Effect.asVoid),
       });
     }),
   );

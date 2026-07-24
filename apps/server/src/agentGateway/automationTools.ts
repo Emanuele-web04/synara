@@ -1,15 +1,38 @@
 import {
   AutomationId,
+  AutomationSchedule,
+  DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
+  DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ProjectId,
   ThreadId,
+  TurnId,
+  type AutomationCompletionPolicy,
   type AutomationDefinition,
+  type AutomationNotificationPolicy,
+  type AutomationSchedule as AutomationScheduleType,
+  type AutomationWorktreeMode,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
 import type { AutomationServiceShape } from "../automation/Services/AutomationService.ts";
+import { automationMemoryForEnvelope } from "../automation/runEnvelope.ts";
+import { computeAutomationScheduleSpacingSeconds } from "../automation/schedule.ts";
+import {
+  AUTOMATION_AUTHORING_GUIDANCE,
+  AUTOMATION_NAME_AUTHORING_GUIDANCE,
+  AUTOMATION_PROMPT_AUTHORING_GUIDANCE,
+} from "./automationAuthoringGuidance.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
-import { ToolInputError, errorText, readNumberArg, readStringArg } from "./toolInput.ts";
+import {
+  ToolInputError,
+  errorText,
+  readBooleanArg,
+  readNumberArg,
+  readRecordArg,
+  readStringArg,
+} from "./toolInput.ts";
 import {
   READ_ONLY_TOOL_ANNOTATIONS,
   WRITE_TOOL_ANNOTATIONS,
@@ -18,6 +41,83 @@ import {
 
 const HEARTBEAT_DEFAULT_INTERVAL_MINUTES = 5;
 const HEARTBEAT_DEFAULT_MAX_ITERATIONS = 50;
+const AUTOMATION_VIEW_DEFAULT_RUNS = 5;
+const AUTOMATION_VIEW_MAX_RUNS = 50;
+
+const SCHEDULE_INPUT_SCHEMA = {
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        type: { const: "interval" },
+        everySeconds: { type: "number", minimum: 1 },
+      },
+      required: ["type", "everySeconds"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "once" },
+        runAt: { type: "string", format: "date-time" },
+      },
+      required: ["type", "runAt"],
+      additionalProperties: false,
+    },
+    ...(["daily", "weekdays"] as const).map((type) => ({
+      type: "object",
+      properties: {
+        type: { const: type },
+        timeOfDay: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        timezone: { type: "string" },
+      },
+      required: ["type", "timeOfDay"],
+      additionalProperties: false,
+    })),
+    {
+      type: "object",
+      properties: {
+        type: { const: "weekly" },
+        dayOfWeek: { type: "number", minimum: 0, maximum: 6 },
+        timeOfDay: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        timezone: { type: "string" },
+      },
+      required: ["type", "dayOfWeek", "timeOfDay"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "cron" },
+        expression: { type: "string" },
+        timezone: { type: "string" },
+      },
+      required: ["type", "expression", "timezone"],
+      additionalProperties: false,
+    },
+  ],
+} as const;
+
+const COMPLETION_POLICY_INPUT_SCHEMA = {
+  oneOf: [
+    {
+      type: "object",
+      properties: { type: { const: "none" } },
+      required: ["type"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "ai-evaluated" },
+        stopWhen: { type: "string" },
+        confidenceThreshold: { type: "number", minimum: 0, maximum: 1 },
+      },
+      required: ["type", "stopWhen"],
+      additionalProperties: false,
+    },
+  ],
+} as const;
 
 interface AutomationToolDependencies {
   readonly automationService: AutomationServiceShape;
@@ -28,12 +128,121 @@ interface AutomationToolDependencies {
     caller: OrchestrationThreadShell,
     target: OrchestrationThreadShell,
   ) => Effect.Effect<void, ToolInputError>;
+  readonly surfaceAutomationProposal: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly definition: AutomationDefinition;
+  }) => Effect.Effect<void, unknown>;
+}
+
+function decodeSchedule(args: Record<string, unknown>): AutomationScheduleType | undefined {
+  const raw = readRecordArg(args, "schedule");
+  if (!raw) return undefined;
+  try {
+    const schedule = Schema.decodeUnknownSync(AutomationSchedule)(raw);
+    if (schedule.type === "manual") {
+      throw new ToolInputError('Agent schedules cannot use type "manual".');
+    }
+    return schedule;
+  } catch (error) {
+    if (error instanceof ToolInputError) throw error;
+    throw new ToolInputError(`Invalid automation schedule: ${errorText(error)}`);
+  }
+}
+
+function decodeCompletionPolicy(
+  args: Record<string, unknown>,
+  required = false,
+): AutomationCompletionPolicy | undefined {
+  const raw = readRecordArg(args, "completionPolicy");
+  if (!raw) {
+    if (required) {
+      throw new ToolInputError('Missing required argument "completionPolicy".');
+    }
+    return undefined;
+  }
+  const type = readStringArg(raw, "type", { required: true });
+  if (type === "none") return { type: "none" };
+  if (type !== "ai-evaluated") {
+    throw new ToolInputError('Argument "completionPolicy.type" must be "none" or "ai-evaluated".');
+  }
+  return {
+    type,
+    stopWhen: readStringArg(raw, "stopWhen", { required: true })!,
+    confidenceThreshold:
+      readNumberArg(raw, "confidenceThreshold") ?? DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  };
+}
+
+function readNullablePositiveInteger(
+  args: Record<string, unknown>,
+  name: string,
+  options?: { readonly required?: boolean },
+): number | null | undefined {
+  const raw = args[name];
+  if (raw === undefined) {
+    if (options?.required) throw new ToolInputError(`Missing required argument "${name}".`);
+    return undefined;
+  }
+  if (raw === null) return null;
+  const value = readNumberArg(args, name)!;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ToolInputError(`Argument "${name}" must be a positive integer or null.`);
+  }
+  return value;
+}
+
+function readNotificationPolicy(
+  args: Record<string, unknown>,
+  required = false,
+): AutomationNotificationPolicy | undefined {
+  const raw = readStringArg(args, "notificationPolicy", { required });
+  if (raw === undefined) return undefined;
+  if (raw !== "all" && raw !== "failed-runs-only") {
+    throw new ToolInputError('Argument "notificationPolicy" must be "all" or "failed-runs-only".');
+  }
+  return raw;
+}
+
+function readWorktreeMode(args: Record<string, unknown>): AutomationWorktreeMode | undefined {
+  const raw = readStringArg(args, "worktreeMode");
+  if (raw === undefined) return undefined;
+  if (raw !== "auto" && raw !== "local" && raw !== "worktree") {
+    throw new ToolInputError('Argument "worktreeMode" must be "auto", "local", or "worktree".');
+  }
+  return raw;
+}
+
+function readMode(args: Record<string, unknown>): AutomationDefinition["mode"] {
+  const raw = readStringArg(args, "mode") ?? "heartbeat";
+  if (raw !== "heartbeat" && raw !== "standalone") {
+    throw new ToolInputError('Argument "mode" must be "heartbeat" or "standalone".');
+  }
+  return raw;
+}
+
+function readMemoryContent(args: Record<string, unknown>): string {
+  // "content" is the legacy name of "memory"; accept both so older callers keep working.
+  const value = args.memory ?? args.content;
+  if (typeof value !== "string") {
+    throw new ToolInputError('Argument "memory" must be a string.');
+  }
+  return value;
+}
+
+function scheduleIsFast(schedule: AutomationScheduleType): boolean {
+  const spacing = computeAutomationScheduleSpacingSeconds(schedule, new Date().toISOString());
+  return spacing !== null && spacing < 60;
 }
 
 export function makeAgentGatewayAutomationTools(
   dependencies: AutomationToolDependencies,
 ): ReadonlyArray<ToolEntry> {
-  const { automationService, requireThreadShell, assertCallerMayDriveThread } = dependencies;
+  const {
+    automationService,
+    requireThreadShell,
+    assertCallerMayDriveThread,
+    surfaceAutomationProposal,
+  } = dependencies;
 
   const requireAutomationDefinition = (automationId: string) =>
     automationService.list({ includeArchived: true }).pipe(
@@ -41,12 +250,12 @@ export function makeAgentGatewayAutomationTools(
       Effect.flatMap((result) => {
         const definition = result.definitions.find((entry) => entry.id === automationId);
         return definition
-          ? Effect.succeed(definition)
+          ? Effect.succeed({ definition, listed: result })
           : Effect.fail(new ToolInputError(`Automation "${automationId}" was not found.`));
       }),
     );
 
-  const assertCallerMayCancelAutomation = (
+  const assertCallerMayManageAutomation = (
     caller: OrchestrationThreadShell,
     definition: AutomationDefinition,
   ) =>
@@ -65,31 +274,46 @@ export function makeAgentGatewayAutomationTools(
     });
 
   const createAutomation: ToolEntry = {
+    requiredCapability: "automation:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_create_automation",
-      description:
-        "Create a Synara heartbeat automation that wakes a thread on an interval (default: your own thread every 5 minutes). Use it for periodic monitoring instead of relying on memory; cancel it with synara_cancel_automation when done.",
+      description: `Create a heartbeat or standalone Synara automation. ${AUTOMATION_AUTHORING_GUIDANCE} Existing calls remain compatible: omitting mode/schedule creates a heartbeat on your thread using everyMinutes (default 5). Prefer suggested:true unless the user explicitly requested creation.`,
       inputSchema: {
         type: "object",
         properties: {
-          name: { type: "string", description: "Automation name." },
-          prompt: {
-            type: "string",
-            description:
-              "Message sent to the target thread on each wake (e.g. 'Check your child threads and steer them if needed').",
-          },
+          name: { type: "string", description: AUTOMATION_NAME_AUTHORING_GUIDANCE },
+          prompt: { type: "string", description: AUTOMATION_PROMPT_AUTHORING_GUIDANCE },
+          mode: { type: "string", enum: ["heartbeat", "standalone"] },
+          schedule: SCHEDULE_INPUT_SCHEMA,
           everyMinutes: {
             type: "number",
-            description: "Wake interval in minutes (default 5, min 1).",
+            description: "Legacy interval shorthand. Cannot be combined with schedule.",
           },
-          targetThreadId: {
+          targetThreadId: { type: "string", description: "Heartbeat target; defaults to caller." },
+          projectId: { type: "string", description: "Standalone project; defaults to caller's." },
+          worktreeMode: { type: "string", enum: ["auto", "local", "worktree"] },
+          notificationPolicy: {
             type: "string",
-            description: "Thread woken on each interval; defaults to your own thread.",
+            enum: ["all", "failed-runs-only"],
           },
-          maxIterations: {
+          completionPolicy: COMPLETION_POLICY_INPUT_SCHEMA,
+          heartbeatCooldownSeconds: {
             type: "number",
-            description: "Safety cap on total wakes before auto-disable (default 50).",
+            minimum: 0,
+            description:
+              "Idle seconds required on the target thread (excluding this automation's own runs) before a heartbeat run may start. Defaults to min(60, schedule spacing).",
+          },
+          maxIterations: { type: "number", minimum: 1 },
+          fastInterval: {
+            type: "boolean",
+            description:
+              "Required to acknowledge a sub-minute schedule. Such runs remain capped at 10 iterations.",
+          },
+          suggested: {
+            type: "boolean",
+            description:
+              "Persist disabled as a pending proposal and surface Accept/Dismiss actions.",
           },
         },
         required: ["name", "prompt"],
@@ -99,61 +323,179 @@ export function makeAgentGatewayAutomationTools(
     },
     handler: (args, context) =>
       Effect.gen(function* () {
+        const caller = yield* requireThreadShell(context.callerThreadId);
         const name = readStringArg(args, "name", { required: true })!;
         const prompt = readStringArg(args, "prompt", { required: true })!;
+        const mode = readMode(args);
+        const explicitSchedule = decodeSchedule(args);
+        if (explicitSchedule && args.everyMinutes !== undefined) {
+          throw new ToolInputError(
+            'Arguments "schedule" and "everyMinutes" are mutually exclusive.',
+          );
+        }
         const everyMinutes = Math.max(
           1,
           readNumberArg(args, "everyMinutes") ?? HEARTBEAT_DEFAULT_INTERVAL_MINUTES,
         );
-        const targetThreadId = readStringArg(args, "targetThreadId") ?? context.callerThreadId;
-        const maxIterations = Math.max(
-          1,
-          Math.round(readNumberArg(args, "maxIterations") ?? HEARTBEAT_DEFAULT_MAX_ITERATIONS),
+        const schedule =
+          explicitSchedule ??
+          ({
+            type: "interval",
+            everySeconds: Math.round(everyMinutes * 60),
+          } as const);
+        const fastInterval = readBooleanArg(args, "fastInterval") ?? false;
+        const scheduleSpacingSeconds = computeAutomationScheduleSpacingSeconds(
+          schedule,
+          new Date().toISOString(),
         );
-        const target = yield* requireThreadShell(targetThreadId);
-        if (target.id !== context.callerThreadId) {
-          const caller = yield* requireThreadShell(context.callerThreadId);
-          yield* assertCallerMayDriveThread(caller, target);
+        const fastSchedule = scheduleSpacingSeconds !== null && scheduleSpacingSeconds < 60;
+        if (fastSchedule && !fastInterval) {
+          throw new ToolInputError(
+            'Sub-minute schedules require explicit "fastInterval": true acknowledgement.',
+          );
         }
-        const worktreeMode =
-          target.envMode === "worktree" ? ("worktree" as const) : ("local" as const);
-        const acknowledgedRisks: Array<"full-access" | "local-checkout"> = [];
-        if (target.runtimeMode === "full-access") acknowledgedRisks.push("full-access");
-        if (worktreeMode === "local") acknowledgedRisks.push("local-checkout");
+        const explicitMaxIterations = readNullablePositiveInteger(args, "maxIterations");
+        const maxIterations =
+          explicitMaxIterations ??
+          (fastSchedule
+            ? DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS
+            : mode === "heartbeat"
+              ? HEARTBEAT_DEFAULT_MAX_ITERATIONS
+              : null);
+        const completionPolicy = decodeCompletionPolicy(args) ?? { type: "none" as const };
+        if (mode === "standalone" && completionPolicy.type !== "none") {
+          throw new ToolInputError(
+            'Argument "completionPolicy" is only available for heartbeat automations.',
+          );
+        }
+        const notificationPolicy = readNotificationPolicy(args) ?? "all";
+        const suggested = readBooleanArg(args, "suggested") ?? false;
+        // A cooldown longer than the schedule spacing would silently degrade the
+        // requested cadence to cooldown cadence, so the default is capped at the spacing.
+        const defaultCooldownSeconds =
+          scheduleSpacingSeconds === null
+            ? DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS
+            : Math.min(
+                DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS,
+                Math.max(0, Math.floor(scheduleSpacingSeconds)),
+              );
+        const heartbeatCooldownSeconds =
+          readNumberArg(args, "heartbeatCooldownSeconds") ?? defaultCooldownSeconds;
+        if (!Number.isInteger(heartbeatCooldownSeconds) || heartbeatCooldownSeconds < 0) {
+          throw new ToolInputError(
+            'Argument "heartbeatCooldownSeconds" must be a non-negative integer.',
+          );
+        }
+
+        let projectId: ProjectId;
+        let targetThreadId: ThreadId | null;
+        let worktreeMode: AutomationWorktreeMode;
+        let executionThread: OrchestrationThreadShell;
+        if (mode === "heartbeat") {
+          if (args.projectId !== undefined || args.worktreeMode !== undefined) {
+            throw new ToolInputError(
+              'Arguments "projectId" and "worktreeMode" are standalone-only.',
+            );
+          }
+          const targetId = readStringArg(args, "targetThreadId") ?? context.callerThreadId;
+          const target = yield* requireThreadShell(targetId);
+          if (target.id !== caller.id) {
+            yield* assertCallerMayDriveThread(caller, target);
+          }
+          projectId = target.projectId;
+          targetThreadId = target.id;
+          worktreeMode = target.envMode === "worktree" ? "worktree" : "local";
+          executionThread = target;
+        } else {
+          if (args.targetThreadId !== undefined) {
+            throw new ToolInputError('Argument "targetThreadId" is heartbeat-only.');
+          }
+          const requestedProjectId = readStringArg(args, "projectId");
+          if (requestedProjectId !== undefined && requestedProjectId !== caller.projectId) {
+            throw new ToolInputError("Standalone automations must belong to the caller's project.");
+          }
+          projectId = ProjectId.makeUnsafe(requestedProjectId ?? caller.projectId);
+          targetThreadId = null;
+          const requestedWorktreeMode = readWorktreeMode(args);
+          if (caller.envMode === "worktree" && requestedWorktreeMode === "local") {
+            throw new ToolInputError(
+              "A worktree-isolated caller cannot create an automation on the shared local checkout.",
+            );
+          }
+          worktreeMode =
+            requestedWorktreeMode === "auto" && caller.envMode === "worktree"
+              ? "worktree"
+              : (requestedWorktreeMode ?? (caller.envMode === "worktree" ? "worktree" : "local"));
+          executionThread = caller;
+        }
+
+        const acknowledgedRisks: Array<"full-access" | "local-checkout" | "fast-interval"> = [];
+        if (executionThread.runtimeMode === "full-access") {
+          acknowledgedRisks.push("full-access");
+        }
+        if (
+          worktreeMode === "local" ||
+          (worktreeMode === "auto" && caller.envMode !== "worktree")
+        ) {
+          acknowledgedRisks.push("local-checkout");
+        }
+        if (fastSchedule) acknowledgedRisks.push("fast-interval");
+
         const definition = yield* automationService
           .create({
-            projectId: target.projectId,
+            projectId,
             sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
             name,
             prompt,
-            schedule: { type: "interval", everySeconds: Math.round(everyMinutes * 60) },
-            modelSelection: target.modelSelection,
-            runtimeMode: target.runtimeMode,
-            interactionMode: target.interactionMode,
-            mode: "heartbeat",
-            targetThreadId: target.id,
+            schedule,
+            enabled: !suggested,
+            modelSelection: executionThread.modelSelection,
+            runtimeMode: executionThread.runtimeMode,
+            interactionMode: executionThread.interactionMode,
+            mode,
+            targetThreadId,
+            proposalState: suggested ? "pending" : null,
+            notificationPolicy,
+            heartbeatCooldownSeconds,
             maxIterations,
             stopOnError: true,
+            completionPolicy,
             worktreeMode,
             acknowledgedRisks,
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        if (suggested) {
+          yield* surfaceAutomationProposal({
+            callerThreadId: caller.id,
+            definition,
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("automation proposal activity could not be surfaced", {
+                automationId: definition.id,
+                error: errorText(error),
+              }),
+            ),
+          );
+        }
         return mcpToolResultJson({
           automationId: definition.id,
           name: definition.name,
+          mode: definition.mode,
+          schedule: definition.schedule,
           targetThreadId: definition.targetThreadId,
-          everyMinutes,
           nextRunAt: definition.nextRunAt,
           maxIterations: definition.maxIterations,
+          proposalState: definition.proposalState ?? null,
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
   const listAutomations: ToolEntry = {
+    requiredCapability: "thread:read",
     definition: {
       name: "synara_list_automations",
       description:
-        "List Synara automations (id, name, schedule, target thread, enabled, next run).",
+        "List Synara automations (id, name, mode, schedule, target thread, enabled, next run).",
       inputSchema: {
         type: "object",
         properties: {
@@ -176,16 +518,162 @@ export function makeAgentGatewayAutomationTools(
             mode: definition.mode,
             schedule: definition.schedule,
             enabled: definition.enabled,
+            proposalState: definition.proposalState ?? null,
             targetThreadId: definition.targetThreadId,
             nextRunAt: definition.nextRunAt,
             iterationCount: definition.iterationCount,
             maxIterations: definition.maxIterations,
+            notificationPolicy: definition.notificationPolicy ?? "all",
           })),
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const viewAutomation: ToolEntry = {
+    requiredCapability: "thread:read",
+    definition: {
+      name: "synara_view_automation",
+      description:
+        "View a complete automation definition, recent runs, next run, and persistent-memory excerpt. Call this immediately before synara_update_automation and resend every unchanged mutable field.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          automationId: { type: "string" },
+          runLimit: { type: "number", minimum: 1, maximum: AUTOMATION_VIEW_MAX_RUNS },
+        },
+        required: ["automationId"],
+        additionalProperties: false,
+      },
+      annotations: { title: "View a Synara automation", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const automationId = readStringArg(args, "automationId", { required: true })!;
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const { definition } = yield* requireAutomationDefinition(automationId);
+        const projectScopedStandaloneRead =
+          definition.mode === "standalone" && definition.projectId === caller.projectId;
+        if (!projectScopedStandaloneRead) {
+          yield* assertCallerMayManageAutomation(caller, definition);
+        }
+        const runLimit = Math.min(
+          AUTOMATION_VIEW_MAX_RUNS,
+          Math.max(1, Math.round(readNumberArg(args, "runLimit") ?? AUTOMATION_VIEW_DEFAULT_RUNS)),
+        );
+        const [runs, memory] = yield* Effect.all([
+          automationService.listRunsForDefinition({
+            automationId: definition.id,
+            limit: runLimit,
+          }),
+          automationService.getMemory(definition.id),
+        ]).pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson({
+          definition,
+          nextRunAt: definition.nextRunAt,
+          runs,
+          memoryExcerpt: memory ? automationMemoryForEnvelope(memory.content) : "(empty)",
+          memoryUpdatedAt: memory?.updatedAt ?? null,
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const updateAutomation: ToolEntry = {
+    requiredCapability: "automation:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_update_automation",
+      description: `Fully replace an automation's mutable configuration. ${AUTOMATION_AUTHORING_GUIDANCE} You MUST call synara_view_automation first, then resend name, prompt, schedule, enabled, maxIterations, notificationPolicy, and completionPolicy, including every unchanged field. Partial updates are rejected.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          automationId: { type: "string" },
+          name: { type: "string", description: AUTOMATION_NAME_AUTHORING_GUIDANCE },
+          prompt: { type: "string", description: AUTOMATION_PROMPT_AUTHORING_GUIDANCE },
+          schedule: SCHEDULE_INPUT_SCHEMA,
+          enabled: { type: "boolean" },
+          maxIterations: { type: ["number", "null"], minimum: 1 },
+          notificationPolicy: { type: "string", enum: ["all", "failed-runs-only"] },
+          completionPolicy: COMPLETION_POLICY_INPUT_SCHEMA,
+          fastInterval: { type: "boolean" },
+        },
+        required: [
+          "automationId",
+          "name",
+          "prompt",
+          "schedule",
+          "enabled",
+          "maxIterations",
+          "notificationPolicy",
+          "completionPolicy",
+        ],
+        additionalProperties: false,
+      },
+      annotations: { title: "Replace a Synara automation", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const automationId = readStringArg(args, "automationId", { required: true })!;
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const { definition } = yield* requireAutomationDefinition(automationId);
+        yield* assertCallerMayManageAutomation(caller, definition);
+        if (definition.proposalState === "pending") {
+          throw new ToolInputError(
+            "Pending proposals must be accepted or dismissed by the user before they can be updated.",
+          );
+        }
+        const schedule = decodeSchedule(args);
+        if (!schedule) {
+          throw new ToolInputError('Missing required argument "schedule".');
+        }
+        const completionPolicy = decodeCompletionPolicy(args, true)!;
+        if (definition.mode === "standalone" && completionPolicy.type !== "none") {
+          throw new ToolInputError(
+            'Argument "completionPolicy" must be {"type":"none"} for standalone automations.',
+          );
+        }
+        const enabled = readBooleanArg(args, "enabled");
+        if (enabled === undefined) {
+          throw new ToolInputError('Missing required argument "enabled".');
+        }
+        const fastSchedule = scheduleIsFast(schedule);
+        const alreadyAcknowledged = definition.acknowledgedRisks.includes("fast-interval");
+        if (fastSchedule && !alreadyAcknowledged && readBooleanArg(args, "fastInterval") !== true) {
+          throw new ToolInputError(
+            'A newly sub-minute schedule requires explicit "fastInterval": true acknowledgement.',
+          );
+        }
+        const acknowledgedRisks = fastSchedule
+          ? Array.from(new Set([...definition.acknowledgedRisks, "fast-interval" as const]))
+          : definition.acknowledgedRisks;
+        const maxIterations = readNullablePositiveInteger(args, "maxIterations", {
+          required: true,
+        });
+        if (maxIterations === undefined) {
+          throw new ToolInputError('Missing required argument "maxIterations".');
+        }
+        const notificationPolicy = readNotificationPolicy(args, true);
+        if (notificationPolicy === undefined) {
+          throw new ToolInputError('Missing required argument "notificationPolicy".');
+        }
+        const updated = yield* automationService
+          .update({
+            id: AutomationId.makeUnsafe(automationId),
+            name: readStringArg(args, "name", { required: true })!,
+            prompt: readStringArg(args, "prompt", { required: true })!,
+            schedule,
+            enabled,
+            maxIterations,
+            notificationPolicy,
+            completionPolicy,
+            acknowledgedRisks,
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson({ definition: updated });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const cancelAutomation: ToolEntry = {
+    requiredCapability: "automation:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_cancel_automation",
@@ -207,12 +695,12 @@ export function makeAgentGatewayAutomationTools(
         const automationId = readStringArg(args, "automationId", { required: true })!;
         const modeArg = readStringArg(args, "mode") ?? "disable";
         if (modeArg !== "disable" && modeArg !== "delete") {
-          throw new ToolInputError(`Argument "mode" must be "disable" or "delete".`);
+          throw new ToolInputError('Argument "mode" must be "disable" or "delete".');
         }
         const id = AutomationId.makeUnsafe(automationId);
         const caller = yield* requireThreadShell(context.callerThreadId);
-        const definition = yield* requireAutomationDefinition(automationId);
-        yield* assertCallerMayCancelAutomation(caller, definition);
+        const { definition } = yield* requireAutomationDefinition(automationId);
+        yield* assertCallerMayManageAutomation(caller, definition);
         if (modeArg === "delete") {
           yield* automationService
             .delete({ id })
@@ -226,5 +714,105 @@ export function makeAgentGatewayAutomationTools(
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
-  return [createAutomation, listAutomations, cancelAutomation];
+  const updateMemory: ToolEntry = {
+    requiredCapability: "automation:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_update_automation_memory",
+      description:
+        'Fully replace an automation\'s DB-backed persistent memory. Maximum UTF-8 size: 32 KiB. Omit automationId only when the current user message is the automation run envelope. A later manual follow-up such as "continue" is not part of that run and must not call this tool as completion bookkeeping.',
+      inputSchema: {
+        type: "object",
+        properties: {
+          memory: {
+            type: "string",
+            maxLength: 32 * 1_024,
+            description: "Complete replacement memory content.",
+          },
+          automationId: {
+            type: "string",
+            description:
+              "Defaults to the automation that dispatched the current turn; only needed elsewhere.",
+          },
+          content: {
+            type: "string",
+            maxLength: 32 * 1_024,
+            description: 'Deprecated alias of "memory".',
+          },
+        },
+        required: ["memory"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Update automation memory", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const automationIdArg = readStringArg(args, "automationId");
+        const memory = yield* automationService
+          .updateMemory({
+            automationId: automationIdArg ? AutomationId.makeUnsafe(automationIdArg) : null,
+            content: readMemoryContent(args),
+            callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+            callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson({ memory });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const reportResult: ToolEntry = {
+    requiredCapability: "automation:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_report_automation_result",
+      description:
+        'Report the structured result only when the current user message is the automation run envelope. Automation status never carries into a later manual follow-up such as "continue"; never call this tool for that turn. Use decision "silent" only when a successful run needs no user attention. Failures always remain visible.',
+      inputSchema: {
+        type: "object",
+        properties: {
+          decision: { type: "string", enum: ["notify", "silent"] },
+          title: { type: "string", maxLength: 160 },
+          summary: { type: "string", maxLength: 2_000 },
+        },
+        required: ["decision"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Report automation result", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const decision = readStringArg(args, "decision", { required: true });
+        if (decision !== "notify" && decision !== "silent") {
+          throw new ToolInputError('Argument "decision" must be "notify" or "silent".');
+        }
+        const run = yield* automationService
+          .reportResult({
+            callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+            callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
+            decision,
+            ...(args.title !== undefined
+              ? { title: readStringArg(args, "title", { required: true })! }
+              : {}),
+            ...(args.summary !== undefined
+              ? { summary: readStringArg(args, "summary", { required: true })! }
+              : {}),
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson({
+          automationId: run.automationId,
+          runId: run.id,
+          decision: run.result?.decision ?? decision,
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  return [
+    createAutomation,
+    listAutomations,
+    viewAutomation,
+    updateAutomation,
+    cancelAutomation,
+    updateMemory,
+    reportResult,
+  ];
 }

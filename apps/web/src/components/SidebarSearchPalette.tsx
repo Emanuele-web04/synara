@@ -33,7 +33,6 @@ import {
   getBrowseDirectoryPath,
   getBrowseLeafPathSegment,
   getBrowseParentPath,
-  getInitialBrowseQuery,
   hasTrailingPathSeparator,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
@@ -85,7 +84,6 @@ interface SidebarSearchPaletteProps {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
-  initialBrowseQuery?: string | null;
   onOpenSettings: () => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
@@ -352,7 +350,7 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
-  const [query, setQuery] = useState(props.initialBrowseQuery ?? "");
+  const [query, setQuery] = useState("");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const [importProviderState, setImportProvider] = useState<ImportProviderKind>(
     props.importProviders[0] ?? "codex",
@@ -844,8 +842,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     <CommandGroup>
                       <CommandGroupLabel className="pt-0 pb-1.5 pl-3">Suggested</CommandGroupLabel>
                       {matchedActions.map((action) => {
-                        const onSelect = actionHandler(action.id, props);
-                        const Icon = ACTION_ICONS[action.id];
+                        const onSelect = action.run ?? actionHandler(action.id, props);
+                        const Icon = action.icon ?? ACTION_ICONS[action.id];
                         return (
                           <CommandItem
                             key={action.id}
@@ -860,10 +858,6 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 setImportId("");
                                 setImportProvider(props.importProviders[0] ?? "codex");
                                 props.onModeChange("import");
-                                return;
-                              }
-                              if (action.id === "add-project") {
-                                setQuery(getInitialBrowseQuery(props.homeDir));
                                 return;
                               }
                               if (!onSelect) return;
@@ -923,6 +917,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                     query={query}
                                   />
                                 </div>
+                                {/* Project only, not "project · space": this column is
+                                    96px, and a thread's Space is already implied by its
+                                    project. Space stays searchable — it just does not
+                                    get to eat the name the user is scanning for. */}
                                 <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
                                   {thread.projectName}
                                 </span>
@@ -983,8 +981,17 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         >
                           <PaletteIcon icon={HiOutlineFolderOpen} />
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
-                              {project.name || "Untitled project"}
+                            <div className="flex items-baseline gap-3">
+                              <div className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
+                                {project.name || "Untitled project"}
+                              </div>
+                              {/* Opening a project from here can switch Space, so the
+                                  destination is worth naming. It rides in the same right-hand
+                                  column the thread rows use for their parent, rather than
+                                  in front of the path, which is what identifies a project. */}
+                              <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
+                                {project.spaceName}
+                              </span>
                             </div>
                             <div className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
                               {project.localName

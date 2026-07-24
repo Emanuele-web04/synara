@@ -146,7 +146,7 @@ export function ShareDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" className="sm:max-w-[560px]">
+      <DialogPopup className="sm:max-w-[560px]">
         <DialogTitle className="text-center text-xl">Share your activity</DialogTitle>
         <div className="mt-5 flex flex-col items-center gap-7 px-2 pb-3">
           <div

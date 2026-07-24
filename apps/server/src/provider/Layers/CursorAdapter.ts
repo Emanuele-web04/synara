@@ -38,7 +38,7 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
@@ -46,6 +46,7 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
   startAgentGatewaySessionLeaseExitWatcher,
@@ -64,13 +65,15 @@ import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
-  selectAcpFullAccessPermissionOptionId,
+  resolveAcpPermissionPolicy,
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
 import {
   acceptAcpPlanUpdate,
   makeAcpThreadLock,
   readAcpUsdCost,
+  resolveRequestedAcpSessionModeId,
+  resolveAcpTurnInteractionMode,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
@@ -85,11 +88,7 @@ import {
   makeAcpToolCallEvent,
   stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
-import {
-  type AcpSessionMode,
-  type AcpSessionModeState,
-  parsePermissionRequest,
-} from "../acp/AcpRuntimeModel.ts";
+import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
@@ -115,7 +114,6 @@ import {
   extractAskQuestions,
   extractPlanMarkdown,
   extractTodosAsPlan,
-  formatCursorPlanUpdateMarkdown,
 } from "../acp/CursorAcpExtension.ts";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -144,6 +142,11 @@ const CURSOR_TURN_WATCHDOG_INTERVAL_MS = 15_000;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
+const CURSOR_ACP_SESSION_MODE_ALIASES = {
+  plan: ACP_PLAN_MODE_ALIASES,
+  implement: ACP_IMPLEMENT_MODE_ALIASES,
+  approval: ACP_APPROVAL_MODE_ALIASES,
+} as const;
 const CURSOR_PLAN_MODE_PROMPT_PREFIX = [
   "Synara Cursor plan mode is active.",
   "Do not implement or mutate files in this turn.",
@@ -241,7 +244,7 @@ function completeCursorAssistantItemTurnId(
 
 function recordCursorSessionCost(
   ctx: CursorSessionContext,
-  cost: EffectAcpSchema.Cost | null | undefined,
+  cost: Acp.Cost | null | undefined,
 ): void {
   const sessionCostUsd = readAcpUsdCost(cost);
   if (sessionCostUsd === undefined) {
@@ -284,74 +287,6 @@ function parseCursorResume(raw: unknown): { sessionId: string } | undefined {
   return { sessionId: raw.sessionId.trim() };
 }
 
-function normalizeModeSearchText(mode: AcpSessionMode): string {
-  return [mode.id, mode.name, mode.description]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .join(" ")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function findModeByAliases(
-  modes: ReadonlyArray<AcpSessionMode>,
-  aliases: ReadonlyArray<string>,
-): AcpSessionMode | undefined {
-  const normalizedAliases = aliases.map((alias) => alias.toLowerCase());
-  for (const alias of normalizedAliases) {
-    const exact = modes.find((mode) => {
-      const id = mode.id.toLowerCase();
-      const name = mode.name.toLowerCase();
-      return id === alias || name === alias;
-    });
-    if (exact) {
-      return exact;
-    }
-  }
-  for (const alias of normalizedAliases) {
-    const partial = modes.find((mode) => normalizeModeSearchText(mode).includes(alias));
-    if (partial) {
-      return partial;
-    }
-  }
-  return undefined;
-}
-
-function isPlanMode(mode: AcpSessionMode): boolean {
-  return findModeByAliases([mode], ACP_PLAN_MODE_ALIASES) !== undefined;
-}
-
-function resolveRequestedModeId(input: {
-  readonly interactionMode: ProviderInteractionMode | undefined;
-  readonly runtimeMode: RuntimeMode;
-  readonly modeState: AcpSessionModeState | undefined;
-}): string | undefined {
-  const modeState = input.modeState;
-  if (!modeState) {
-    return undefined;
-  }
-
-  if (input.interactionMode === "plan") {
-    return findModeByAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)?.id;
-  }
-
-  if (input.runtimeMode === "approval-required") {
-    return (
-      findModeByAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES)?.id ??
-      findModeByAliases(modeState.availableModes, ACP_IMPLEMENT_MODE_ALIASES)?.id ??
-      modeState.availableModes.find((mode) => !isPlanMode(mode))?.id ??
-      modeState.currentModeId
-    );
-  }
-
-  return (
-    findModeByAliases(modeState.availableModes, ACP_IMPLEMENT_MODE_ALIASES)?.id ??
-    findModeByAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES)?.id ??
-    modeState.availableModes.find((mode) => !isPlanMode(mode))?.id ??
-    modeState.currentModeId
-  );
-}
-
 function applyRequestedSessionConfiguration<E>(input: {
   readonly runtime: AcpSessionRuntimeShape;
   readonly runtimeMode: RuntimeMode;
@@ -363,7 +298,7 @@ function applyRequestedSessionConfiguration<E>(input: {
       }
     | undefined;
   readonly mapError: (context: {
-    readonly cause: import("effect-acp/errors").AcpError;
+    readonly cause: import("../acp/AcpErrors.ts").AcpError;
     readonly method: "session/set_config_option" | "session/set_mode";
   }) => E;
 }): Effect.Effect<void, E> {
@@ -381,10 +316,11 @@ function applyRequestedSessionConfiguration<E>(input: {
       });
     }
 
-    const requestedModeId = resolveRequestedModeId({
+    const requestedModeId = resolveRequestedAcpSessionModeId({
       interactionMode: input.interactionMode,
       runtimeMode: input.runtimeMode,
       modeState: yield* input.runtime.getModeState,
+      aliases: CURSOR_ACP_SESSION_MODE_ALIASES,
     });
     if (!requestedModeId) {
       return;
@@ -439,7 +375,9 @@ export function makeCursorAdapter(
 
     const sessions = new Map<ThreadId, CursorSessionContext>();
     const withThreadLock = yield* makeAcpThreadLock();
-    const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+    const runtimeEventPubSub = yield* PubSub.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
@@ -829,18 +767,13 @@ export function makeCursorAdapter(
                   params,
                   "acp.jsonrpc",
                 );
-                if (input.runtimeMode === "full-access") {
-                  const autoApprovedOptionId = selectAcpFullAccessPermissionOptionId(
-                    params.options,
-                  );
-                  if (autoApprovedOptionId !== undefined) {
-                    return {
-                      outcome: {
-                        outcome: "selected" as const,
-                        optionId: autoApprovedOptionId,
-                      },
-                    };
-                  }
+                const policyOutcome = resolveAcpPermissionPolicy({
+                  runtimeMode: input.runtimeMode,
+                  interactionMode: ctx?.activeInteractionMode,
+                  options: params.options,
+                });
+                if (policyOutcome !== undefined) {
+                  return { outcome: policyOutcome };
                 }
                 const permissionRequest = parsePermissionRequest(params);
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
@@ -1119,10 +1052,11 @@ export function makeCursorAdapter(
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
         const resolvedModel = resolveCursorAcpBaseModelId(model);
+        const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
         yield* applyRequestedSessionConfiguration({
           runtime: ctx.acp,
           runtimeMode: ctx.session.runtimeMode,
-          interactionMode: input.interactionMode,
+          interactionMode,
           modelSelection:
             model === undefined
               ? undefined
@@ -1133,14 +1067,12 @@ export function makeCursorAdapter(
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
-        const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+        const promptParts: Array<Acp.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: input.input?.trim()
             ? withCursorPlanModePrompt({
                 text: input.input.trim(),
-                ...(input.interactionMode !== undefined
-                  ? { interactionMode: input.interactionMode }
-                  : {}),
+                interactionMode,
               })
             : undefined,
           attachments: input.attachments,
@@ -1180,7 +1112,7 @@ export function makeCursorAdapter(
 
         ctx.activeTurnId = turnId;
         ctx.activeTurnFailedToolDetail = undefined;
-        ctx.activeInteractionMode = input.interactionMode;
+        ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.completedPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();

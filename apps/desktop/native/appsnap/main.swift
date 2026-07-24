@@ -19,7 +19,7 @@ do {
             inputMonitoring: permissions.inputMonitoring,
             screenRecording: permissions.screenRecording
         )
-    case let .watch(outputDirectory, excludedBundleIdentifier):
+    case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger):
         _ = umask(0o077)
         try preparePrivateOutputDirectory(outputDirectory)
         _ = NSApplication.shared.setActivationPolicy(.accessory)
@@ -29,14 +29,25 @@ do {
             outputDirectory: outputDirectory,
             excludedBundleIdentifier: excludedBundleIdentifier
         )
-        let monitor = OptionChordMonitor(emitter: emitter) {
-            coordinator.handleGesture()
-        }
         let parentProcessMonitor = ParentProcessMonitor()
         parentProcessMonitor.start()
-        monitor.start()
 
-        withExtendedLifetime((coordinator, monitor, parentProcessMonitor)) {
+        let gestureSource: AnyObject
+        if externalTrigger {
+            let listener = ExternalTriggerListener(emitter: emitter) {
+                coordinator.handleGesture()
+            }
+            listener.start()
+            gestureSource = listener
+        } else {
+            let monitor = OptionChordMonitor(emitter: emitter) {
+                coordinator.handleGesture()
+            }
+            monitor.start()
+            gestureSource = monitor
+        }
+
+        withExtendedLifetime((coordinator, gestureSource, parentProcessMonitor)) {
             RunLoop.main.run()
         }
     }

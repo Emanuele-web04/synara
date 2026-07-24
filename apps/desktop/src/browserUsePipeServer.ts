@@ -21,8 +21,11 @@ const BROWSER_USE_MAX_QUEUED_OUTPUT_BYTES = 1024 * 1024;
 const BROWSER_USE_INITIAL_URL = "about:blank";
 const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 2_000;
 const BROWSER_USE_PANEL_READY_POLL_MS = 50;
-const BROWSER_USE_PIPE_DIR = "codex-browser-use";
+// The Browser plugin scans this fixed directory; OS.tmpdir() differs on macOS.
+const BROWSER_USE_DISCOVERY_DIR = "/tmp/codex-browser-use";
 const BROWSER_USE_PIPE_NAME_PREFIX = "synara-iab";
+// Production Browser plugins reject IAB backends from another build flavor.
+const BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod";
 export const SYNARA_BROWSER_USE_PIPE_ENV = "SYNARA_BROWSER_USE_PIPE_PATH";
 
 type BrowserUseRpcId = string | number;
@@ -63,9 +66,8 @@ interface BrowserUsePipeServerOptions {
 
 export function resolveDefaultBrowserUsePipePath(platform = process.platform): string {
   if (platform === "win32") return "";
-  return Path.join(
-    OS.tmpdir(),
-    BROWSER_USE_PIPE_DIR,
+  return Path.posix.join(
+    BROWSER_USE_DISCOVERY_DIR,
     `${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}-${Crypto.randomUUID()}.sock`,
   );
 }
@@ -371,7 +373,10 @@ export class BrowserUsePipeServer {
           name: "Synara In-app Browser",
           version: "0.1.0",
           type: "iab",
-          metadata: { codexSessionId },
+          metadata: {
+            codexAppBuildFlavor: BROWSER_USE_CODEX_APP_BUILD_FLAVOR,
+            codexSessionId,
+          },
         };
       }
       case "getTabs":

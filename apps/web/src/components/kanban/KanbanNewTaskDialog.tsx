@@ -72,10 +72,10 @@ import {
 } from "../../composerDraftStore";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
+import { ExpandedImageOverlay } from "../chat/ExpandedImageOverlay";
 import { useStore } from "../../store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
 import { appendKanbanTaskTranscript, buildKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
-import { KanbanTaskExpandedImageOverlay } from "./KanbanTaskExpandedImageOverlay";
 import { KanbanTaskExtrasMenu } from "./KanbanTaskExtrasMenu";
 import { KanbanTaskProjectPicker } from "./KanbanTaskProjectPicker";
 import { useKanbanTaskComposerMenu } from "./useKanbanTaskComposerMenu";
@@ -389,11 +389,7 @@ export function KanbanNewTaskDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogPopup
-        surface="solid"
-        className="max-w-3xl rounded-3xl"
-        onKeyDown={handleSubmitShortcut}
-      >
+      <DialogPopup className="max-w-3xl rounded-3xl" onKeyDown={handleSubmitShortcut}>
         {/* Linear-style breadcrumb header: project chip › title, same type size. */}
         <DialogHeader className="px-4 pt-3.5 pb-0">
           <div className="flex min-w-0 items-center gap-2">
@@ -595,7 +591,7 @@ export function KanbanNewTaskDialog({
             </div>
           </div>
         </div>
-        <KanbanTaskExpandedImageOverlay
+        <ExpandedImageOverlay
           expandedImage={expandedImage}
           onClose={closeExpandedImage}
           onNavigate={navigateExpandedImage}

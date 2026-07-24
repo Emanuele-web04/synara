@@ -22,20 +22,25 @@ import {
   allVisibleTriageRuns,
   applyAutomationEvent,
   automationAttentionCount,
+  automationAttentionLabel,
   automationFastIntervalLimitMessage,
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
   formatCadence,
+  formatCadenceLong,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
   isoFromDatetimeLocal,
   isFormSubmittable,
+  isTriageRun,
   maxIterationOptions,
   modelSelectionForProjectChange,
   providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
   runResultSummary,
+  runResultTitle,
   scheduleKindFromSchedule,
   scheduleFromForm,
   updateWeeklyScheduleDay,
@@ -141,6 +146,43 @@ describe("automation shared route helpers", () => {
     ).toBe("cron");
   });
 
+  it("spells out interval cadences in the long form", () => {
+    expect(formatCadenceLong({ type: "interval", everySeconds: 300 })).toBe("Every 5 minutes");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 60 })).toBe("Every minute");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 3600 })).toBe("Hourly");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 7200 })).toBe("Every 2 hours");
+    expect(formatCadenceLong({ type: "interval", everySeconds: 90 })).toBe("Every 90 seconds");
+    expect(formatCadenceLong({ type: "daily", timeOfDay: "09:00", timezone: "Europe/Rome" })).toBe(
+      "Daily at 9:00",
+    );
+  });
+
+  it("phrases the next-run countdown with pluralized units", () => {
+    const now = Date.parse("2026-06-19T00:00:00.000Z");
+    expect(formatNextRun("2026-06-19T00:00:30.000Z", now)).toBe("now");
+    expect(formatNextRun("2026-06-18T23:00:00.000Z", now)).toBe("now");
+    expect(formatNextRun("2026-06-19T00:01:30.000Z", now)).toBe("in 2 minutes");
+    expect(formatNextRun("2026-06-19T00:59:00.000Z", now)).toBe("in 59 minutes");
+    expect(formatNextRun("2026-06-19T09:00:00.000Z", now)).toBe("in 9 hours");
+    expect(formatNextRun("2026-06-22T00:00:00.000Z", now)).toBe("in 3 days");
+    expect(formatNextRun(null, now)).toBeNull();
+    expect(formatNextRun("not-a-date", now)).toBeNull();
+  });
+
+  it("labels only badly-ended or approval-blocked runs as needing attention", () => {
+    expect(automationAttentionLabel(runWith({ status: "failed" }))).toBe("Last run failed");
+    expect(automationAttentionLabel(runWith({ status: "cancelled" }))).toBe("Last run cancelled");
+    expect(automationAttentionLabel(runWith({ status: "interrupted" }))).toBe(
+      "Last run interrupted",
+    );
+    expect(automationAttentionLabel(runWith({ status: "waiting-for-approval" }))).toBe(
+      "Waiting for approval",
+    );
+    expect(automationAttentionLabel(runWith({ status: "succeeded" }))).toBeNull();
+    expect(automationAttentionLabel(runWith({ status: "running" }))).toBeNull();
+    expect(automationAttentionLabel(runWith({ status: "skipped" }))).toBeNull();
+  });
+
   it("counts only unread unarchived triage runs", () => {
     const unresolved = runWith({ id: runId("run-unresolved") });
     const read = runWith({
@@ -172,6 +214,37 @@ describe("automation shared route helpers", () => {
     ]);
   });
 
+  it("keeps silent successful runs in history without counting them for attention", () => {
+    const silent = runWith({
+      id: runId("run-silent"),
+      result: {
+        ...baseRun.result!,
+        decision: "silent",
+        unread: false,
+      },
+    });
+
+    expect(unresolvedTriageRuns([silent])).toEqual([]);
+    expect(automationAttentionCount([silent])).toBe(0);
+    expect(allVisibleTriageRuns([silent])).toEqual([silent]);
+  });
+
+  it("does not surface a reported result before its run finishes", () => {
+    const running = runWith({
+      status: "running",
+      finishedAt: null,
+      result: {
+        ...baseRun.result!,
+        decision: "notify",
+        unread: true,
+      },
+    });
+
+    expect(isTriageRun(running)).toBe(false);
+    expect(unresolvedTriageRuns([running])).toEqual([]);
+    expect(allVisibleTriageRuns([running])).toEqual([]);
+  });
+
   it("allows cancelling active and waiting runs only", () => {
     expect(canCancelAutomationRun(runWith({ status: "pending" }))).toBe(true);
     expect(canCancelAutomationRun(runWith({ status: "running" }))).toBe(true);
@@ -192,6 +265,20 @@ describe("automation shared route helpers", () => {
         }),
       ),
     ).toBe("Completed; open the thread for the reply");
+  });
+
+  it("exposes the structured automation result title", () => {
+    expect(
+      runResultTitle(
+        runWith({
+          result: {
+            ...baseRun.result!,
+            title: "Dependency updates available",
+          },
+        }),
+      ),
+    ).toBe("Dependency updates available");
+    expect(runResultTitle(runWith({ result: { ...baseRun.result!, title: "  " } }))).toBeNull();
   });
 
   it("round-trips one-shot datetimes through datetime-local values", () => {
@@ -380,6 +467,20 @@ describe("automation shared route helpers", () => {
       maxIterations: 3,
       completionPolicy: { type: "none" },
     });
+  });
+
+  it("round-trips the notification policy through form payloads", () => {
+    const form = {
+      ...formFromDefinition(
+        definitionWith({ notificationPolicy: "failed-runs-only" }),
+        "project-1",
+      ),
+      name: "Notify on failure",
+      prompt: "Check the build.",
+    };
+
+    expect(form.notificationPolicy).toBe("failed-runs-only");
+    expect(createInputFromForm(form).notificationPolicy).toBe("failed-runs-only");
   });
 
   it("serializes composer source thread provenance on create inputs", () => {
@@ -683,5 +784,66 @@ describe("automation shared route helpers", () => {
 
     expect(afterReconnectSnapshot.definitions).toEqual([definition]);
     expect(afterReconnectSnapshot.runs).toEqual([]);
+  });
+
+  it("keeps newer live memory when an older snapshot arrives later", () => {
+    const staleMemory = {
+      automationId: baseDefinition.id,
+      content: "Older persisted context.",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    };
+    const newerMemory = {
+      ...staleMemory,
+      content: "Newest live context.",
+      updatedAt: "2026-06-19T10:03:00.000Z",
+    };
+    const afterLiveUpdate = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [], memories: [staleMemory] },
+      { type: "memory-upserted", memory: newerMemory },
+    );
+
+    const afterLateSnapshot = applyAutomationEvent(afterLiveUpdate, {
+      type: "snapshot",
+      definitions: [baseDefinition],
+      runs: [],
+      memories: [staleMemory],
+    });
+
+    expect(afterLateSnapshot.memories).toEqual([newerMemory]);
+  });
+
+  it("keeps live memory omitted by a snapshot while its automation remains visible", () => {
+    const liveMemory = {
+      automationId: baseDefinition.id,
+      content: "Memory written after the snapshot query began.",
+      updatedAt: "2026-06-19T10:03:00.000Z",
+    };
+
+    const afterLateSnapshot = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [], memories: [liveMemory] },
+      {
+        type: "snapshot",
+        definitions: [baseDefinition],
+        runs: [],
+        memories: [],
+      },
+    );
+
+    expect(afterLateSnapshot.memories).toEqual([liveMemory]);
+  });
+
+  it("applies persistent-memory stream updates without requiring a new snapshot", () => {
+    const memory = {
+      automationId: baseDefinition.id,
+      content: "Remember the latest successful SHA.",
+      updatedAt: "2026-06-19T10:03:00.000Z",
+    };
+
+    const updated = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [], memories: [] },
+      { type: "memory-upserted", memory },
+    );
+
+    expect(updated.memories).toEqual([memory]);
   });
 });

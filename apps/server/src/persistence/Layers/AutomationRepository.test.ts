@@ -11,6 +11,7 @@ import {
   type AutomationCreateInput,
 } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import { AutomationRepositoryLive } from "./AutomationRepository.ts";
@@ -68,6 +69,83 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("decodes a pre-007 persisted definition row with additive defaults", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      yield* sql`
+        INSERT INTO automation_definitions (
+          automation_id,
+          project_id,
+          name,
+          prompt,
+          schedule_json,
+          enabled,
+          next_run_at,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          worktree_mode,
+          mode,
+          target_thread_id,
+          max_iterations,
+          stop_on_error,
+          completion_policy_json,
+          completion_policy_version,
+          minimum_interval_seconds,
+          max_runtime_seconds,
+          retry_policy_json,
+          misfire_policy,
+          acknowledged_risks_json,
+          iteration_count,
+          created_at,
+          updated_at,
+          archived_at
+        ) VALUES (
+          'automation-pre-007',
+          'project-pre-007',
+          'Legacy definition',
+          'Keep working.',
+          '{"type":"manual"}',
+          1,
+          NULL,
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'approval-required',
+          'default',
+          'auto',
+          'standalone',
+          NULL,
+          NULL,
+          1,
+          '{"type":"none"}',
+          0,
+          60,
+          3600,
+          '{"type":"none"}',
+          'coalesce',
+          '[]',
+          0,
+          '2026-06-16T10:00:00.000Z',
+          '2026-06-16T10:00:00.000Z',
+          NULL
+        )
+      `;
+
+      const loaded = yield* repository.getDefinitionById({
+        id: AutomationId.makeUnsafe("automation-pre-007"),
+      });
+
+      assert.isTrue(Option.isSome(loaded));
+      if (Option.isNone(loaded)) {
+        assert.fail("Expected the pre-007 row to load.");
+      }
+      assert.isNull(loaded.value.proposalState);
+      assert.strictEqual(loaded.value.notificationPolicy, "all");
+      assert.strictEqual(loaded.value.heartbeatCooldownSeconds, 60);
+    }),
+  );
+
   it.effect("claims only expired scheduler leases", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
@@ -95,6 +173,256 @@ layer("AutomationRepository", (it) => {
       assert.isTrue(firstClaim);
       assert.isFalse(blockedClaim);
       assert.isTrue(reclaimedClaim);
+    }),
+  );
+
+  it.effect("persists automation memory without including bodies in list snapshots", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-memory");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: createInputForProject("project-memory"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const first = yield* repository.upsertMemory({
+        automationId,
+        content: "first memory",
+        updatedAt: "2026-06-16T10:01:00.000Z",
+      });
+      const replaced = yield* repository.upsertMemory({
+        automationId,
+        content: "replacement memory",
+        updatedAt: "2026-06-16T10:02:00.000Z",
+      });
+      const listed = yield* repository.list({
+        projectId: ProjectId.makeUnsafe("project-memory"),
+      });
+      const loaded = yield* repository.getMemory({ automationId });
+
+      assert.strictEqual(first.content, "first memory");
+      assert.strictEqual(replaced.content, "replacement memory");
+      assert.deepStrictEqual(Option.getOrNull(loaded), replaced);
+      assert.deepStrictEqual(listed.memories, []);
+    }),
+  );
+
+  it.effect("creates one stable installation salt", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      const first = yield* repository.getOrCreateInstallSalt();
+      const second = yield* repository.getOrCreateInstallSalt();
+
+      assert.strictEqual(second, first);
+      assert.isAbove(first.length, 20);
+    }),
+  );
+
+  it.effect("stores deferred runs and makes them due at their retry time", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-deferred");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: createInputForProject("project-deferred"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const pending = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-deferred"),
+        automationId,
+        projectId: ProjectId.makeUnsafe("project-deferred"),
+        threadId: ThreadId.makeUnsafe("thread-deferred"),
+        trigger: { type: "scheduled" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        deferredUntil: "2026-06-16T10:00:15.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      assert.strictEqual(pending.deferredUntil, "2026-06-16T10:00:15.000Z");
+      assert.lengthOf(
+        yield* repository.listDueDeferredRuns({
+          now: "2026-06-16T10:00:14.999Z",
+          limit: 3,
+        }),
+        0,
+      );
+      assert.deepStrictEqual(
+        (yield* repository.listDueDeferredRuns({
+          now: "2026-06-16T10:00:15.000Z",
+          limit: 3,
+        })).map((run) => run.id),
+        [pending.id],
+      );
+
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:00:15.000Z",
+      });
+      assert.lengthOf(
+        yield* repository.listDueDeferredRuns({
+          now: "2026-06-16T10:00:15.000Z",
+          limit: 3,
+        }),
+        0,
+      );
+      assert.isNull(
+        yield* repository.getEarliestNextRunAt({
+          now: "2026-06-16T10:00:15.000Z",
+        }),
+      );
+      assert.isFalse(
+        yield* repository.reserveDeferredRun({
+          id: pending.id,
+          threadId: ThreadId.makeUnsafe("thread-deferred"),
+          reservedAt: "2026-06-16T10:00:15.000Z",
+        }),
+      );
+    }),
+  );
+
+  it.effect("does not recover deferred runs before their retry time", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-deferred-recovery");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: createInputForProject("project-deferred-recovery"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const deferred = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-deferred-recovery"),
+        automationId,
+        projectId: ProjectId.makeUnsafe("project-deferred-recovery"),
+        threadId: null,
+        trigger: { type: "scheduled" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        deferredUntil: "2026-06-16T10:00:15.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      assert.notInclude(
+        (yield* repository.listRecoverableRuns({ limit: 10 })).map((run) => run.id),
+        deferred.id,
+      );
+    }),
+  );
+
+  it.effect("atomically reserves only one deferred run for a target thread", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const targetThreadId = ThreadId.makeUnsafe("thread-shared-deferred-target");
+      const automationIds = [
+        AutomationId.makeUnsafe("automation-deferred-reservation-a"),
+        AutomationId.makeUnsafe("automation-deferred-reservation-b"),
+      ] as const;
+      yield* Effect.forEach(
+        automationIds,
+        (automationId) =>
+          repository.createDefinition({
+            id: automationId,
+            input: createInputForProject("project-deferred-reservation"),
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      const runs = yield* Effect.forEach(automationIds, (automationId, index) =>
+        repository.createRun({
+          id: AutomationRunId.makeUnsafe(`run-deferred-reservation-${index}`),
+          automationId,
+          projectId: ProjectId.makeUnsafe("project-deferred-reservation"),
+          threadId: null,
+          trigger: { type: "scheduled" },
+          scheduledFor: "2026-06-16T10:00:00.000Z",
+          deferredUntil: "2026-06-16T10:00:15.000Z",
+          permissionSnapshot,
+          now: "2026-06-16T10:00:00.000Z",
+        }),
+      );
+
+      const reservations = yield* Effect.all(
+        runs.map((run) =>
+          repository.reserveDeferredRun({
+            id: run.id,
+            threadId: targetThreadId,
+            reservedAt: "2026-06-16T10:00:15.000Z",
+          }),
+        ),
+        { concurrency: "unbounded" },
+      );
+      const reloaded = yield* repository.list({
+        projectId: ProjectId.makeUnsafe("project-deferred-reservation"),
+      });
+
+      assert.strictEqual(reservations.filter(Boolean).length, 1);
+      assert.strictEqual(
+        reloaded.runs.filter((run) => run.threadId === targetThreadId && run.deferredUntil === null)
+          .length,
+        1,
+      );
+      assert.strictEqual(reloaded.runs.filter((run) => run.deferredUntil !== null).length, 1);
+    }),
+  );
+
+  it.effect("lists run history directly for one automation", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const targetAutomationId = AutomationId.makeUnsafe("automation-history-target");
+      const noisyAutomationId = AutomationId.makeUnsafe("automation-history-noise");
+      yield* Effect.forEach(
+        [targetAutomationId, noisyAutomationId],
+        (automationId) =>
+          repository.createDefinition({
+            id: automationId,
+            input: createInputForProject("project-history"),
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-history-target"),
+        automationId: targetAutomationId,
+        projectId: ProjectId.makeUnsafe("project-history"),
+        threadId: null,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* Effect.forEach(
+        Array.from({ length: 3 }, (_, index) => index),
+        (index) =>
+          repository.createRun({
+            id: AutomationRunId.makeUnsafe(`run-history-noise-${index}`),
+            automationId: noisyAutomationId,
+            projectId: ProjectId.makeUnsafe("project-history"),
+            threadId: null,
+            trigger: { type: "manual" },
+            scheduledFor: `2026-06-16T10:0${index + 1}:00.000Z`,
+            permissionSnapshot,
+            now: `2026-06-16T10:0${index + 1}:00.000Z`,
+          }),
+        { discard: true },
+      );
+
+      const history = yield* repository.listRunsForDefinition({
+        automationId: targetAutomationId,
+        limit: 2,
+      });
+
+      assert.deepStrictEqual(
+        history.map((run) => run.id),
+        [AutomationRunId.makeUnsafe("run-history-target")],
+      );
     }),
   );
 
@@ -202,6 +530,16 @@ layer("AutomationRepository", (it) => {
         nextRunAt: "2026-06-16T10:10:00.000Z",
         updatedAt: "2026-06-16T10:00:00.000Z",
       });
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-4-pending"),
+        input: {
+          ...createInputForProject("project-4"),
+          schedule: { type: "interval", everySeconds: 300 },
+          enabled: true,
+          proposalState: "pending",
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
 
       const due = yield* repository.listDueDefinitions({
         now: "2026-06-16T10:00:00.000Z",
@@ -212,6 +550,45 @@ layer("AutomationRepository", (it) => {
         due.map((definition) => definition.id),
         [AutomationId.makeUnsafe("automation-4-due")],
       );
+    }),
+  );
+
+  it.effect("resolves a pending proposal exactly once", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const id = AutomationId.makeUnsafe("automation-proposal-race");
+      yield* repository.createDefinition({
+        id,
+        input: {
+          ...createInputForProject("project-proposal-race"),
+          enabled: false,
+          proposalState: "pending",
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const resolutions = yield* Effect.all(
+        [
+          repository.resolvePendingProposal({
+            id,
+            resolution: "accepted",
+            nextRunAt: "2026-06-16T10:05:00.000Z",
+            updatedAt: "2026-06-16T10:01:00.000Z",
+            archivedAt: null,
+          }),
+          repository.resolvePendingProposal({
+            id,
+            resolution: "dismissed",
+            nextRunAt: null,
+            updatedAt: "2026-06-16T10:01:00.000Z",
+            archivedAt: "2026-06-16T10:01:00.000Z",
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      assert.strictEqual(resolutions.filter(Boolean).length, 1);
     }),
   );
 
@@ -1044,7 +1421,7 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("ignores due heartbeat rows blocked by a pending stop evaluation", () =>
+  it.effect("keeps due heartbeats selectable while a stop evaluation is pending", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
@@ -1105,10 +1482,10 @@ layer("AutomationRepository", (it) => {
         finishedAt: "2020-01-01T10:01:00.000Z",
       });
 
-      const blockedEarliest = yield* repository.getEarliestNextRunAt({
+      const pendingEarliest = yield* repository.getEarliestNextRunAt({
         now: "2020-01-01T10:02:00.000Z",
       });
-      assert.notStrictEqual(blockedEarliest, "2020-01-01T10:00:30.000Z");
+      assert.strictEqual(pendingEarliest, "2020-01-01T10:00:30.000Z");
 
       yield* repository.markRunResult({
         id: runId,
@@ -1133,7 +1510,7 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("filters pending stop checks before applying the due definition limit", () =>
+  it.effect("returns pending-stop heartbeats so the service can defer them", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
@@ -1223,7 +1600,7 @@ layer("AutomationRepository", (it) => {
 
       assert.deepStrictEqual(
         due.map((definition) => definition.id),
-        [AutomationId.makeUnsafe("automation-due-ready")],
+        [AutomationId.makeUnsafe("automation-due-pending-a")],
       );
     }),
   );

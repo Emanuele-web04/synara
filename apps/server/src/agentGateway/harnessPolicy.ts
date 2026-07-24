@@ -1,7 +1,9 @@
 import type { ProviderKind } from "@synara/contracts";
 
+import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
+
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-07-16.2";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-07-23.6";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -17,12 +19,21 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
   const controlPolicy = capabilities.gatewayControlAvailable
     ? [
         "Use the synara_* tools for Synara threads, projects, automations, and coordination.",
+        "For thread discovery and diagnosis, use synara_list_threads, synara_read_thread, synara_read_thread_activity, synara_read_thread_events, synara_read_thread_runtime_events, and synara_diagnose_thread before inspecting Synara's SQLite files or process logs. Fall back to host storage only when a tool's coverage metadata says the required evidence is unavailable.",
         "Provider-native subagent or Task tools are implementation details: they do not create Synara threads and must not substitute for an explicit request to create Synara threads.",
-        "For a plural thread request, call synara_create_threads exactly once. The array length is the exact requested count.",
+        "For a plural thread request, submit one exact synara_create_threads plan. The array length is the exact requested count.",
+        "If synara_create_threads rejects the plan during validation or preflight before returning an operationId, correct that same plan and retry it with the same requestId. This is safe because no durable operation, thread, or worktree was created.",
         "Use synara_capabilities to select canonical provider, model, and option values. Never guess a model slug or silently substitute a provider or model.",
         "Provider option keys are not interchangeable: Codex uses options.reasoningEffort and Claude Agent uses options.effort. Follow synara_capabilities.targetConstruction for every provider instead of inspecting Synara source code.",
         "When results are requested, call synara_wait_for_threads for the created thread ids, wait for every requested result, then synthesize all outcomes.",
-        "Report failures as outcomes. Do not create replacement threads unless the user gives a new instruction to do so.",
+        "After synara_create_threads returns an operationId, retries must keep the same requestId and exact plan. Report terminal operation failures as outcomes; do not create replacement threads unless the user gives a new instruction.",
+        "Synara automations support heartbeat and standalone modes plus interval, once, daily, weekdays, weekly, and cron schedules. Existing everyMinutes heartbeat calls remain supported. Use fastInterval: true only when the user explicitly accepts a sub-minute bounded loop.",
+        AUTOMATION_AUTHORING_GUIDANCE,
+        "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
+        "Before synara_update_automation, call synara_view_automation and resend the complete mutable configuration, including unchanged fields. Updates are full replacement and partial payloads are rejected.",
+        'Automation-dispatched turns receive an identity/run/memory envelope in the current user message. Only that current turn is automation-dispatched; the status never carries into a later manual follow-up such as "continue", even in the same thread.',
+        'During an automation-dispatched turn, persist durable context with synara_update_automation_memory {"memory": "..."} before finishing; memory is full replacement, DB-backed, and capped at 32 KiB.',
+        'Every automation-dispatched turn must finish by calling synara_report_automation_result. Use decision "silent" only for a successful run with nothing requiring user attention; otherwise use "notify" with a concise title and summary. Failures remain visible regardless of this decision or the automation notification policy. Never call this tool for a manual follow-up turn.',
       ]
     : [
         "Synara MCP control is unavailable in this provider session. Do not claim that Synara threads, projects, or automations were created or changed.",

@@ -37,6 +37,20 @@ import type { Effect, Stream } from "effect";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 
+export type ProviderRuntimeEventPumpStatus = "starting" | "healthy" | "recovering" | "degraded";
+
+export interface ProviderRuntimeEventPumpHealth {
+  readonly provider: ProviderKind;
+  readonly status: ProviderRuntimeEventPumpStatus;
+  readonly consecutiveFailures: number;
+  readonly updatedAt: string;
+  readonly lastEventAt?: string;
+  readonly lastError?: string;
+  readonly quarantinedEvents?: number;
+  readonly lastQuarantinedEventId?: string;
+  readonly lastQuarantinedAt?: string;
+}
+
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
@@ -189,6 +203,14 @@ export interface ProviderServiceShape {
    * are still live, and then close the publication bus. Safe to call repeatedly.
    */
   readonly closeRuntimeEvents: Effect.Effect<void>;
+
+  /**
+   * Snapshot the supervised runtime-event pumps. The state is operational
+   * evidence for reconciliation and diagnostics, not provider availability.
+   */
+  readonly getRuntimeEventPumpHealth?: () => Effect.Effect<
+    ReadonlyArray<ProviderRuntimeEventPumpHealth>
+  >;
 
   /**
    * Canonical provider runtime event stream.

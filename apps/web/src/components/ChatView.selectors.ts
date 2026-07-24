@@ -9,7 +9,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 
-import type { AppState } from "../store";
+import type { AppState } from "../storeState";
 import { collectByIds, getThreadFromState } from "../threadDerivation";
 import type {
   ChatMessage,

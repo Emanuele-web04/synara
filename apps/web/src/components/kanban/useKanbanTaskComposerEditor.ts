@@ -32,12 +32,12 @@ import {
   formatComposerMentionToken,
   skillMentionPrefix,
 } from "~/lib/composerMentions";
-import type { TerminalContextDraft } from "~/lib/terminalContext";
-import { useComposerDraftStore } from "../../composerDraftStore";
 import {
-  areKanbanTaskTerminalContextIdsEqual,
-  syncKanbanTaskTerminalContextsByIds,
-} from "./KanbanNewTaskDialog.logic";
+  syncTerminalContextsByIds,
+  terminalContextIdListsEqual,
+  type TerminalContextDraft,
+} from "~/lib/terminalContext";
+import { useComposerDraftStore } from "../../composerDraftStore";
 
 interface UseKanbanTaskComposerEditorInput {
   readonly promptRef: MutableRefObject<string>;
@@ -262,7 +262,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
       });
       return;
     }
-    if (item.type === "plugin") {
+    if (item.type === "plugin" || item.type === "thread") {
       applyComposerTriggerReplacement({
         snapshot,
         trigger,
@@ -315,12 +315,12 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
   ) => {
     promptRef.current = nextPrompt;
     setPrompt(nextPrompt);
-    if (!areKanbanTaskTerminalContextIdsEqual(composerTerminalContexts, terminalContextIds)) {
+    if (!terminalContextIdListsEqual(composerTerminalContexts, terminalContextIds)) {
       useComposerDraftStore
         .getState()
         .setTerminalContexts(
           scratchThreadId,
-          syncKanbanTaskTerminalContextsByIds(composerTerminalContexts, terminalContextIds),
+          syncTerminalContextsByIds(composerTerminalContexts, terminalContextIds),
         );
     }
     setComposerCursor(nextCursor);

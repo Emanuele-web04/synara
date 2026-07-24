@@ -141,6 +141,13 @@ export function buildComposerMenuSelectionKey(input: {
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
 }
 
+export function buildTranscriptAutoFollowSignal(input: {
+  readonly messageCount: number;
+  readonly tailKey: string;
+}): string {
+  return `${input.messageCount}\u001f${input.tailKey}`;
+}
+
 export interface PromptHistoryNavigationState {
   index: number;
   draft: string;
@@ -431,6 +438,15 @@ export function resolveEnvironmentPanelVisible(input: {
   environmentPanelOpen: boolean;
 }): boolean {
   return input.environmentEnabled && input.environmentPanelOpen;
+}
+
+// Normal project toolbars stay stable while repository discovery is pending. Studio folders are
+// casual context, however, so they must opt into Git UI only after a positive repository result.
+export function resolveGitRepoUiState(input: {
+  isStudioContainer: boolean;
+  queriedIsRepo: boolean | undefined;
+}): boolean {
+  return input.queriedIsRepo ?? !input.isStudioContainer;
 }
 
 // The composer live strip prefers the turn's computed diff (the

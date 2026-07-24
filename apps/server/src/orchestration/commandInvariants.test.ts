@@ -26,6 +26,7 @@ const now = new Date().toISOString();
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 2,
   updatedAt: now,
+  spaces: [],
   projects: [
     {
       id: ProjectId.makeUnsafe("project-a"),

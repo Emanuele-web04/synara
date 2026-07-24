@@ -13,9 +13,8 @@ import {
   type ProviderModelDescriptor,
 } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
-import type * as EffectAcpErrors from "effect-acp/errors";
-import * as EffectAcpErrorsRuntime from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -31,7 +30,6 @@ export interface DroidAcpRuntimeSettings {
   readonly binaryPath?: string;
   readonly model?: string;
   readonly reasoningEffort?: DroidModelOptions["reasoningEffort"];
-  readonly skipPermissionsUnsafe?: boolean;
 }
 
 export interface DroidAcpRuntimeInput extends Omit<
@@ -43,12 +41,12 @@ export interface DroidAcpRuntimeInput extends Omit<
 }
 
 export interface DroidAcpModelSelectionErrorContext {
-  readonly cause: EffectAcpErrors.AcpError;
+  readonly cause: AcpErrors.AcpError;
   readonly method: "session/set_config_option";
 }
 
 export interface DroidAcpModeSelectionErrorContext {
-  readonly cause: EffectAcpErrors.AcpError;
+  readonly cause: AcpErrors.AcpError;
   readonly method: "session/set_config_option";
 }
 
@@ -107,9 +105,6 @@ export function buildDroidAcpSpawnInput(
   cwd: string,
 ): AcpSpawnInput {
   const args = ["exec", "--output-format", "acp"];
-  if (droidSettings?.skipPermissionsUnsafe === true) {
-    args.push("--skip-permissions-unsafe");
-  }
   const appendSystemPrompt = droidSettings?.appendSystemPrompt?.trim();
   if (appendSystemPrompt) {
     args.push("--append-system-prompt", appendSystemPrompt);
@@ -131,15 +126,13 @@ export function buildDroidAcpSpawnInput(
   };
 }
 
-function availableAuthMethodIds(
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): ReadonlySet<string> {
+function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): ReadonlySet<string> {
   return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
 }
 
 export const resolveDroidAcpAuthMethodId = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+  initializeResult: Acp.InitializeResponse,
+): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
     if (hasDroidApiKeyEnv() && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
@@ -148,7 +141,7 @@ export const resolveDroidAcpAuthMethodId = (
     if (authMethodIds.has(DROID_DEVICE_PAIRING_AUTH_METHOD_ID)) {
       return DROID_DEVICE_PAIRING_AUTH_METHOD_ID;
     }
-    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+    return yield* new AcpErrors.AcpRequestError({
       code: -32602,
       errorMessage: "Droid ACP authentication is unavailable.",
       data: {
@@ -160,7 +153,7 @@ export const resolveDroidAcpAuthMethodId = (
 
 export const makeDroidAcpRuntime = (
   input: DroidAcpRuntimeInput,
-): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
+): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
@@ -193,7 +186,7 @@ export function applyDroidAcpModelSelection<E>(input: {
   readonly mapError: (context: DroidAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
-    const mapError = (cause: EffectAcpErrors.AcpError) =>
+    const mapError = (cause: AcpErrors.AcpError) =>
       input.mapError({ cause, method: "session/set_config_option" });
     const model = input.model.trim();
     if (model) {
@@ -232,24 +225,24 @@ export function applyDroidAcpInteractionMode<E>(input: {
 }
 
 export function flattenDroidConfigOptions(
-  options: EffectAcpSchema.SessionConfigSelectOptions,
-): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
+  options: Acp.SessionConfigSelectOptions,
+): ReadonlyArray<Acp.SessionConfigSelectOption> {
   return options.flatMap((entry) => ("options" in entry ? entry.options : [entry]));
 }
 
 function findDroidSelectConfig(
-  options: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  options: ReadonlyArray<Acp.SessionConfigOption>,
   input: { readonly id: string; readonly category: string },
-): Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined {
+): Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined {
   return options.find(
-    (option): option is Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> =>
+    (option): option is Extract<Acp.SessionConfigOption, { readonly type: "select" }> =>
       option.type === "select" && (option.id === input.id || option.category === input.category),
   );
 }
 
 function droidModelDescriptor(
-  model: EffectAcpSchema.SessionConfigSelectOption,
-  reasoning: Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined,
+  model: Acp.SessionConfigSelectOption,
+  reasoning: Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined,
 ): ProviderModelDescriptor {
   const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
   const optionDescriptors = reasoning
@@ -288,7 +281,7 @@ function droidModelDescriptor(
  */
 export function discoverDroidAcpModels(
   runtime: Pick<AcpSessionRuntimeShape, "getConfigOptions" | "setConfigOption">,
-): Effect.Effect<ProviderListModelsResult, EffectAcpErrors.AcpError> {
+): Effect.Effect<ProviderListModelsResult, AcpErrors.AcpError> {
   return Effect.gen(function* () {
     const initialOptions = yield* runtime.getConfigOptions;
     const modelConfig = findDroidSelectConfig(initialOptions, {
@@ -296,7 +289,7 @@ export function discoverDroidAcpModels(
       category: "model",
     });
     if (!modelConfig) {
-      return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+      return yield* new AcpErrors.AcpRequestError({
         code: -32602,
         errorMessage: "Droid ACP did not advertise a model configuration option.",
       });

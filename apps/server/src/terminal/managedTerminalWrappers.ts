@@ -502,13 +502,3 @@ export function prepareManagedTerminalAgentWrappers(options: {
     zshRootDir: options.zshDir,
   });
 }
-
-export function prependManagedTerminalAgentWrapperPath(
-  env: NodeJS.ProcessEnv,
-  managedWrapperState: {
-    binDir: string | null;
-    zshDir: string | null;
-  },
-): NodeJS.ProcessEnv {
-  return applyManagedTerminalWrapperEnvState(env, managedWrapperState);
-}

@@ -2,7 +2,7 @@
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { ChevronRightIcon } from "~/lib/icons";
-import type * as React from "react";
+import * as React from "react";
 
 import { cn } from "~/lib/utils";
 import {
@@ -15,7 +15,31 @@ import { SWITCH_THUMB_CLASS_NAME, SWITCH_TRACK_CLASS_NAME } from "./switch";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
 
-const Menu = MenuPrimitive.Root;
+type MenuProps = MenuPrimitive.Root.Props & {
+  /** Keep a controlled menu open while one of its portalled submenus is being entered. */
+  keepOpenOnSubmenuInteraction?: boolean;
+};
+
+function Menu({ keepOpenOnSubmenuInteraction = false, onOpenChange, ...props }: MenuProps) {
+  const handleOpenChange: NonNullable<MenuPrimitive.Root.Props["onOpenChange"]> = (
+    nextOpen,
+    eventDetails,
+  ) => {
+    if (
+      !nextOpen &&
+      keepOpenOnSubmenuInteraction &&
+      (eventDetails.reason === "sibling-open" ||
+        eventDetails.reason === "trigger-hover" ||
+        eventDetails.reason === "focus-out")
+    ) {
+      eventDetails.cancel();
+      return;
+    }
+    onOpenChange?.(nextOpen, eventDetails);
+  };
+
+  return <MenuPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+}
 
 const MenuPortal = MenuPrimitive.Portal;
 
@@ -316,8 +340,46 @@ function MenuShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
   );
 }
 
-function MenuSub(props: MenuPrimitive.SubmenuRoot.Props) {
-  return <MenuPrimitive.SubmenuRoot data-slot="menu-sub" {...props} />;
+type MenuSubProps = MenuPrimitive.SubmenuRoot.Props & {
+  /** Keep a hover-open submenu mounted when focus moves into its portalled popup. */
+  keepOpenOnFocusOut?: boolean;
+};
+
+function FocusStableMenuSub({
+  defaultOpen,
+  onOpenChange,
+  open: controlledOpen,
+  ...props
+}: MenuPrimitive.SubmenuRoot.Props) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const handleOpenChange: NonNullable<MenuPrimitive.SubmenuRoot.Props["onOpenChange"]> = (
+    nextOpen,
+    eventDetails,
+  ) => {
+    // Base UI can report focus-out while the pointer is already inside the submenu's
+    // portalled popup. Let the parent menu's outside/sibling handling own real dismissal.
+    if (!nextOpen && eventDetails.reason === "focus-out") return;
+    if (controlledOpen === undefined) setUncontrolledOpen(nextOpen);
+    onOpenChange?.(nextOpen, eventDetails);
+  };
+
+  return (
+    <MenuPrimitive.SubmenuRoot
+      data-slot="menu-sub"
+      open={open}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  );
+}
+
+function MenuSub({ keepOpenOnFocusOut = false, ...props }: MenuSubProps) {
+  return keepOpenOnFocusOut ? (
+    <FocusStableMenuSub {...props} />
+  ) : (
+    <MenuPrimitive.SubmenuRoot data-slot="menu-sub" {...props} />
+  );
 }
 
 function MenuSubTrigger({

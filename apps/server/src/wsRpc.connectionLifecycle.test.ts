@@ -3,7 +3,7 @@ import http from "node:http";
 import type { AuthSessionId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
-import { HttpRouter } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
@@ -22,6 +22,12 @@ import { ServerConfig } from "./config";
 import { makeBoundedNodeHttpServer, MAX_WEBSOCKET_MESSAGE_BYTES } from "./nodeHttpServer";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { makeWebsocketRpcRouteLayer } from "./wsRpc";
+import {
+  makeWsConnectionSessions,
+  WS_CONNECTION_SESSION_HEADER,
+  WsConnectionSessions,
+  type WsConnectionSessionsShape,
+} from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
 
 const PingRpc = Rpc.make("test.ping", {
@@ -41,6 +47,8 @@ interface RunningTestServer {
   readonly transportFinalizers: { count: number };
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
   readonly observedSlowRpc: { started: number; completed: number; finalized: number };
+  readonly connectionSessions: WsConnectionSessionsShape;
+  readonly observedConnectionSessionKeys: string[];
   readonly close: () => Promise<void>;
 }
 
@@ -246,10 +254,17 @@ async function startTestServer(): Promise<RunningTestServer> {
         ),
     }),
   );
+  const connectionSessions = await Effect.runPromise(makeWsConnectionSessions);
+  const observedConnectionSessionKeys: string[] = [];
   const rpcHttpEffectSource = RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(
     Effect.provide(handlerLayer.pipe(Layer.provideMerge(serializationLayer))),
     Effect.map((httpEffect) =>
-      httpEffect.pipe(
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const sessionKey = request.headers[WS_CONNECTION_SESSION_HEADER];
+        if (typeof sessionKey === "string") observedConnectionSessionKeys.push(sessionKey);
+        return yield* httpEffect;
+      }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             transportFinalizers.count += 1;
@@ -258,7 +273,9 @@ async function startTestServer(): Promise<RunningTestServer> {
       ),
     ),
   );
-  const routeLayer = makeWebsocketRpcRouteLayer(rpcHttpEffectSource);
+  const routeLayer = makeWebsocketRpcRouteLayer(rpcHttpEffectSource).pipe(
+    Layer.provide(Layer.succeed(WsConnectionSessions, connectionSessions)),
+  );
   const scope = await Effect.runPromise(Scope.make("sequential"));
   const context = await Effect.runPromise(
     Layer.buildWithScope(
@@ -295,6 +312,8 @@ async function startTestServer(): Promise<RunningTestServer> {
     transportFinalizers,
     observedRpc,
     observedSlowRpc,
+    connectionSessions,
+    observedConnectionSessionKeys,
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
   };
 }
@@ -453,6 +472,66 @@ describe("websocket RPC payload admission", () => {
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
+  it("exposes the authenticated session to RPC handlers for the connection lifetime", async () => {
+    const server = await startTestServer();
+    try {
+      // Regression: RPC handlers run on fibers forked from the layer-build
+      // scope, so the upgrade's authenticated role/principal must travel via
+      // the connection-session registry, not fiber context (the owner-only
+      // external MCP methods failed for everyone when this broke).
+      const issued = await Effect.runPromise(server.sessions.issue({ role: "owner" }));
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      const socket = await connect(featureSocketUrl(server, websocket.token));
+
+      expect(server.observedConnectionSessionKeys).toHaveLength(1);
+      const sessionKey = server.observedConnectionSessionKeys[0]!;
+      expect(server.connectionSessions.lookup(sessionKey)).toEqual({
+        role: "owner",
+        attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
+      });
+
+      socket.close();
+      await waitForClose(socket);
+      await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
+    } finally {
+      await server.close();
+    }
+  }, 4_000);
+
+  it("closes with an established socket and finalizes its RPC work", async () => {
+    const server = await startTestServer();
+    let serverClosed = false;
+    try {
+      const connected = await connectSession(server);
+      connected.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "200",
+          tag: "test.slow",
+          payload: {},
+          headers: [],
+        }),
+      );
+      await waitForObserved(() => server.observedSlowRpc.started === 1);
+      const socketClosed = waitForClose(connected.socket);
+
+      await expect(server.close()).resolves.toBeUndefined();
+      serverClosed = true;
+      await socketClosed;
+
+      expect(server.observedSlowRpc).toEqual({
+        started: 1,
+        completed: 0,
+        finalized: 1,
+      });
+      expect(server.transportFinalizers.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      if (!serverClosed) await server.close();
+    }
+  }, 2_000);
+
   it("interrupts and finalizes cancelled request work exactly once", async () => {
     const server = await startTestServer();
     try {

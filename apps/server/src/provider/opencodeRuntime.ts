@@ -756,22 +756,46 @@ export function toOpenCodeFileParts(input: {
   return parts;
 }
 
-export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): PermissionRuleset {
-  if (runtimeMode === "full-access") {
-    return [{ permission: "*", pattern: "*", action: "allow" }];
+export function buildOpenCodePermissionRules(
+  runtimeMode: RuntimeMode,
+  interactionMode: "default" | "plan" = "default",
+): PermissionRuleset {
+  if (interactionMode === "plan") {
+    // OpenCode evaluates the last matching rule. Start closed, then allow only
+    // read-only planning tools. This also blocks custom/MCP tools and future
+    // mutating tools that a short denylist would accidentally leave enabled.
+    return [
+      { permission: "*", pattern: "*", action: "deny" },
+      { permission: "read", pattern: "*", action: "allow" },
+      { permission: "glob", pattern: "*", action: "allow" },
+      { permission: "grep", pattern: "*", action: "allow" },
+      { permission: "list", pattern: "*", action: "allow" },
+      { permission: "lsp", pattern: "*", action: "allow" },
+      { permission: "webfetch", pattern: "*", action: "allow" },
+      { permission: "websearch", pattern: "*", action: "allow" },
+      { permission: "codesearch", pattern: "*", action: "allow" },
+      { permission: "todoread", pattern: "*", action: "allow" },
+      { permission: "todowrite", pattern: "*", action: "allow" },
+      { permission: "question", pattern: "*", action: "allow" },
+    ];
   }
 
-  return [
-    { permission: "*", pattern: "*", action: "ask" },
-    { permission: "bash", pattern: "*", action: "ask" },
-    { permission: "edit", pattern: "*", action: "ask" },
-    { permission: "webfetch", pattern: "*", action: "ask" },
-    { permission: "websearch", pattern: "*", action: "ask" },
-    { permission: "codesearch", pattern: "*", action: "ask" },
-    { permission: "external_directory", pattern: "*", action: "ask" },
-    { permission: "doom_loop", pattern: "*", action: "ask" },
-    { permission: "question", pattern: "*", action: "allow" },
-  ];
+  const runtimeRules: PermissionRuleset =
+    runtimeMode === "full-access"
+      ? [{ permission: "*", pattern: "*", action: "allow" }]
+      : [
+          { permission: "*", pattern: "*", action: "ask" },
+          { permission: "bash", pattern: "*", action: "ask" },
+          { permission: "edit", pattern: "*", action: "ask" },
+          { permission: "webfetch", pattern: "*", action: "ask" },
+          { permission: "websearch", pattern: "*", action: "ask" },
+          { permission: "codesearch", pattern: "*", action: "ask" },
+          { permission: "external_directory", pattern: "*", action: "ask" },
+          { permission: "doom_loop", pattern: "*", action: "ask" },
+          { permission: "question", pattern: "*", action: "allow" },
+        ];
+
+  return runtimeRules;
 }
 
 export function buildOpenCodeServerProcessEnv(input: {

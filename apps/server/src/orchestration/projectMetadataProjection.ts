@@ -36,6 +36,7 @@ export const applyProjectMetadataProjection = (input: {
           defaultModelSelection: input.event.payload.defaultModelSelection,
           scripts: input.event.payload.scripts,
           isPinned: input.event.payload.isPinned ?? false,
+          spaceId: input.event.payload.spaceId ?? null,
           createdAt: input.event.payload.createdAt,
           updatedAt: input.event.payload.updatedAt,
           deletedAt: null,
@@ -65,6 +66,9 @@ export const applyProjectMetadataProjection = (input: {
             ...(input.event.payload.isPinned !== undefined
               ? { isPinned: input.event.payload.isPinned }
               : {}),
+            ...(input.event.payload.spaceId !== undefined
+              ? { spaceId: input.event.payload.spaceId }
+              : {}),
             updatedAt: input.event.payload.updatedAt,
           });
         }
@@ -88,7 +92,7 @@ export const applyProjectMetadataProjection = (input: {
   });
 
 export const advanceProjectMetadataSnapshotState = (input: {
-  readonly event: ProjectMetadataOrchestrationEvent;
+  readonly event: Pick<OrchestrationEvent, "sequence" | "occurredAt">;
   readonly projectionStateRepository: ProjectionStateRepositoryShape;
 }): Effect.Effect<void, ProjectionRepositoryError> =>
   Effect.forEach(

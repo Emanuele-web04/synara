@@ -14,9 +14,10 @@ import { type MouseEvent, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
-import { reconcileDeletedThreadFromClient } from "~/lib/deletedThreadClientReconciliation";
+import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { pinActionLabel } from "~/lib/pin";
+import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -24,14 +25,8 @@ import { useKanbanUiStore } from "../../kanbanUiStore";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { useTerminalStateStore } from "../../terminalStateStore";
-import { isThreadRunningTurn } from "../../session-logic";
-import { getThreadFromState, getThreadsFromState } from "../../threadDerivation";
-import {
-  formatWorktreePathForDisplay,
-  getOrphanedWorktreePathForThread,
-} from "../../worktreeCleanup";
+import { getThreadFromState } from "../../threadDerivation";
 import { toastManager } from "../ui/toast";
-import { terminalRuntimeRegistry } from "../terminal/terminalRuntimeRegistry";
 import { isKanbanDraftOnlyCard, type KanbanCard } from "./kanban.logic";
 
 interface RenameTarget {
@@ -61,22 +56,10 @@ async function archiveCardThread(threadId: ThreadId) {
   if (!api) return;
   const thread = getThreadFromState(useStore.getState(), threadId);
   if (!thread) return;
-  if (isThreadRunningTurn(thread)) {
-    toastManager.add({
-      type: "error",
-      title: "Cannot archive",
-      description: "Stop the running session before archiving this thread.",
-    });
-    return;
-  }
   // Archived threads leave the board's thread feed, so a live optimistic
   // dispatch entry could never reconcile — drop it with the card.
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);
-  await api.orchestration.dispatchCommand({
-    type: "thread.archive",
-    commandId: newCommandId(),
-    threadId,
-  });
+  await archiveThreadFromClient(api.orchestration, threadId);
 }
 
 async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {
@@ -119,78 +102,16 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
       clearComposerContent(card.threadId);
       return;
     }
-    const api = readNativeApi();
-    if (!api) return;
-    const state = useStore.getState();
-    const thread = getThreadFromState(state, card.threadId);
-    if (!thread) return;
-    const project = state.projects.find((candidate) => candidate.id === thread.projectId) ?? null;
-    const orphanedWorktreePath = getOrphanedWorktreePathForThread(
-      getThreadsFromState(state),
-      card.threadId,
-    );
-    const displayWorktreePath = orphanedWorktreePath
-      ? formatWorktreePathForDisplay(orphanedWorktreePath)
-      : null;
-    const shouldDeleteWorktree =
-      orphanedWorktreePath !== null &&
-      project !== null &&
-      (await api.dialogs.confirm(
-        [
-          "This thread is the only one linked to this worktree:",
-          displayWorktreePath ?? orphanedWorktreePath,
-          "",
-          "Delete the worktree too?",
-        ].join("\n"),
-      ));
-
-    if (thread.session && thread.session.status !== "closed") {
-      await api.orchestration
-        .dispatchCommand({
-          type: "thread.session.stop",
-          commandId: newCommandId(),
-          threadId: card.threadId,
-          createdAt: new Date().toISOString(),
-        })
-        .catch(() => undefined);
-    }
-    try {
-      terminalRuntimeRegistry.disposeThread(card.threadId);
-      await api.terminal.close({ threadId: card.threadId, deleteHistory: true });
-    } catch {
-      // Terminal may already be closed.
-    }
-    await api.orchestration.dispatchCommand({
-      type: "thread.delete",
-      commandId: newCommandId(),
+    await deleteActiveThreadFromClient({
       threadId: card.threadId,
+      onDeleted: ({ thread }) => {
+        clearDraftThread(card.threadId);
+        clearProjectDraftThreadById(thread.projectId, thread.id);
+        clearTerminalState(card.threadId);
+      },
+      removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+      unknownWorktreeErrorMessage: "Unknown error.",
     });
-    void reconcileDeletedThreadFromClient({
-      threadId: card.threadId,
-      removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
-    });
-    clearDraftThread(card.threadId);
-    clearProjectDraftThreadById(thread.projectId, thread.id);
-    clearTerminalState(card.threadId);
-
-    if (!shouldDeleteWorktree || !orphanedWorktreePath || !project) {
-      return;
-    }
-    try {
-      await removeWorktreeMutation.mutateAsync({
-        cwd: project.cwd,
-        path: orphanedWorktreePath,
-        force: true,
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Thread deleted, but worktree removal failed",
-        description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${
-          error instanceof Error ? error.message : "Unknown error."
-        }`,
-      });
-    }
   };
 
   const onCardContextMenu = (card: KanbanCard, event: MouseEvent) => {

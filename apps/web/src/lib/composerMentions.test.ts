@@ -10,6 +10,7 @@ import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
   formatComposerMentionToken,
+  isThreadProviderMentionReference,
   resolveMentionChipKind,
 } from "./composerMentions";
 
@@ -66,6 +67,19 @@ describe("composer mention reference filtering", () => {
     expect(resolveMentionChipKind("linear")).toBe("path");
     expect(resolveMentionChipKind("linear", { kind: "plugin" })).toBe("plugin");
     expect(resolveMentionChipKind("linear", { mentionReferences: [plugin] })).toBe("plugin");
+  });
+
+  it("serializes and reconciles a quoted thread token with its authoritative thread id", () => {
+    const mention = { name: "Release planning", path: "thread://thread-123" };
+    const token = formatComposerMentionToken(mention.name);
+
+    expect(token).toBe('@"Release planning"');
+    expect(isThreadProviderMentionReference(mention)).toBe(true);
+    expect(filterPromptProviderMentionReferences(`Compare ${token} please`, [mention])).toEqual([
+      mention,
+    ]);
+    expect(filterPromptProviderMentionReferences("Compare the plan please", [mention])).toEqual([]);
+    expect(resolveMentionChipKind(mention.name, { mentionReferences: [mention] })).toBe("thread");
   });
 
   it("keeps selected slash and dollar skills only when their prompt token remains", () => {

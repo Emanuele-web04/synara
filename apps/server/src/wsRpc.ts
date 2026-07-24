@@ -27,7 +27,7 @@ import {
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
@@ -65,6 +65,7 @@ import {
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
+import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -85,7 +86,9 @@ import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
+import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
+import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -94,8 +97,21 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
-import { makeWsStreamAdmission } from "./wsStreamAdmission";
+import {
+  MAX_STREAMS_PER_RPC_CLIENT,
+  MAX_THREAD_STREAMS_PER_RPC_CLIENT,
+  makeWsStreamAdmission,
+} from "./wsStreamAdmission";
+import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
+import {
+  CurrentWsSessionRole,
+  provideWsConnectionSession,
+  WS_CONNECTION_SESSION_HEADER,
+  WsConnectionSessions,
+  WsConnectionSessionsLive,
+  type WsConnectionSession,
+} from "./wsConnectionSessions";
 import { negotiateWsCompatibility, validateWsFeatureCompatibility } from "./wsCompatibility";
 import {
   requiresWebSocketAuthentication,
@@ -105,6 +121,10 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
+
+export function canManageExternalMcp(role: "owner" | "client"): boolean {
+  return role === "owner";
+}
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
@@ -118,19 +138,22 @@ const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.middleware(WsRequestAdmissio
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
-  makeWsRequestAdmission.pipe(
-    Effect.map(
-      (admission) =>
-        ((effect, options) =>
-          RpcSchema.isStreamSchema(options.rpc.successSchema)
-            ? effect
-            : admission.guard(
-                options.clientId,
-                options.rpc._tag,
-                effect,
-              )) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>,
-    ),
-  ),
+  Effect.gen(function* () {
+    const admission = yield* makeWsRequestAdmission;
+    const connectionSessions = yield* WsConnectionSessions;
+    return ((effect, options) => {
+      // Handler fibers descend from the RPC server fiber (forked at layer build),
+      // not from the connection's HTTP upgrade fiber, so connection-scoped
+      // services must be re-provided here from the connection-session registry.
+      const scoped = provideWsConnectionSession(
+        effect,
+        connectionSessions.lookup(Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER)),
+      );
+      return RpcSchema.isStreamSchema(options.rpc.successSchema)
+        ? scoped
+        : admission.guard(options.clientId, options.rpc._tag, scoped);
+    }) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>;
+  }),
 );
 
 // Relative subdirectories scaffolded under a freshly created chat container workspace root.
@@ -146,14 +169,8 @@ interface ProcessTableRow {
   readonly args: string;
 }
 
-function redactProcessArgs(args: string): string {
-  const redacted = args
-    .replace(
-      /(--?(?:api[-_]?key|auth|authorization|key|password|secret|token)(?:=|\s+))(\S+)/gi,
-      "$1[redacted]",
-    )
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]");
+function redactAndTruncateProcessArgs(args: string): string {
+  const redacted = redactSensitiveProcessArgs(args);
   return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
     ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
     : redacted;
@@ -172,7 +189,7 @@ function parseProcessTable(output: string): ProcessTableRow[] {
       rssBytes: Number(match[3]) * 1024,
       virtualSizeBytes: Number(match[4]) * 1024,
       command: match[5] ?? "",
-      args: redactProcessArgs(match[6] ?? ""),
+      args: redactAndTruncateProcessArgs(match[6] ?? ""),
     });
   }
   return rows;
@@ -237,6 +254,10 @@ const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
 // actually project to a shell update.
 function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   return (
+    event.type === "space.created" ||
+    event.type === "space.meta-updated" ||
+    event.type === "space.order-updated" ||
+    event.type === "space.deleted" ||
     event.type === "project.created" ||
     event.type === "project.meta-updated" ||
     event.type === "project.deleted" ||
@@ -278,6 +299,7 @@ const makeWsRpcHandlersLayer = () =>
       const config = yield* ServerConfig;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
+      const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
@@ -301,7 +323,88 @@ const makeWsRpcHandlersLayer = () =>
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
-      const streamAdmission = yield* makeWsStreamAdmission;
+      const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const streamAdmission = yield* makeWsStreamAdmission({
+        recordRejection: (incident) =>
+          threadDiagnostics
+            .recordOperationalDiagnostic({
+              ...(incident.threadId ? { threadId: incident.threadId } : {}),
+              source: "server",
+              kind: "ws.stream-admission-rejected",
+              severity: "warning",
+              code: incident.errorCode,
+              detail: {
+                reason: incident.reason,
+                active: incident.active,
+                activeThreads: incident.activeThreads,
+                streamLimit: MAX_STREAMS_PER_RPC_CLIENT,
+                threadLimit: MAX_THREAD_STREAMS_PER_RPC_CLIENT,
+              },
+              occurredAt: new Date().toISOString(),
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to persist streaming RPC rejection diagnostic.", {
+                  error: String(error),
+                }),
+              ),
+            ),
+      });
+      const recordThreadStreamDrop = (threadId: string, report: LiveUiStreamDropReport) =>
+        threadDiagnostics
+          .recordOperationalDiagnostic({
+            threadId,
+            source: "server",
+            kind: "ws.thread-stream-events-dropped",
+            severity: "error",
+            code: "THREAD_STREAM_EVENTS_DROPPED",
+            detail: {
+              label: report.label,
+              capacity: report.capacity,
+              droppedAtLeast: report.droppedAtLeast,
+            },
+            occurredAt: new Date().toISOString(),
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to persist thread stream drop diagnostic.", {
+                error: String(error),
+              }),
+            ),
+            (diagnostic) => Effect.sync(() => Effect.runFork(diagnostic)),
+            Effect.andThen(failLiveUiStreamForSnapshotResync(report)),
+          );
+      const recordThreadResnapshotRequired = (
+        threadId: string,
+        report: {
+          readonly snapshotSequence: number;
+          readonly highWaterSequence: number;
+          readonly replayCount: number;
+          readonly replayLimit: number;
+        },
+      ) =>
+        threadDiagnostics
+          .recordOperationalDiagnostic({
+            threadId,
+            source: "server",
+            kind: "ws.thread-stream-resnapshot-required",
+            severity: "warning",
+            code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
+            detail: {
+              snapshotSequence: report.snapshotSequence,
+              highWaterSequence: report.highWaterSequence,
+              replayCount: report.replayCount,
+              replayLimit: report.replayLimit,
+            },
+            occurredAt: new Date().toISOString(),
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to persist thread resnapshot diagnostic.", {
+                error: String(error),
+              }),
+            ),
+          );
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
         error instanceof GitHubCliError &&
@@ -521,6 +624,31 @@ const makeWsRpcHandlersLayer = () =>
             gitStatusBroadcaster.refreshStatus(cwd).pipe(Effect.catchCause(() => Effect.void)),
           ),
         );
+
+      const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
+        homeDir: config.homeDir,
+        worktreesDir: config.worktreesDir,
+        snapshotQuery: projectionReadModelQuery,
+        git,
+      }).pipe(
+        // A retention failure must not present as an empty inventory: fall back
+        // to a plain scan so listing callers still see the real worktrees.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("managed worktree retention failed", {
+            cause: String(cause),
+          }).pipe(
+            Effect.andThen(
+              listManagedWorktrees({ worktreesDir: config.worktreesDir, git }).pipe(
+                Effect.catchCause((listCause) =>
+                  Effect.logWarning("managed worktree inventory scan failed", {
+                    cause: String(listCause),
+                  }).pipe(Effect.as([])),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
       const getOrchestrationHighWaterSequence = orchestrationEngine.getEventHighWaterSequence.pipe(
         Effect.mapError((cause) =>
           toWsRpcError(cause, "Failed to capture orchestration high-water sequence"),
@@ -531,6 +659,35 @@ const makeWsRpcHandlersLayer = () =>
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never> => {
         switch (event.type) {
+          case "space.created":
+          case "space.meta-updated":
+            return projectionReadModelQuery.getSpaceShellById(event.payload.spaceId).pipe(
+              Effect.map((space) =>
+                Option.map(space, (nextSpace) => ({
+                  kind: "space-upserted" as const,
+                  sequence: event.sequence,
+                  space: nextSpace,
+                })),
+              ),
+              Effect.catch(() => Effect.succeed(Option.none())),
+            );
+          case "space.order-updated":
+            return Effect.succeed(
+              Option.some({
+                kind: "space-order-updated" as const,
+                sequence: event.sequence,
+                orderedSpaceIds: event.payload.orderedSpaceIds,
+              }),
+            );
+          case "space.deleted":
+            return Effect.succeed(
+              Option.some({
+                kind: "space-removed" as const,
+                sequence: event.sequence,
+                spaceId: event.payload.spaceId,
+                updatedAt: event.payload.deletedAt,
+              }),
+            );
           case "project.created":
           case "project.meta-updated":
             return projectionReadModelQuery.getProjectShellById(event.payload.projectId).pipe(
@@ -579,6 +736,21 @@ const makeWsRpcHandlersLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      const requireOwner = Effect.gen(function* () {
+        if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
+          return yield* Effect.fail(
+            new WsRpcError({ message: "Owner authorization is required for this operation." }),
+          );
+        }
+        if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+          return yield* Effect.fail(
+            new WsRpcError({
+              message: "External MCP management is available only on a loopback-only instance.",
+            }),
+          );
+        }
+      });
+
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
@@ -591,6 +763,9 @@ const makeWsRpcHandlersLayer = () =>
               // cross-kind workspace-root ownership conflict) must never mutate the filesystem.
               if (prepareWorkspaceRoot) {
                 yield* prepareWorkspaceRoot;
+              }
+              if (normalizedCommand.type === "thread.archive") {
+                yield* Effect.forkDetach(pruneManagedWorktrees);
               }
               return result;
             }),
@@ -715,6 +890,8 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
+              onResnapshotRequired: (report) =>
+                recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
                   bufferLiveUiStream(
@@ -723,7 +900,7 @@ const makeWsRpcHandlersLayer = () =>
                     ),
                     {
                       label: "orchestration.thread-detail",
-                      onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                      onDroppedEvents: (report) => recordThreadStreamDrop(input.threadId, report),
                     },
                   ),
                 ),
@@ -1137,7 +1314,34 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to refresh providers",
           ),
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
-        [WS_METHODS.serverListWorktrees]: () => Effect.succeed({ worktrees: [] }),
+        [WS_METHODS.serverListExternalMcpIntegrations]: () =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
+            "Failed to list external MCP integrations",
+          ),
+        [WS_METHODS.serverCreateExternalMcpIntegration]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.createIntegration(input))),
+            "Failed to create external MCP integration",
+          ),
+        [WS_METHODS.serverRevokeExternalMcpIntegration]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(
+              Effect.andThen(externalMcp.revokeIntegration(input.integrationId)),
+              Effect.map((revoked) => ({ revoked })),
+            ),
+            "Failed to revoke external MCP integration",
+          ),
+        [WS_METHODS.serverRefreshExternalMcpPairing]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
+            "Failed to refresh external MCP pairing",
+          ),
+        [WS_METHODS.serverListWorktrees]: () =>
+          rpcEffect(
+            pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
+            "Failed to list managed worktrees",
+          ),
         [WS_METHODS.serverListLocalServers]: () =>
           rpcEffect(
             Effect.promise(() => listLocalServers()),
@@ -1399,6 +1603,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
+        [WS_METHODS.automationGetMemory]: ({ automationId }) =>
+          rpcEffect(automationService.getMemory(automationId), "Failed to load automation memory"),
         [WS_METHODS.automationCreate]: (input) =>
           rpcEffect(automationService.create(input), "Failed to create automation"),
         [WS_METHODS.automationUpdate]: (input) =>
@@ -1413,6 +1619,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(automationService.markRunRead(input), "Failed to update automation run"),
         [WS_METHODS.automationArchiveRun]: (input) =>
           rpcEffect(automationService.archiveRun(input), "Failed to update automation run"),
+        [WS_METHODS.automationResolveProposal]: (input) =>
+          rpcEffect(
+            automationService.resolveProposal(input),
+            "Failed to resolve automation proposal",
+          ),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -1420,10 +1631,11 @@ const makeWsRpcHandlersLayer = () =>
             Stream.merge(
               Stream.fromEffect(
                 automationService.list({}).pipe(
-                  Effect.map(({ definitions, runs }) => ({
+                  Effect.map(({ definitions, runs, memories }) => ({
                     type: "snapshot" as const,
                     definitions,
                     runs,
+                    memories,
                   })),
                 ),
               ),
@@ -1514,7 +1726,29 @@ export function makeWebsocketRpcRouteLayer<R>(
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const rpcWebSocketHttpEffect = yield* rpcWebSocketHttpEffectSource;
+      const connectionSessions = yield* WsConnectionSessions;
       const router = yield* HttpRouter.HttpRouter;
+      // RPC handlers run on fibers forked from the layer-build scope, not from
+      // this per-connection fiber, so the authenticated session cannot be
+      // provided as a plain service around rpcWebSocketHttpEffect. Instead the
+      // session is registered for the connection's lifetime and its key is
+      // injected as a synthetic upgrade header; the admission middleware
+      // resolves it back into handler-scoped services on every request.
+      const runWithConnectionSession = (
+        request: HttpServerRequest.HttpServerRequest,
+        session: WsConnectionSession,
+      ) =>
+        Effect.gen(function* () {
+          const sessionKey = yield* connectionSessions.register(session);
+          return yield* rpcWebSocketHttpEffect.pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              request.modify({
+                headers: Headers.set(request.headers, WS_CONNECTION_SESSION_HEADER, sessionKey),
+              }),
+            ),
+          );
+        });
       yield* router.add(
         "GET",
         WS_FEATURE_PATH,
@@ -1543,22 +1777,18 @@ export function makeWebsocketRpcRouteLayer<R>(
           });
 
           if (!authenticatedSession) {
-            return yield* rpcWebSocketHttpEffect.pipe(
-              Effect.provideService(
-                CurrentManagedAttachmentPrincipal,
-                LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
-              ),
-            );
+            return yield* runWithConnectionSession(request, {
+              role: "owner",
+              attachmentPrincipal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+            });
           }
 
           return yield* sessions.runAuthenticatedConnection(
             authenticatedSession.sessionId,
-            rpcWebSocketHttpEffect.pipe(
-              Effect.provideService(
-                CurrentManagedAttachmentPrincipal,
-                attachmentPrincipalForSession(authenticatedSession.sessionId),
-              ),
-            ),
+            runWithConnectionSession(request, {
+              role: authenticatedSession.role,
+              attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+            }),
           );
         }).pipe(
           Effect.catchTags({
@@ -1616,5 +1846,9 @@ function makeWebsocketBootstrapRouteLayer<R>(
 
 export const websocketRpcRouteLayer = Layer.merge(
   makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
-  makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect),
+  // The registry must be provided here so the upgrade route and the RPC
+  // middleware (built from the same source effect) share one instance.
+  makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect).pipe(
+    Layer.provide(WsConnectionSessionsLive),
+  ),
 );

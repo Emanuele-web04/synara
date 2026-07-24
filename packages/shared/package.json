@@ -76,6 +76,10 @@
       "types": "./src/browserShortcuts.ts",
       "import": "./src/browserShortcuts.ts"
     },
+    "./appSnapShortcut": {
+      "types": "./src/appSnapShortcut.ts",
+      "import": "./src/appSnapShortcut.ts"
+    },
     "./browserSession": {
       "types": "./src/browserSession.ts",
       "import": "./src/browserSession.ts"
@@ -107,6 +111,10 @@
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
+    },
+    "./projectContainers": {
+      "types": "./src/projectContainers.ts",
+      "import": "./src/projectContainers.ts"
     },
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",
@@ -195,6 +203,10 @@
     "./migrationRecovery": {
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
+    },
+    "./threadMentions": {
+      "types": "./src/threadMentions.ts",
+      "import": "./src/threadMentions.ts"
     }
   },
   "scripts": {
