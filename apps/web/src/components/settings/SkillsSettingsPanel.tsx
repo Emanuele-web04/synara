@@ -17,6 +17,7 @@ import {
   skillsCatalogQueryOptions,
 } from "~/lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
+import { useUiText } from "~/hooks/useUiText";
 import {
   buildSettingsSkillGroups,
   buildSettingsSkillSections,
@@ -50,6 +51,7 @@ function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKi
 }
 
 export function SkillsSettingsPanel() {
+  const t = useUiText();
   const queryClient = useQueryClient();
   const catalogQuery = useQuery(skillsCatalogQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -111,8 +113,8 @@ export function SkillsSettingsPanel() {
           control={
             <span className="text-xs font-medium text-muted-foreground">
               {catalogQuery.isLoading
-                ? "Scanning…"
-                : `${enabledSkills} of ${totalSkills} skill${totalSkills === 1 ? "" : "s"} enabled`}
+                ? t("Scanning…")
+                : `${enabledSkills}/${totalSkills} ${t("skills enabled")}`}
             </span>
           }
         />
@@ -159,7 +161,7 @@ export function SkillsSettingsPanel() {
                       <span className="flex min-w-0 items-center gap-1.5">
                         <SkillProviderStack providers={group.providers} />
                         <span className="truncate text-[11px] text-muted-foreground">
-                          {group.sources.map((source) => source.originInfo.label).join(" · ")}
+                          {group.sources.map((source) => t(source.originInfo.label)).join(" · ")}
                         </span>
                       </span>
                       {group.sources.map((source) => (
@@ -178,7 +180,7 @@ export function SkillsSettingsPanel() {
                       onCheckedChange={(checked) =>
                         setSkillEnabled(group.primarySkill.name, Boolean(checked))
                       }
-                      aria-label={`Enable the ${group.displayName} skill`}
+                      aria-label={`${t("Enable skill")}: ${group.displayName}`}
                     />
                   }
                 />

@@ -10,6 +10,7 @@ import { ChangelogAccordion } from "../whatsNew/ChangelogAccordion";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc, type WhatsNewEntry } from "../whatsNew/logic";
 import { Button } from "./ui/button";
+import { useUiText } from "../hooks/useUiText";
 import {
   Dialog,
   DialogDescription,
@@ -41,6 +42,7 @@ export default function ReleaseHistoryDialog({
   entries = WHATS_NEW_ENTRIES,
   defaultExpandedVersion = null,
 }: ReleaseHistoryDialogProps) {
+  const t = useUiText();
   // Sort at render time so the source of truth (`entries.ts`) stays free of
   // ordering rules — authors can prepend, append, or reorder entries freely.
   const sorted = sortEntriesByVersionDesc(entries);
@@ -49,9 +51,9 @@ export default function ReleaseHistoryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-lg gap-0 p-0">
         <DialogHeader className="gap-1 p-4 pr-12">
-          <DialogTitle className="text-base">Release history</DialogTitle>
+          <DialogTitle className="text-base">{t("Release history")}</DialogTitle>
           <DialogDescription className="text-xs">
-            Every curated release, newest first.
+            {t("Every curated release, newest first.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -61,7 +63,7 @@ export default function ReleaseHistoryDialog({
 
         <DialogFooter>
           <Button size="sm" onClick={() => onOpenChange(false)}>
-            Close
+            {t("Close")}
           </Button>
         </DialogFooter>
       </DialogPopup>

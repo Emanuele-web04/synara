@@ -18,6 +18,7 @@ import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
+import { useUiText } from "../hooks/useUiText";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { useStore } from "../store";
 import {
@@ -136,6 +137,7 @@ export function RuntimeUsageControls({
   className,
   hideLabel = false,
 }: RuntimeUsageControlsProps) {
+  const t = useUiText();
   return (
     <div
       className={cn(
@@ -157,8 +159,8 @@ export function RuntimeUsageControls({
                 )}
                 title={
                   runtimeMode === "full-access"
-                    ? "Full access — click to change permissions"
-                    : "Default permissions — click to change permissions"
+                    ? t("Full access — click to change permissions")
+                    : t("Default permissions — click to change permissions")
                 }
               />
             }
@@ -170,7 +172,7 @@ export function RuntimeUsageControls({
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+                {runtimeMode === "full-access" ? t("Full access") : t("Default permissions")}
               </span>
               <ChevronDownIcon
                 className={cn(
@@ -200,13 +202,13 @@ export function RuntimeUsageControls({
               >
                 <span className="inline-flex items-center gap-2">
                   <CentralIcon name="shield-access" className="size-4 shrink-0" />
-                  Full access
+                  {t("Full access")}
                 </span>
               </MenuRadioItem>
               <MenuRadioItem value="approval-required">
                 <span className="inline-flex items-center gap-2">
                   <HiOutlineHandRaised className="size-4 shrink-0" />
-                  Default permissions
+                  {t("Default permissions")}
                 </span>
               </MenuRadioItem>
             </MenuRadioGroup>

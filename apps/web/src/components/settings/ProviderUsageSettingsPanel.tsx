@@ -34,6 +34,7 @@ import {
 } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createAllThreadsSelector } from "~/storeSelectors";
+import { useUiText } from "~/hooks/useUiText";
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-[11px] font-medium leading-none";
 
@@ -42,17 +43,20 @@ interface StatusPill {
   className: string;
 }
 
-function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill | null {
+function statusPill(
+  status: ServerProviderUsageSnapshot["status"],
+  t: (text: string) => string,
+): StatusPill | null {
   switch (status) {
     case "needs-auth":
       return {
-        label: "Not signed in",
+        label: t("Not signed in"),
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
       };
     case "unsupported":
-      return { label: "Unsupported", className: "bg-muted text-muted-foreground" };
+      return { label: t("Unsupported"), className: "bg-muted text-muted-foreground" };
     case "error":
-      return { label: "Unavailable", className: "bg-red-500/12 text-red-600 dark:text-red-400" };
+      return { label: t("Unavailable"), className: "bg-red-500/12 text-red-600 dark:text-red-400" };
     default:
       return null;
   }
@@ -67,6 +71,7 @@ function ProviderUsageCard({
   threadRateLimits: ReadonlyArray<ProviderRateLimit>;
   codexHomePath: string | null;
 }) {
+  const t = useUiText();
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
   const usageSummary = useProviderUsageSummary({
@@ -79,7 +84,7 @@ function ProviderUsageCard({
   const usageLines = usageSummary.usageLines;
 
   const hasUsage = meterRows.length > 0 || usageLines.length > 0;
-  const pill = status === "ok" ? null : statusPill(snapshot.status);
+  const pill = status === "ok" ? null : statusPill(snapshot.status, t);
 
   return (
     <SettingsCard>
@@ -126,7 +131,7 @@ function ProviderUsageCard({
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {status === "ok"
-              ? "No usage data reported yet."
+              ? t("No usage data reported yet.")
               : (snapshot.detail ?? providerUsageNeedsAuthDetail(provider))}
           </p>
         )}
@@ -162,6 +167,7 @@ function mergeProviderUsageRefresh(
 }
 
 export function ProviderUsageSettingsPanel() {
+  const t = useUiText();
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
   const codexHomePath = settings.codexHomePath || null;
@@ -196,7 +202,7 @@ export function ProviderUsageSettingsPanel() {
   return (
     <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
       <div className="flex items-center justify-between gap-2">
-        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Provider usage</h2>
+        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{t("Provider usage")}</h2>
         <Button
           size="xs"
           variant="outline"
@@ -205,13 +211,13 @@ export function ProviderUsageSettingsPanel() {
           onClick={() => refreshMutation.mutate()}
         >
           <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-          Refresh
+          {t("Refresh")}
         </Button>
       </div>
 
       {showInitialLoading ? (
         <SettingsCard>
-          <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
+          <div className="px-4 py-3.5 text-xs text-muted-foreground">{t("Loading provider usage…")}</div>
         </SettingsCard>
       ) : (
         <div className="flex flex-col gap-3">
@@ -227,9 +233,7 @@ export function ProviderUsageSettingsPanel() {
       )}
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-        Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. OAuth providers may refresh short-lived tokens through their official
-        token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
+        {t("Usage is read locally from each provider CLI's stored credentials and fetched directly from the provider. OAuth providers may refresh short-lived tokens through their official token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.")}
       </p>
     </section>
   );

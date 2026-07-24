@@ -26,6 +26,7 @@ import {
   ComboboxTrigger,
 } from "../ui/combobox";
 import { useWorkspaceStore } from "../../workspaceStore";
+import { useUiText } from "../../hooks/useUiText";
 
 interface ProjectPickerProps {
   align?: "start" | "center" | "end";
@@ -91,6 +92,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onResetToHome,
   triggerClassName,
 }: ProjectPickerProps) {
+  const t = useUiText();
   const projects = useStore((state) => state.projects);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
   const homeDir = useWorkspaceStore((state) => state.homeDir);
@@ -247,7 +249,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       ) : null}
     </span>
   ) : (
-    "Work in a project"
+    t("Work in a project")
   );
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {

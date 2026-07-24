@@ -13,6 +13,7 @@ import { ShortcutKbd } from "~/components/ui/shortcut-kbd";
 import { CentralIcon } from "~/lib/central-icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { useUiText } from "~/hooks/useUiText";
 import {
   buildShortcutSheetSections,
   filterShortcutSheetSections,
@@ -39,6 +40,7 @@ const SETTINGS_SHORTCUT_CONTEXT: ShortcutSheetContext = {
 };
 
 export function KeyboardShortcutsSettingsPanel() {
+  const t = useUiText();
   const [query, setQuery] = useState("");
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
@@ -63,9 +65,9 @@ export function KeyboardShortcutsSettingsPanel() {
           size="sm"
           variant="soft"
           nativeInput
-          placeholder="Search shortcuts..."
+          placeholder={t("Search shortcuts...")}
           value={query}
-          aria-label="Search shortcuts"
+          aria-label={t("Search shortcuts")}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape" && query.length > 0) {
@@ -87,8 +89,8 @@ export function KeyboardShortcutsSettingsPanel() {
           className={cn(SETTINGS_CARD_CLASS_NAME, "divide-y divide-[color:var(--color-border)]")}
         >
           <div className="flex items-center justify-between gap-4 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-            <span>Command</span>
-            <span>Keybinding</span>
+            <span>{t("Command")}</span>
+            <span>{t("Keybinding")}</span>
           </div>
           {filteredSections.flatMap((section) => {
             const muted = section.tone === "muted";
@@ -103,10 +105,12 @@ export function KeyboardShortcutsSettingsPanel() {
               >
                 <div className="min-w-0 space-y-0.5">
                   <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>
-                    {entry.label}
+                    {entry.label.startsWith("Jump to visible thread ")
+                      ? `${t("Jump to visible thread")} ${entry.label.slice("Jump to visible thread ".length)}`
+                      : t(entry.label)}
                   </div>
                   <div className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "truncate")}>
-                    {entry.description}
+                    {t(entry.description)}
                   </div>
                 </div>
                 <ShortcutKbd shortcutLabel={entry.shortcutLabel} groupClassName="shrink-0" />
@@ -121,7 +125,7 @@ export function KeyboardShortcutsSettingsPanel() {
             "px-4 py-10 text-center text-sm text-muted-foreground",
           )}
         >
-          No shortcuts match &ldquo;{query}&rdquo;.
+          {t("No shortcuts match")} &ldquo;{query}&rdquo;。
         </div>
       )}
     </div>

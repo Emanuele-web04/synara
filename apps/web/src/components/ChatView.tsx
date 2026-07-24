@@ -564,6 +564,7 @@ import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useUiText } from "../hooks/useUiText";
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
@@ -1129,6 +1130,7 @@ export default function ChatView({
   onChangeThreadInSplitPane,
   onCloseThreadPane,
 }: ChatViewProps) {
+  const t = useUiText();
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -11139,20 +11141,20 @@ export default function ChatView({
                       : {})}
                     placeholder={
                       isComposerApprovalState
-                        ? "Resolve this approval request to continue"
+                        ? t("Resolve this approval request to continue")
                         : activePendingProgress
                           ? activePendingProgress.activeQuestion?.options.length === 0
-                            ? "Type your answer to continue"
-                            : "Type your own answer, or leave this blank to use the selected option"
+                            ? t("Type your answer to continue")
+                            : t("Type your own answer, or leave this blank to use the selected option")
                           : showPlanFollowUpPrompt && activeProposedPlan
-                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            ? t("Add feedback to refine the plan, or leave this blank to implement it")
                             : activeThread?.parentThreadId
-                              ? "Message this subagent while it works"
+                              ? t("Message this subagent while it works")
                               : hasLiveTurn
-                                ? "Ask for follow-up changes"
+                                ? t("Ask for follow-up changes")
                                 : phase === "disconnected"
-                                  ? "Ask for follow-up changes or attach images"
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
+                                  ? t("Ask for follow-up changes or attach images")
+                                  : t("Ask anything, @tag files/folders, or use / to show available commands")
                     }
                     disabled={isComposerEditorDisabled}
                   />
@@ -11476,7 +11478,7 @@ export default function ChatView({
       >
         <ChatHeader
           activeThreadId={activeThread.id}
-          activeThreadTitle={activeThreadDisplayTitle}
+          activeThreadTitle={t(activeThreadDisplayTitle)}
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
           activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
@@ -11646,12 +11648,12 @@ export default function ChatView({
                       className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
                     >
                       {isEmptyChatLanding ? (
-                        "What should we work on?"
+                        t("What should we work on?")
                       ) : (
                         <>
-                          What should we do in{" "}
+                          {t("What should we do in")} {" "}
                           <span className={COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}>
-                            {activeProjectDisplayName ?? "this folder"}
+                            {activeProjectDisplayName ?? t("this folder")}
                           </span>
                           ?
                         </>

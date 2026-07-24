@@ -16,7 +16,6 @@ import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
-import { pluralize } from "@synara/shared/text";
 import {
   type ReactNode,
   type RefObject,
@@ -66,6 +65,7 @@ import { APP_VERSION } from "../branding";
 import { logoutCurrentBrowserSession } from "../authLogout";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
+import { useUiText } from "../hooks/useUiText";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
 import {
   Autocomplete,
@@ -263,6 +263,7 @@ const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
 };
 
 function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
+  const t = useUiText();
   return (
     <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
       <span
@@ -276,7 +277,7 @@ function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPerm
               : "bg-[color:var(--color-border)]",
         )}
       />
-      {APPSNAP_PERMISSION_LABELS[permission]}
+      {t(APPSNAP_PERMISSION_LABELS[permission])}
     </span>
   );
 }
@@ -342,6 +343,7 @@ function SortableProviderVisibilityRow(props: {
   isHidden: boolean;
   onHiddenChange: (hidden: boolean) => void;
 }) {
+  const t = useUiText();
   const {
     attributes,
     listeners,
@@ -372,7 +374,7 @@ function SortableProviderVisibilityRow(props: {
             "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing",
             SETTINGS_RADIUS_CLASS_NAME,
           )}
-          aria-label={`Reorder ${props.option.title}`}
+          aria-label={`${t("Reorder")} ${props.option.title}`}
           {...attributes}
           {...listeners}
         >
@@ -383,7 +385,7 @@ function SortableProviderVisibilityRow(props: {
       <Switch
         checked={!props.isHidden}
         onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
-        aria-label={`Show ${props.option.title} in the provider picker`}
+        aria-label={`${t("Show in provider picker")}: ${props.option.title}`}
       />
     </div>
   );
@@ -689,6 +691,7 @@ function SettingsRouteView() {
     setSystemUiFont,
   } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const t = useUiText();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -1689,12 +1692,12 @@ function SettingsRouteView() {
     const isChanged = settings[settingKey] !== defaults[settingKey];
     return (
       <SettingsRow
-        title={title}
-        description={description}
+        title={t(title)}
+        description={t(description)}
         resetAction={
           isChanged ? (
             <SettingResetButton
-              label={resetLabel}
+              label={t(resetLabel)}
               onClick={() =>
                 updateSettings({ [settingKey]: defaults[settingKey] } as Partial<AppSettings>)
               }
@@ -1707,7 +1710,7 @@ function SettingsRouteView() {
             onCheckedChange={(checked) =>
               updateSettings({ [settingKey]: Boolean(checked) } as Partial<AppSettings>)
             }
-            aria-label={ariaLabel}
+            aria-label={t(ariaLabel)}
           />
         }
       />
@@ -1716,14 +1719,55 @@ function SettingsRouteView() {
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Core defaults">
+      <SettingsSection title={t("Core defaults")}>
         <SettingsRow
-          title="Default provider"
-          description="Choose the provider used for new chats."
+          title={t("Language")}
+          description={t(
+            "The language used for Synara's fixed interface text. Chat messages, code, and terminal output are never translated.",
+          )}
+          resetAction={
+            settings.uiLanguage !== defaults.uiLanguage ? (
+              <SettingResetButton
+                label={t("Language")}
+                onClick={() => updateSettings({ uiLanguage: defaults.uiLanguage })}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.uiLanguage}
+              onValueChange={(value) => {
+                if (value !== "system" && value !== "en" && value !== "zh-CN") return;
+                updateSettings({ uiLanguage: value });
+              }}
+              ariaLabel={t("Language")}
+              valueContent={t(
+                settings.uiLanguage === "system"
+                  ? "System default"
+                  : settings.uiLanguage === "zh-CN"
+                    ? "简体中文"
+                    : "English",
+              )}
+            >
+              <SelectItem hideIndicator value="system">
+                {t("System default")}
+              </SelectItem>
+              <SelectItem hideIndicator value="en">
+                {t("English")}
+              </SelectItem>
+              <SelectItem hideIndicator value="zh-CN">
+                简体中文
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
+        <SettingsRow
+          title={t("Default provider")}
+          description={t("Choose the provider used for new chats.")}
           resetAction={
             settings.defaultProvider !== defaults.defaultProvider ? (
               <SettingResetButton
-                label="default provider"
+                label={t("default provider")}
                 onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
               />
             ) : null
@@ -1735,7 +1779,7 @@ function SettingsRouteView() {
                 if (!isProviderSelectOption(value)) return;
                 updateSettings({ defaultProvider: value });
               }}
-              ariaLabel="Default provider"
+              ariaLabel={t("Default provider")}
               valueContent={
                 <ProviderOptionLabel
                   provider={settings.defaultProvider}
@@ -1756,12 +1800,12 @@ function SettingsRouteView() {
         />
 
         <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
+          title={t("New threads")}
+          description={t("Pick the default workspace mode for newly created draft threads.")}
           resetAction={
             settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
               <SettingResetButton
-                label="new threads"
+                label={t("new threads")}
                 onClick={() =>
                   updateSettings({
                     defaultThreadEnvMode: defaults.defaultThreadEnvMode,
@@ -1779,28 +1823,28 @@ function SettingsRouteView() {
                   defaultThreadEnvMode: value,
                 });
               }}
-              ariaLabel="Default thread mode"
-              valueContent={settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+              ariaLabel={t("Default thread mode")}
+              valueContent={t(settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local")}
             >
               <SelectItem hideIndicator value="local">
-                Local
+                {t("Local")}
               </SelectItem>
               <SelectItem hideIndicator value="worktree">
-                New worktree
+                {t("New worktree")}
               </SelectItem>
             </SettingsSelectControl>
           }
         />
       </SettingsSection>
 
-      <SettingsSection title="Sidebar organization">
+      <SettingsSection title={t("Sidebar organization")}>
         <SettingsRow
-          title="Project order"
-          description="Controls how projects are arranged in the main sidebar."
+          title={t("Project order")}
+          description={t("Controls how projects are arranged in the main sidebar.")}
           resetAction={
             settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
               <SettingResetButton
-                label="project order"
+                label={t("project order")}
                 onClick={() =>
                   updateSettings({
                     sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
@@ -1818,29 +1862,29 @@ function SettingsRouteView() {
                 }
                 updateSettings({ sidebarProjectSortOrder: value });
               }}
-              ariaLabel="Project sort order"
-              valueContent={SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
+              ariaLabel={t("Project sort order")}
+              valueContent={t(SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder])}
             >
               <SelectItem hideIndicator value="updated_at">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
+                {t(SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at)}
               </SelectItem>
               <SelectItem hideIndicator value="created_at">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
+                {t(SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at)}
               </SelectItem>
               <SelectItem hideIndicator value="manual">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
+                {t(SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual)}
               </SelectItem>
             </SettingsSelectControl>
           }
         />
 
         <SettingsRow
-          title="Thread order"
-          description="Controls how threads are arranged inside each project in the main sidebar."
+          title={t("Thread order")}
+          description={t("Controls how threads are arranged inside each project in the main sidebar.")}
           resetAction={
             settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
               <SettingResetButton
-                label="thread order"
+                label={t("thread order")}
                 onClick={() =>
                   updateSettings({
                     sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
@@ -1858,21 +1902,21 @@ function SettingsRouteView() {
                 }
                 updateSettings({ sidebarThreadSortOrder: value });
               }}
-              ariaLabel="Thread sort order"
-              valueContent={SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
+              ariaLabel={t("Thread sort order")}
+              valueContent={t(SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder])}
             >
               <SelectItem hideIndicator value="updated_at">
-                {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
+                {t(SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at)}
               </SelectItem>
               <SelectItem hideIndicator value="created_at">
-                {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
+                {t(SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at)}
               </SelectItem>
             </SettingsSelectControl>
           }
         />
       </SettingsSection>
 
-      <SettingsSection title="Sidebar sections">
+      <SettingsSection title={t("Sidebar sections")}>
         {renderBooleanSettingRow({
           settingKey: "showChatsSection",
           title: "Chats",
@@ -1901,7 +1945,7 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
-        <SettingsSection title="Environment panel">
+        <SettingsSection title={t("Environment panel")}>
           {renderBooleanSettingRow({
             settingKey: "environmentPanelDefaultOpen",
             title: "Open by default",
@@ -1994,14 +2038,14 @@ function SettingsRouteView() {
   const renderAppearancePanel = () => (
     <div className="space-y-6">
       <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
-        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
+        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{t("Theme and typography")}</h2>
         <SettingsCard>
           <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
+            title={t("Theme")}
+            description={t("Choose how Synara looks across the app.")}
             resetAction={
               theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+                <SettingResetButton label={t("Theme")} onClick={() => setTheme("system")} />
               ) : null
             }
             control={
@@ -2011,24 +2055,26 @@ function SettingsRouteView() {
                   if (value !== "system" && value !== "light" && value !== "dark") return;
                   setTheme(value);
                 }}
-                ariaLabel="Theme preference"
-                options={THEME_OPTIONS}
+                ariaLabel={t("Theme preference")}
+                options={THEME_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
               />
             }
           />
           <SettingsRow
-            title="Use system UI font"
-            description="Ignore the theme's custom UI font and render the interface with the native system font (SF Pro on macOS)."
+            title={t("Use system UI font")}
+            description={t(
+              "Ignore the theme's custom UI font and render the interface with the native system font (SF Pro on macOS).",
+            )}
             resetAction={
               !systemUiFont ? (
-                <SettingResetButton label="system UI font" onClick={() => setSystemUiFont(true)} />
+                <SettingResetButton label={t("Use system UI font")} onClick={() => setSystemUiFont(true)} />
               ) : null
             }
             control={
               <Switch
                 checked={systemUiFont}
                 onCheckedChange={(checked) => setSystemUiFont(Boolean(checked))}
-                aria-label="Use system UI font"
+                aria-label={t("Use system UI font")}
               />
             }
           />
@@ -2050,12 +2096,14 @@ function SettingsRouteView() {
 
         <SettingsCard>
           <SettingsRow
-            title="UI density"
-            description="Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size."
+            title={t("UI density")}
+            description={t(
+              "Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size.",
+            )}
             resetAction={
               settings.uiDensity !== defaults.uiDensity ? (
                 <SettingResetButton
-                  label="UI density"
+                  label={t("UI density")}
                   onClick={() =>
                     updateSettings({
                       uiDensity: DEFAULT_UI_DENSITY,
@@ -2073,19 +2121,21 @@ function SettingsRouteView() {
                   }
                   updateSettings({ uiDensity: value });
                 }}
-                ariaLabel="UI density"
-                options={UI_DENSITY_OPTIONS}
+                ariaLabel={t("UI density")}
+                options={UI_DENSITY_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
               />
             }
           />
 
           <SettingsRow
-            title="Base font size"
-            description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
+            title={t("Base font size")}
+            description={t(
+              "Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value.",
+            )}
             resetAction={
               settings.chatFontSizePx !== defaults.chatFontSizePx ? (
                 <SettingResetButton
-                  label="base font size"
+                  label={t("Base font size")}
                   onClick={() =>
                     updateSettings({
                       chatFontSizePx: defaults.chatFontSizePx,
@@ -2113,7 +2163,7 @@ function SettingsRouteView() {
                       chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
                     });
                   }}
-                  aria-label="Base font size in pixels"
+                  aria-label={t("Base font size in pixels")}
                 />
                 <span className="text-xs text-muted-foreground">px</span>
               </div>
@@ -2121,12 +2171,12 @@ function SettingsRouteView() {
           />
 
           <SettingsRow
-            title="Terminal font size"
-            description="Adjust terminal text independently from the app and chat font size."
+            title={t("Terminal font size")}
+            description={t("Adjust terminal text independently from the app and chat font size.")}
             resetAction={
               settings.terminalFontSizePx !== defaults.terminalFontSizePx ? (
                 <SettingResetButton
-                  label="terminal font size"
+                  label={t("Terminal font size")}
                   onClick={() =>
                     updateSettings({
                       terminalFontSizePx: defaults.terminalFontSizePx,
@@ -2162,12 +2212,14 @@ function SettingsRouteView() {
           />
 
           <SettingsRow
-            title="Terminal font"
-            description="Type any monospace font installed on this device (e.g. Fira Code). Leave empty for the default. Fonts that aren't installed fall back to the system monospace."
+            title={t("Terminal font")}
+            description={t(
+              "Type any monospace font installed on this device (e.g. Fira Code). Leave empty for the default. Fonts that aren't installed fall back to the system monospace.",
+            )}
             resetAction={
               settings.terminalFontFamily !== defaults.terminalFontFamily ? (
                 <SettingResetButton
-                  label="terminal font"
+                  label={t("Terminal font")}
                   onClick={() =>
                     updateSettings({
                       terminalFontFamily: defaults.terminalFontFamily,
@@ -2196,9 +2248,9 @@ function SettingsRouteView() {
                     showClear={settings.terminalFontFamily.length > 0}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="Default (JetBrains Mono)"
+                    placeholder={t("Default (JetBrains Mono)")}
                     className="w-full sm:w-56"
-                    aria-label="Terminal font family"
+                    aria-label={t("Terminal font family")}
                   />
                   <AutocompletePopup className="w-56 min-w-56 font-system-ui">
                     <AutocompleteList>
@@ -2217,7 +2269,7 @@ function SettingsRouteView() {
                           {suggestion}
                         </AutocompleteItem>
                       ))}
-                      <AutocompleteEmpty>No matching suggested fonts.</AutocompleteEmpty>
+                      <AutocompleteEmpty>{t("No matching suggested fonts.")}</AutocompleteEmpty>
                     </AutocompleteList>
                   </AutocompletePopup>
                 </Autocomplete>
@@ -2237,14 +2289,14 @@ function SettingsRouteView() {
         </SettingsCard>
       </section>
 
-      <SettingsSection title="Time and reading">
+      <SettingsSection title={t("Time and reading")}>
         <SettingsRow
-          title="Time format"
-          description="System default follows your browser or OS clock preference."
+          title={t("Time format")}
+          description={t("System default follows your browser or OS clock preference.")}
           resetAction={
             settings.timestampFormat !== defaults.timestampFormat ? (
               <SettingResetButton
-                label="time format"
+                label={t("Time format")}
                 onClick={() =>
                   updateSettings({
                     timestampFormat: defaults.timestampFormat,
@@ -2264,18 +2316,18 @@ function SettingsRouteView() {
                   timestampFormat: value,
                 });
               }}
-              ariaLabel="Timestamp format"
+              ariaLabel={t("Timestamp format")}
               triggerClassName="w-full sm:w-40"
-              valueContent={TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}
+              valueContent={t(TIMESTAMP_FORMAT_LABELS[settings.timestampFormat])}
             >
               <SelectItem hideIndicator value="locale">
-                {TIMESTAMP_FORMAT_LABELS.locale}
+                {t(TIMESTAMP_FORMAT_LABELS.locale)}
               </SelectItem>
               <SelectItem hideIndicator value="12-hour">
-                {TIMESTAMP_FORMAT_LABELS["12-hour"]}
+                {t(TIMESTAMP_FORMAT_LABELS["12-hour"])}
               </SelectItem>
               <SelectItem hideIndicator value="24-hour">
-                {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                {t(TIMESTAMP_FORMAT_LABELS["24-hour"])}
               </SelectItem>
             </SettingsSelectControl>
           }
@@ -2286,7 +2338,7 @@ function SettingsRouteView() {
 
   const renderNotificationsPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Activity alerts">
+      <SettingsSection title={t("Activity alerts")}>
         {renderBooleanSettingRow({
           settingKey: "enableTaskCompletionToasts",
           title: "Activity toasts",
@@ -2297,14 +2349,16 @@ function SettingsRouteView() {
         })}
 
         <SettingsRow
-          title="Desktop notifications"
-          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
-          status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+          title={t("Desktop notifications")}
+          description={t(
+            "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background.",
+          )}
+          status={t(buildNotificationSettingsSupportText(browserNotificationPermission))}
           resetAction={
             settings.enableSystemTaskCompletionNotifications !==
             defaults.enableSystemTaskCompletionNotifications ? (
               <SettingResetButton
-                label="desktop notifications"
+                label={t("Desktop notifications")}
                 onClick={() =>
                   updateSettings({
                     enableSystemTaskCompletionNotifications:
@@ -2317,14 +2371,14 @@ function SettingsRouteView() {
           control={
             <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
               <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                Test
+                {t("Test")}
               </Button>
               <Switch
                 checked={settings.enableSystemTaskCompletionNotifications}
                 onCheckedChange={(checked) => {
                   void setSystemNotificationsEnabled(Boolean(checked));
                 }}
-                aria-label="Desktop activity notifications"
+                aria-label={t("Desktop activity notifications")}
               />
             </div>
           }
@@ -2344,33 +2398,32 @@ function SettingsRouteView() {
           </span>
           <div className="min-w-0 space-y-1">
             <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
-              Take an AppSnap to show your agent another app's window
+              {t("Take an AppSnap to show your agent another app's window")}
             </p>
             <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-              Press both <Kbd className="mx-px">⌥ Option</Kbd> keys at once while any app is
-              frontmost. Synara captures that window as an image, brings itself forward, and
-              attaches the snap to a task composer — the capture stays on this device until you send
-              the message.
+              {t(
+                "Press both Option keys at once while any app is frontmost. Synara captures that window as an image, brings itself forward, and attaches the snap to a task composer — the capture stays on this device until you send the message.",
+              )}
             </p>
             {!supported ? (
               <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
                 {appSnapState
-                  ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
-                  : "AppSnap requires the Synara desktop app on macOS."}
+                  ? t(appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
+                  : t("AppSnap requires the Synara desktop app on macOS.")}
               </p>
             ) : null}
           </div>
         </div>
 
-        <SettingsSection title="Capture">
+        <SettingsSection title={t("Capture")}>
           <SettingsRow
-            title="Enable AppSnap"
-            description="Run the capture listener in the background while Synara is open."
-            status={appSnapStatusText(appSnapState)}
+            title={t("Enable AppSnap")}
+            description={t("Run the capture listener in the background while Synara is open.")}
+            status={t(appSnapStatusText(appSnapState))}
             resetAction={
               settings.enableAppSnap !== defaults.enableAppSnap ? (
                 <SettingResetButton
-                  label="AppSnap"
+                  label={t("AppSnap")}
                   onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
                 />
               ) : null
@@ -2380,14 +2433,14 @@ function SettingsRouteView() {
                 checked={enabled}
                 disabled={!supported}
                 onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
-                aria-label="Enable AppSnap"
+                aria-label={t("Enable AppSnap")}
               />
             }
           />
 
           <SettingsRow
-            title="Shortcut"
-            description="Press the left and right Option keys at the same time. The chord works while any app is focused, and can't be remapped yet."
+            title={t("Shortcut")}
+            description={t("Press the left and right Option keys at the same time. The chord works while any app is focused, and can't be remapped yet.")}
             control={
               <KbdGroup>
                 <Kbd>⌥ left</Kbd>
@@ -2398,18 +2451,18 @@ function SettingsRouteView() {
           />
 
           <SettingsRow
-            title="Destination"
-            description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
-            control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+            title={t("Destination")}
+            description={t("Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached.")}
+            control={<span className="text-xs font-medium text-muted-foreground">{t("Automatic")}</span>}
           />
 
           <SettingsRow
-            title="Capture sound"
-            description="Play a short shutter cue when a window is captured."
+            title={t("Capture sound")}
+            description={t("Play a short shutter cue when a window is captured.")}
             resetAction={
               settings.appSnapPlaySound !== defaults.appSnapPlaySound ? (
                 <SettingResetButton
-                  label="capture sound"
+                  label={t("capture sound")}
                   onClick={() => updateSettings({ appSnapPlaySound: defaults.appSnapPlaySound })}
                 />
               ) : null
@@ -2417,14 +2470,14 @@ function SettingsRouteView() {
             control={
               <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
                 <Button size="xs" variant="outline" onClick={() => void playAppSnapCaptureSound()}>
-                  Preview
+                  {t("Preview")}
                 </Button>
                 <Switch
                   checked={settings.appSnapPlaySound}
                   onCheckedChange={(checked) =>
                     updateSettings({ appSnapPlaySound: Boolean(checked) })
                   }
-                  aria-label="Play a sound when an AppSnap is captured"
+                  aria-label={t("Play a sound when an AppSnap is captured")}
                 />
               </div>
             }
@@ -2432,24 +2485,24 @@ function SettingsRouteView() {
         </SettingsSection>
 
         {supported ? (
-          <SettingsSection title="macOS permissions">
+          <SettingsSection title={t("macOS permissions")}>
             <SettingsRow
-              title="Input Monitoring"
-              description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
+              title={t("Input Monitoring")}
+              description={t("Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded.")}
               control={
                 <AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />
               }
             />
             <SettingsRow
-              title="Screen Recording"
-              description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
+              title={t("Screen Recording")}
+              description={t("Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord.")}
               control={
                 <AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />
               }
             />
             <SettingsRow
-              title="Permission status"
-              description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+              title={t("Permission status")}
+              description={t("Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change.")}
               control={
                 <Button
                   type="button"
@@ -2457,7 +2510,7 @@ function SettingsRouteView() {
                   variant="outline"
                   onClick={() => void recheckAppSnapPermissions()}
                 >
-                  Recheck permissions
+                  {t("Recheck permissions")}
                 </Button>
               }
             />
@@ -2469,7 +2522,7 @@ function SettingsRouteView() {
 
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Runtime behavior">
+      <SettingsSection title={t("Runtime behavior")}>
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",
@@ -2488,7 +2541,7 @@ function SettingsRouteView() {
         })}
       </SettingsSection>
 
-      <SettingsSection title="Safety confirmations">
+      <SettingsSection title={t("Safety confirmations")}>
         {renderBooleanSettingRow({
           settingKey: "confirmThreadDelete",
           title: "Delete confirmation",
@@ -2522,7 +2575,7 @@ function SettingsRouteView() {
         <div
           className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
         >
-          Loading managed worktrees...
+          {t("Loading managed worktrees...")}
         </div>
       );
     }
@@ -2536,7 +2589,7 @@ function SettingsRouteView() {
         >
           {serverWorktreesQuery.error instanceof Error
             ? serverWorktreesQuery.error.message
-            : "Unable to load worktrees."}
+            : t("Unable to load worktrees.")}
         </div>
       );
     }
@@ -2545,7 +2598,7 @@ function SettingsRouteView() {
         <div
           className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
         >
-          No app-managed worktrees found yet.
+          {t("No app-managed worktrees found yet.")}
         </div>
       );
     }
@@ -2568,7 +2621,7 @@ function SettingsRouteView() {
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="space-y-0.5">
-                        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Worktree</div>
+                        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{t("Worktree")}</div>
                         <div
                           className={cn(
                             SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
@@ -2581,7 +2634,7 @@ function SettingsRouteView() {
 
                       <div className="space-y-1">
                         <div className="text-[11px] font-medium text-muted-foreground">
-                          Conversations
+                          {t("Conversations")}
                         </div>
                         {worktree.linkedThreads.length > 0 ? (
                           <div className="space-y-1">
@@ -2599,7 +2652,7 @@ function SettingsRouteView() {
                           </div>
                         ) : (
                           <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-                            No conversations linked to this worktree.
+                            {t("No conversations linked to this worktree.")}
                           </div>
                         )}
                       </div>
@@ -2617,7 +2670,7 @@ function SettingsRouteView() {
                           })
                         }
                       >
-                        Delete
+                        {t("Delete")}
                       </Button>
                       {worktree.linkedThreads.length > 0 ? (
                         <p
@@ -2626,7 +2679,7 @@ function SettingsRouteView() {
                             "max-w-40 text-right",
                           )}
                         >
-                          Linked conversations exist. Deleting will ask for confirmation.
+                          {t("Linked conversations exist. Deleting will ask for confirmation.")}
                         </p>
                       ) : null}
                     </div>
@@ -2678,9 +2731,9 @@ function SettingsRouteView() {
           <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
             <ArchiveIcon className="size-5" />
           </div>
-          <div className="text-sm font-medium text-foreground">No archived threads</div>
+          <div className="text-sm font-medium text-foreground">{t("No archived threads")}</div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Archived threads will appear here and can be restored to the sidebar.
+            {t("Archived threads will appear here and can be restored to the sidebar.")}
           </div>
         </div>
       );
@@ -2694,13 +2747,13 @@ function SettingsRouteView() {
         {archivedGroups.map(({ project, threads: projectThreads }) => (
           <SettingsSection
             key={project?.id ?? "unknown-project"}
-            title={project?.name ?? "Unknown project"}
+            title={project?.name ?? t("Unknown project")}
           >
             {projectThreads.map((thread) => (
               <SettingsListRow
                 key={thread.id}
                 title={thread.title}
-                description={`Archived ${formatRelativeTime(thread.archivedAt ?? thread.createdAt)}`}
+                description={`${t("Archived")} ${formatRelativeTime(thread.archivedAt ?? thread.createdAt)}`}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   void handleArchivedThreadContextMenu(thread.id, thread.title, {
@@ -2715,14 +2768,14 @@ function SettingsRouteView() {
                       variant="outline"
                       onClick={() => void unarchiveThread(thread.id)}
                     >
-                      Restore
+                      {t("Restore")}
                     </Button>
                     <Button
                       size="xs"
                       variant="destructive"
                       onClick={() => void deleteArchivedThread(thread.id, thread.title)}
                     >
-                      Delete
+                      {t("Delete")}
                     </Button>
                   </>
                 }
@@ -2767,7 +2820,7 @@ function SettingsRouteView() {
                   textGenerationModel: model,
                 });
               }}
-              ariaLabel="Git text generation model"
+              ariaLabel={t("Git text generation model")}
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
@@ -2835,7 +2888,7 @@ function SettingsRouteView() {
                 <SelectTrigger
                   size="sm"
                   className="w-full sm:w-40"
-                  aria-label="Custom model provider"
+                  aria-label={t("Custom model provider")}
                 >
                   <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                 </SelectTrigger>
@@ -2883,7 +2936,7 @@ function SettingsRouteView() {
                 onClick={() => addCustomModel(selectedCustomModelProvider)}
               >
                 <PlusIcon className="size-3.5" />
-                Add
+                {t("Add")}
               </Button>
             </div>
 
@@ -2920,8 +2973,8 @@ function SettingsRouteView() {
                     onClick={() => setShowAllCustomModels((value) => !value)}
                   >
                     {showAllCustomModels
-                      ? "Show less"
-                      : `Show more (${savedCustomModelRows.length - 5})`}
+                      ? t("Show less")
+                      : `${t("Show more")} (${savedCustomModelRows.length - 5})`}
                   </button>
                 ) : null}
               </div>
@@ -2941,7 +2994,7 @@ function SettingsRouteView() {
           description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
           status={
             hiddenProviderCount > 0
-              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
+              ? `${hiddenProviderCount} ${t("providers hidden")}`
               : isProviderOrderDirty
                 ? "Custom order"
                 : "All providers visible"
@@ -3016,7 +3069,7 @@ function SettingsRouteView() {
               ? "Automatic checks off"
               : outdatedProviderCount > 0
                 ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-                : "No provider updates detected"
+                : t("No provider updates detected")
           }
         >
           {settings.enableProviderUpdateChecks && outdatedProviderStatuses.length > 0 ? (
@@ -3062,10 +3115,10 @@ function SettingsRouteView() {
                           ) : (
                             <DownloadIcon className="size-3.5" />
                           )}
-                          {isProviderUpdateActive ? "Updating" : "Update"}
+                          {isProviderUpdateActive ? t("Updating") : t("Update")}
                         </Button>
                       ) : (
-                        <span className="text-[11px] text-muted-foreground">Manual update</span>
+                        <span className="text-[11px] text-muted-foreground">{t("Manual update")}</span>
                       )
                     }
                   />
@@ -3089,7 +3142,7 @@ function SettingsRouteView() {
               ? "Automatic checks off"
               : outdatedProviderCount > 0
                 ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-                : "No provider updates detected"
+                : t("No provider updates detected")
           }
           resetAction={
             isInstallSettingsDirty ? (
@@ -3570,7 +3623,7 @@ function SettingsRouteView() {
           <SettingsRow
             title="This browser"
             description="Revoke this browser session and close every live Synara connection it owns. A fresh pairing link is required to reconnect."
-            status={`Authenticated as ${serverAuthSessionQuery.data.role ?? "client"}.`}
+            status={`${t("Authenticated as")} ${serverAuthSessionQuery.data.role ?? "client"}。`}
             control={
               <Button
                 size="xs"
@@ -3578,7 +3631,7 @@ function SettingsRouteView() {
                 disabled={isLoggingOut}
                 onClick={() => void logoutCurrentSession()}
               >
-                {isLoggingOut ? "Signing out..." : "Sign out"}
+                {isLoggingOut ? t("Signing out...") : t("Sign out")}
               </Button>
             }
           />
@@ -3592,12 +3645,12 @@ function SettingsRouteView() {
           status={
             <>
               <span className="block break-all font-mono text-[11px] text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
+                {keybindingsConfigPath ?? t("Resolving keybindings path...")}
               </span>
               {openKeybindingsError ? (
                 <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
               ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
+                <span className="mt-1 block">{t("Opens in your preferred editor.")}</span>
               )}
             </>
           }
@@ -3608,7 +3661,7 @@ function SettingsRouteView() {
               disabled={!keybindingsConfigPath || isOpeningKeybindings}
               onClick={openKeybindingsFile}
             >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
+              {isOpeningKeybindings ? t("Opening...") : t("Open file")}
             </Button>
           }
         />
@@ -3618,8 +3671,8 @@ function SettingsRouteView() {
           description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
           status={
             shouldOfferRecoveryTools
-              ? "Visible because projects exist but no chat history is currently available."
-              : "Shown automatically only when recovery actions are relevant."
+              ? t("Visible because projects exist but no chat history is currently available.")
+              : t("Shown automatically only when recovery actions are relevant.")
           }
           control={
             <Button
@@ -3628,7 +3681,7 @@ function SettingsRouteView() {
               disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
               onClick={() => void repairLocalState()}
             >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
+              {isRepairingLocalState ? t("Repairing...") : t("Repair state")}
             </Button>
           }
         >
@@ -3639,7 +3692,7 @@ function SettingsRouteView() {
                 className="flex w-full items-center justify-between text-left"
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
-                <span className="text-xs font-medium text-muted-foreground">What this does</span>
+                <span className="text-xs font-medium text-muted-foreground">{t("What this does")}</span>
                 <ChevronDownIcon
                   className={cn(
                     "size-4 shrink-0 text-muted-foreground transition-transform",
@@ -3654,8 +3707,7 @@ function SettingsRouteView() {
                     SETTINGS_INSET_LIST_CLASS_NAME,
                   )}
                 >
-                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                  stay in place.
+                  {t("Rebuilds local project indexes and refreshes project snapshots. Existing chats stay in place.")}
                 </div>
               ) : null}
             </div>
@@ -3674,7 +3726,7 @@ function SettingsRouteView() {
           description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
           control={
             <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
-              View release history
+              {t("View release history")}
             </Button>
           }
         />
@@ -3760,10 +3812,10 @@ function SettingsRouteView() {
                 <div className="mb-8 flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <h1 className="text-xl font-medium tracking-tight text-foreground">
-                      {activeSectionItem.label}
+                      {t(activeSectionItem.label)}
                     </h1>
                     <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                      {activeSectionItem.description}
+                      {t(activeSectionItem.description)}
                     </p>
                   </div>
                   <Button
@@ -3774,7 +3826,7 @@ function SettingsRouteView() {
                     onClick={() => void restoreDefaults()}
                   >
                     <RotateCcwIcon className="size-3.5" />
-                    Restore defaults
+                    {t("Restore defaults")}
                   </Button>
                 </div>
 

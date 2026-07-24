@@ -98,6 +98,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { isElectron } from "../env";
+import { useUiText } from "../hooks/useUiText";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
@@ -1236,6 +1237,7 @@ export function SidebarSegmentedPicker({
   onSelectView: (view: SidebarView) => void;
   onPrewarmView?: (view: SidebarView) => void;
 }) {
+  const t = useUiText();
   // Optimistic selection: activeView is derived from the route, which only updates
   // after the segment switch's (heavy) render commits — the thumb would otherwise
   // sit still for the whole switch and the click would feel dead. Drive the thumb
@@ -1343,7 +1345,7 @@ export function SidebarSegmentedPicker({
               }}
               onClick={() => handleSelectView(view)}
             >
-              {SIDEBAR_VIEW_LABELS[view]}
+          {t(SIDEBAR_VIEW_LABELS[view])}
             </button>
           );
         })}
@@ -1389,6 +1391,7 @@ function SortableWorkspaceItem({
 }
 
 export default function Sidebar() {
+  const t = useUiText();
   const [showDebugFeatureFlagsMenu, setShowDebugFeatureFlagsMenu] = useState(
     readDebugFeatureFlagsMenuVisibility,
   );
@@ -6961,19 +6964,19 @@ export default function Sidebar() {
                   {isOnWorkspace ? (
                     <SidebarPrimaryAction
                       icon={TerminalIcon}
-                      label="New workspace"
+                      label={t("New workspace")}
                       onClick={handleCreateWorkspace}
                     />
                   ) : isOnStudio ? (
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
-                        label="New studio chat"
+                        label={t("New studio chat")}
                         onClick={handleCreateStudioChat}
                       />
                       <SidebarPrimaryAction
                         icon={SearchIcon}
-                        label="Search"
+                        label={t("Search")}
                         active={searchPaletteOpen}
                         onClick={() => {
                           setSearchPaletteOpen(true);
@@ -6985,14 +6988,14 @@ export default function Sidebar() {
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
-                        label="New thread"
+                        label={t("New project")}
                         onClick={handlePrimaryNewThread}
                         onMouseEnter={prefetchModelsForPrimaryNewThread}
                         onFocus={prefetchModelsForPrimaryNewThread}
                       />
                       <SidebarPrimaryAction
                         icon={SearchIcon}
-                        label="Search"
+                        label={t("Search")}
                         active={searchPaletteOpen}
                         onClick={() => {
                           setSearchPaletteOpen(true);
@@ -7001,7 +7004,7 @@ export default function Sidebar() {
                       />
                       <SidebarPrimaryAction
                         icon={KanbanIcon}
-                        label="Kanban"
+                        label={t("Kanban")}
                         active={isOnKanban}
                         onClick={() => {
                           void navigate({ to: "/kanban" });
@@ -7009,7 +7012,7 @@ export default function Sidebar() {
                       />
                       <SidebarPrimaryAction
                         icon={IoIosGitCompare}
-                        label="Pull requests"
+                        label={t("Pull requests")}
                         active={isOnPullRequests}
                         badge={pullRequestsReviewBadge}
                         onClick={() => {
@@ -7021,7 +7024,7 @@ export default function Sidebar() {
                       />
                       <SidebarPrimaryAction
                         icon={ClockIcon}
-                        label="Automations"
+                        label={t("Automations")}
                         active={isOnAutomations}
                         badge={automationAttentionBadge}
                         onClick={() => {
@@ -7037,7 +7040,7 @@ export default function Sidebar() {
                 <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                   <div className="my-2 h-px w-full bg-border" />
                   <div className="mb-1.5 flex items-center px-2">
-                    <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Workspace</span>
+                    <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>{t("Workspace")}</span>
                   </div>
 
                   <DndContext
@@ -7153,12 +7156,12 @@ export default function Sidebar() {
                 <SidebarGroup className="px-1.5 py-1.5">
                   {renderPinnedThreadsSection()}
                   {renderListSectionHeader(
-                    "Studio",
+                    t("Studio"),
                     <>
                       <SidebarIconButton
                         icon={NewThreadIcon}
-                        label="New studio chat"
-                        tooltip="New studio chat"
+                        label={t("New studio chat")}
+                        tooltip={t("New studio chat")}
                         tooltipSide="top"
                         onClick={handleCreateStudioChat}
                       />
@@ -7175,7 +7178,7 @@ export default function Sidebar() {
                       studioChatThreadRows.map((row) => renderStudioChatItem(row))
                     ) : (
                       <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                        {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
+                        {threadsHydrated ? t("No studio chats yet") : t("Loading Studio...")}
                       </div>
                     )}
                   </SidebarMenu>
@@ -7184,7 +7187,7 @@ export default function Sidebar() {
                 <SidebarGroup className="px-1.5 py-1.5">
                   {renderPinnedThreadsSection()}
                   {renderListSectionHeader(
-                    "Projects",
+                    t("Projects"),
                     <>
                       {standardProjects.length > 0 ? (
                         <SidebarIconButton
@@ -7242,10 +7245,10 @@ export default function Sidebar() {
                             >
                               <FolderClosed className={sidebarGlyphClass("chrome")} />
                               {isPickingFolder
-                                ? "Opening..."
+                                ? t("Opening...")
                                 : isAddingProject
-                                  ? "Adding..."
-                                  : "Browse"}
+                                  ? t("Adding...")
+                                  : t("Browse")}
                             </button>
                           )}
                           <button
@@ -7254,7 +7257,7 @@ export default function Sidebar() {
                             onClick={() => setShowManualPathInput(true)}
                           >
                             <SidebarGlyph icon={TbCursorText} variant="chrome" />
-                            Type path
+                            {t("Type path")}
                           </button>
                         </div>
                       ) : (
@@ -7269,7 +7272,7 @@ export default function Sidebar() {
                             autoCorrect="off"
                             autoCapitalize="off"
                             aria-invalid={addProjectError ? true : undefined}
-                            aria-label="Project path"
+                            aria-label={t("Project path")}
                             className="[&>[data-slot=input]]:pe-9"
                             placeholder="/path/to/project"
                             value={newCwd}
@@ -7360,7 +7363,7 @@ export default function Sidebar() {
 
                   {projectEmptyState === "empty" && (
                     <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                      No projects yet
+                      {t("No projects yet")}
                     </div>
                   )}
                 </SidebarGroup>
@@ -7392,7 +7395,7 @@ export default function Sidebar() {
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
                     <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
-                      Chats
+                      {t("Chats")}
                     </span>
                     <DisclosureChevron
                       open={chatSectionExpanded}
@@ -7409,14 +7412,16 @@ export default function Sidebar() {
                   />
                   <SidebarIconButton
                     icon={NewThreadIcon}
-                    label="Open new chat home"
+                    label={t("Open new chat home")}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                       void handleCreateHomeChat();
                     }}
                     tooltip={
-                      newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"
+                      newChatShortcutLabel
+                        ? `${t("New chat")} (${newChatShortcutLabel})`
+                        : t("New chat")
                     }
                     tooltipSide="top"
                   />
@@ -7432,7 +7437,7 @@ export default function Sidebar() {
                       renderedChatEntries.map((entry) => renderChatItem(entry.row))
                     ) : (
                       <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-                        No chats yet
+                        {t("No chats yet")}
                       </div>
                     )}
                     {canShowMoreChatThreads || canShowLessChatThreads ? (
@@ -7446,7 +7451,7 @@ export default function Sidebar() {
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
                               }
                             >
-                              <span>Show more</span>
+                              <span>{t("Show more")}</span>
                             </SidebarMenuButton>
                           ) : null}
                           {canShowLessChatThreads ? (
@@ -7465,7 +7470,7 @@ export default function Sidebar() {
                                 )
                               }
                             >
-                              <span>Show less</span>
+                              <span>{t("Show less")}</span>
                             </SidebarMenuButton>
                           ) : null}
                         </div>
@@ -7503,7 +7508,7 @@ export default function Sidebar() {
                     <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
                       <SidebarGlyph icon={SettingsIcon} variant="leading" />
                     </SidebarLeadingIcon>
-                    <span>Settings</span>
+                    <span>{t("Settings")}</span>
                   </SidebarMenuButton>
                 )}
                 {showDesktopUpdateButton ? (
