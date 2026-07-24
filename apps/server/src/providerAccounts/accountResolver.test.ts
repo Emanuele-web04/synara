@@ -175,6 +175,31 @@ describe("accountResolver", () => {
     expect(resolved.environment.CODEX_HOME).toBe(resolved.profilePath);
   });
 
+  it("resolves managed Claude accounts through the registered builder", async () => {
+    await Effect.runPromise(
+      storage.writeAccount({
+        schemaVersion: 1,
+        provider: "claudeAgent",
+        ordinal: 1,
+        createdAt: "2026-07-24T00:00:00.000Z",
+        agent: { generation: 1, state: "connected", authMethod: "apiKey" },
+      }),
+    );
+    await Effect.runPromise(storage.writeSecret("claudeAgent", 1, "agent", "sk-ant-managed"));
+
+    const resolved = await Effect.runPromise(
+      resolver.resolveAccountLaunch({
+        provider: "claudeAgent",
+        surface: "agent",
+        explicitOrdinal: 1,
+      }),
+    );
+    expect(resolved.environment.ANTHROPIC_API_KEY).toBe("sk-ant-managed");
+    expect(resolved.environment.CLAUDE_CONFIG_DIR).toBe(resolved.profilePath);
+    expect(resolved.profilePath).toContain(join("accounts", "claudeAgent", "1"));
+    expect(resolved.supportLevel).toBe("supported");
+  });
+
   it("keeps OAuth launches free of injected API keys", async () => {
     await Effect.runPromise(storage.writeAccount(codexAccount({ ordinal: 1 })));
     const resolved = await Effect.runPromise(

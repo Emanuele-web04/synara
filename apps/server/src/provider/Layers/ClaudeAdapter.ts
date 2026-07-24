@@ -100,6 +100,7 @@ import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
+import { applyAccountEnvironmentOverrides } from "../../providerAccounts/accountEnvironment.ts";
 import {
   CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
   decideClaudeContextUsageWarnings,
@@ -4495,6 +4496,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         };
         const claudeSubagents = buildClaudeSdkSubagents();
         const claudeSdkEnv = yield* resolveClaudeSdkEnv;
+        if (input.accountLaunch !== undefined) {
+          // Applied last so managed-account auth (CLAUDE_CONFIG_DIR plus the
+          // account's ANTHROPIC_API_KEY, with conflicting inherited overrides
+          // stripped) always beats inherited env.
+          applyAccountEnvironmentOverrides(claudeSdkEnv, input.accountLaunch.environment);
+        }
         const existing = sessions.get(threadId);
         if (existing) {
           // Retire and prove the old process tree before spawning its replacement.
