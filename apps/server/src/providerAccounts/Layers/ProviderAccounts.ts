@@ -18,6 +18,7 @@ import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessio
 import { readAccountBindingFromRuntimePayload } from "../../provider/accountBindingPayload";
 import { makeAccountConnect } from "../accountConnect";
 import { makeAccountResolver } from "../accountResolver";
+import { makeAppLaunch } from "../appLaunch";
 import { makeAccountStorage } from "../accountStorage";
 import {
   ProviderAccounts,
@@ -74,6 +75,7 @@ export const makeProviderAccounts = Effect.gen(function* () {
   });
   const connect = makeAccountConnect({ storage });
   const resolver = makeAccountResolver({ storage });
+  const appLaunch = makeAppLaunch({ storage, resolver });
 
   yield* storage.ensureRoot.pipe(
     Effect.catchCause((cause) =>
@@ -137,21 +139,39 @@ export const makeProviderAccounts = Effect.gen(function* () {
         .hide(input.provider, input.ordinal)
         .pipe(Effect.mapError(fail("providerAccounts.hide"))),
     launch: (input) =>
-      // Standalone app launching ships with the launcher work; resolve only.
-      resolver
-        .resolveAccountLaunch({
-          provider: input.provider,
-          surface: input.surface,
-          ...(input.ordinal !== undefined ? { explicitOrdinal: input.ordinal } : {}),
-        })
-        .pipe(
-          Effect.map((resolved) => ({
-            launched: false,
-            ordinal: resolved.ordinal,
-            supportLevel: resolved.supportLevel,
-          })),
-          Effect.mapError(fail("providerAccounts.launch")),
-        ),
+      input.surface === "app"
+        ? appLaunch
+            .planAppLaunch({
+              provider: input.provider,
+              ...(input.ordinal !== undefined ? { explicitOrdinal: input.ordinal } : {}),
+            })
+            .pipe(
+              Effect.flatMap((plan) =>
+                appLaunch.launchApp(plan).pipe(
+                  Effect.map(() => ({
+                    launched: true,
+                    ordinal: plan.ordinal,
+                    supportLevel: plan.supportLevel,
+                  })),
+                ),
+              ),
+              Effect.mapError(fail("providerAccounts.launch")),
+            )
+        : // Standalone agent CLI launching ships with the launcher work; resolve only.
+          resolver
+            .resolveAccountLaunch({
+              provider: input.provider,
+              surface: input.surface,
+              ...(input.ordinal !== undefined ? { explicitOrdinal: input.ordinal } : {}),
+            })
+            .pipe(
+              Effect.map((resolved) => ({
+                launched: false,
+                ordinal: resolved.ordinal,
+                supportLevel: resolved.supportLevel,
+              })),
+              Effect.mapError(fail("providerAccounts.launch")),
+            ),
     getIntegrationStatus: Effect.succeed({
       cliIntegrationEnabled: false,
       launcherInstalled: false,
@@ -205,6 +225,8 @@ export const makeProviderAccounts = Effect.gen(function* () {
       resolver
         .resolveAccountLaunch(input)
         .pipe(Effect.mapError(fail("providerAccounts.resolveLaunch"))),
+    planAppLaunch: (input) =>
+      appLaunch.planAppLaunch(input).pipe(Effect.mapError(fail("providerAccounts.planAppLaunch"))),
   };
 
   return service;
