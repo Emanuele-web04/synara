@@ -671,7 +671,7 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
       ...commandOutputOptions(verbose),
       // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
       shell: process.platform === "win32",
-    })`bun install --production --frozen-lockfile --ignore-scripts --linker hoisted`,
+    })`bun install --frozen-lockfile --ignore-scripts --linker hoisted`,
   );
 
   if (platform === "linux") {
