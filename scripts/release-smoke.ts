@@ -290,26 +290,20 @@ function verifyDesktopStageLockAuthority(): void {
     "bun.lock text eol=lf",
     "Expected bun.lock to retain byte-identical LF endings on every release runner.",
   );
-  for (const expectedArg of [
-    '"--production"',
-    '"--frozen-lockfile"',
-    '"--ignore-scripts"',
-    '"--linker"',
-    '"hoisted"',
-    '"--filter"',
-    '"@synara/cli"',
-    '"@synara/desktop"',
-  ]) {
-    assertContains(
-      buildScript,
-      expectedArg,
-      `Expected desktop staging to retain the frozen install argument ${expectedArg}.`,
-    );
-  }
   assertContains(
     buildScript,
-    'prepareWindowsSafeProcess("bun", stageInstallArgs',
-    "Expected desktop staging to preserve Bun arguments without shell reparsing on Windows.",
+    "bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop",
+    "Expected desktop staging to install only from the repository's frozen workspace lockfile.",
+  );
+  assertContains(
+    buildScript,
+    "bun install --production --no-save --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop",
+    "Expected Windows staging to use the verified repository lock without saving Bun's platform-only rewrite.",
+  );
+  assertContains(
+    buildScript,
+    'if (platform === "win")',
+    "Expected the no-save staging exception to remain Windows-only.",
   );
   assertContains(
     buildScript,
