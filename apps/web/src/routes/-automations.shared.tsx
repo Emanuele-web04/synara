@@ -398,12 +398,17 @@ export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
 export function automationListRowIcon(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
-): { readonly name: string; readonly className: string; readonly spin?: boolean } {
+): { readonly name: string; readonly className: string } {
+  // Pausing prevents future dispatches but does not cancel an in-flight run, so the
+  // active run state must take precedence over the definition's enabled flag.
+  if (isLiveRun(latestRun)) {
+    return {
+      name: "loading-circle",
+      className: "size-4 animate-spin text-blue-500 motion-reduce:animate-none",
+    };
+  }
   if (!definition.enabled) {
     return { name: "pause", className: "size-4 text-muted-foreground/40" };
-  }
-  if (isLiveRun(latestRun)) {
-    return { name: "loading-circle", className: "size-4 animate-spin text-blue-500", spin: true };
   }
   if (latestRun?.status === "succeeded") {
     return { name: "circle-check", className: "size-4 text-green-500" };
