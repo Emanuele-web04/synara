@@ -258,6 +258,9 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.enableAdvancedEffortSlider !== defaults.enableAdvancedEffortSlider
+      ? ["Advanced effort slider"]
+      : []),
     ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
     ...(!sameAppSnapShortcut(settings.appSnapShortcut, defaults.appSnapShortcut)
       ? ["AppSnap shortcut"]
@@ -929,6 +932,15 @@ function SettingsRouteView() {
           description: "Show token-by-token output while a response is in progress.",
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "enableAdvancedEffortSlider",
+          title: "Advanced effort slider",
+          description:
+            "Use a direct, draggable effort control for models with multiple reasoning levels. Turn it off to keep the standard effort list.",
+          resetLabel: "advanced effort slider",
+          ariaLabel: "Use the advanced reasoning effort slider",
         })}
 
         {renderBooleanSettingRow({
