@@ -668,15 +668,16 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   if (platform === "win") {
     // Bun 1.3.12 needs a platform-only lockfile rewrite while resolving this
     // copied workspace on Windows even though the repository-level frozen
-    // install already passed. Allow only the temporary staging copy to update;
-    // the verified source lockfile remains untouched.
+    // install already passed. Its --production flag also forces frozen mode,
+    // so use the equivalent dependency omission and allow only the temporary
+    // staging copy to update; the verified source lockfile remains untouched.
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
         // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
         shell: process.platform === "win32",
-      })`bun install --production --no-frozen-lockfile --ignore-scripts --linker hoisted`,
+      })`bun install --omit=dev --ignore-scripts --linker hoisted`,
     );
   } else {
     yield* runCommand(

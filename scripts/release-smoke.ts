@@ -302,13 +302,18 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    "bun install --production --no-frozen-lockfile --ignore-scripts --linker hoisted",
-    "Expected Windows staging to allow Bun's platform-only rewrite of the temporary lockfile copy.",
+    "bun install --omit=dev --ignore-scripts --linker hoisted",
+    "Expected Windows staging to omit dev dependencies without Bun's implicitly frozen production mode.",
   );
   assertNotContains(
     buildScript,
     "--production --frozen-lockfile",
     "Desktop staging must avoid Bun's divergent frozen production-workspace lockfile resolution.",
+  );
+  assertNotContains(
+    buildScript,
+    "bun install --production",
+    "Windows staging must not use Bun's production flag because it implicitly forces frozen mode.",
   );
   assertNotContains(
     buildScript,
