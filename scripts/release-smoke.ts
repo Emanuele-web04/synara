@@ -291,13 +291,18 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    ")`bun pm trust node-pty`,",
-    "Expected Linux desktop staging to build node-pty without enabling other dependency scripts.",
+    ")`npm rebuild node-pty --foreground-scripts`,",
+    "Expected Linux desktop staging to build only node-pty after the script-free frozen install.",
+  );
+  assertNotContains(
+    buildScript,
+    "npm rebuild --foreground-scripts",
+    "Desktop staging must never enable every dependency lifecycle script.",
   );
   assertNotContains(
     buildScript,
     "bun pm trust --all",
-    "Desktop staging must never enable every dependency lifecycle script.",
+    "Desktop staging must never trust every dependency lifecycle script.",
   );
   assertNotContains(
     buildScript,
