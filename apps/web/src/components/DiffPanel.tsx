@@ -24,6 +24,7 @@ import {
   buildFileDiffRenderKey,
   getRenderablePatch,
   resolveDiffCopyText,
+  serializeRenderablePatchText,
   sortFileDiffsByPath,
   summarizePatchTotals,
   summarizeRenderablePatchStats,
@@ -57,6 +58,7 @@ import {
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
+  resolveDiffSelectAllArmed,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
   type DiffPanelTurnScopeIntent,
@@ -401,6 +403,11 @@ export default function DiffPanel({
     setFileTreeOpen(false);
   }, []);
   const patchViewportRef = useRef<HTMLDivElement>(null);
+  const diffSelectAllArmedRef = useRef(false);
+  // Cmd/Ctrl+A keydown targets document.activeElement; clicks on non-focusable diff
+  // chrome leave focus outside the viewport. Remember the last pointer hit so a
+  // subsequent select-all still counts as "inside the diff".
+  const lastPointerInDiffViewportRef = useRef(false);
   const previousDiffOpenRef = useRef(false);
   const routeThreadId = useParams({
     strict: false,
@@ -698,12 +705,17 @@ export default function DiffPanel({
     diffViewKind === "repo" ? repoDiffQuery.isLoading : isLoadingCheckpointDiff;
   const activeReviewHasNoChanges = diffViewKind === "repo" ? hasNoRepoChanges : hasNoNetChanges;
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
-  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   // The parsed patch is structural and theme-agnostic — theming is applied
   // separately via the themed row key and buildDiffPanelUnsafeCSS (cached per
   // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
   // avoids re-parsing the whole patch on every light/dark toggle.
   const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
+  // Serialize from the parsed model so select-all+copy is not limited to mounted
+  // virtualized rows (~150 lines). Fall back to the raw patch string.
+  const diffCopyText = useMemo(
+    () => serializeRenderablePatchText(renderablePatch) ?? resolveDiffCopyText(activeReviewPatch),
+    [renderablePatch, activeReviewPatch],
+  );
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
       return [];
@@ -713,6 +725,49 @@ export default function DiffPanel({
   useEffect(() => {
     onRenderableFilesChange?.(renderableFiles, activeReviewIsLoading);
   }, [activeReviewIsLoading, onRenderableFilesChange, renderableFiles]);
+
+  // Virtualized shadow-DOM diffs only mount ~150 rows. Arm on Cmd/Ctrl+A inside
+  // the viewport, then hijack the document `copy` event to write the full model.
+  useEffect(() => {
+    const isEventWithinDiffViewport = (event: Event) => {
+      const viewport = patchViewportRef.current;
+      return viewport ? event.composedPath().includes(viewport) : false;
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isWithinDiffViewport =
+        isEventWithinDiffViewport(event) || lastPointerInDiffViewportRef.current;
+      diffSelectAllArmedRef.current = resolveDiffSelectAllArmed(
+        diffSelectAllArmedRef.current,
+        event,
+        isWithinDiffViewport,
+      );
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      lastPointerInDiffViewportRef.current = isEventWithinDiffViewport(event);
+      diffSelectAllArmedRef.current = false;
+    };
+    const handleCopy = (event: ClipboardEvent) => {
+      if (!diffSelectAllArmedRef.current) {
+        return;
+      }
+      diffSelectAllArmedRef.current = false;
+      if (!diffCopyText || !event.clipboardData) {
+        return;
+      }
+      event.preventDefault();
+      event.clipboardData.setData("text/plain", diffCopyText);
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("copy", handleCopy, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("copy", handleCopy, true);
+    };
+  }, [diffCopyText]);
+
   const activePatchStat = useMemo(
     () => summarizeRenderablePatchStats(renderablePatch),
     [renderablePatch],

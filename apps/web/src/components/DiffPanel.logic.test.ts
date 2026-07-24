@@ -17,6 +17,7 @@ import {
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
+  resolveDiffSelectAllArmed,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
@@ -362,5 +363,52 @@ describe("diff panel view source helpers", () => {
 
     expect(filterRenderableFilesForSearch(files, "diffpanel")).toHaveLength(1);
     expect(filterRenderableFilesForSearch(files, "")).toHaveLength(2);
+  });
+});
+
+describe("resolveDiffSelectAllArmed", () => {
+  it("arms on Cmd/Ctrl+A inside the diff viewport", () => {
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "a", metaKey: true, ctrlKey: false }, true),
+    ).toBe(true);
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "A", metaKey: false, ctrlKey: true }, true),
+    ).toBe(true);
+  });
+
+  it("does not arm on Cmd/Ctrl+A outside the diff viewport", () => {
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "a", metaKey: true, ctrlKey: false }, false),
+    ).toBe(false);
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "a", metaKey: false, ctrlKey: true }, false),
+    ).toBe(false);
+  });
+
+  it("preserves the armed state through the copy half of the gesture", () => {
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "c", metaKey: true, ctrlKey: false }, false),
+    ).toBe(true);
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "c", metaKey: true, ctrlKey: false }, false),
+    ).toBe(false);
+  });
+
+  it("preserves the armed state through bare modifier keydowns", () => {
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "Meta", metaKey: true, ctrlKey: false }, false),
+    ).toBe(true);
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "Shift", metaKey: false, ctrlKey: false }, false),
+    ).toBe(true);
+  });
+
+  it("disarms on any other key that starts a fresh selection", () => {
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "ArrowDown", metaKey: false, ctrlKey: false }, true),
+    ).toBe(false);
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "x", metaKey: false, ctrlKey: false }, true),
+    ).toBe(false);
   });
 });
