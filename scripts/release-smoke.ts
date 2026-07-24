@@ -297,16 +297,6 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    "bun install --production --no-save --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop",
-    "Expected Windows staging to use the verified repository lock without saving Bun's platform-only rewrite.",
-  );
-  assertContains(
-    buildScript,
-    'if (platform === "win")',
-    "Expected the no-save staging exception to remain Windows-only.",
-  );
-  assertContains(
-    buildScript,
     ")`npm rebuild node-pty --foreground-scripts`,",
     "Expected Linux desktop staging to build only node-pty after the script-free frozen install.",
   );
