@@ -1,6 +1,7 @@
 // FILE: accountEnvironment.ts
 // Purpose: Provider environment builder registry for managed account launches.
-// Layer: Server service internals (plan section 13)
+// Layer: Cross-package pure utility (plan section 13); used by the server
+//        resolver and the standalone account launcher.
 // Exports: registerAccountEnvironmentBuilder, resolveAccountEnvironmentBuilder,
 //          applyAccountEnvironmentOverrides, ACCOUNT_ENV_UNSET.
 
@@ -37,6 +38,7 @@ export type AccountEnvironmentBuilder = (
 
 // Providers register their builder from their own module (see
 // codexAccountEnvironment.ts); adding a provider never edits a central switch.
+// TODO(PR3-PR5): register claudeAgent, cursor, and grok builders.
 const builders = new Map<SupportedAccountProvider, AccountEnvironmentBuilder>();
 
 export function registerAccountEnvironmentBuilder(

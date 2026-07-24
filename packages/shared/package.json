@@ -212,6 +212,14 @@
       "types": "./src/providerAccounts/launcherProtocol.ts",
       "import": "./src/providerAccounts/launcherProtocol.ts"
     },
+    "./providerAccounts/accountEnvironment": {
+      "types": "./src/providerAccounts/accountEnvironment.ts",
+      "import": "./src/providerAccounts/accountEnvironment.ts"
+    },
+    "./providerAccounts/codexAccountEnvironment": {
+      "types": "./src/providerAccounts/codexAccountEnvironment.ts",
+      "import": "./src/providerAccounts/codexAccountEnvironment.ts"
+    },
     "./migrationRecovery": {
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
