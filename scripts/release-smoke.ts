@@ -304,6 +304,11 @@ function verifyDesktopStageLockAuthority(): void {
     "bun pm trust --all",
     "Desktop staging must never trust every dependency lifecycle script.",
   );
+  assertContains(
+    buildScript,
+    '"scripts",\n    "node_modules",\n    ".bin",',
+    "Expected desktop packaging to resolve electron-builder from its owning scripts workspace.",
+  );
   assertNotContains(
     buildScript,
     ")`bun install --production`,",
