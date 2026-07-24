@@ -22,6 +22,7 @@ import {
   type ProviderUserInputAnswers,
   ThreadId,
   TurnId,
+  type ProviderAccountLaunchContext,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
@@ -50,6 +51,7 @@ import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
 import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { applyAccountEnvironmentOverrides } from "./providerAccounts/accountEnvironment.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import {
   teardownChildProcessTree,
@@ -245,6 +247,8 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+  /** Server-private managed account launch context; never sent to clients. */
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -802,13 +806,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async buildSessionProcessEnv(
     homePath: string | undefined,
     gatewayBearerToken: string | undefined,
+    accountLaunch?: ProviderAccountLaunchContext,
   ) {
+    // Managed accounts pin CODEX_HOME to the account agent home and skip the
+    // shared overlay config, so nothing from the native home can leak in.
     const env = await buildCodexProcessEnv({
-      ...(homePath ? { homePath } : {}),
-      ...(this.agentGatewayMcp
+      ...(accountLaunch?.profilePath
+        ? { homePath: accountLaunch.profilePath }
+        : homePath
+          ? { homePath }
+          : {}),
+      ...(this.agentGatewayMcp && accountLaunch === undefined
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
         : {}),
     });
+    if (accountLaunch !== undefined) {
+      // Applied last so managed-account auth always beats inherited env.
+      applyAccountEnvironmentOverrides(env, accountLaunch.environment);
+    }
     if (gatewayBearerToken) {
       env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
     }
@@ -874,6 +889,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         env: await this.buildSessionProcessEnv(
           codexHomePath,
           gatewaySessionLease?.connection.bearerToken,
+          input.accountLaunch,
         ),
       });
 

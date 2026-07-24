@@ -1717,6 +1717,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.accountLaunch !== undefined ? { accountLaunch: input.accountLaunch } : {}),
         runtimeMode: input.runtimeMode,
         ...codexModelSelectionOverrides(input.modelSelection),
       };

@@ -31,6 +31,7 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSteerTurnInput,
+  ProviderAccountLaunchContext,
   ProviderSession,
   ProviderSessionStartInput,
   ServerVoiceTranscriptionInput,
@@ -43,6 +44,15 @@ import type { Effect } from "effect";
 import type { Stream } from "effect";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
+
+/**
+ * Server-private adapter start input: extends the public contract with the
+ * resolved account launch context, which must never cross a public RPC
+ * boundary (it can contain credentials in its environment).
+ */
+export type ProviderAdapterStartSessionInput = ProviderSessionStartInput & {
+  readonly accountLaunch?: ProviderAccountLaunchContext;
+};
 
 /**
  * Structured payload for steering a running subagent. Mirrors the turn-input
@@ -97,7 +107,7 @@ export interface ProviderAdapterShape<TError> {
    * Start a provider-backed session.
    */
   readonly startSession: (
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterStartSessionInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
