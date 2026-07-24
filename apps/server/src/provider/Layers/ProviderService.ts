@@ -2176,6 +2176,48 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
 
+    const launchApp: NonNullable<ProviderServiceShape["launchApp"]> = (input) =>
+      Effect.gen(function* () {
+        const adapter = yield* registry.getByProvider(input.provider);
+        if (!adapter.launchApp) {
+          return yield* toValidationError(
+            "ProviderService.launchApp",
+            `Desktop app launch is unavailable for provider '${input.provider}'.`,
+          );
+        }
+        if (providerAccounts === undefined || !isSupportedAccountProvider(input.provider)) {
+          return yield* adapter.launchApp({ ordinal: input.ordinal ?? 0 });
+        }
+        const resolved = yield* providerAccounts
+          .resolveLaunch({
+            provider: input.provider,
+            surface: "app",
+            ...(input.ordinal !== undefined ? { explicitOrdinal: input.ordinal } : {}),
+          })
+          .pipe(
+            // A selected managed account that is missing or disconnected
+            // fails closed; never fall back to the native app silently.
+            Effect.mapError((cause) =>
+              toValidationError("ProviderService.launchApp", cause.detail, cause),
+            ),
+          );
+        return yield* adapter.launchApp({
+          ordinal: resolved.ordinal,
+          ...(resolved.ordinal > 0
+            ? {
+                accountLaunch: {
+                  ordinal: resolved.ordinal,
+                  generation: resolved.generation,
+                  environment: resolved.environment,
+                  ...(resolved.profilePath !== undefined
+                    ? { profilePath: resolved.profilePath }
+                    : {}),
+                },
+              }
+            : {}),
+        });
+      });
+
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -2351,6 +2393,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,
+      launchApp,
       rollbackConversation,
       compactThread,
       closeRuntimeEvents,

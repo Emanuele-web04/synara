@@ -32,6 +32,7 @@ import type {
   ProviderSendTurnInput,
   ProviderSteerTurnInput,
   ProviderAccountLaunchContext,
+  ProviderAppLaunchPlan,
   ProviderSession,
   ProviderSessionStartInput,
   ServerVoiceTranscriptionInput,
@@ -53,6 +54,16 @@ export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | 
 export type ProviderAdapterStartSessionInput = ProviderSessionStartInput & {
   readonly accountLaunch?: ProviderAccountLaunchContext;
 };
+
+/**
+ * Server-private desktop app launch input: carries the resolved account
+ * launch context (absent for the native account 0), which must never cross a
+ * public RPC boundary.
+ */
+export interface ProviderAdapterAppLaunchInput {
+  readonly ordinal: number;
+  readonly accountLaunch?: ProviderAccountLaunchContext;
+}
 
 /**
  * Structured payload for steering a running subagent. Mirrors the turn-input
@@ -291,4 +302,11 @@ export interface ProviderAdapterShape<TError> {
   readonly transcribeVoice?: (
     input: ServerVoiceTranscriptionInput,
   ) => Effect.Effect<ServerVoiceTranscriptionResult, TError>;
+
+  /**
+   * Build a provider-specific desktop app launch plan when supported.
+   */
+  readonly launchApp?: (
+    input: ProviderAdapterAppLaunchInput,
+  ) => Effect.Effect<ProviderAppLaunchPlan, TError>;
 }
