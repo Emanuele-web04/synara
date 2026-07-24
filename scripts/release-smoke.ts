@@ -337,8 +337,23 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    '"scripts",\n    "node_modules",\n    ".bin",',
-    "Expected desktop packaging to resolve electron-builder from its owning scripts workspace.",
+    'createRequire(\n  new URL("./package.json", import.meta.url),',
+    "Expected desktop packaging to resolve dependencies from the owning scripts workspace.",
+  );
+  assertContains(
+    buildScript,
+    'requireFromScriptsWorkspace.resolve("electron-builder/cli.js")',
+    "Expected desktop packaging to resolve electron-builder across Bun hoisting layouts.",
+  );
+  assertContains(
+    buildScript,
+    "`${process.execPath} ${electronBuilderCliPath}",
+    "Expected desktop packaging to invoke electron-builder through Node without platform-specific bin shims.",
+  );
+  assertNotContains(
+    buildScript,
+    "electron-builder.cmd",
+    "Desktop packaging must not depend on a Windows bin shim that Bun may hoist elsewhere.",
   );
   assertContains(
     buildScript,
