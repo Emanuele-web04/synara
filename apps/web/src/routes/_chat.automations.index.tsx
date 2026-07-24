@@ -33,13 +33,14 @@ import {
   AutomationDialog,
   acknowledgedRiskIdsForFormWarnings,
   automationAttentionLabel,
-  automationStatusDotClass,
+  automationListRowIcon,
   buildAutomationFormWarnings,
   createInputFromForm,
   formatCadenceLong,
   formatNextRun,
   formFromDefinition,
   isFormSubmittable,
+  isLiveRun,
   isRowInteractiveEventTarget,
   isUnresolvedTriageResult,
   providerOptionsForAutomationEdit,
@@ -54,19 +55,6 @@ export const Route = createFileRoute("/_chat/automations/")({
 });
 
 const selectAllThreads = createAllThreadsSelector();
-
-type LiveAutomationRun = AutomationRun & {
-  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
-};
-
-function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
-  return (
-    run?.status === "pending" ||
-    run?.status === "claimed" ||
-    run?.status === "running" ||
-    run?.status === "waiting-for-approval"
-  );
-}
 
 /** Unread successful result the user has not opened yet — surfaced as quiet row meta. */
 function hasUnreadResult(run: AutomationRun | null): boolean {
@@ -289,8 +277,6 @@ function AutomationsRouteView() {
 
   const renderRow = (definition: AutomationDefinition) => {
     const latestRun: AutomationRun | null = runsByAutomationId.get(definition.id)?.[0] ?? null;
-    const needsAttention =
-      definition.enabled && latestRun !== null && automationAttentionLabel(latestRun) !== null;
     return (
       <AutomationListRow
         key={definition.id}
@@ -301,18 +287,10 @@ function AutomationsRouteView() {
             params: { automationId: definition.id },
           })
         }
-        leading={
-          <CentralIcon
-            name={
-              definition.enabled
-                ? needsAttention
-                  ? "exclamation-circle"
-                  : "circle-placeholder-on"
-                : "play-circle"
-            }
-            className={cn("size-4", automationStatusDotClass(definition, latestRun))}
-          />
-        }
+        leading={(() => {
+          const icon = automationListRowIcon(definition, latestRun);
+          return <CentralIcon name={icon.name} className={icon.className} />;
+        })()}
         title={definition.name}
         detail={rowSubtitle(definition, latestRun, now)}
         meta={hasUnreadResult(latestRun) ? "New result" : undefined}
