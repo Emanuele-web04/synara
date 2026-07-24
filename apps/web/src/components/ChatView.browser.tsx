@@ -4493,7 +4493,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
-          const projectCreateCommand = findDispatchedCommand("project.create");
+          const projectCreateCommand = wsRequests
+            .map((request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              "command" in request &&
+              request.command &&
+              typeof request.command === "object" &&
+              "type" in request.command &&
+              request.command.type === "project.create"
+                ? (request.command as Record<string, unknown>)
+                : null,
+            )
+            .find((command) => command?.workspaceRoot === "/repo/spaced-project");
           expect(projectCreateCommand).toBeDefined();
           expect(projectCreateCommand?.workspaceRoot).toBe("/repo/spaced-project");
           expect(projectCreateCommand?.spaceId).toBe(createdSpaceId);
