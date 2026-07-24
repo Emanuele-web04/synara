@@ -3,12 +3,13 @@
  *
  * @module GrokAcpSupport
  */
-import { type GrokModelOptions } from "@synara/contracts";
+import { type GrokModelOptions, type ProviderAccountLaunchContext } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { applyAccountEnvironmentOverrides } from "../../providerAccounts/accountEnvironment.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   AcpSessionRuntime,
@@ -30,6 +31,7 @@ export interface GrokAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly grokSettings: GrokAcpRuntimeSettings | null | undefined;
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface GrokAcpModelSelectionErrorContext {
@@ -58,6 +60,7 @@ export function hasGrokApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean 
 export function buildGrokAcpSpawnInput(
   grokSettings: GrokAcpRuntimeSettings | null | undefined,
   cwd: string,
+  accountLaunch?: ProviderAccountLaunchContext,
 ): AcpSpawnInput {
   const args = ["agent", "--no-leader"];
   if (grokSettings?.alwaysApprove === true) {
@@ -74,11 +77,18 @@ export function buildGrokAcpSpawnInput(
   }
   args.push("stdio");
 
+  const env = buildProviderChildEnvironment({ provider: "grok" });
+  if (accountLaunch !== undefined) {
+    // Applied last so managed-account auth (GROK_HOME, XAI_API_KEY) always
+    // beats inherited env.
+    applyAccountEnvironmentOverrides(env, accountLaunch.environment);
+  }
+
   return {
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "grok" }),
+    env,
   };
 }
 
@@ -88,10 +98,11 @@ function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): Reado
 
 export const resolveGrokAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
+  env: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    if (hasGrokApiKeyEnv() && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+    if (hasGrokApiKeyEnv(env) && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
       return GROK_API_KEY_AUTH_METHOD_ID;
     }
     if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
@@ -111,11 +122,15 @@ export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
+    const spawn = buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.accountLaunch);
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd),
-        resolveAuthMethodId: resolveGrokAcpAuthMethodId,
+        spawn,
+        // Authentication selection must examine the exact environment supplied
+        // to the child process, not process-global credentials (plan 8.4).
+        resolveAuthMethodId: (initializeResult) =>
+          resolveGrokAcpAuthMethodId(initializeResult, spawn.env),
         authenticateMeta: { headless: true },
       }).pipe(
         Layer.provide(

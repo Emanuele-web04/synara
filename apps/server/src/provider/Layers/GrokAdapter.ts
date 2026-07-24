@@ -976,12 +976,14 @@ export function makeGrokAdapter(
             reasoningEffort: effectiveGrokSettings.reasoningEffort,
             alwaysApprove: effectiveGrokSettings.alwaysApprove === true,
             binaryPath: effectiveGrokSettings.binaryPath ?? "grok",
+            accountOrdinal: input.accountLaunch?.ordinal,
           });
 
           const acp = yield* makeGrokAcpRuntime({
             grokSettings: effectiveGrokSettings,
             childProcessSpawner,
             cwd,
+            ...(input.accountLaunch !== undefined ? { accountLaunch: input.accountLaunch } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
             ...(agentGatewayCredentials
