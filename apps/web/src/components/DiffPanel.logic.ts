@@ -275,7 +275,7 @@ export function areAllRenderableFilesCollapsed(
 
 /**
  * Track whether the diff viewport is in a "select all then copy" gesture so the copy
- * handler can substitute the full serialized diff instead of the few mounted rows the
+ * handler can substitute the full raw diff instead of the few mounted rows the
  * virtualizer left in the DOM.
  *
  * The diff surface renders into shadow DOM, so a native Cmd/Ctrl+A actually selects the
@@ -302,4 +302,12 @@ export function resolveDiffSelectAllArmed(
     return previous;
   }
   return false;
+}
+
+export function resolveDiffSelectAllWithinViewport(
+  eventWithinDiffViewport: boolean,
+  lastPointerInDiffViewport: boolean,
+  isTextEditingTarget: boolean,
+): boolean {
+  return eventWithinDiffViewport || (lastPointerInDiffViewport && !isTextEditingTarget);
 }

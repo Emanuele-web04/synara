@@ -18,6 +18,7 @@ import {
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
   resolveDiffSelectAllArmed,
+  resolveDiffSelectAllWithinViewport,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
@@ -410,5 +411,19 @@ describe("resolveDiffSelectAllArmed", () => {
     expect(
       resolveDiffSelectAllArmed(true, { key: "x", metaKey: false, ctrlKey: false }, true),
     ).toBe(false);
+  });
+});
+
+describe("resolveDiffSelectAllWithinViewport", () => {
+  it("uses the last pointer hit for non-focusable diff chrome", () => {
+    expect(resolveDiffSelectAllWithinViewport(false, true, false)).toBe(true);
+  });
+
+  it("does not use stale diff pointer state for an external text editor", () => {
+    expect(resolveDiffSelectAllWithinViewport(false, true, true)).toBe(false);
+  });
+
+  it("keeps direct events inside the diff authoritative", () => {
+    expect(resolveDiffSelectAllWithinViewport(true, false, true)).toBe(true);
   });
 });

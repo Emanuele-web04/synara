@@ -24,7 +24,6 @@ import {
   buildFileDiffRenderKey,
   getRenderablePatch,
   resolveDiffCopyText,
-  serializeRenderablePatchText,
   sortFileDiffsByPath,
   summarizePatchTotals,
   summarizeRenderablePatchStats,
@@ -59,6 +58,7 @@ import {
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
   resolveDiffSelectAllArmed,
+  resolveDiffSelectAllWithinViewport,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
   type DiffPanelTurnScopeIntent,
@@ -710,12 +710,7 @@ export default function DiffPanel({
   // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
   // avoids re-parsing the whole patch on every light/dark toggle.
   const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
-  // Serialize from the parsed model so select-all+copy is not limited to mounted
-  // virtualized rows (~150 lines). Fall back to the raw patch string.
-  const diffCopyText = useMemo(
-    () => serializeRenderablePatchText(renderablePatch) ?? resolveDiffCopyText(activeReviewPatch),
-    [renderablePatch, activeReviewPatch],
-  );
+  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
       return [];
@@ -727,15 +722,26 @@ export default function DiffPanel({
   }, [activeReviewIsLoading, onRenderableFilesChange, renderableFiles]);
 
   // Virtualized shadow-DOM diffs only mount ~150 rows. Arm on Cmd/Ctrl+A inside
-  // the viewport, then hijack the document `copy` event to write the full model.
+  // the viewport, then hijack the document `copy` event to write the full raw patch.
   useEffect(() => {
     const isEventWithinDiffViewport = (event: Event) => {
       const viewport = patchViewportRef.current;
       return viewport ? event.composedPath().includes(viewport) : false;
     };
+    const isTextEditingEvent = (event: Event) =>
+      event.composedPath().some(
+        (target) =>
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          (target instanceof HTMLElement &&
+            (target.isContentEditable || target.getAttribute("role") === "textbox")),
+      );
     const handleKeyDown = (event: KeyboardEvent) => {
-      const isWithinDiffViewport =
-        isEventWithinDiffViewport(event) || lastPointerInDiffViewportRef.current;
+      const isWithinDiffViewport = resolveDiffSelectAllWithinViewport(
+        isEventWithinDiffViewport(event),
+        lastPointerInDiffViewportRef.current,
+        isTextEditingEvent(event),
+      );
       diffSelectAllArmedRef.current = resolveDiffSelectAllArmed(
         diffSelectAllArmedRef.current,
         event,
@@ -744,6 +750,13 @@ export default function DiffPanel({
     };
     const handlePointerDown = (event: PointerEvent) => {
       lastPointerInDiffViewportRef.current = isEventWithinDiffViewport(event);
+      diffSelectAllArmedRef.current = false;
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isEventWithinDiffViewport(event)) {
+        return;
+      }
+      lastPointerInDiffViewportRef.current = false;
       diffSelectAllArmedRef.current = false;
     };
     const handleCopy = (event: ClipboardEvent) => {
@@ -760,10 +773,12 @@ export default function DiffPanel({
 
     document.addEventListener("keydown", handleKeyDown, true);
     document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("focusin", handleFocusIn, true);
     document.addEventListener("copy", handleCopy, true);
     return () => {
       document.removeEventListener("keydown", handleKeyDown, true);
       document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("focusin", handleFocusIn, true);
       document.removeEventListener("copy", handleCopy, true);
     };
   }, [diffCopyText]);
