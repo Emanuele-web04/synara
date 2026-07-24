@@ -7,6 +7,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import rootPackageJson from "../package.json" with { type: "json" };
@@ -38,6 +39,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+const requireFromScriptsWorkspace = createRequire(
+  new URL("./package.json", import.meta.url),
+);
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -642,6 +646,7 @@ const verifyStagedPatchedDependencies = Effect.fn("verifyStagedPatchedDependenci
 const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies")(function* (
   repoRoot: string,
   stageAppDir: string,
+  platform: typeof BuildPlatform.Type,
   verbose: boolean,
 ) {
   const path = yield* Path.Path;
@@ -664,14 +669,42 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   yield* Effect.log(
     "[desktop-artifact] Installing staged production dependencies from the repository lockfile...",
   );
-  yield* runCommand(
-    ChildProcess.make({
-      cwd: stageAppDir,
-      ...commandOutputOptions(verbose),
-      // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
-      shell: process.platform === "win32",
-    })`bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop`,
-  );
+  if (platform === "win") {
+    // Bun 1.3.12 needs a platform-only lockfile rewrite while resolving this
+    // copied workspace on Windows even though the repository-level frozen
+    // install already passed. Its --production flag also forces frozen mode,
+    // so use the equivalent dependency omission and allow only the temporary
+    // staging copy to update; the verified source lockfile remains untouched.
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        ...commandOutputOptions(verbose),
+        // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+        shell: process.platform === "win32",
+      })`bun install --omit=dev --ignore-scripts --linker hoisted`,
+    );
+  } else {
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        ...commandOutputOptions(verbose),
+      })`bun install --frozen-lockfile --ignore-scripts --linker hoisted`,
+    );
+  }
+
+  if (platform === "linux") {
+    // node-pty's npm package does not ship Linux prebuilds. Keep the frozen
+    // install's blanket lifecycle-script block, then rebuild only node-pty so
+    // npm supplies node-gyp to its install script and compiles the native
+    // binding required by the packaged terminal.
+    yield* Effect.log("[desktop-artifact] Building staged Linux node-pty binding...");
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        ...commandOutputOptions(verbose),
+      })`npm rebuild node-pty --foreground-scripts`,
+    );
+  }
 
   yield* verifyStagedPatchedDependencies(repoRoot, stageAppDir);
 
@@ -1012,7 +1045,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     },
   };
 
-  yield* installFrozenStageDependencies(repoRoot, stageAppDir, options.verbose);
+  yield* installFrozenStageDependencies(repoRoot, stageAppDir, options.platform, options.verbose);
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
@@ -1051,20 +1084,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log(
     `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
-  const electronBuilderExecutable = path.join(
-    repoRoot,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "electron-builder.cmd" : "electron-builder",
-  );
+  const electronBuilderCliPath = requireFromScriptsWorkspace.resolve("electron-builder/cli.js");
   yield* runCommand(
     ChildProcess.make({
       cwd: stageAppDir,
       env: buildEnv,
       ...commandOutputOptions(options.verbose),
-      // Windows needs shell mode to resolve .cmd shims.
-      shell: process.platform === "win32",
-    })`${electronBuilderExecutable} ${platformConfig.cliFlag} --${options.arch} --publish never`,
+    })`${process.execPath} ${electronBuilderCliPath} ${platformConfig.cliFlag} --${options.arch} --publish never`,
   );
 
   const stageDistDir = path.join(stageAppDir, "dist");

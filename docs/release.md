@@ -21,7 +21,8 @@ This document covers build-only native validation and publishing desktop release
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
 - Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
 - Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
-- Signing is optional and auto-detected per platform from secrets.
+- Published macOS and Windows artifacts must be signed. Build-only runs may
+  produce unsigned artifacts when signing secrets are unavailable.
 
 ## Desktop auto-update notes
 
@@ -107,6 +108,7 @@ Required secrets used by the workflow:
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
+- `APPLE_TEAM_ID`
 
 Checklist:
 
@@ -121,6 +123,7 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
+   - `APPLE_TEAM_ID`: Developer Team ID embedded in the signed application
 8. Re-run a tag release and confirm macOS artifacts are signed/notarized.
 
 Notes:
@@ -130,10 +133,10 @@ Notes:
 
 ## 3) Azure Trusted Signing setup (Windows)
 
-Windows signing is optional for both the `0.4.2` compatibility bridge and the
-clean `0.5.0` release. When any Azure signing secret is absent, the workflow
-continues and produces an unsigned NSIS installer, matching previous releases.
-Signing is enabled only when all of the following secrets are present:
+Published Windows installers must be signed with Azure Trusted Signing. The
+workflow fails closed when any required signing value is absent; unsigned
+Windows artifacts are supported only for build-only validation runs. Signing
+requires all of the following secrets:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -142,8 +145,9 @@ Signing is enabled only when all of the following secrets are present:
 - `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
 - `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
 - `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
+- `AZURE_TRUSTED_SIGNING_SUBJECT_DN`
 
-Optional signing checklist:
+Signing checklist:
 
 1. Create Azure Trusted Signing account and certificate profile.
 2. Record ATS values:
@@ -151,15 +155,16 @@ Optional signing checklist:
    - Account name
    - Certificate profile name
    - Publisher name
+   - Full certificate subject distinguished name
 3. Create/choose an Entra app registration (service principal).
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
 7. Re-run a build-only workflow and confirm the Windows installer is signed.
 
-If Windows signing is not being configured, no placeholder or empty secrets are
-needed. Leave them absent and verify the workflow reports that it is building an
-unsigned installer.
+Before tagging a release, run a build-only workflow and verify the generated
+installer's Authenticode identity matches both the configured publisher name and
+full subject distinguished name.
 
 ## 4) Ongoing release checklist
 
@@ -180,8 +185,7 @@ unsigned installer.
 
 - macOS build unsigned when expected signed:
   - Check all Apple secrets are populated and non-empty.
-- Windows build unsigned when expected signed:
-  - Check all Azure ATS and auth secrets are populated and non-empty.
+- Published Windows build rejected before packaging:
+  - Check all eight Azure ATS, identity, and auth secrets are populated and non-empty.
 - Build fails with signing error:
-  - Retry with all Azure signing secrets removed to use the supported unsigned path.
   - Re-check certificate/profile names and tenant/client credentials.

@@ -223,6 +223,7 @@ jobs:
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
           AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
           SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
+          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
           SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
           SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
           LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
@@ -278,11 +279,11 @@ jobs:
               echo "Windows signing enabled (Azure Trusted Signing)."
               signed=true
               args+=(--signed)
-            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
+            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" && "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" != "true" ]]; then
               echo "Publishing Windows artifacts requires every Azure Trusted Signing secret."
               exit 1
             else
-              echo "Build-only Windows artifact will be unsigned because publication is disabled."
+              echo "Windows artifact will be unsigned under the explicit version-scoped release exception."
             fi
           else
             echo "Signing disabled for ${{ matrix.platform }}."
@@ -348,6 +349,7 @@ jobs:
           LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
           PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
           SIGNED_ARTIFACT: ${{ steps.build_artifact.outputs.signed }}
+          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
         run: |
           node scripts/write-release-artifact-provenance.ts \
             --assets-dir release-publish \
@@ -360,6 +362,7 @@ jobs:
             --lockfile-sha256 "$LOCKFILE_SHA256" \
             --publication "$PUBLISH_RELEASE" \
             --signed "$SIGNED_ARTIFACT" \
+            --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
             --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
             --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
             --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"

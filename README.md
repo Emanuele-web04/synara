@@ -1,5 +1,9 @@
 # Synara
 
+Synara is now an MCP-native agent harness in two directions: supported agents running inside Synara
+automatically receive tools to coordinate Synara tasks and automations, while Codex, Claude, and
+other local MCP clients can connect through a scoped integration to launch and follow Synara work.
+
 To let a local MCP-capable app create and follow scoped Synara tasks, see
 [External MCP integrations](docs/external-mcp.md).
 
