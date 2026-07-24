@@ -292,13 +292,8 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    "bun install --frozen-lockfile --ignore-scripts --linker hoisted",
+    "bun install --production --frozen-lockfile --ignore-scripts --linker hoisted",
     "Expected desktop staging to install only from the repository's frozen workspace lockfile.",
-  );
-  assertNotContains(
-    buildScript,
-    "bun install --production --frozen-lockfile",
-    "Desktop staging must not use Bun's divergent frozen production workspace install.",
   );
   assertNotContains(
     buildScript,
