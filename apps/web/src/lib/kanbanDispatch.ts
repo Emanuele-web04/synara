@@ -33,6 +33,10 @@ import type { SidebarThreadSummary } from "../types";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import {
+  appendBrowserAnnotationsToPrompt,
+  formatBrowserAnnotationLabel,
+} from "./browserAnnotations";
+import {
   stageUploadComposerAttachments,
   formatOutgoingComposerPrompt,
   resolvePromptEffortFromModelSelection,
@@ -176,6 +180,7 @@ async function dispatchKanbanDraftThreadOnce(
   const composerImages = draftComposerState?.images ?? [];
   const composerFiles = draftComposerState?.files ?? [];
   const composerAssistantSelections = draftComposerState?.assistantSelections ?? [];
+  const composerBrowserAnnotations = draftComposerState?.browserAnnotations ?? [];
   const composerFileComments = draftComposerState?.fileComments ?? [];
   const sendableTerminalContexts = filterTerminalContextsWithText(
     draftComposerState?.terminalContexts ?? [],
@@ -185,20 +190,28 @@ async function dispatchKanbanDraftThreadOnce(
     (composerImages[0] ? `Image: ${composerImages[0].name}` : "") ||
     (composerFiles[0] ? `File: ${composerFiles[0].name}` : "") ||
     (composerAssistantSelections.length > 0 ? "Referenced assistant selection" : "") ||
+    (composerBrowserAnnotations[0]
+      ? formatBrowserAnnotationLabel(composerBrowserAnnotations[0])
+      : "") ||
     (sendableTerminalContexts.length > 0 ? "Attached terminal context" : "") ||
     (composerFileComments.length > 0
       ? formatFileCommentTitleSeed(composerFileComments.length)
       : "") ||
     "New task";
   const fallbackTitle = buildPromptThreadTitleFallback(titleSeed);
-  // File comments serialize outermost so trailing-block extractors unwrap them
-  // first — matching the chat composer's send path byte-for-byte.
-  const messageText = appendFileCommentsToPrompt(
-    appendTerminalContextsToPrompt(
-      appendAssistantSelectionsToPrompt(liveSnapshot?.prompt ?? "", composerAssistantSelections),
-      sendableTerminalContexts,
+  const messageId = newMessageId();
+  // Browser annotations serialize outermost so display extraction can validate
+  // their message-bound transport before unwrapping the remaining context blocks.
+  const messageText = appendBrowserAnnotationsToPrompt(
+    appendFileCommentsToPrompt(
+      appendTerminalContextsToPrompt(
+        appendAssistantSelectionsToPrompt(liveSnapshot?.prompt ?? "", composerAssistantSelections),
+        sendableTerminalContexts,
+      ),
+      composerFileComments,
     ),
-    composerFileComments,
+    composerBrowserAnnotations,
+    messageId,
   );
   const outgoingMessageText = formatOutgoingComposerPrompt({
     provider: modelSelection.provider,
@@ -293,7 +306,7 @@ async function dispatchKanbanDraftThreadOnce(
         commandId: newCommandId(),
         threadId,
         message: {
-          messageId: newMessageId(),
+          messageId,
           role: "user",
           text: outgoingMessageText,
           attachments: turnAttachments,

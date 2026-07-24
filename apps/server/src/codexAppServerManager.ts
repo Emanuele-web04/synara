@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 
 import {
   ApprovalRequestId,
+  BROWSER_TOOL_NAMES,
   EventId,
   type ProviderComposerCapabilities,
   ProviderItemId,
@@ -47,7 +48,10 @@ import {
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
 } from "./agentGateway/mcpInjection.ts";
 import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
-import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
+import {
+  AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
+  type AgentGatewaySessionLease,
+} from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
@@ -134,6 +138,8 @@ type CodexSessionApprovalOverride = {
 
 interface CodexSessionContext {
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
+  /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
+  gatewayCredentialRetired?: boolean;
   session: ProviderSession;
   lifecycleGeneration?: string;
   account: CodexAccountSnapshot;
@@ -377,9 +383,11 @@ const CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS = `
 
 ## Browser tool routing
 
-Prefer the built-in in-app browser for browser work whenever possible.
+Prefer Synara's built-in visible browser for browser work. In code mode, call its MCP methods directly inside \`functions.exec\` with the exact \`tools.mcp__synara__browser_*\` prefix (for example, \`await tools.mcp__synara__browser_open({ url })\` and \`await tools.mcp__synara__browser_snapshot({})\`). The available suffixes are ${BROWSER_TOOL_NAMES.map((name) => `\`${name.slice("browser_".length)}\``).join(", ")}.
 
-When the user asks to inspect a page, navigate a site, read what is visible in the browser, take a browser screenshot, or interact with content already open in chat, use the in-app browser path first.
+For element actions, keep the \`snapshotId\` returned by the fresh snapshot and use the exact shapes \`browser_type({ target: { ref, snapshotId }, text })\`, \`browser_click({ target: { ref, snapshotId } })\`, and \`browser_press({ keys: ["Enter"] })\`. Wait for observable changes with \`browser_wait({ conditions: [{ kind: "url", glob: "*expected*" }] })\` or another published condition. Never pass a bare \`ref\` without its \`snapshotId\`.
+
+Do not search or filter \`ALL_TOOLS\` to discover these methods. When several browser steps are deterministic, run their awaited MCP calls sequentially in one \`functions.exec\` invocation, inspect each result there, and stop as soon as the requested result is verified. Take a fresh semantic snapshot before element actions and after navigation or human interaction.
 
 Use \`Computer Use\` only when at least one of these is true:
 - the user explicitly asks to use \`Computer Use\`
@@ -738,6 +746,7 @@ export interface CodexAppServerManagerEvents {
 }
 
 const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+const GATEWAY_TURN_CANCELLATION_TIMEOUT_MS = 2_000;
 
 function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
   const value = cache.get(key);
@@ -1072,6 +1081,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
+    if (context.gatewayCredentialRetired === true) {
+      throw new Error(
+        "Codex session gateway authority is retired; resume the provider runtime before starting another turn.",
+      );
+    }
     context.collabReceiverTurns.clear();
     context.collabReceiverParents.clear();
 
@@ -1218,6 +1232,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async startReview(input: ProviderStartReviewInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
+    if (context.gatewayCredentialRetired === true) {
+      throw new Error(
+        "Codex session gateway authority is retired; resume the provider runtime before starting another review.",
+      );
+    }
     const providerThreadId = readResumeThreadId({
       threadId: context.session.threadId,
       runtimeMode: context.session.runtimeMode,
@@ -1264,6 +1283,74 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
+  private runGatewayTurnCleanup(
+    context: CodexSessionContext,
+    turnId: TurnId,
+    operation: "cancellation" | "retirement",
+    cleanup: () => Promise<void> | void,
+  ): Promise<void> {
+    let cleanupResult: Promise<void> | void;
+    try {
+      cleanupResult = cleanup();
+    } catch (error) {
+      log.warn(`gateway turn ${operation} failed to start`, {
+        threadId: context.session.threadId,
+        turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return Promise.resolve();
+    }
+    if (!cleanupResult || typeof cleanupResult.then !== "function") {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        resolve();
+      };
+      timeout = setTimeout(() => {
+        log.warn(`gateway turn ${operation} cleanup timed out`, {
+          threadId: context.session.threadId,
+          turnId,
+          timeoutMs: GATEWAY_TURN_CANCELLATION_TIMEOUT_MS,
+        });
+        finish();
+      }, GATEWAY_TURN_CANCELLATION_TIMEOUT_MS);
+      timeout.unref?.();
+      cleanupResult.then(finish, (error) => {
+        log.warn(`gateway turn ${operation} cleanup failed`, {
+          threadId: context.session.threadId,
+          turnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        finish();
+      });
+    });
+  }
+
+  private cancelGatewayTurn(context: CodexSessionContext, turnId: TurnId): Promise<void> {
+    const lease = context.gatewaySessionLease;
+    if (!lease) return Promise.resolve();
+    return this.runGatewayTurnCleanup(context, turnId, "cancellation", () =>
+      lease.cancelTurn(turnId),
+    );
+  }
+
+  private retireGatewayTurn(context: CodexSessionContext, turnId: TurnId): Promise<void> {
+    const lease = context.gatewaySessionLease;
+    if (!lease) return Promise.resolve();
+    // Flip the local admission fence before starting asynchronous request
+    // drainage. No following turn may reuse this runtime's bearer.
+    context.gatewayCredentialRetired = true;
+    return this.runGatewayTurnCleanup(context, turnId, "retirement", () =>
+      lease.retireTurn(turnId),
+    );
+  }
+
   async interruptTurn(
     threadId: ThreadId,
     turnId?: TurnId,
@@ -1295,11 +1382,38 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       turnId: effectiveTurnId,
       isTrackedReviewTurn: context.reviewTurnIds.has(effectiveTurnId),
     });
+    // Codex app-server currently completes `turn/interrupt` without reliably
+    // forwarding MCP `notifications/cancelled` to stdio servers. A collab child
+    // shares the parent's gateway credential, and gateway requests therefore
+    // carry the parent turn id rather than the child's provider-native id. On a
+    // targeted child stop, tombstone the parent gateway turn without stopping
+    // the parent runtime. This deliberately disables gateway tools for the rest
+    // of that parent turn: without a child-specific transport, re-enabling them
+    // would also re-authorize indistinguishable late child requests.
+    const gatewayTurnId =
+      providerThreadIdOverride === undefined ? effectiveTurnId : context.session.activeTurnId;
+    const gatewayCancellation = gatewayTurnId
+      ? this.cancelGatewayTurn(context, gatewayTurnId)
+      : Promise.resolve();
+    let gatewayRevocationError: unknown;
     try {
-      await this.sendRequest(context, "turn/interrupt", {
-        threadId: providerThreadId,
-        turnId: effectiveTurnId,
-      });
+      // A session bearer has no trustworthy per-turn provenance. Revoke it
+      // after tombstoning A but before asking Codex to interrupt; the provider
+      // runtime is retired by ProviderService before another turn can start.
+      context.gatewaySessionLease?.release();
+      if (context.gatewaySessionLease) context.gatewayCredentialRetired = true;
+    } catch (error) {
+      gatewayRevocationError = error;
+    }
+    try {
+      await Promise.all([
+        this.sendRequest(context, "turn/interrupt", {
+          threadId: providerThreadId,
+          turnId: effectiveTurnId,
+        }),
+        gatewayCancellation,
+      ]);
+      if (gatewayRevocationError !== undefined) throw gatewayRevocationError;
       log.info("[codex-review] turn/interrupt acknowledged", {
         threadId,
         providerThreadId,
@@ -1313,6 +1427,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         isTrackedReviewTurn: context.reviewTurnIds.has(effectiveTurnId),
         error: error instanceof Error ? error.message : String(error),
       });
+      if (this.isTurnAlreadyIdleError(error)) {
+        log.info("[codex-review] settling stale local turn after provider reported idle", {
+          threadId,
+          providerThreadId,
+          turnId: effectiveTurnId,
+        });
+        this.handleServerNotification(context, {
+          method: "turn/aborted",
+          params: {
+            threadId: providerThreadId,
+            turn: { id: effectiveTurnId },
+            reason: "provider-already-idle",
+          },
+        });
+        return;
+      }
       if (!context.reviewTurnIds.has(effectiveTurnId) || !this.isTurnInterruptTimeout(error)) {
         throw error;
       }
@@ -1347,10 +1477,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           previousTurnId: effectiveTurnId,
           nextTurnId: latestReviewTurnId,
         });
-        await this.sendRequest(context, "turn/interrupt", {
-          threadId: providerThreadId,
-          turnId: latestReviewTurnId,
-        });
+        await Promise.all([
+          this.sendRequest(context, "turn/interrupt", {
+            threadId: providerThreadId,
+            turnId: latestReviewTurnId,
+          }),
+          this.cancelGatewayTurn(context, latestReviewTurnId),
+        ]);
         context.reviewTurnIds.add(latestReviewTurnId);
         this.updateSession(context, {
           activeTurnId: latestReviewTurnId,
@@ -2371,6 +2504,44 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       notification.method === "item/agentMessage/delta"
         ? this.readString(notification.params, "delta")
         : undefined;
+    const terminalErrorMessageRaw =
+      notification.method === "error"
+        ? this.readString(this.readObject(notification.params)?.error, "message")
+        : undefined;
+    const terminalErrorMessage =
+      terminalErrorMessageRaw !== undefined
+        ? normalizeCodexUserVisibleErrorMessage(terminalErrorMessageRaw)
+        : undefined;
+    const terminalErrorWillRetry =
+      notification.method === "error"
+        ? this.readBoolean(notification.params, "willRetry") === true
+        : false;
+    const isTerminalError =
+      notification.method === "error" &&
+      !terminalErrorWillRetry &&
+      !(terminalErrorMessage !== undefined && isNonFatalCodexErrorMessage(terminalErrorMessage));
+    const isTerminalParentTurn =
+      !isChildConversation &&
+      (notification.method === "turn/completed" ||
+        notification.method === "turn/aborted" ||
+        isTerminalError);
+    const terminalGatewayTurnId = isTerminalParentTurn
+      ? (rawRoute.turnId ?? context.session.activeTurnId)
+      : undefined;
+    const gatewayTurnAuthorityRetired =
+      terminalGatewayTurnId !== undefined && context.gatewaySessionLease !== undefined;
+    if (gatewayTurnAuthorityRetired) {
+      // Fence synchronously before publishing the terminal event. ProviderService
+      // may admit B as soon as it consumes that event, so A's bearer must already
+      // be permanently unable to bind to another latestTurn.
+      void this.retireGatewayTurn(context, terminalGatewayTurnId);
+    }
+    const eventPayload = gatewayTurnAuthorityRetired
+      ? {
+          ...(this.readObject(notification.params) ?? {}),
+          [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
+        }
+      : notification.params;
 
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
@@ -2388,7 +2559,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(providerThreadId ? { providerThreadId } : {}),
       ...(providerParentThreadId ? { providerParentThreadId } : {}),
       textDelta,
-      payload: notification.params,
+      payload: eventPayload,
     });
 
     if (notification.method === "thread/started") {
@@ -2519,6 +2690,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId: context.session.threadId,
         reviewTurnId: reviewTurnId ?? null,
       });
+      const terminalReviewTurnId = reviewTurnId ?? context.session.activeTurnId;
+      if (terminalReviewTurnId) {
+        void this.retireGatewayTurn(context, terminalReviewTurnId);
+      }
       this.settleTrackedReview(
         context,
         reviewTurnId !== undefined
@@ -2537,10 +2712,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
-      const rawMessage = this.readString(this.readObject(notification.params)?.error, "message");
-      const message =
-        rawMessage !== undefined ? normalizeCodexUserVisibleErrorMessage(rawMessage) : undefined;
-      const willRetry = this.readBoolean(notification.params, "willRetry");
+      const message = terminalErrorMessage;
+      const willRetry = terminalErrorWillRetry;
       const isNonFatalWarning =
         message !== undefined && !willRetry && isNonFatalCodexErrorMessage(message);
 
@@ -2784,6 +2957,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.collabReceiverTurns.clear();
       context.collabReceiverParents.clear();
       context.reviewTurnIds.delete(turnId);
+      const gatewayTurnAuthorityRetired = context.gatewaySessionLease !== undefined;
+      if (gatewayTurnAuthorityRetired) {
+        // Match native terminal notifications: fence the bearer synchronously
+        // before publishing the synthetic completion to ProviderService.
+        void this.retireGatewayTurn(context, turnId);
+      }
       this.updateSession(context, {
         status: "ready",
         activeTurnId: undefined,
@@ -2807,6 +2986,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             status: "completed",
           },
           recoveredFrom: "codex/event/task_complete",
+          ...(gatewayTurnAuthorityRetired ? { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true } : {}),
         },
       });
     }, this.taskCompleteFallbackGraceMs);
@@ -2858,6 +3038,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           id: terminalTurnId,
           status: "completed",
         },
+        ...(context.gatewayCredentialRetired === true
+          ? { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true }
+          : {}),
       },
     });
   }
@@ -3183,6 +3366,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private isTurnInterruptTimeout(error: unknown): boolean {
     return error instanceof Error && error.message.includes("Timed out waiting for turn/interrupt");
+  }
+
+  private isTurnAlreadyIdleError(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      /turn\/interrupt[^\n]*no active turn(?: to interrupt)?/i.test(error.message)
+    );
   }
 
   private normalizeItemType(raw: unknown): string {

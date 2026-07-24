@@ -18,6 +18,7 @@ import { AgentGatewayCredentials } from "./Services/AgentGatewayCredentials";
 import { extractBearerToken } from "./bearerToken.ts";
 
 export const AGENT_GATEWAY_MCP_MAX_BODY_BYTES = 1024 * 1024;
+export const AGENT_GATEWAY_STDIO_BOOTSTRAP_PATH = `${AGENT_GATEWAY_MCP_PATH}/bootstrap`;
 
 const BODY_TOO_LARGE = Symbol("AgentGatewayMcpBodyTooLarge");
 
@@ -119,6 +120,30 @@ const postRouteLayer = HttpRouter.add(
   }),
 );
 
+const stdioBootstrapRouteLayer = HttpRouter.add(
+  "POST",
+  AGENT_GATEWAY_STDIO_BOOTSTRAP_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const credentials = yield* AgentGatewayCredentials;
+    const bootstrapToken = extractBearerToken(request.headers.authorization);
+    const bearerToken = bootstrapToken
+      ? credentials.exchangeStdioBootstrapToken(bootstrapToken)
+      : null;
+    if (bearerToken === null) return unauthorizedResponse();
+    return HttpServerResponse.jsonUnsafe(
+      { bearerToken },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store",
+          Pragma: "no-cache",
+        },
+      },
+    );
+  }),
+);
+
 // The streamable-HTTP transport allows servers to reject GET (no
 // server-initiated stream) with 405; DELETE is session teardown, and this
 // server is stateless, so both are explicit non-endpoints.
@@ -141,6 +166,7 @@ const deleteRouteLayer = HttpRouter.add(
 
 export const agentGatewayRouteLayer = Layer.mergeAll(
   postRouteLayer,
+  stdioBootstrapRouteLayer,
   getRouteLayer,
   deleteRouteLayer,
 );

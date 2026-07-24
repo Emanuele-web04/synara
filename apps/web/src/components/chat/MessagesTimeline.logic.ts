@@ -22,6 +22,14 @@ import {
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
+export function canSubmitUserMessageEdit(input: {
+  draft: string;
+  allowEmpty: boolean;
+  disabled: boolean;
+}): boolean {
+  return (input.allowEmpty || input.draft.trim().length > 0) && !input.disabled;
+}
+
 // Ordered item folded into a settled turn's single "Worked for Xs" disclosure.
 // A turn can interleave tool work and intermediate assistant narration
 // (preambles), so the collapsed panel keeps both in chronological order.

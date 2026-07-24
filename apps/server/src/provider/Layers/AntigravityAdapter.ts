@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,8 +15,28 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, Layer, Queue, Stream } from "effect";
+import { Effect, Layer, Option, Queue, Stream } from "effect";
 
+import {
+  type AcpStdioProxySpawn,
+  buildAntigravityMcpPluginConfig,
+  SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV,
+  SYNARA_AGENT_GATEWAY_URL_ENV,
+} from "../../agentGateway/mcpInjection.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
+import {
+  AgentGatewayCredentials,
+  type AgentGatewayMcpConnection,
+} from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
+  type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
+} from "../../agentGateway/sessionLease.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
@@ -79,6 +99,8 @@ type StoredTurn = {
 
 type AntigravitySessionContext = {
   session: ProviderSession;
+  gatewaySessionLease?: AgentGatewaySessionLease;
+  harnessPolicyDelivered?: boolean;
   readonly lifecycleGeneration?: string;
   readonly binaryPath: string;
   readonly turns: StoredTurn[];
@@ -267,9 +289,18 @@ export async function readCompleteAntigravityLines(
   }
 }
 
-async function ensureCapturePlugin(binaryPath: string): Promise<void> {
+type AntigravityHelperRunner = typeof runAntigravityHelperProcess;
+
+export async function ensureCapturePlugin(
+  binaryPath: string,
+  stdioProxy?: AcpStdioProxySpawn,
+  options: {
+    readonly homeDir?: string;
+    readonly runHelper?: AntigravityHelperRunner;
+  } = {},
+): Promise<void> {
   const pluginDir = path.join(
-    os.homedir(),
+    options.homeDir ?? os.homedir(),
     ".gemini",
     "antigravity-cli",
     "plugins",
@@ -296,7 +327,16 @@ async function ensureCapturePlugin(binaryPath: string): Promise<void> {
     path.join(pluginDir, "hooks.json"),
     `${JSON.stringify(buildAntigravityHookConfig(command), null, 2)}\n`,
   );
-  const installed = await runAntigravityHelperProcess(
+  const mcpConfigPath = path.join(pluginDir, "mcp_config.json");
+  if (stdioProxy) {
+    await fs.writeFile(
+      mcpConfigPath,
+      `${JSON.stringify(buildAntigravityMcpPluginConfig(stdioProxy), null, 2)}\n`,
+    );
+  } else {
+    await fs.rm(mcpConfigPath, { force: true });
+  }
+  const installed = await (options.runHelper ?? runAntigravityHelperProcess)(
     binaryPath,
     ["plugin", "install", pluginDir],
     { timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS },
@@ -304,6 +344,53 @@ async function ensureCapturePlugin(binaryPath: string): Promise<void> {
   if (installed.code !== 0) {
     throw new Error(installed.stderr.trim() || installed.stdout.trim() || "Plugin install failed.");
   }
+}
+
+export function buildAntigravityTurnProcessEnvironment(input: {
+  readonly eventFile: string;
+  readonly gatewayConnection?: Pick<AgentGatewayMcpConnection, "url">;
+  readonly gatewayBootstrapToken?: string;
+  readonly baseEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const hasGatewayBootstrap =
+    input.gatewayConnection !== undefined && input.gatewayBootstrapToken !== undefined;
+  const gatewayKeys = hasGatewayBootstrap
+    ? [SYNARA_AGENT_GATEWAY_URL_ENV, SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV]
+    : [];
+  const gatewayEnvironment = hasGatewayBootstrap
+    ? {
+        [SYNARA_AGENT_GATEWAY_URL_ENV]: input.gatewayConnection!.url,
+        [SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV]: input.gatewayBootstrapToken!,
+      }
+    : {};
+  return buildProviderChildEnvironment({
+    provider: PROVIDER,
+    ...(input.baseEnv === undefined ? {} : { baseEnv: input.baseEnv }),
+    inheritedSynaraKeys: [
+      "SYNARA_ANTIGRAVITY_EVENTS",
+      "SYNARA_ANTIGRAVITY_HOOK_DECISION",
+      ...gatewayKeys,
+    ],
+    overrides: {
+      SYNARA_ANTIGRAVITY_EVENTS: input.eventFile,
+      SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+      ...gatewayEnvironment,
+    },
+  });
+}
+
+export function buildAntigravityTurnPrompt(
+  state: SynaraHarnessPolicyDeliveryState,
+  input: {
+    readonly prompt: string;
+    readonly hasGatewaySessionLease: boolean;
+  },
+): string {
+  const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable: input.hasGatewaySessionLease,
+  });
+  return [harnessPolicy, input.prompt].filter(Boolean).join("\n\n");
 }
 
 const DEFAULT_EFFORT_BY_MODEL: Readonly<Record<string, string>> = {
@@ -449,717 +536,817 @@ export function makeAntigravityRuntimeEventBase(input: {
   };
 }
 
-const makeAntigravityAdapter = Effect.gen(function* () {
-  const serverConfig = yield* ServerConfig;
-  const eventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
-    PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
-  );
-  const sessions = new Map<ThreadId, AntigravitySessionContext>();
-  const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
+type AntigravityChildProcess = ChildProcess & {
+  readonly stdout: NonNullable<ChildProcess["stdout"]>;
+  readonly stderr: NonNullable<ChildProcess["stderr"]>;
+};
 
-  const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
-    (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
-    {
-      capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
-      maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
-      terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-      isTerminal: isTerminalProviderRuntimeEvent,
-      sizeOf: providerRuntimeEventBytes,
-    },
-  );
+export interface AntigravityAdapterDependencies {
+  readonly ensurePlugin?: typeof ensureCapturePlugin;
+  readonly spawnProcess?: (
+    command: string,
+    args: readonly string[],
+    options: SpawnOptions,
+  ) => AntigravityChildProcess;
+}
 
-  const offer = (event: ProviderRuntimeEvent) => {
-    eventIngress.offer(compactProviderRuntimeEventForIngress(event));
-  };
-
-  const base = (
-    context: AntigravitySessionContext,
-    options?: { includeTurn?: boolean; itemId?: RuntimeItemId },
-  ) => ({
-    ...makeAntigravityRuntimeEventBase({
-      threadId: context.session.threadId,
-      ...(context.lifecycleGeneration !== undefined
-        ? { lifecycleGeneration: context.lifecycleGeneration }
-        : {}),
-    }),
-    ...(options?.includeTurn !== false && context.activeTurnId
-      ? { turnId: context.activeTurnId }
-      : {}),
-    ...(options?.itemId ? { itemId: options.itemId } : {}),
-    ...(context.conversationId
-      ? { providerRefs: { providerThreadId: context.conversationId } }
-      : {}),
-  });
-
-  const raw = (messageType: string, payload: unknown) => ({
-    source: "antigravity.cli.event" as const,
-    messageType,
-    payload,
-  });
-
-  const requireSession = (
-    threadId: ThreadId,
-  ): Effect.Effect<AntigravitySessionContext, ProviderAdapterSessionNotFoundError> => {
-    const context = sessions.get(threadId);
-    return context
-      ? Effect.succeed(context)
-      : Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }));
-  };
-
-  const teardownActiveProcess = (
-    context: AntigravitySessionContext,
-    method: string,
-  ): Effect.Effect<void, ProviderAdapterRequestError> => {
-    const child = context.activeProcess;
-    if (!child) return Effect.void;
-    return Effect.tryPromise({
-      try: () => teardownChildProcessTree(child),
-      catch: (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method,
-          detail: messageFromCause(cause, "Failed to stop the Antigravity process tree."),
-          cause,
-        }),
-    }).pipe(Effect.asVoid);
-  };
-
-  const currentTurn = (context: AntigravitySessionContext): StoredTurn | undefined =>
-    context.activeTurnId
-      ? context.turns.find((turn) => turn.id === context.activeTurnId)
-      : undefined;
-
-  const emitTextItem = (
-    context: AntigravitySessionContext,
-    step: TranscriptStep,
-    itemType: "assistant_message" | "reasoning",
-    streamKind: "assistant_text" | "reasoning_text",
-  ) => {
-    const content = trim(step.content);
-    if (!content) return;
-    const itemId = RuntimeItemId.makeUnsafe(
-      `antigravity-${context.activeTurnId ?? "turn"}-${step.step_index ?? crypto.randomUUID()}-${itemType}`,
+const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {}) =>
+  Effect.gen(function* () {
+    const serverConfig = yield* ServerConfig;
+    const agentGatewayCredentials = Option.getOrUndefined(
+      yield* Effect.serviceOption(AgentGatewayCredentials),
     );
-    offer({
-      ...base(context, { itemId }),
-      type: "item.started",
-      payload: {
-        itemType,
-        status: "inProgress",
-        title: itemType === "reasoning" ? "Reasoning" : "Assistant",
-      },
-      raw: raw(step.type ?? "transcript", step),
-    } satisfies ProviderRuntimeEvent);
-    offer({
-      ...base(context, { itemId }),
-      type: "content.delta",
-      payload: { streamKind, delta: content },
-      raw: raw(step.type ?? "transcript", step),
-    } satisfies ProviderRuntimeEvent);
-    offer({
-      ...base(context, { itemId }),
-      type: "item.completed",
-      payload: {
-        itemType,
-        status: "completed",
-        title: itemType === "reasoning" ? "Reasoning" : "Assistant",
-        ...(itemType === "reasoning" ? { detail: content } : {}),
-        data: step,
-      },
-      raw: raw(step.type ?? "transcript", step),
-    } satisfies ProviderRuntimeEvent);
-    if (itemType === "assistant_message") context.sawAssistant = true;
-  };
+    const eventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
+    const sessions = new Map<ThreadId, AntigravitySessionContext>();
+    const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
 
-  const processTranscriptStep = (context: AntigravitySessionContext, step: TranscriptStep) => {
-    const stepIndex = step.step_index;
-    if (typeof stepIndex !== "number" || context.processedSteps.has(stepIndex)) return;
-    context.processedSteps.add(stepIndex);
-    currentTurn(context)?.items.push(step);
+    const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
+      (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
+      {
+        capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+        maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
+        terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
+        isTerminal: isTerminalProviderRuntimeEvent,
+        sizeOf: providerRuntimeEventBytes,
+      },
+    );
 
-    if (step.type === "PLANNER_RESPONSE") {
-      const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
-      if (calls.length > 0) {
-        emitTextItem(context, step, "reasoning", "reasoning_text");
-        for (const [index, call] of calls.entries()) {
-          const name = trim(call.name) ?? "tool";
-          const itemId = RuntimeItemId.makeUnsafe(
-            `antigravity-${context.activeTurnId ?? "turn"}-${stepIndex}-tool-${index}`,
-          );
-          const itemType = toolItemType(name);
-          const pending = { itemId, itemType, name, args: call.args ?? {} } satisfies PendingTool;
-          context.pendingTools.push(pending);
+    const offer = (event: ProviderRuntimeEvent) => {
+      eventIngress.offer(compactProviderRuntimeEventForIngress(event));
+    };
+
+    const base = (
+      context: AntigravitySessionContext,
+      options?: { includeTurn?: boolean; itemId?: RuntimeItemId },
+    ) => ({
+      ...makeAntigravityRuntimeEventBase({
+        threadId: context.session.threadId,
+        ...(context.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: context.lifecycleGeneration }
+          : {}),
+      }),
+      ...(options?.includeTurn !== false && context.activeTurnId
+        ? { turnId: context.activeTurnId }
+        : {}),
+      ...(options?.itemId ? { itemId: options.itemId } : {}),
+      ...(context.conversationId
+        ? { providerRefs: { providerThreadId: context.conversationId } }
+        : {}),
+    });
+
+    const raw = (messageType: string, payload: unknown) => ({
+      source: "antigravity.cli.event" as const,
+      messageType,
+      payload,
+    });
+
+    const requireSession = (
+      threadId: ThreadId,
+    ): Effect.Effect<AntigravitySessionContext, ProviderAdapterSessionNotFoundError> => {
+      const context = sessions.get(threadId);
+      return context
+        ? Effect.succeed(context)
+        : Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }));
+    };
+
+    const releaseTurnGatewayLease = (
+      context: AntigravitySessionContext,
+      lease: AgentGatewaySessionLease | undefined = context.gatewaySessionLease,
+    ): void => {
+      lease?.release();
+      if (context.gatewaySessionLease === lease) delete context.gatewaySessionLease;
+    };
+
+    const teardownActiveProcess = (
+      context: AntigravitySessionContext,
+      method: string,
+    ): Effect.Effect<void, ProviderAdapterRequestError> => {
+      const child = context.activeProcess;
+      if (!child) return Effect.void;
+      return Effect.tryPromise({
+        try: () => teardownChildProcessTree(child),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method,
+            detail: messageFromCause(cause, "Failed to stop the Antigravity process tree."),
+            cause,
+          }),
+      }).pipe(Effect.asVoid);
+    };
+
+    const currentTurn = (context: AntigravitySessionContext): StoredTurn | undefined =>
+      context.activeTurnId
+        ? context.turns.find((turn) => turn.id === context.activeTurnId)
+        : undefined;
+
+    const emitTextItem = (
+      context: AntigravitySessionContext,
+      step: TranscriptStep,
+      itemType: "assistant_message" | "reasoning",
+      streamKind: "assistant_text" | "reasoning_text",
+    ) => {
+      const content = trim(step.content);
+      if (!content) return;
+      const itemId = RuntimeItemId.makeUnsafe(
+        `antigravity-${context.activeTurnId ?? "turn"}-${step.step_index ?? crypto.randomUUID()}-${itemType}`,
+      );
+      offer({
+        ...base(context, { itemId }),
+        type: "item.started",
+        payload: {
+          itemType,
+          status: "inProgress",
+          title: itemType === "reasoning" ? "Reasoning" : "Assistant",
+        },
+        raw: raw(step.type ?? "transcript", step),
+      } satisfies ProviderRuntimeEvent);
+      offer({
+        ...base(context, { itemId }),
+        type: "content.delta",
+        payload: { streamKind, delta: content },
+        raw: raw(step.type ?? "transcript", step),
+      } satisfies ProviderRuntimeEvent);
+      offer({
+        ...base(context, { itemId }),
+        type: "item.completed",
+        payload: {
+          itemType,
+          status: "completed",
+          title: itemType === "reasoning" ? "Reasoning" : "Assistant",
+          ...(itemType === "reasoning" ? { detail: content } : {}),
+          data: step,
+        },
+        raw: raw(step.type ?? "transcript", step),
+      } satisfies ProviderRuntimeEvent);
+      if (itemType === "assistant_message") context.sawAssistant = true;
+    };
+
+    const processTranscriptStep = (context: AntigravitySessionContext, step: TranscriptStep) => {
+      const stepIndex = step.step_index;
+      if (typeof stepIndex !== "number" || context.processedSteps.has(stepIndex)) return;
+      context.processedSteps.add(stepIndex);
+      currentTurn(context)?.items.push(step);
+
+      if (step.type === "PLANNER_RESPONSE") {
+        const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
+        if (calls.length > 0) {
+          emitTextItem(context, step, "reasoning", "reasoning_text");
+          for (const [index, call] of calls.entries()) {
+            const name = trim(call.name) ?? "tool";
+            const itemId = RuntimeItemId.makeUnsafe(
+              `antigravity-${context.activeTurnId ?? "turn"}-${stepIndex}-tool-${index}`,
+            );
+            const itemType = toolItemType(name);
+            const pending = { itemId, itemType, name, args: call.args ?? {} } satisfies PendingTool;
+            context.pendingTools.push(pending);
+            offer({
+              ...base(context, { itemId }),
+              type: "item.started",
+              payload: {
+                itemType,
+                status: "inProgress",
+                title: name,
+                data: { name, args: pending.args },
+              },
+              raw: raw("tool-call", call),
+            } satisfies ProviderRuntimeEvent);
+          }
+        } else {
+          emitTextItem(context, step, "assistant_message", "assistant_text");
+        }
+        return;
+      }
+
+      if (isToolResultStep(step)) {
+        const pending = context.pendingTools.shift();
+        if (!pending) return;
+        const content = typeof step.content === "string" ? step.content : "";
+        if (content) {
           offer({
-            ...base(context, { itemId }),
-            type: "item.started",
-            payload: {
-              itemType,
-              status: "inProgress",
-              title: name,
-              data: { name, args: pending.args },
-            },
-            raw: raw("tool-call", call),
+            ...base(context, { itemId: pending.itemId }),
+            type: "content.delta",
+            payload: { streamKind: resultStreamKind(pending.itemType), delta: content },
+            raw: raw(step.type ?? "tool-result", step),
           } satisfies ProviderRuntimeEvent);
         }
-      } else {
-        emitTextItem(context, step, "assistant_message", "assistant_text");
-      }
-      return;
-    }
-
-    if (isToolResultStep(step)) {
-      const pending = context.pendingTools.shift();
-      if (!pending) return;
-      const content = typeof step.content === "string" ? step.content : "";
-      if (content) {
         offer({
           ...base(context, { itemId: pending.itemId }),
-          type: "content.delta",
-          payload: { streamKind: resultStreamKind(pending.itemType), delta: content },
+          type: "item.completed",
+          payload: {
+            itemType: pending.itemType,
+            status: step.status === "ERROR" ? "failed" : "completed",
+            title: pending.name,
+            data: { name: pending.name, args: pending.args, result: step },
+          },
           raw: raw(step.type ?? "tool-result", step),
         } satisfies ProviderRuntimeEvent);
       }
-      offer({
-        ...base(context, { itemId: pending.itemId }),
-        type: "item.completed",
-        payload: {
-          itemType: pending.itemType,
-          status: step.status === "ERROR" ? "failed" : "completed",
-          title: pending.name,
-          data: { name: pending.name, args: pending.args, result: step },
-        },
-        raw: raw(step.type ?? "tool-result", step),
-      } satisfies ProviderRuntimeEvent);
-    }
-  };
+    };
 
-  const readTranscript = async (context: AntigravitySessionContext) => {
-    if (!context.transcriptPath) return;
-    const isInitialRead = context.processedTranscriptPath !== context.transcriptPath;
-    if (isInitialRead) context.processedTranscriptBytes = 0;
-    let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
-    try {
-      batch = await readCompleteAntigravityLines(
-        context.transcriptPath,
-        context.processedTranscriptBytes,
-      );
-    } catch {
-      return;
-    }
-    context.processedTranscriptBytes = batch.nextOffset;
-    context.processedTranscriptPath = context.transcriptPath;
-    const steps = batch.lines.flatMap((line) => {
+    const readTranscript = async (context: AntigravitySessionContext) => {
+      if (!context.transcriptPath) return;
+      const isInitialRead = context.processedTranscriptPath !== context.transcriptPath;
+      if (isInitialRead) context.processedTranscriptBytes = 0;
+      let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
       try {
-        return [JSON.parse(line) as TranscriptStep];
+        batch = await readCompleteAntigravityLines(
+          context.transcriptPath,
+          context.processedTranscriptBytes,
+        );
       } catch {
-        return [];
+        return;
       }
-    });
-    const latestUserIndex = isInitialRead
-      ? steps.reduce(
-          (latest, step) =>
-            step.type === "USER_INPUT" && typeof step.step_index === "number"
-              ? Math.max(latest, step.step_index)
-              : latest,
-          -1,
-        )
-      : -1;
-    for (const step of steps) {
-      if (typeof step.step_index === "number" && step.step_index > latestUserIndex) {
-        processTranscriptStep(context, step);
-      }
-    }
-  };
-
-  const markExistingTranscriptStepsProcessed = async (context: AntigravitySessionContext) => {
-    if (!context.transcriptPath) return;
-    try {
-      const batch = await readCompleteAntigravityLines(context.transcriptPath, 0);
       context.processedTranscriptBytes = batch.nextOffset;
       context.processedTranscriptPath = context.transcriptPath;
-    } catch {
-      return;
-    }
-  };
+      const steps = batch.lines.flatMap((line) => {
+        try {
+          return [JSON.parse(line) as TranscriptStep];
+        } catch {
+          return [];
+        }
+      });
+      const latestUserIndex = isInitialRead
+        ? steps.reduce(
+            (latest, step) =>
+              step.type === "USER_INPUT" && typeof step.step_index === "number"
+                ? Math.max(latest, step.step_index)
+                : latest,
+            -1,
+          )
+        : -1;
+      for (const step of steps) {
+        if (typeof step.step_index === "number" && step.step_index > latestUserIndex) {
+          processTranscriptStep(context, step);
+        }
+      }
+    };
 
-  const pollHookFile = async (context: AntigravitySessionContext) => {
-    if (context.stopped) return;
-    if (!context.eventFile) return;
-    let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
-    try {
-      batch = await readCompleteAntigravityLines(context.eventFile, context.processedHookBytes);
-    } catch {
-      return;
-    }
-    context.processedHookBytes = batch.nextOffset;
-    for (const line of batch.lines) {
-      const tab = line.indexOf("\t");
-      if (tab < 0) continue;
-      const eventName = line.slice(0, tab);
-      let payload: Record<string, unknown>;
+    const markExistingTranscriptStepsProcessed = async (context: AntigravitySessionContext) => {
+      if (!context.transcriptPath) return;
       try {
-        payload = JSON.parse(line.slice(tab + 1)) as Record<string, unknown>;
+        const batch = await readCompleteAntigravityLines(context.transcriptPath, 0);
+        context.processedTranscriptBytes = batch.nextOffset;
+        context.processedTranscriptPath = context.transcriptPath;
       } catch {
-        continue;
+        return;
       }
-      const conversationId =
-        typeof payload.conversationId === "string" ? payload.conversationId : undefined;
-      const transcriptPath =
-        typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
-      const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
-      const learnedConversation = conversationId && conversationId !== context.conversationId;
-      if (conversationId) context.conversationId = conversationId;
-      if (transcriptPath && transcriptPath !== context.transcriptPath) {
-        context.transcriptPath = transcriptPath;
-        context.processedTranscriptBytes = 0;
-        delete context.processedTranscriptPath;
+    };
+
+    const pollHookFile = async (context: AntigravitySessionContext) => {
+      if (context.stopped) return;
+      if (!context.eventFile) return;
+      let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
+      try {
+        batch = await readCompleteAntigravityLines(context.eventFile, context.processedHookBytes);
+      } catch {
+        return;
       }
-      if (modelName) context.modelName = modelName;
-      if (learnedConversation) {
-        context.session = {
-          ...context.session,
-          resumeCursor: conversationId,
-          updatedAt: new Date().toISOString(),
+      context.processedHookBytes = batch.nextOffset;
+      for (const line of batch.lines) {
+        const tab = line.indexOf("\t");
+        if (tab < 0) continue;
+        const eventName = line.slice(0, tab);
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(line.slice(tab + 1)) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const conversationId =
+          typeof payload.conversationId === "string" ? payload.conversationId : undefined;
+        const transcriptPath =
+          typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
+        const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
+        const learnedConversation = conversationId && conversationId !== context.conversationId;
+        if (conversationId) context.conversationId = conversationId;
+        if (transcriptPath && transcriptPath !== context.transcriptPath) {
+          context.transcriptPath = transcriptPath;
+          context.processedTranscriptBytes = 0;
+          delete context.processedTranscriptPath;
+        }
+        if (modelName) context.modelName = modelName;
+        if (learnedConversation) {
+          context.session = {
+            ...context.session,
+            resumeCursor: conversationId,
+            updatedAt: new Date().toISOString(),
+          };
+          offer({
+            ...base(context, { includeTurn: false }),
+            type: "thread.started",
+            payload: { providerThreadId: conversationId },
+            raw: raw(eventName, payload),
+          } satisfies ProviderRuntimeEvent);
+        }
+      }
+      await readTranscript(context);
+    };
+
+    const startSession: AntigravityAdapterShape["startSession"] = (input) =>
+      Effect.gen(function* () {
+        if (input.runtimeMode !== "full-access") {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/start",
+            issue:
+              "Antigravity CLI print mode cannot pause for interactive approvals. Select Full access to use this provider.",
+          });
+        }
+        const binaryPath = trim(input.providerOptions?.antigravity?.binaryPath) ?? "agy";
+        yield* Effect.tryPromise({
+          try: () =>
+            (dependencies.ensurePlugin ?? ensureCapturePlugin)(
+              binaryPath,
+              agentGatewayCredentials?.stdioProxy,
+            ),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "plugin/install",
+              detail: messageFromCause(cause, "Failed to install the Synara capture hook."),
+              cause,
+            }),
+        });
+        const existing = sessions.get(input.threadId);
+        if (existing) {
+          existing.stopped = true;
+          existing.interrupted = true;
+          yield* cancelAgentGatewayTurn(existing.gatewaySessionLease, existing.activeTurnId);
+          yield* teardownActiveProcess(existing, "session/restart");
+          releaseTurnGatewayLease(existing);
+        }
+        const now = new Date().toISOString();
+        const conversationId = resumeConversationId(input.resumeCursor);
+        const modelSelection =
+          input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+        const model = modelSelection?.model ?? DEFAULT_MODEL;
+        const session: ProviderSession = {
+          provider: PROVIDER,
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          cwd: trim(input.cwd) ?? serverConfig.cwd,
+          model,
+          threadId: input.threadId,
+          ...(conversationId ? { resumeCursor: conversationId } : {}),
+          createdAt: now,
+          updatedAt: now,
         };
+        const context: AntigravitySessionContext = {
+          session,
+          ...(input.lifecycleGeneration !== undefined
+            ? { lifecycleGeneration: input.lifecycleGeneration }
+            : {}),
+          binaryPath,
+          turns: [],
+          ...(conversationId ? { conversationId } : {}),
+          ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
+          ...(conversationId
+            ? { transcriptPath: transcriptPathForConversation(conversationId) }
+            : {}),
+          processedHookBytes: 0,
+          processedTranscriptBytes: 0,
+          processedSteps: new Set(),
+          pendingTools: [],
+          sawAssistant: false,
+          interrupted: false,
+          stopped: false,
+        };
+        sessions.set(input.threadId, context);
+        offer({
+          ...base(context, { includeTurn: false }),
+          type: "session.started",
+          payload: {
+            message: "Antigravity CLI session started",
+            ...(conversationId ? { resume: conversationId } : {}),
+          },
+        } satisfies ProviderRuntimeEvent);
         offer({
           ...base(context, { includeTurn: false }),
           type: "thread.started",
-          payload: { providerThreadId: conversationId },
-          raw: raw(eventName, payload),
+          payload: { ...(conversationId ? { providerThreadId: conversationId } : {}) },
         } satisfies ProviderRuntimeEvent);
-      }
-    }
-    await readTranscript(context);
-  };
+        return session;
+      });
 
-  const startSession: AntigravityAdapterShape["startSession"] = (input) =>
-    Effect.gen(function* () {
-      if (input.runtimeMode !== "full-access") {
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "session/start",
-          issue:
-            "Antigravity CLI print mode cannot pause for interactive approvals. Select Full access to use this provider.",
-        });
-      }
-      const binaryPath = trim(input.providerOptions?.antigravity?.binaryPath) ?? "agy";
-      yield* Effect.tryPromise({
-        try: () => ensureCapturePlugin(binaryPath),
-        catch: (cause) =>
-          new ProviderAdapterRequestError({
+    const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(input.threadId);
+        if (context.activeProcess) {
+          return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
-            method: "plugin/install",
-            detail: messageFromCause(cause, "Failed to install the Synara capture hook."),
-            cause,
-          }),
-      });
-      const existing = sessions.get(input.threadId);
-      if (existing) {
-        existing.stopped = true;
-        existing.interrupted = true;
-        yield* teardownActiveProcess(existing, "session/restart");
-      }
-      const now = new Date().toISOString();
-      const conversationId = resumeConversationId(input.resumeCursor);
-      const modelSelection =
-        input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
-      const model = modelSelection?.model ?? DEFAULT_MODEL;
-      const session: ProviderSession = {
-        provider: PROVIDER,
-        status: "ready",
-        runtimeMode: input.runtimeMode,
-        cwd: trim(input.cwd) ?? serverConfig.cwd,
-        model,
-        threadId: input.threadId,
-        ...(conversationId ? { resumeCursor: conversationId } : {}),
-        createdAt: now,
-        updatedAt: now,
-      };
-      const context: AntigravitySessionContext = {
-        session,
-        ...(input.lifecycleGeneration !== undefined
-          ? { lifecycleGeneration: input.lifecycleGeneration }
-          : {}),
-        binaryPath,
-        turns: [],
-        ...(conversationId ? { conversationId } : {}),
-        ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
-        ...(conversationId
-          ? { transcriptPath: transcriptPathForConversation(conversationId) }
-          : {}),
-        processedHookBytes: 0,
-        processedTranscriptBytes: 0,
-        processedSteps: new Set(),
-        pendingTools: [],
-        sawAssistant: false,
-        interrupted: false,
-        stopped: false,
-      };
-      sessions.set(input.threadId, context);
-      offer({
-        ...base(context, { includeTurn: false }),
-        type: "session.started",
-        payload: {
-          message: "Antigravity CLI session started",
-          ...(conversationId ? { resume: conversationId } : {}),
-        },
-      } satisfies ProviderRuntimeEvent);
-      offer({
-        ...base(context, { includeTurn: false }),
-        type: "thread.started",
-        payload: { ...(conversationId ? { providerThreadId: conversationId } : {}) },
-      } satisfies ProviderRuntimeEvent);
-      return session;
-    });
-
-  const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
-    Effect.gen(function* () {
-      const context = yield* requireSession(input.threadId);
-      if (context.activeProcess) {
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "turn/start",
-          issue: "An Antigravity turn is already active for this thread.",
+            operation: "turn/start",
+            issue: "An Antigravity turn is already active for this thread.",
+          });
+        }
+        const prompt = appendFileAttachmentsPromptBlock({
+          text: input.input,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
         });
-      }
-      const prompt = appendFileAttachmentsPromptBlock({
-        text: input.input,
-        attachments: input.attachments,
-        attachmentsDir: serverConfig.attachmentsDir,
-        include: "all-files",
-      });
-      const normalizedPrompt = trim(prompt);
-      if (!normalizedPrompt) {
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "turn/start",
-          issue: "A prompt or file attachment is required.",
+        const normalizedPrompt = trim(prompt);
+        if (!normalizedPrompt) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "turn/start",
+            issue: "A prompt or file attachment is required.",
+          });
+        }
+        const canBootstrapGateway = agentGatewayCredentials !== undefined;
+        const providerPrompt = buildAntigravityTurnPrompt(context, {
+          prompt: normalizedPrompt,
+          hasGatewaySessionLease: canBootstrapGateway,
         });
-      }
-      const promptIssue = antigravityPromptCommandLineIssue(normalizedPrompt);
-      if (promptIssue) {
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "turn/start",
-          issue: promptIssue,
+        const promptIssue = antigravityPromptCommandLineIssue(providerPrompt);
+        if (promptIssue) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "turn/start",
+            issue: promptIssue,
+          });
+        }
+        const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+        const modelSelection =
+          input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+        const model = modelSelection?.model ?? context.session.model ?? DEFAULT_MODEL;
+        const modelOptions = modelSelection?.options ?? context.modelOptions;
+        const cliModel = resolveAntigravityCliModelLabel(
+          model,
+          modelOptions,
+          defaultEffortByModel.get(model),
+        );
+        const runDir = yield* Effect.tryPromise({
+          try: () => fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-")),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "turn/prepare",
+              detail: messageFromCause(cause, "Failed to prepare Antigravity turn files."),
+              cause,
+            }),
         });
-      }
-      const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-      const modelSelection =
-        input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
-      const model = modelSelection?.model ?? context.session.model ?? DEFAULT_MODEL;
-      const modelOptions = modelSelection?.options ?? context.modelOptions;
-      const cliModel = resolveAntigravityCliModelLabel(
-        model,
-        modelOptions,
-        defaultEffortByModel.get(model),
-      );
-      const runDir = yield* Effect.tryPromise({
-        try: () => fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-")),
-        catch: (cause) =>
-          new ProviderAdapterRequestError({
+        const eventFile = path.join(runDir, "hooks.ndjson");
+        const logFile = path.join(runDir, "agy.log");
+        yield* Effect.tryPromise({
+          try: () => fs.writeFile(eventFile, ""),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "turn/prepare",
+              detail: messageFromCause(cause, "Failed to create the Antigravity hook stream."),
+              cause,
+            }),
+        });
+        const gatewaySessionLease = acquireAgentGatewaySessionLease(
+          agentGatewayCredentials,
+          input.threadId,
+          PROVIDER,
+        );
+        const gatewayBootstrapToken = gatewaySessionLease?.issueStdioBootstrapToken?.();
+        if (gatewaySessionLease && !gatewayBootstrapToken) {
+          gatewaySessionLease.release();
+          yield* Effect.promise(() => fs.rm(runDir, { recursive: true, force: true }));
+          return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "turn/prepare",
-            detail: messageFromCause(cause, "Failed to prepare Antigravity turn files."),
-            cause,
-          }),
-      });
-      const eventFile = path.join(runDir, "hooks.ndjson");
-      const logFile = path.join(runDir, "agy.log");
-      yield* Effect.tryPromise({
-        try: () => fs.writeFile(eventFile, ""),
-        catch: (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "turn/prepare",
-            detail: messageFromCause(cause, "Failed to create the Antigravity hook stream."),
-            cause,
-          }),
-      });
-      context.activeTurnId = turnId;
-      context.activePrompt = normalizedPrompt;
-      if (modelOptions) {
-        context.modelOptions = modelOptions;
-      } else {
-        delete context.modelOptions;
-      }
-      context.eventFile = eventFile;
-      context.processedHookBytes = 0;
-      context.processedSteps.clear();
-      yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
-      context.pendingTools = [];
-      context.sawAssistant = false;
-      context.interrupted = false;
-      context.turns.push({ id: turnId, items: [] });
-      context.session = {
-        ...context.session,
-        status: "running",
-        model,
-        activeTurnId: turnId,
-        updatedAt: new Date().toISOString(),
-      };
-      offer({
-        ...base(context),
-        type: "turn.started",
-        payload: { model },
-      } satisfies ProviderRuntimeEvent);
-
-      const conversationId = context.conversationId;
-      const args: string[] = [
-        ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
-        "--dangerously-skip-permissions",
-        "--model",
-        cliModel,
-        "--log-file",
-        logFile,
-        "--print-timeout",
-        PRINT_TIMEOUT,
-        "-p",
-        normalizedPrompt,
-      ];
-      const child = spawn(context.binaryPath, args, {
-        cwd: context.session.cwd ?? serverConfig.cwd,
-        env: buildProviderChildEnvironment({
-          provider: PROVIDER,
-          inheritedSynaraKeys: ["SYNARA_ANTIGRAVITY_EVENTS", "SYNARA_ANTIGRAVITY_HOOK_DECISION"],
-          overrides: {
-            SYNARA_ANTIGRAVITY_EVENTS: eventFile,
-            SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
-          },
-        }),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      context.activeProcess = child;
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => (stdout += chunk));
-      child.stderr.on("data", (chunk) => (stderr += chunk));
-      const timer = setInterval(() => void pollHookFile(context), POLL_INTERVAL_MS);
-      child.once("error", (cause) => {
-        clearInterval(timer);
-        if (sessions.get(input.threadId) !== context || context.activeProcess !== child) return;
+            detail: "The Synara gateway credential is no longer active for this provider turn.",
+          });
+        }
+        if (gatewaySessionLease) context.gatewaySessionLease = gatewaySessionLease;
+        context.activeTurnId = turnId;
+        context.activePrompt = providerPrompt;
+        if (modelOptions) {
+          context.modelOptions = modelOptions;
+        } else {
+          delete context.modelOptions;
+        }
+        context.eventFile = eventFile;
+        context.processedHookBytes = 0;
+        context.processedSteps.clear();
+        yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
+        context.pendingTools = [];
+        context.sawAssistant = false;
+        context.interrupted = false;
+        context.turns.push({ id: turnId, items: [] });
+        context.session = {
+          ...context.session,
+          status: "running",
+          model,
+          activeTurnId: turnId,
+          updatedAt: new Date().toISOString(),
+        };
         offer({
-          ...base(context, { includeTurn: false }),
-          type: "runtime.error",
-          payload: {
-            message: messageFromCause(cause, "Failed to launch Antigravity CLI."),
-            class: "transport_error",
-          },
-          raw: raw("process-error", cause),
+          ...base(context),
+          type: "turn.started",
+          payload: { model },
         } satisfies ProviderRuntimeEvent);
-      });
-      child.once("close", (code, signal) => {
-        clearInterval(timer);
-        void (async () => {
-          if (sessions.get(input.threadId) !== context || context.activeProcess !== child) {
-            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-            return;
-          }
-          await pollHookFile(context);
-          if (!context.sawAssistant && stdout.trim()) {
-            emitTextItem(
-              context,
-              { step_index: Number.MAX_SAFE_INTEGER, type: "PRINT_OUTPUT", content: stdout.trim() },
-              "assistant_message",
-              "assistant_text",
-            );
-          }
-          const completionBase = base(context);
-          const interrupted = context.interrupted || signal !== null;
-          const failed = !interrupted && (code ?? 1) !== 0;
-          if (failed && stderr.trim()) {
-            offer({
-              ...base(context, { includeTurn: false }),
-              type: "runtime.error",
-              payload: { message: stderr.trim(), class: "provider_error" },
-              raw: raw("stderr", { code, stderr }),
-            } satisfies ProviderRuntimeEvent);
-          }
-          delete context.activeProcess;
-          delete context.activeTurnId;
-          const {
-            activeTurnId: _activeTurnId,
-            lastError: _lastError,
-            ...inactiveSession
-          } = context.session;
-          context.session = {
-            ...inactiveSession,
-            status: failed ? "error" : "ready",
-            ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
-            updatedAt: new Date().toISOString(),
-            ...(failed
-              ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
-              : {}),
-          };
-          offer({
-            ...completionBase,
-            type: "turn.completed",
-            payload: interrupted
-              ? { state: "interrupted", stopReason: "interrupted" }
-              : failed
+
+        const conversationId = context.conversationId;
+        const args: string[] = [
+          ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
+          "--dangerously-skip-permissions",
+          "--model",
+          cliModel,
+          "--log-file",
+          logFile,
+          "--print-timeout",
+          PRINT_TIMEOUT,
+          "-p",
+          providerPrompt,
+        ];
+        let child: AntigravityChildProcess;
+        try {
+          const spawnProcess =
+            dependencies.spawnProcess ??
+            ((command: string, spawnArgs: readonly string[], options: SpawnOptions) =>
+              spawn(command, spawnArgs, options) as AntigravityChildProcess);
+          child = spawnProcess(context.binaryPath, args, {
+            cwd: context.session.cwd ?? serverConfig.cwd,
+            env: buildAntigravityTurnProcessEnvironment({
+              eventFile,
+              ...(gatewaySessionLease && gatewayBootstrapToken
                 ? {
-                    state: "failed",
-                    stopReason: "error",
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    gatewayConnection: gatewaySessionLease.connection,
+                    gatewayBootstrapToken,
                   }
-                : { state: "completed", stopReason: "model_stop" },
-            raw: raw("process-exit", { code, signal, stdout, stderr }),
-          } satisfies ProviderRuntimeEvent);
-          await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-        })();
-      });
-      return {
-        threadId: input.threadId,
-        turnId,
-        ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
-      };
-    });
-
-  const interruptTurn: AntigravityAdapterShape["interruptTurn"] = (threadId) =>
-    requireSession(threadId).pipe(
-      Effect.flatMap((context) => {
-        context.interrupted = true;
-        return teardownActiveProcess(context, "turn/interrupt");
-      }),
-    );
-
-  const unsupported = (threadId: ThreadId, method: string) =>
-    Effect.fail(
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method,
-        detail: `Antigravity CLI print mode does not expose interactive requests for ${threadId}.`,
-      }),
-    );
-
-  const stopSession: AntigravityAdapterShape["stopSession"] = (threadId) =>
-    requireSession(threadId).pipe(
-      Effect.flatMap((context) =>
-        Effect.gen(function* () {
-          context.stopped = true;
-          context.interrupted = true;
-          yield* teardownActiveProcess(context, "session/stop");
-          sessions.delete(threadId);
+                : {}),
+            }),
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        } catch (cause) {
+          releaseTurnGatewayLease(context, gatewaySessionLease);
+          yield* Effect.promise(() => fs.rm(runDir, { recursive: true, force: true }));
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/start",
+            detail: messageFromCause(cause, "Failed to launch Antigravity CLI."),
+            cause,
+          });
+        }
+        context.activeProcess = child;
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stderr.on("data", (chunk) => (stderr += chunk));
+        const timer = setInterval(() => void pollHookFile(context), POLL_INTERVAL_MS);
+        child.once("error", (cause) => {
+          clearInterval(timer);
+          if (sessions.get(input.threadId) !== context || context.activeProcess !== child) return;
           offer({
             ...base(context, { includeTurn: false }),
-            type: "session.exited",
-            payload: { reason: "stopped", exitKind: "graceful" },
+            type: "runtime.error",
+            payload: {
+              message: messageFromCause(cause, "Failed to launch Antigravity CLI."),
+              class: "transport_error",
+            },
+            raw: raw("process-error", cause),
           } satisfies ProviderRuntimeEvent);
+        });
+        child.once("close", (code, signal) => {
+          clearInterval(timer);
+          void (async () => {
+            if (sessions.get(input.threadId) !== context || context.activeProcess !== child) {
+              releaseTurnGatewayLease(context, gatewaySessionLease);
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              return;
+            }
+            const completionBase = base(context);
+            const completedTurnId = context.activeTurnId;
+            await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, completedTurnId));
+            // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
+            // soon as that process exits, before post-processing or a later turn
+            // can begin, so an unconsumed bootstrap from this turn cannot cross
+            // into the next turn's authority.
+            releaseTurnGatewayLease(context, gatewaySessionLease);
+            await pollHookFile(context).catch(() => undefined);
+            if (!context.sawAssistant && stdout.trim()) {
+              emitTextItem(
+                context,
+                {
+                  step_index: Number.MAX_SAFE_INTEGER,
+                  type: "PRINT_OUTPUT",
+                  content: stdout.trim(),
+                },
+                "assistant_message",
+                "assistant_text",
+              );
+            }
+            const interrupted = context.interrupted || signal !== null;
+            const failed = !interrupted && (code ?? 1) !== 0;
+            if (failed && stderr.trim()) {
+              offer({
+                ...base(context, { includeTurn: false }),
+                type: "runtime.error",
+                payload: { message: stderr.trim(), class: "provider_error" },
+                raw: raw("stderr", { code, stderr }),
+              } satisfies ProviderRuntimeEvent);
+            }
+            delete context.activeProcess;
+            delete context.activeTurnId;
+            const {
+              activeTurnId: _activeTurnId,
+              lastError: _lastError,
+              ...inactiveSession
+            } = context.session;
+            context.session = {
+              ...inactiveSession,
+              status: failed ? "error" : "ready",
+              ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+              updatedAt: new Date().toISOString(),
+              ...(failed
+                ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
+                : {}),
+            };
+            offer({
+              ...completionBase,
+              type: "turn.completed",
+              payload: interrupted
+                ? { state: "interrupted", stopReason: "interrupted" }
+                : failed
+                  ? {
+                      state: "failed",
+                      stopReason: "error",
+                      errorMessage:
+                        stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    }
+                  : { state: "completed", stopReason: "model_stop" },
+              raw: raw("process-exit", { code, signal, stdout, stderr }),
+            } satisfies ProviderRuntimeEvent);
+            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+          })();
+        });
+        return {
+          threadId: input.threadId,
+          turnId,
+          ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+        };
+      });
+
+    const interruptTurn: AntigravityAdapterShape["interruptTurn"] = (threadId, turnId) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        if (turnId !== undefined && turnId !== context.activeTurnId) {
+          yield* Effect.logWarning("antigravity.stale_interrupt_ignored", {
+            threadId,
+            requestedTurnId: turnId,
+            activeTurnId: context.activeTurnId,
+          });
+          return;
+        }
+        const activeTurnId = turnId ?? context.activeTurnId;
+        yield* withAgentGatewayTurnCancellation(
+          context.gatewaySessionLease,
+          activeTurnId,
+          Effect.gen(function* () {
+            context.interrupted = true;
+            yield* teardownActiveProcess(context, "turn/interrupt");
+          }),
+        );
+      });
+
+    const unsupported = (threadId: ThreadId, method: string) =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method,
+          detail: `Antigravity CLI print mode does not expose interactive requests for ${threadId}.`,
         }),
+      );
+
+    const stopSession: AntigravityAdapterShape["stopSession"] = (threadId) =>
+      requireSession(threadId).pipe(
+        Effect.flatMap((context) =>
+          Effect.gen(function* () {
+            context.stopped = true;
+            context.interrupted = true;
+            yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+            yield* teardownActiveProcess(context, "session/stop");
+            releaseTurnGatewayLease(context);
+            sessions.delete(threadId);
+            offer({
+              ...base(context, { includeTurn: false }),
+              type: "session.exited",
+              payload: { reason: "stopped", exitKind: "graceful" },
+            } satisfies ProviderRuntimeEvent);
+          }),
+        ),
+      );
+
+    const snapshot = (context: AntigravitySessionContext): ProviderThreadSnapshot => ({
+      threadId: context.session.threadId,
+      ...(context.session.cwd ? { cwd: context.session.cwd } : {}),
+      turns: context.turns.map((turn) => ({ id: turn.id, items: [...turn.items] })),
+    });
+
+    const rollbackThread: AntigravityAdapterShape["rollbackThread"] = (threadId, numTurns) =>
+      requireSession(threadId).pipe(
+        Effect.map((context) => {
+          context.turns.splice(Math.max(0, context.turns.length - Math.max(0, numTurns)));
+          // Antigravity has no rollback cursor; ProviderService will rebuild local context.
+          delete context.conversationId;
+          delete context.transcriptPath;
+          delete context.processedTranscriptPath;
+          context.processedTranscriptBytes = 0;
+          context.processedSteps.clear();
+          const { resumeCursor: _resumeCursor, ...sessionWithoutResume } = context.session;
+          context.session = sessionWithoutResume;
+          return snapshot(context);
+        }),
+      );
+
+    const listModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
+      Effect.tryPromise({
+        try: async () => {
+          const result = await runAntigravityHelperProcess(
+            trim(input.binaryPath) ?? "agy",
+            ["models"],
+            {
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+            },
+          );
+          if (result.code !== 0) throw new Error(result.stderr || "agy models failed");
+          const models = parseModelLines(result.stdout);
+          for (const model of models) {
+            if (model.defaultReasoningEffort) {
+              defaultEffortByModel.set(model.slug, model.defaultReasoningEffort);
+            }
+          }
+          return {
+            models,
+            source: "antigravity.cli",
+            cached: false,
+          } satisfies ProviderListModelsResult;
+        },
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: messageFromCause(cause, "Failed to list Antigravity models."),
+            cause,
+          }),
+      });
+
+    const stopAll = () =>
+      Effect.forEach([...sessions.keys()], (threadId) => stopSession(threadId), {
+        concurrency: "unbounded",
+        discard: true,
+      }).pipe(Effect.asVoid);
+
+    yield* Effect.addFinalizer(() =>
+      stopAll().pipe(
+        Effect.ignore,
+        Effect.andThen(eventIngress.stop),
+        Effect.andThen(Queue.shutdown(eventQueue)),
       ),
     );
 
-  const snapshot = (context: AntigravitySessionContext): ProviderThreadSnapshot => ({
-    threadId: context.session.threadId,
-    ...(context.session.cwd ? { cwd: context.session.cwd } : {}),
-    turns: context.turns.map((turn) => ({ id: turn.id, items: [...turn.items] })),
+    return {
+      provider: PROVIDER,
+      capabilities: {
+        sessionModelSwitch: "restart-session",
+        conversationRollback: "restart-session",
+        supportsRuntimeModelList: true,
+        supportsLiveTurnDiffPatch: false,
+      },
+      startSession,
+      sendTurn,
+      interruptTurn,
+      respondToRequest: (threadId) => unsupported(threadId, "request/respond"),
+      respondToUserInput: (threadId) => unsupported(threadId, "user-input/respond"),
+      stopSession,
+      listSessions: () =>
+        Effect.sync(() => [...sessions.values()].map((context) => context.session)),
+      hasSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
+      readThread: (threadId) => requireSession(threadId).pipe(Effect.map(snapshot)),
+      rollbackThread,
+      stopAll,
+      listModels,
+      getComposerCapabilities: () =>
+        Effect.succeed({
+          provider: PROVIDER,
+          supportsSkillMentions: true,
+          supportsSkillDiscovery: true,
+          supportsNativeSlashCommandDiscovery: false,
+          supportsPluginMentions: false,
+          supportsPluginDiscovery: false,
+          supportsRuntimeModelList: true,
+          supportsThreadCompaction: false,
+          supportsThreadImport: false,
+        } satisfies ProviderComposerCapabilities),
+      get streamEvents() {
+        return Stream.fromQueue(eventQueue);
+      },
+    } satisfies AntigravityAdapterShape;
   });
 
-  const rollbackThread: AntigravityAdapterShape["rollbackThread"] = (threadId, numTurns) =>
-    requireSession(threadId).pipe(
-      Effect.map((context) => {
-        context.turns.splice(Math.max(0, context.turns.length - Math.max(0, numTurns)));
-        // Antigravity has no rollback cursor; ProviderService will rebuild local context.
-        delete context.conversationId;
-        delete context.transcriptPath;
-        delete context.processedTranscriptPath;
-        context.processedTranscriptBytes = 0;
-        context.processedSteps.clear();
-        const { resumeCursor: _resumeCursor, ...sessionWithoutResume } = context.session;
-        context.session = sessionWithoutResume;
-        return snapshot(context);
-      }),
-    );
+export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter());
 
-  const listModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
-    Effect.tryPromise({
-      try: async () => {
-        const result = await runAntigravityHelperProcess(
-          trim(input.binaryPath) ?? "agy",
-          ["models"],
-          {
-            ...(input.cwd ? { cwd: input.cwd } : {}),
-            timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
-          },
-        );
-        if (result.code !== 0) throw new Error(result.stderr || "agy models failed");
-        const models = parseModelLines(result.stdout);
-        for (const model of models) {
-          if (model.defaultReasoningEffort) {
-            defaultEffortByModel.set(model.slug, model.defaultReasoningEffort);
-          }
-        }
-        return {
-          models,
-          source: "antigravity.cli",
-          cached: false,
-        } satisfies ProviderListModelsResult;
-      },
-      catch: (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "model/list",
-          detail: messageFromCause(cause, "Failed to list Antigravity models."),
-          cause,
-        }),
-    });
-
-  const stopAll = () =>
-    Effect.forEach([...sessions.keys()], (threadId) => stopSession(threadId), {
-      concurrency: "unbounded",
-      discard: true,
-    }).pipe(Effect.asVoid);
-
-  yield* Effect.addFinalizer(() =>
-    stopAll().pipe(
-      Effect.ignore,
-      Effect.andThen(eventIngress.stop),
-      Effect.andThen(Queue.shutdown(eventQueue)),
-    ),
-  );
-
-  return {
-    provider: PROVIDER,
-    capabilities: {
-      sessionModelSwitch: "restart-session",
-      conversationRollback: "restart-session",
-      supportsRuntimeModelList: true,
-      supportsLiveTurnDiffPatch: false,
-    },
-    startSession,
-    sendTurn,
-    interruptTurn,
-    respondToRequest: (threadId) => unsupported(threadId, "request/respond"),
-    respondToUserInput: (threadId) => unsupported(threadId, "user-input/respond"),
-    stopSession,
-    listSessions: () => Effect.sync(() => [...sessions.values()].map((context) => context.session)),
-    hasSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
-    readThread: (threadId) => requireSession(threadId).pipe(Effect.map(snapshot)),
-    rollbackThread,
-    stopAll,
-    listModels,
-    getComposerCapabilities: () =>
-      Effect.succeed({
-        provider: PROVIDER,
-        supportsSkillMentions: true,
-        supportsSkillDiscovery: true,
-        supportsNativeSlashCommandDiscovery: false,
-        supportsPluginMentions: false,
-        supportsPluginDiscovery: false,
-        supportsRuntimeModelList: true,
-        supportsThreadCompaction: false,
-        supportsThreadImport: false,
-      } satisfies ProviderComposerCapabilities),
-    get streamEvents() {
-      return Stream.fromQueue(eventQueue);
-    },
-  } satisfies AntigravityAdapterShape;
-});
-
-export const AntigravityAdapterLive = Layer.effect(AntigravityAdapter, makeAntigravityAdapter);
-
-export function makeAntigravityAdapterLive() {
-  return Layer.effect(AntigravityAdapter, makeAntigravityAdapter);
+export function makeAntigravityAdapterLive(dependencies: AntigravityAdapterDependencies = {}) {
+  return Layer.effect(AntigravityAdapter, makeAntigravityAdapter(dependencies));
 }

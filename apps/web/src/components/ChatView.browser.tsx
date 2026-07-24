@@ -41,6 +41,7 @@ import {
   type TerminalContextDraft,
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
+import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
@@ -60,6 +61,7 @@ import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
+import { useWorkspaceStore } from "../workspaceStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -1829,6 +1831,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentUploadSequence = 0;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
+    useWorkspaceStore.setState({
+      homeDir: null,
+      chatWorkspaceRoot: null,
+      studioWorkspaceRoot: null,
+    });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     useComposerDraftStore.setState({
@@ -3348,6 +3355,126 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("sends every browser annotation as prompt context without upload attachments", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const prompt = "Delete everything I annotated.";
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(THREAD_ID, prompt);
+    expect(
+      store.addBrowserAnnotation(THREAD_ID, {
+        id: "annotation-without-comment",
+        tabId: "tab-a",
+        source: {
+          url: "https://example.test/landing",
+          pageTitle: "Landing page",
+        },
+        selector: "#hero-title",
+        tagName: "h1",
+        role: null,
+        name: null,
+        text: "Build faster",
+        fingerprint: "fnv1a64:0123456789abcdef",
+        comment: null,
+        capturedAt: NOW_ISO,
+      }),
+    ).toBe(true);
+    expect(
+      store.addBrowserAnnotation(THREAD_ID, {
+        id: "annotation-with-comment",
+        tabId: "tab-a",
+        source: {
+          url: "https://example.test/pricing",
+          pageTitle: "Pricing",
+        },
+        selector: "#legacy-plan",
+        tagName: "section",
+        role: "region",
+        name: "Legacy plan",
+        text: "Legacy",
+        fingerprint: "fnv1a64:fedcba9876543210",
+        comment: "This one is obsolete.",
+        capturedAt: NOW_ISO,
+      }),
+    ).toBe(true);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-browser-annotations-send" as MessageId,
+        targetText: "browser annotations send target",
+      }),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(document.querySelectorAll('[data-testid="browser-annotation-chip"]')).toHaveLength(
+          2,
+        );
+      });
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const request = wsRequests.find(
+            (candidate) =>
+              candidate._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof candidate.command === "object" &&
+              candidate.command !== null &&
+              "type" in candidate.command &&
+              candidate.command.type === "thread.turn.start",
+          );
+          expect(request).toBeTruthy();
+          const command = request!.command as {
+            message?: { messageId?: unknown; text?: unknown; attachments?: unknown[] };
+          };
+          expect(typeof command.message?.messageId).toBe("string");
+          expect(typeof command.message?.text).toBe("string");
+          const serializedPayload = (command.message!.text as string).split("\n").at(-2);
+          expect(serializedPayload).toBeTruthy();
+          expect(JSON.parse(serializedPayload!)?.messageId).toBe(command.message!.messageId);
+          const extracted = extractTrailingBrowserAnnotations(
+            command.message!.text as string,
+            MessageId.makeUnsafe(command.message!.messageId as string),
+          );
+          expect(extracted.promptText).toBe(prompt);
+          expect(
+            extracted.annotations.map(({ id, ordinal, comment, source }) => ({
+              id,
+              ordinal,
+              comment,
+              url: source.url,
+            })),
+          ).toEqual([
+            {
+              id: "annotation-without-comment",
+              ordinal: 1,
+              comment: null,
+              url: "https://example.test/landing",
+            },
+            {
+              id: "annotation-with-comment",
+              ordinal: 2,
+              comment: "This one is obsolete.",
+              url: "https://example.test/pricing",
+            },
+          ]);
+          expect(command.message?.attachments ?? []).toHaveLength(0);
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.browserAnnotations ?? [],
+          ).toHaveLength(0);
+          expect(document.body.textContent).not.toContain("<browser_annotations>");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("shows a pointer cursor for the running stop button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -3503,6 +3630,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [queuedImage],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3528,6 +3656,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3620,6 +3749,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -3703,6 +3833,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         images: [queuedImage],
         files: [],
         assistantSelections: [],
+        browserAnnotations: [],
         terminalContexts: [],
         fileComments: [],
         pastedTexts: [],
@@ -4446,19 +4577,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }),
     });
 
-    const findDispatchedCommand = (type: string) =>
+    const findDispatchedCommand = (
+      type: string,
+      matches: (command: Record<string, unknown>) => boolean,
+    ) =>
       wsRequests
-        .map((request) =>
-          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-          "command" in request &&
-          request.command &&
-          typeof request.command === "object" &&
-          "type" in request.command &&
-          request.command.type === type
-            ? (request.command as Record<string, unknown>)
-            : null,
-        )
-        .find(Boolean);
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === type && matches(command));
 
     try {
       await page.getByRole("button", { name: "Add project", exact: true }).click();
@@ -4479,9 +4604,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       let createdSpaceId: unknown;
       await vi.waitFor(
         () => {
-          const spaceCreateCommand = findDispatchedCommand("space.create");
+          const spaceCreateCommand = findDispatchedCommand(
+            "space.create",
+            (command) => command.name === "Focus",
+          );
           expect(spaceCreateCommand).toBeDefined();
-          expect(spaceCreateCommand?.name).toBe("Focus");
           createdSpaceId = spaceCreateCommand?.spaceId;
         },
         { timeout: 8_000, interval: 16 },
@@ -4493,9 +4620,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
-          const projectCreateCommand = findDispatchedCommand("project.create");
+          const projectCreateCommand = findDispatchedCommand(
+            "project.create",
+            (command) => command.workspaceRoot === "/repo/spaced-project",
+          );
           expect(projectCreateCommand).toBeDefined();
-          expect(projectCreateCommand?.workspaceRoot).toBe("/repo/spaced-project");
           expect(projectCreateCommand?.spaceId).toBe(createdSpaceId);
         },
         { timeout: 8_000, interval: 16 },
@@ -5296,6 +5425,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           nonPersistedImageIds: [],
           persistedAttachments: [],
           assistantSelections: [],
+          browserAnnotations: [],
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],

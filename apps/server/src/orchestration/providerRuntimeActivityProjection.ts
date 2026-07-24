@@ -873,13 +873,20 @@ export function projectProviderRuntimeActivities(
       const state = runtimeTurnState(event);
       const modelUsage = compactTurnModelUsage(event.payload.modelUsage);
       const errorMessage = asString(runtimePayloadRecord(event)?.errorMessage);
+      const interrupted = state === "interrupted" || state === "cancelled";
+      let summary = "Turn completed";
+      if (state === "failed") {
+        summary = "Turn failed";
+      } else if (interrupted) {
+        summary = "Turn interrupted";
+      }
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: state === "failed" ? "error" : "info",
           kind: "turn.completed",
-          summary: state === "failed" ? "Turn failed" : "Turn completed",
+          summary,
           payload: toActivityPayload({
             state,
             ...(modelUsage ? { modelUsage } : {}),

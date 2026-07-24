@@ -58,6 +58,12 @@ import {
   stripNonStickyModelOptions,
 } from "./composerDraftModels";
 import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
+import {
+  BROWSER_ANNOTATION_MAX_COUNT,
+  nextBrowserAnnotationOrdinal,
+  normalizeBrowserAnnotation,
+  normalizeBrowserAnnotations,
+} from "./lib/browserAnnotations";
 import { ensureInlineTerminalContextPlaceholders } from "./lib/terminalContext";
 import { buildModelSelection } from "./providerModelOptions";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
@@ -579,6 +585,7 @@ export const createComposerDraftStoreState =
                 nonPersistedImageIds: [],
                 persistedAttachments: [],
                 assistantSelections: [],
+                browserAnnotations: [],
                 terminalContexts: [],
                 fileComments: [],
                 pastedTexts: [],
@@ -621,6 +628,7 @@ export const createComposerDraftStoreState =
           nonPersistedImageIds: [...savedDraft.nonPersistedImageIds],
           persistedAttachments: [...savedDraft.persistedAttachments],
           assistantSelections: normalizeAssistantSelections(savedDraft.assistantSelections),
+          browserAnnotations: normalizeBrowserAnnotations(savedDraft.browserAnnotations),
           terminalContexts: normalizeTerminalContextsForThread(
             threadId,
             savedDraft.terminalContexts,
@@ -1337,6 +1345,138 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    addBrowserAnnotation: (threadId, annotation) => {
+      if (threadId.length === 0) {
+        return false;
+      }
+      let inserted = false;
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        if (
+          existing.browserAnnotations.length >= BROWSER_ANNOTATION_MAX_COUNT ||
+          existing.browserAnnotations.some((entry) => entry.id === annotation.id)
+        ) {
+          return state;
+        }
+        const normalized = normalizeBrowserAnnotation({
+          ...annotation,
+          ordinal: nextBrowserAnnotationOrdinal(existing.browserAnnotations),
+        });
+        if (!normalized) {
+          return state;
+        }
+        inserted = true;
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...existing,
+              browserAnnotations: [...existing.browserAnnotations, normalized],
+            },
+          },
+        };
+      });
+      return inserted;
+    },
+    addBrowserAnnotations: (threadId, annotations) => {
+      if (threadId.length === 0 || annotations.length === 0) {
+        return 0;
+      }
+      let insertedCount = 0;
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        const nextAnnotations = [...existing.browserAnnotations];
+        const ids = new Set(nextAnnotations.map((annotation) => annotation.id));
+        const preserveBatchOrdinals = existing.browserAnnotations.length === 0;
+        const ordinals = new Set(nextAnnotations.map((annotation) => annotation.ordinal));
+        for (const annotation of annotations) {
+          if (nextAnnotations.length >= BROWSER_ANNOTATION_MAX_COUNT) {
+            break;
+          }
+          if (ids.has(annotation.id)) {
+            continue;
+          }
+          const requestedOrdinal =
+            preserveBatchOrdinals &&
+            typeof annotation.ordinal === "number" &&
+            Number.isFinite(annotation.ordinal) &&
+            annotation.ordinal >= 1 &&
+            !ordinals.has(Math.floor(annotation.ordinal))
+              ? Math.floor(annotation.ordinal)
+              : nextBrowserAnnotationOrdinal(nextAnnotations);
+          const normalized = normalizeBrowserAnnotation({
+            ...annotation,
+            ordinal: requestedOrdinal,
+          });
+          if (!normalized) {
+            continue;
+          }
+          nextAnnotations.push(normalized);
+          ids.add(normalized.id);
+          ordinals.add(normalized.ordinal);
+          insertedCount += 1;
+        }
+        if (insertedCount === 0) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...existing,
+              browserAnnotations: nextAnnotations,
+            },
+          },
+        };
+      });
+      return insertedCount;
+    },
+    removeBrowserAnnotation: (threadId, annotationId) => {
+      if (threadId.length === 0 || annotationId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current || current.browserAnnotations.every((entry) => entry.id !== annotationId)) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          browserAnnotations: current.browserAnnotations.filter(
+            (annotation) => annotation.id !== annotationId,
+          ),
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    clearBrowserAnnotations: (threadId) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current || current.browserAnnotations.length === 0) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          browserAnnotations: [],
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     addFileComment: (threadId, comment) => {
       if (threadId.length === 0) {
         return false;
@@ -1704,6 +1844,7 @@ export const createComposerDraftStoreState =
           nonPersistedImageIds: [],
           persistedAttachments: [],
           assistantSelections: [],
+          browserAnnotations: [],
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],

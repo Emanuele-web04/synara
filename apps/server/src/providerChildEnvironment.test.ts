@@ -14,6 +14,8 @@ describe("buildProviderChildEnvironment", () => {
         GEMINI_API_KEY: "provider-key",
         SYNARA_AUTH_TOKEN: "control-plane-secret",
         SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/browser.sock",
+        SYNARA_BROWSER_HOST_CAPABILITY: "private-desktop-capability",
+        SYNARA_BROWSER_HOST_CAPABILITY_FD: "3",
         NODE_OPTIONS: "--require=/tmp/inject.js",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/other.sock",
       },

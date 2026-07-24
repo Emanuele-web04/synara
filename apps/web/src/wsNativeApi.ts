@@ -789,12 +789,6 @@ export function createWsNativeApi(): NativeApi {
         }
         throw new Error("Browser screenshots require the desktop app.");
       },
-      executeCdp: async (input) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.browser.executeCdp(input);
-        }
-        throw new Error("Browser automation requires the desktop app.");
-      },
       navigate: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.navigate(input);
@@ -876,6 +870,34 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge) {
           await window.desktopBridge.browser.openDevTools(input);
         }
+      },
+      annotations: {
+        start: async (input) => {
+          if (window.desktopBridge) {
+            return window.desktopBridge.browser.annotations.start(input);
+          }
+          throw new Error("Browser annotations require the desktop app.");
+        },
+        cancel: async (input) => {
+          if (window.desktopBridge) {
+            await window.desktopBridge.browser.annotations.cancel(input);
+            return;
+          }
+          throw new Error("Browser annotations require the desktop app.");
+        },
+        syncMarkers: async (input) => {
+          if (window.desktopBridge) {
+            await window.desktopBridge.browser.annotations.syncMarkers(input);
+            return;
+          }
+          throw new Error("Browser annotations require the desktop app.");
+        },
+        onEvent: (callback) => {
+          if (window.desktopBridge) {
+            return window.desktopBridge.browser.annotations.onEvent(callback);
+          }
+          return () => {};
+        },
       },
       onState: (callback) => {
         if (window.desktopBridge) {

@@ -325,6 +325,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerAssistantSelectionAttachment,
+  type BrowserAnnotationDraft,
   type DraftThreadEnvMode,
   type PersistedComposerImageAttachment,
   type QueuedComposerChatTurn,
@@ -363,6 +364,10 @@ import {
   formatAssistantSelectionQueuePreview,
   formatAssistantSelectionTitleSeed,
 } from "../lib/assistantSelections";
+import {
+  appendBrowserAnnotationsToPrompt,
+  formatBrowserAnnotationLabel,
+} from "../lib/browserAnnotations";
 import {
   appendFileCommentsToPrompt,
   formatFileCommentLabel,
@@ -920,6 +925,7 @@ function buildQueuedComposerPreviewText(input: {
   images: ReadonlyArray<ComposerImageAttachment>;
   files: ReadonlyArray<ComposerFileAttachment>;
   assistantSelections: ReadonlyArray<{ id: string }>;
+  browserAnnotations: ReadonlyArray<BrowserAnnotationDraft>;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
@@ -937,6 +943,10 @@ function buildQueuedComposerPreviewText(input: {
   }
   if (input.assistantSelections.length > 0) {
     return formatAssistantSelectionQueuePreview(input.assistantSelections.length);
+  }
+  const firstBrowserAnnotation = input.browserAnnotations[0];
+  if (firstBrowserAnnotation) {
+    return `#${firstBrowserAnnotation.ordinal} ${formatBrowserAnnotationLabel(firstBrowserAnnotation)}`;
   }
   const firstTerminalContext = input.terminalContexts[0];
   if (firstTerminalContext) {
@@ -1121,6 +1131,7 @@ export default function ChatView({
   const composerImages = composerDraft.images;
   const composerFiles = composerDraft.files;
   const composerAssistantSelections = composerDraft.assistantSelections;
+  const composerBrowserAnnotations = composerDraft.browserAnnotations;
   const composerFileComments = composerDraft.fileComments;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerPastedTexts = composerDraft.pastedTexts;
@@ -1135,12 +1146,14 @@ export default function ChatView({
         imageCount: composerImages.length,
         fileCount: composerFiles.length,
         assistantSelectionCount: composerAssistantSelections.length,
+        browserAnnotationCount: composerBrowserAnnotations.length,
         fileCommentCount: composerFileComments.length,
         terminalContexts: composerTerminalContexts,
         pastedTexts: composerPastedTexts,
       }),
     [
       composerAssistantSelections.length,
+      composerBrowserAnnotations.length,
       composerFileComments.length,
       composerFiles.length,
       composerImages.length,
@@ -1178,6 +1191,12 @@ export default function ChatView({
   const removeComposerDraftFile = useComposerDraftStore((store) => store.removeFile);
   const addComposerDraftAssistantSelection = useComposerDraftStore(
     (store) => store.addAssistantSelection,
+  );
+  const addComposerDraftBrowserAnnotations = useComposerDraftStore(
+    (store) => store.addBrowserAnnotations,
+  );
+  const removeComposerDraftBrowserAnnotation = useComposerDraftStore(
+    (store) => store.removeBrowserAnnotation,
   );
   const clearComposerDraftAssistantSelections = useComposerDraftStore(
     (store) => store.clearAssistantSelections,
@@ -1271,6 +1290,9 @@ export default function ChatView({
   }, [optimisticUserMessages]);
   const composerAssistantSelectionsRef = useRef<ComposerAssistantSelectionAttachment[]>(
     composerAssistantSelections,
+  );
+  const composerBrowserAnnotationsRef = useRef<BrowserAnnotationDraft[]>(
+    composerBrowserAnnotations,
   );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const composerFileCommentsRef = useRef<FileCommentDraft[]>(composerFileComments);
@@ -1625,6 +1647,17 @@ export default function ChatView({
       removeComposerDraftPastedText(threadId, pastedTextId);
     },
     [discardPromptHistoryNavigationForComposerMutation, removeComposerDraftPastedText, threadId],
+  );
+  const removeComposerBrowserAnnotationFromDraft = useCallback(
+    (annotationId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      removeComposerDraftBrowserAnnotation(threadId, annotationId);
+    },
+    [
+      discardPromptHistoryNavigationForComposerMutation,
+      removeComposerDraftBrowserAnnotation,
+      threadId,
+    ],
   );
   // "Show in text field": drop the full pasted text back into the editor (appended
   // to the current prompt) and discard the card so it can be edited as normal text.
@@ -4976,6 +5009,10 @@ export default function ChatView({
   }, [composerAssistantSelections]);
 
   useEffect(() => {
+    composerBrowserAnnotationsRef.current = composerBrowserAnnotations;
+  }, [composerBrowserAnnotations]);
+
+  useEffect(() => {
     composerTerminalContextsRef.current = composerTerminalContexts;
   }, [composerTerminalContexts]);
 
@@ -6438,6 +6475,8 @@ export default function ChatView({
       const restoredFiles = queuedTurn.kind === "chat" ? queuedTurn.files : [];
       const restoredAssistantSelections =
         queuedTurn.kind === "chat" ? queuedTurn.assistantSelections : [];
+      const restoredBrowserAnnotations =
+        queuedTurn.kind === "chat" ? queuedTurn.browserAnnotations : [];
       const restoredFileComments = queuedTurn.kind === "chat" ? queuedTurn.fileComments : [];
       promptRef.current = nextPrompt;
       clearComposerDraftContent(activeThread.id);
@@ -6457,6 +6496,9 @@ export default function ChatView({
         }
         for (const selection of restoredAssistantSelections) {
           addComposerAssistantSelectionToDraft(selection);
+        }
+        if (restoredBrowserAnnotations.length > 0) {
+          addComposerDraftBrowserAnnotations(activeThread.id, restoredBrowserAnnotations);
         }
         for (const comment of restoredFileComments) {
           addComposerFileCommentToDraft(comment);
@@ -6493,6 +6535,7 @@ export default function ChatView({
     [
       activeThread,
       addComposerAssistantSelectionToDraft,
+      addComposerDraftBrowserAnnotations,
       addComposerFileCommentToDraft,
       addComposerFilesToDraft,
       addComposerImagesToDraft,
@@ -6600,6 +6643,8 @@ export default function ChatView({
     const composerFilesForSend = queuedChatTurn?.files ?? composerFiles;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
+    const composerBrowserAnnotationsForSend =
+      queuedChatTurn?.browserAnnotations ?? composerBrowserAnnotations;
     const composerFileCommentsForSend = queuedChatTurn?.fileComments ?? composerFileComments;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
@@ -6629,6 +6674,7 @@ export default function ChatView({
       imageCount: composerImagesForSend.length,
       fileCount: composerFilesForSend.length,
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
+      browserAnnotationCount: composerBrowserAnnotationsForSend.length,
       fileCommentCount: composerFileCommentsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
       pastedTexts: composerPastedTextsForSend,
@@ -6652,6 +6698,7 @@ export default function ChatView({
       composerImagesForSend.length > 0 ||
       composerFilesForSend.length > 0 ||
       composerAssistantSelectionsForSend.length > 0 ||
+      composerBrowserAnnotationsForSend.length > 0 ||
       composerFileCommentsForSend.length > 0 ||
       sendableComposerTerminalContexts.length > 0 ||
       sendableComposerPastedTexts.length > 0;
@@ -6699,6 +6746,7 @@ export default function ChatView({
       composerImagesForSend.length === 0 &&
       composerFilesForSend.length === 0 &&
       composerAssistantSelectionsForSend.length === 0 &&
+      composerBrowserAnnotationsForSend.length === 0 &&
       composerFileCommentsForSend.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       sendableComposerPastedTexts.length === 0 &&
@@ -6952,6 +7000,7 @@ export default function ChatView({
           images: queuedImagesForPersistence,
           files: composerFilesForSend,
           assistantSelections: composerAssistantSelectionsForSend,
+          browserAnnotations: composerBrowserAnnotationsForSend,
           terminalContexts: sendableComposerTerminalContexts,
           fileComments: composerFileCommentsForSend,
           pastedTexts: sendableComposerPastedTexts,
@@ -6960,6 +7009,7 @@ export default function ChatView({
         images: queuedImagesForPersistence,
         files: composerFilesForSend,
         assistantSelections: composerAssistantSelectionsForSend,
+        browserAnnotations: composerBrowserAnnotationsForSend,
         fileComments: composerFileCommentsForSend,
         terminalContexts: sendableComposerTerminalContexts,
         pastedTexts: sendableComposerPastedTexts,
@@ -6994,6 +7044,8 @@ export default function ChatView({
         titleSeed = `File: ${composerFilesForSend[0]?.name ?? "attachment"}`;
       } else if (composerAssistantSelectionsForSend.length > 0) {
         titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsForSend.length);
+      } else if (composerBrowserAnnotationsForSend.length > 0) {
+        titleSeed = formatBrowserAnnotationLabel(composerBrowserAnnotationsForSend[0]!);
       } else if (sendableComposerTerminalContexts.length > 0) {
         titleSeed = formatTerminalContextLabel(sendableComposerTerminalContexts[0]!);
       } else if (composerFileCommentsForSend.length > 0) {
@@ -7165,25 +7217,33 @@ export default function ChatView({
     const composerImagesSnapshot = [...composerImagesForSend];
     const composerFilesSnapshot = [...composerFilesForSend];
     const composerAssistantSelectionsSnapshot = [...composerAssistantSelectionsForSend];
+    const composerBrowserAnnotationsSnapshot = composerBrowserAnnotationsForSend.map(
+      (annotation) => ({ ...annotation, source: { ...annotation.source } }),
+    );
     const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
-    // Trailing blocks are appended innermost-to-outermost: assistant selections,
-    // terminal contexts, file comments, then pasted text (outermost). The display
-    // extractors unwrap them in the reverse order.
-    const messageTextForSend = appendPastedTextsToPrompt(
-      appendFileCommentsToPrompt(
-        appendTerminalContextsToPrompt(
-          appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
-          composerTerminalContextsSnapshot,
-        ),
-        composerFileCommentsSnapshot,
-      ),
-      composerPastedTextsSnapshot,
-    );
     const messageIdForSend = newMessageId();
+    // Trailing blocks are appended innermost-to-outermost: assistant selections,
+    // terminal contexts, file comments, pasted text, then browser annotations
+    // (outermost). The display
+    // extractors unwrap them in the reverse order.
+    const messageTextForSend = appendBrowserAnnotationsToPrompt(
+      appendPastedTextsToPrompt(
+        appendFileCommentsToPrompt(
+          appendTerminalContextsToPrompt(
+            appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
+            composerTerminalContextsSnapshot,
+          ),
+          composerFileCommentsSnapshot,
+        ),
+        composerPastedTextsSnapshot,
+      ),
+      composerBrowserAnnotationsSnapshot,
+      messageIdForSend,
+    );
     const messageCreatedAt = new Date().toISOString();
     const outgoingTextSeed =
       messageTextForSend || (composerImagesSnapshot.length > 0 ? IMAGE_ONLY_BOOTSTRAP_PROMPT : "");
@@ -7566,6 +7626,7 @@ export default function ChatView({
         composerImagesRef.current.length === 0 &&
         composerFilesRef.current.length === 0 &&
         composerAssistantSelectionsRef.current.length === 0 &&
+        composerBrowserAnnotationsRef.current.length === 0 &&
         composerFileCommentsRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0 &&
         composerPastedTextsRef.current.length === 0
@@ -7593,6 +7654,7 @@ export default function ChatView({
         for (const selection of composerAssistantSelectionsSnapshot) {
           addComposerAssistantSelectionToDraft(selection);
         }
+        addComposerDraftBrowserAnnotations(threadIdForSend, composerBrowserAnnotationsSnapshot);
         for (const comment of composerFileCommentsSnapshot) {
           addComposerFileCommentToDraft(comment);
         }
@@ -8035,6 +8097,7 @@ export default function ChatView({
       const editedTextWithOriginalContext = appendOriginalComposerPromptBlocks({
         editedPrompt: text,
         originalPrompt: originalMessage.text,
+        messageId,
       });
       const outgoingMessageText = formatOutgoingComposerPrompt({
         provider: selectedProvider,
@@ -8136,6 +8199,7 @@ export default function ChatView({
       images: [],
       files: [],
       assistantSelections: [],
+      browserAnnotations: [],
       terminalContexts: [],
       fileComments: [],
       pastedTexts: [],
@@ -10223,12 +10287,14 @@ export default function ChatView({
                   {!isComposerApprovalState &&
                     pendingUserInputs.length === 0 &&
                     (composerAssistantSelections.length > 0 ||
+                      composerBrowserAnnotations.length > 0 ||
                       composerFileComments.length > 0 ||
                       composerPastedTexts.length > 0 ||
                       composerFiles.length > 0 ||
                       composerImages.length > 0) && (
                       <ComposerReferenceAttachments
                         assistantSelections={composerAssistantSelections}
+                        browserAnnotations={composerBrowserAnnotations}
                         fileComments={composerFileComments}
                         pastedTexts={composerPastedTexts}
                         files={composerFiles}
@@ -10236,6 +10302,7 @@ export default function ChatView({
                         nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
                         onExpandImage={setExpandedImage}
                         onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                        onRemoveBrowserAnnotation={removeComposerBrowserAnnotationFromDraft}
                         onRemoveFileComments={clearComposerFileCommentsFromDraft}
                         onRemovePastedText={removeComposerPastedTextFromDraft}
                         onShowPastedTextInField={showComposerPastedTextInField}

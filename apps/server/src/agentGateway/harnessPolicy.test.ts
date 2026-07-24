@@ -16,6 +16,17 @@ describe("Synara harness policy", () => {
     assert.include(policy, "one exact synara_create_threads plan");
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
+    assert.include(policy, "Use the browser_* tools");
+    assert.include(policy, "exact Electron WebView the user sees");
+    assert.include(policy, "in any language");
+    assert.include(policy, "canonical and complete control surface");
+    assert.include(policy, "start with browser_open");
+    assert.include(policy, "do not load or use a generic Browser");
+    assert.include(policy, "workspace-relative paths");
+    assert.include(policy, "BrowserInterruptedByHuman");
+    assert.include(policy, "BrowserDownloadApprovalRequired");
+    assert.include(policy, "OAuth popup requiring human action");
+    assert.include(policy, "stop using tools and answer");
     assert.include(policy, "do not create Synara threads");
     assert.include(policy, "3–8 word outcome-oriented task label");
     assert.include(policy, "no assumed chat context");
@@ -40,7 +51,15 @@ describe("Synara harness policy", () => {
   });
 
   it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
-    for (const provider of ["cursor", "grok", "droid", "opencode", "kilo", "pi"] as const) {
+    for (const provider of [
+      "antigravity",
+      "cursor",
+      "grok",
+      "droid",
+      "opencode",
+      "kilo",
+      "pi",
+    ] as const) {
       for (const lifecycle of ["fresh", "load", "fork"] as const) {
         const state: { harnessPolicyDelivered?: boolean } = {};
         const first =

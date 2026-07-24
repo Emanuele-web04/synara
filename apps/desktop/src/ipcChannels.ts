@@ -58,7 +58,6 @@ export const DESKTOP_IPC_CHANNELS = {
     requestCopyLink: "desktop:browser-request-copy-link",
     copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
     captureScreenshot: "desktop:browser-capture-screenshot",
-    executeCdp: "desktop:browser-execute-cdp",
     navigate: "desktop:browser-navigate",
     reload: "desktop:browser-reload",
     goBack: "desktop:browser-go-back",
@@ -67,10 +66,18 @@ export const DESKTOP_IPC_CHANNELS = {
     closeTab: "desktop:browser-close-tab",
     selectTab: "desktop:browser-select-tab",
     openDevTools: "desktop:browser-open-devtools",
+    annotations: {
+      start: "desktop:browser-annotations-start",
+      cancel: "desktop:browser-annotations-cancel",
+      syncMarkers: "desktop:browser-annotations-sync-markers",
+      event: "desktop:browser-annotations-event",
+      guestMessage: "desktop:browser-annotations-guest-message",
+    },
   },
 } as const;
 
 export const BROWSER_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.browser;
+export const BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL = "desktop:browser-annotations-guest-command";
 export const APPSNAP_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.appSnap;
 export const DESKTOP_WS_URL_CHANNEL = DESKTOP_IPC_CHANNELS.wsUrl;
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = DESKTOP_IPC_CHANNELS.transcribeVoice;

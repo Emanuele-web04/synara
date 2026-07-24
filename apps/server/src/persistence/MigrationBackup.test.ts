@@ -1,11 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
+import nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -390,6 +391,47 @@ describe("migration backups", () => {
     // A current schema is a no-op startup and must not consume retention slots.
     expect(await startDatabase()).toBe(migrationEntries.length);
     expect(await backupPaths(dbPath)).toEqual([]);
+  });
+
+  it("repairs SQLite files before the live connection executes any statement", async () => {
+    const dbPath = await makeDbPath();
+    const sqlitePaths = new Set([dbPath, `${dbPath}-wal`, `${dbPath}-shm`]);
+    const asyncOpen = vi.spyOn(nodeFs.promises, "open");
+    const syncOpen = vi.spyOn(nodeFs, "openSync");
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`SELECT 1`;
+        }).pipe(
+          Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
+        ),
+      );
+
+      const firstPrepareOrder = prepare.mock.invocationCallOrder[0];
+      expect(firstPrepareOrder).toBeDefined();
+      const sqliteOpenOrders = [
+        ...asyncOpen.mock.calls.map((args, index) => ({
+          path: String(args[0]),
+          order: asyncOpen.mock.invocationCallOrder[index],
+        })),
+        ...syncOpen.mock.calls.map((args, index) => ({
+          path: String(args[0]),
+          order: syncOpen.mock.invocationCallOrder[index],
+        })),
+      ].filter(({ path: openedPath }) => sqlitePaths.has(openedPath));
+
+      expect(sqliteOpenOrders.length).toBeGreaterThan(0);
+      for (const { order } of sqliteOpenOrders) {
+        expect(order).toBeLessThan(firstPrepareOrder!);
+      }
+    } finally {
+      asyncOpen.mockRestore();
+      syncOpen.mockRestore();
+      prepare.mockRestore();
+    }
   });
 
   it("creates the main database and live WAL files with private modes", async () => {

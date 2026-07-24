@@ -8,10 +8,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { IconPointer } from "@tabler/icons-react";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ServerLocalServerProcess,
+  type ThreadBrowserState,
   type ThreadId,
 } from "@synara/contracts";
 import {
@@ -53,7 +55,7 @@ import {
   selectThreadBrowserHistory,
   selectThreadBrowserState,
 } from "../browserStateStore";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { useComposerDraftStore, type BrowserAnnotationDraft } from "../composerDraftStore";
 import { anchoredToastManager } from "./ui/toast";
 import {
   composerImageFromBrowserScreenshot,
@@ -62,12 +64,18 @@ import {
 import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
+  createBrowserPanelHideScheduler,
+  createBrowserRendererLossHandler,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import {
+  useBrowserAnnotations,
+  type BrowserAnnotationsController,
+} from "./browser/useBrowserAnnotations";
 import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -75,6 +83,7 @@ import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 interface BrowserPanelProps {
   mode: DiffPanelMode;
@@ -89,6 +98,7 @@ const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
 const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
+const browserPanelHideScheduler = createBrowserPanelHideScheduler();
 // The address field and tab pills share one chrome-control surface so the whole row reads
 // as a single cohesive control: matching height, radius, border width, and type scale.
 const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
@@ -100,6 +110,7 @@ const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
   "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
 const BROWSER_ACTION_MENU_ICON_CLASS_NAME =
   "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
+const EMPTY_BROWSER_ANNOTATIONS: readonly BrowserAnnotationDraft[] = [];
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='dialog-backdrop']",
   "[data-slot='dialog-popup']",
@@ -119,6 +130,41 @@ function BrowserActionMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
     <span className={BROWSER_ACTION_MENU_ICON_CLASS_NAME}>
       <Icon aria-hidden="true" />
     </span>
+  );
+}
+
+export function BrowserAnnotationButton(props: {
+  controller: BrowserAnnotationsController;
+  disabled: boolean;
+}) {
+  const label = props.controller.active ? "Cancel annotation" : "Annotate page";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant={props.controller.active ? "default" : "ghost"}
+            size="icon-sm"
+            className="size-7 [&_svg]:!opacity-100"
+            disabled={props.disabled}
+            aria-label={label}
+            aria-pressed={props.controller.active}
+            aria-busy={props.controller.starting || undefined}
+            data-pressed={props.controller.active ? "" : undefined}
+            title={label}
+            onClick={props.controller.toggle}
+          />
+        }
+      >
+        <IconPointer className="size-3.5" aria-hidden="true" />
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {props.controller.active
+          ? "Cancel element selection (Esc)"
+          : "Select an element to annotate"}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -510,6 +556,10 @@ export function BrowserPanel({
   const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
+  const addBrowserAnnotation = useComposerDraftStore((store) => store.addBrowserAnnotation);
+  const browserAnnotations = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.browserAnnotations ?? EMPTY_BROWSER_ANNOTATIONS,
+  );
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
   );
@@ -524,7 +574,15 @@ export function BrowserPanel({
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const browserWebviewRef = useRef<BrowserWebviewElement | null>(null);
   const browserWebviewTabIdRef = useRef<string | null>(null);
+  const browserWebviewWebContentsIdRef = useRef<number | null>(null);
+  const detachedBrowserWebviewsRef = useRef(new WeakSet<BrowserWebviewElement>());
   const browserWebviewAttachKeyRef = useRef<string | null>(null);
+  // Unlike effect-local state, this lease survives browser metadata pushes.
+  // Main can emit a newer tab snapshot before attachWebview() resolves; keeping
+  // the in-flight key here prevents that render from issuing another bind for
+  // the same physical guest and starving its compositor with IPC churn.
+  const browserWebviewAttachInFlightKeyRef = useRef<string | null>(null);
+  const activeTabInitialUrlRef = useRef(BROWSER_BLANK_URL);
   const copyScreenshotButtonRef = useRef<HTMLButtonElement>(null);
   const addressDraftsByTabIdRef = useRef(new Map<string, string>());
   const lastSyncedAddressByTabIdRef = useRef(new Map<string, string>());
@@ -553,11 +611,15 @@ export function BrowserPanel({
   const [isAddressFocused, setIsAddressFocused] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
     threadBrowserState?.tabs[0] ??
     null;
+  const activeTabId = activeTab?.id ?? null;
+  const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
+  activeTabInitialUrlRef.current = activeTabInitialUrl;
   const loading = activeTab?.isLoading ?? false;
   const activeTabIsBlank = isBlankBrowserTabUrl(activeTab);
   const showLocalServersHome = isLiveRuntime && workspaceReady && (!activeTab || activeTabIsBlank);
@@ -578,6 +640,18 @@ export function BrowserPanel({
   });
   const showBrowserAddressSuggestions =
     isLiveRuntime && isAddressFocused && browserAddressSuggestions.length > 0 && runtimeReady;
+  const annotationMethods = api?.browser.annotations;
+  const annotationController = useBrowserAnnotations({
+    methods: annotationMethods,
+    threadId,
+    activeTabId,
+    browserStateVersion: threadBrowserState?.version ?? 0,
+    enabled:
+      isElectron && isLiveRuntime && workspaceReady && activeTab !== null && !showLocalServersHome,
+    annotations: browserAnnotations,
+    addAnnotation: addBrowserAnnotation,
+    onError: setLocalError,
+  });
 
   const requestLiveRuntime = useCallback(() => {
     onRequestLive?.();
@@ -604,29 +678,55 @@ export function BrowserPanel({
 
   // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
   // removing the DOM node so main never keeps a stale webContents runtime.
-  const detachRendererBrowserWebview = useCallback(() => {
-    const webview = browserWebviewRef.current;
-    const tabId = browserWebviewTabIdRef.current;
+  const detachRendererBrowserWebview = useCallback(
+    (expectedWebview?: BrowserWebviewElement) => {
+      const webview = browserWebviewRef.current;
+      if (
+        !webview ||
+        (expectedWebview !== undefined && webview !== expectedWebview) ||
+        detachedBrowserWebviewsRef.current.has(webview)
+      ) {
+        return;
+      }
+      detachedBrowserWebviewsRef.current.add(webview);
 
-    if (webview && api && isLiveRuntime && tabId) {
-      let webContentsId: number | undefined;
+      const tabId = browserWebviewTabIdRef.current;
+
+      if (api && isLiveRuntime && tabId) {
+        let webContentsId = browserWebviewWebContentsIdRef.current ?? undefined;
+        try {
+          webContentsId ??= webview.getWebContentsId?.();
+        } catch {
+          // A destroyed guest can no longer answer getWebContentsId(). Retain the
+          // id captured during attachment so main can still discard its lease.
+        }
+        if (webContentsId && webContentsId > 0) {
+          try {
+            void api.browser
+              .detachWebview({ threadId, tabId, webContentsId })
+              .catch(ignoreBrowserWebviewDetachError);
+          } catch {
+            ignoreBrowserWebviewDetachError();
+          }
+        }
+      }
+
       try {
-        webContentsId = webview.getWebContentsId?.();
+        webview.remove();
       } catch {
-        webContentsId = undefined;
+        ignoreBrowserWebviewDetachError();
+      } finally {
+        if (browserWebviewRef.current === webview) {
+          browserWebviewRef.current = null;
+          browserWebviewTabIdRef.current = null;
+          browserWebviewWebContentsIdRef.current = null;
+          browserWebviewAttachKeyRef.current = null;
+          browserWebviewAttachInFlightKeyRef.current = null;
+        }
       }
-      if (webContentsId && webContentsId > 0) {
-        void api.browser
-          .detachWebview({ threadId, tabId, webContentsId })
-          .catch(ignoreBrowserWebviewDetachError);
-      }
-    }
-
-    webview?.remove();
-    browserWebviewRef.current = null;
-    browserWebviewTabIdRef.current = null;
-    browserWebviewAttachKeyRef.current = null;
-  }, [api, isLiveRuntime, threadId]);
+    },
+    [api, isLiveRuntime, threadId],
+  );
 
   useEffect(() => {
     if (!api || !isLiveRuntime) {
@@ -642,6 +742,8 @@ export function BrowserPanel({
     if (!api || !isLiveRuntime) {
       return;
     }
+
+    browserPanelHideScheduler.cancel(threadId);
 
     // Timeout-0 keeps the reset writes asynchronous (no wasted pre-paint
     // render), which also keeps this component eligible for React Compiler.
@@ -669,7 +771,9 @@ export function BrowserPanel({
     return () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
-      void api.browser.hide({ threadId });
+      browserPanelHideScheduler.schedule(threadId, () => {
+        void api.browser.hide({ threadId });
+      });
     };
   }, [api, isLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
@@ -701,7 +805,7 @@ export function BrowserPanel({
   }, [activeTab]);
 
   useLayoutEffect(() => {
-    if (!api || !isLiveRuntime || !workspaceReady || !activeTab) {
+    if (!api || !isLiveRuntime || !workspaceReady || !activeTabId) {
       return;
     }
 
@@ -734,62 +838,155 @@ export function BrowserPanel({
       // UA on the shared persistent partition, so this webview (and OAuth popups) inherit the
       // same identity. This keeps in-app Google/OAuth sign-in working without duplicating the
       // UA string into the renderer.
+      webview.dataset.rendererGeneration = String(browserRendererGeneration);
+      browserWebviewWebContentsIdRef.current = null;
       browserWebviewRef.current = webview;
       host.append(webview);
     } else if (webview.parentElement !== host) {
       host.append(webview);
     }
 
-    const initialUrl = activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL;
-    if (browserWebviewTabIdRef.current !== activeTab.id) {
-      browserWebviewTabIdRef.current = activeTab.id;
+    const initialUrl = activeTabInitialUrlRef.current;
+    const shouldLoadInitialUrl = browserWebviewTabIdRef.current !== activeTabId;
+    if (shouldLoadInitialUrl) {
+      browserWebviewTabIdRef.current = activeTabId;
       browserWebviewAttachKeyRef.current = null;
-      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+      webview.dataset.tabId = activeTabId;
     }
 
+    let cancelled = false;
+    let attachRetryTimer: number | null = null;
+    let attachRetryDelayMs = 25;
+
+    const scheduleAttachRetry = () => {
+      if (cancelled || attachRetryTimer !== null) {
+        return;
+      }
+      attachRetryTimer = window.setTimeout(() => {
+        attachRetryTimer = null;
+        attachVisibleWebview();
+      }, attachRetryDelayMs);
+      attachRetryDelayMs = Math.min(attachRetryDelayMs * 2, 500);
+    };
+
     const attachVisibleWebview = () => {
+      if (cancelled) {
+        return;
+      }
+      if (attachRetryTimer !== null) {
+        window.clearTimeout(attachRetryTimer);
+        attachRetryTimer = null;
+      }
+
       let webContentsId: number | undefined;
       try {
         webContentsId = webview.getWebContentsId?.();
       } catch {
+        scheduleAttachRetry();
         return;
       }
       if (!webContentsId || webContentsId <= 0) {
+        scheduleAttachRetry();
         return;
       }
+      if (browserWebviewRef.current === webview) {
+        browserWebviewWebContentsIdRef.current = webContentsId;
+      }
 
-      const attachKey = `${activeTab.id}:${webContentsId}`;
+      const attachKey = `${browserRendererGeneration}:${activeTabId}:${webContentsId}`;
       if (browserWebviewAttachKeyRef.current === attachKey) {
         return;
       }
+      // A previous layout-effect generation may still be completing. Serialize
+      // physical guest adoption so an older response can never overwrite the
+      // currently visible tab binding.
+      if (browserWebviewAttachInFlightKeyRef.current !== null) {
+        scheduleAttachRetry();
+        return;
+      }
+      browserWebviewAttachInFlightKeyRef.current = attachKey;
+      // Publish the requested lease before IPC. attachWebview() emits browser
+      // state synchronously from main, so waiting for its Promise to resolve
+      // would let React clean this effect up and immediately submit it again.
       browserWebviewAttachKeyRef.current = attachKey;
-      void runBrowserAction(() =>
-        api.browser.attachWebview({
-          threadId,
-          tabId: activeTab.id,
-          webContentsId,
-        }),
-      ).then((state) => {
-        if (state) {
+      const finishAttachment = (state: ThreadBrowserState | null) => {
+        if (browserWebviewAttachInFlightKeyRef.current === attachKey) {
+          browserWebviewAttachInFlightKeyRef.current = null;
+        }
+        if (!state) {
+          if (browserWebviewAttachKeyRef.current === attachKey) {
+            browserWebviewAttachKeyRef.current = null;
+          }
+          if (
+            !cancelled &&
+            browserWebviewRef.current === webview &&
+            browserWebviewTabIdRef.current === activeTabId
+          ) {
+            scheduleAttachRetry();
+          }
+          return;
+        }
+        // A tab switch can supersede this request while IPC is in flight. Main
+        // processes invokes in order, and the current effect will bind the new
+        // tab next; never let the stale completion rewrite its renderer lease.
+        if (
+          browserWebviewRef.current === webview &&
+          browserWebviewTabIdRef.current === activeTabId
+        ) {
+          browserWebviewAttachKeyRef.current = attachKey;
           upsertThreadState(state);
         }
-      });
+      };
+      void api.browser
+        .attachWebview({
+          threadId,
+          tabId: activeTabId,
+          webContentsId,
+        })
+        .then(finishAttachment, () => finishAttachment(null));
     };
 
+    const handleRendererLoss = createBrowserRendererLossHandler({
+      renderer: webview,
+      rendererGeneration: browserRendererGeneration,
+      tabId: activeTabId,
+      isCurrent: (candidate) =>
+        browserWebviewRef.current === candidate && browserWebviewTabIdRef.current === activeTabId,
+      detach: detachRendererBrowserWebview,
+      recover: ({ generation }) => {
+        setBrowserRendererGeneration((current) => Math.max(current + 1, generation));
+      },
+    });
+
+    // Subscribe before assigning src: a cached/blank page may begin loading
+    // synchronously, before getWebContentsId() becomes available. The bounded
+    // backoff below makes that renderer-to-main handshake reliable even while
+    // Electron throttles requestAnimationFrame in the background.
     webview.addEventListener("dom-ready", attachVisibleWebview);
     webview.addEventListener("did-start-loading", attachVisibleWebview);
-    window.requestAnimationFrame(attachVisibleWebview);
+    webview.addEventListener("render-process-gone", handleRendererLoss);
+    webview.addEventListener("destroyed", handleRendererLoss);
+    if (shouldLoadInitialUrl) {
+      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+    }
+    attachVisibleWebview();
 
     return () => {
+      cancelled = true;
+      if (attachRetryTimer !== null) {
+        window.clearTimeout(attachRetryTimer);
+      }
       webview.removeEventListener("dom-ready", attachVisibleWebview);
       webview.removeEventListener("did-start-loading", attachVisibleWebview);
+      webview.removeEventListener("render-process-gone", handleRendererLoss);
+      webview.removeEventListener("destroyed", handleRendererLoss);
     };
   }, [
-    activeTab,
+    activeTabId,
     api,
+    browserRendererGeneration,
     detachRendererBrowserWebview,
     isLiveRuntime,
-    runBrowserAction,
     showLocalServersHome,
     threadId,
     upsertThreadState,
@@ -1434,6 +1631,17 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <BrowserAnnotationButton
+          controller={annotationController}
+          disabled={
+            !isLiveRuntime ||
+            !isElectron ||
+            !workspaceReady ||
+            !activeTab ||
+            showLocalServersHome ||
+            !annotationMethods
+          }
+        />
         <Button
           ref={copyScreenshotButtonRef}
           type="button"

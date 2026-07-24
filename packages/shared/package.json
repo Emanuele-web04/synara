@@ -207,6 +207,22 @@
     "./threadMentions": {
       "types": "./src/threadMentions.ts",
       "import": "./src/threadMentions.ts"
+    },
+    "./browserAutomationCatalogue": {
+      "types": "./src/browserAutomationCatalogue.ts",
+      "import": "./src/browserAutomationCatalogue.ts"
+    },
+    "./browserAutomationErrors": {
+      "types": "./src/browserAutomationErrors.ts",
+      "import": "./src/browserAutomationErrors.ts"
+    },
+    "./browserAutomationMcpError": {
+      "types": "./src/browserAutomationMcpError.ts",
+      "import": "./src/browserAutomationMcpError.ts"
+    },
+    "./browserAnnotations": {
+      "types": "./src/browserAnnotations.ts",
+      "import": "./src/browserAnnotations.ts"
     }
   },
   "scripts": {
