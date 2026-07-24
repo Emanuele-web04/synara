@@ -293,11 +293,21 @@ function verifyDesktopStageLockAuthority(): void {
   assertContains(
     buildScript,
     "bun install --frozen-lockfile --ignore-scripts --linker hoisted",
-    "Expected desktop staging to install only from the repository's frozen workspace lockfile.",
+    "Expected macOS and Linux desktop staging to install from the repository's frozen workspace lockfile.",
+  );
+  assertContains(
+    buildScript,
+    'if (platform === "win")',
+    "Expected Windows staging to use its explicit Bun lockfile-workaround path.",
+  );
+  assertContains(
+    buildScript,
+    "bun install --production --no-save --ignore-scripts --linker hoisted",
+    "Expected Windows staging to avoid Bun's platform-only lockfile rewrite without mutating the copied workspace.",
   );
   assertNotContains(
     buildScript,
-    "bun install --production --frozen-lockfile",
+    "--production --frozen-lockfile",
     "Desktop staging must avoid Bun's divergent frozen production-workspace lockfile resolution.",
   );
   assertNotContains(
@@ -324,11 +334,6 @@ function verifyDesktopStageLockAuthority(): void {
     buildScript,
     '"scripts",\n    "node_modules",\n    ".bin",',
     "Expected desktop packaging to resolve electron-builder from its owning scripts workspace.",
-  );
-  assertNotContains(
-    buildScript,
-    ")`bun install --production`,",
-    "Desktop staging must not retain the fresh production install path.",
   );
   assertContains(
     buildScript,

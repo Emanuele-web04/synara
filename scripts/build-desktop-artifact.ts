@@ -665,14 +665,26 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   yield* Effect.log(
     "[desktop-artifact] Installing staged production dependencies from the repository lockfile...",
   );
-  yield* runCommand(
-    ChildProcess.make({
-      cwd: stageAppDir,
-      ...commandOutputOptions(verbose),
-      // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
-      shell: process.platform === "win32",
-    })`bun install --frozen-lockfile --ignore-scripts --linker hoisted`,
-  );
+  if (platform === "win") {
+    // Bun 1.3.12 can report a platform-only lockfile rewrite while resolving
+    // this copied workspace on Windows even though the repository-level frozen
+    // install already passed. Keep the source tree immutable with --no-save.
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        ...commandOutputOptions(verbose),
+        // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+        shell: process.platform === "win32",
+      })`bun install --production --no-save --ignore-scripts --linker hoisted`,
+    );
+  } else {
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        ...commandOutputOptions(verbose),
+      })`bun install --frozen-lockfile --ignore-scripts --linker hoisted`,
+    );
+  }
 
   if (platform === "linux") {
     // node-pty's npm package does not ship Linux prebuilds. Keep the frozen
