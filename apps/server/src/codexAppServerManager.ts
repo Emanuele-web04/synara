@@ -1766,38 +1766,62 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return context.stopPromise;
     }
 
-    context.stopping = true;
-    this.clearTaskCompleteFallback(context);
-    context.gatewaySessionLease?.release();
+    if (!context.stopping) {
+      context.stopping = true;
+      this.clearTaskCompleteFallback(context);
+      context.gatewaySessionLease?.release();
 
-    this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
-    context.pendingApprovals.clear();
-    context.pendingUserInputs.clear();
+      this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
+      context.pendingApprovals.clear();
+      context.pendingUserInputs.clear();
 
-    context.detachStdout?.();
-    context.stdinWriter?.close(new Error("Codex session stopped"));
-    const stopPromise = this.teardownContextProcess(context).then(() => {
+      context.detachStdout?.();
+      context.stdinWriter?.close(new Error("Codex session stopped"));
+
+      // The session becomes unroutable immediately, but remains in the map as a
+      // replacement barrier until teardown proves the old process tree exited.
+      // Otherwise a failed proof could let startSession spawn a second provider
+      // process for the same thread.
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
       });
       this.emitLifecycleEvent(context, "session/closed", "Session stopped");
-      if (this.sessions.get(threadId) === context) {
-        this.sessions.delete(threadId);
-      }
-    });
+    }
+    let stopPromise: Promise<void>;
+    stopPromise = this.teardownContextProcess(context).then(
+      () => {
+        if (this.sessions.get(threadId) === context) {
+          this.sessions.delete(threadId);
+        }
+      },
+      (error: unknown) => {
+        log.error("codex app-server teardown did not prove process-tree exit", {
+          threadId,
+          error,
+        });
+        // A later stop/start may retry proof after the process has exited.
+        if (context.stopPromise === stopPromise) {
+          delete context.stopPromise;
+        }
+        throw error;
+      },
+    );
     context.stopPromise = stopPromise;
     return stopPromise;
   }
 
   listSessions(): ProviderSession[] {
-    return Array.from(this.sessions.values(), ({ session }) => ({
-      ...session,
-    }));
+    return Array.from(this.sessions.values())
+      .filter((context) => this.isContextRoutable(context))
+      .map(({ session }) => ({
+        ...session,
+      }));
   }
 
   hasSession(threadId: ThreadId): boolean {
-    return this.sessions.has(threadId);
+    const context = this.sessions.get(threadId);
+    return context !== undefined && this.isContextRoutable(context);
   }
 
   async stopAll(): Promise<void> {
@@ -1978,11 +2002,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error(`Unknown session for thread: ${threadId}`);
     }
 
-    if (context.session.status === "closed") {
+    // "Session is closed" is the phrase CodexAdapter maps to the typed
+    // recoverable session error. A failed turn may leave a healthy process with
+    // status "error", so only transport/process health controls routability.
+    if (!this.isContextRoutable(context)) {
       throw new Error(`Session is closed for thread: ${threadId}`);
     }
 
     return context;
+  }
+
+  private isContextRoutable(context: CodexSessionContext): boolean {
+    const stdin = context.child.stdin;
+    return (
+      !context.stopping &&
+      context.session.status !== "closed" &&
+      context.child.exitCode === null &&
+      context.child.signalCode === null &&
+      !context.child.killed &&
+      stdin.writable &&
+      !stdin.writableEnded &&
+      !stdin.destroyed
+    );
   }
 
   private async resolveContextForDiscovery(
@@ -2005,17 +2046,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
-        if (
-          !activeSession.stopping &&
-          !activeSession.child.killed &&
-          activeSession.session.cwd === normalizedCwd
-        ) {
+        if (this.isContextRoutable(activeSession) && activeSession.session.cwd === normalizedCwd) {
           return activeSession;
         }
       }
       return this.getOrCreateDiscoverySession(normalizedCwd);
     }
-    const firstActive = this.sessions.values().next().value;
+    const firstActive = Array.from(this.sessions.values()).find((context) =>
+      this.isContextRoutable(context),
+    );
     if (firstActive) {
       return firstActive;
     }
@@ -2183,11 +2222,25 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
     context.detachStdout?.();
     context.stdinWriter?.close(new Error("Codex discovery session stopped"));
-    const stopPromise = this.teardownContextProcess(context).then(() => {
-      if (this.discoverySessions.get(discoveryKey) === context) {
-        this.discoverySessions.delete(discoveryKey);
-      }
-    });
+    // Keep a non-routable replacement barrier until exit is proven.
+    let stopPromise: Promise<void>;
+    stopPromise = this.teardownContextProcess(context).then(
+      () => {
+        if (this.discoverySessions.get(discoveryKey) === context) {
+          this.discoverySessions.delete(discoveryKey);
+        }
+      },
+      (error: unknown) => {
+        log.error("codex discovery teardown did not prove process-tree exit", {
+          discoveryKey,
+          error,
+        });
+        if (context.stopPromise === stopPromise) {
+          delete context.stopPromise;
+        }
+        throw error;
+      },
+    );
     context.stopPromise = stopPromise;
     return stopPromise;
   }

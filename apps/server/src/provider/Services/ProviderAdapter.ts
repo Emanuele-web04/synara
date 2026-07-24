@@ -177,6 +177,13 @@ export interface ProviderAdapterShape<TError> {
   /**
    * Stop one provider session.
    */
+  /**
+   * Stop and release every resource owned by a thread.
+   *
+   * This operation is idempotent: an already-stopped or unknown thread is a
+   * successful no-op. Callers use it as a cleanup barrier after restarts, when
+   * the persisted binding can outlive the adapter's in-memory session.
+   */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
   /**

@@ -35,6 +35,7 @@ import {
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  resolveThreadDetailHydration,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
@@ -1984,5 +1985,64 @@ describe("resolveQueuedSteerGateTransition", () => {
         now,
       }),
     ).toEqual({ kind: "clear" });
+  });
+});
+
+describe("thread detail hydration", () => {
+  it("keeps local drafts on the empty landing even if a stale failure flag lingers", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: false,
+        hasTimelineEntries: false,
+        detailSyncState: null,
+      }),
+    ).toBe("ready");
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: false,
+        hasTimelineEntries: false,
+        detailSyncState: "failed",
+      }),
+    ).toBe("ready");
+  });
+
+  it("renders existing timeline entries without waiting for a snapshot", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: true,
+        detailSyncState: null,
+      }),
+    ).toBe("ready");
+  });
+
+  it("treats a synced empty thread as genuinely empty", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: false,
+        detailSyncState: "synced",
+      }),
+    ).toBe("ready");
+  });
+
+  it("shows loading for a server thread whose detail has not synced yet", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: false,
+        detailSyncState: null,
+      }),
+    ).toBe("loading");
+  });
+
+  it("surfaces a failed state when the detail stream died without data", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: false,
+        detailSyncState: "failed",
+      }),
+    ).toBe("failed");
   });
 });

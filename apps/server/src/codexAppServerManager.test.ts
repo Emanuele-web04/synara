@@ -425,7 +425,62 @@ function createProcessOutputHarness() {
 }
 
 describe("Codex app-server teardown", () => {
-  it("keeps the session owned until shared process-tree exit proof resolves", async () => {
+  it("keeps a live process routable when only the last turn status is error", () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5050;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      killed = false;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-codex-failed-turn");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "error",
+        threadId,
+        runtimeMode: "full-access",
+        lastError: "Turn failed",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      requireSession: (threadId: ThreadId) => unknown;
+    };
+    internals.sessions.set(threadId, context);
+
+    expect(manager.hasSession(threadId)).toBe(true);
+    expect(manager.listSessions()).toEqual([
+      expect.objectContaining({ threadId, status: "error" }),
+    ]);
+    expect(internals.requireSession(threadId)).toBe(context);
+
+    child.stdin.end();
+
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toEqual([]);
+    expect(() => internals.requireSession(threadId)).toThrow("Session is closed");
+  });
+
+  it("makes the session unroutable immediately while stop awaits exit proof", async () => {
     class FakeCodexChild extends EventEmitter {
       readonly pid = 5151;
       exitCode: number | null = null;
@@ -491,7 +546,9 @@ describe("Codex app-server teardown", () => {
     await Promise.resolve();
     expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(teardownProcessTree).toHaveBeenCalledTimes(1);
-    expect(manager.hasSession(threadId)).toBe(true);
+    // Unroutable immediately: follow-ups must fall through to thread/resume
+    // instead of writing into the dying process's stdin.
+    expect(manager.hasSession(threadId)).toBe(false);
     expect(exitProven).toBe(false);
 
     child.exitCode = 0;
@@ -1734,6 +1791,48 @@ describe("CodexAppServerManager discovery", () => {
     expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "skills/list", {
       cwds: ["/repo-b"],
     });
+  });
+
+  it("skips a dead replacement barrier in the cwd-less discovery fallback", async () => {
+    const manager = new CodexAppServerManager();
+    const deadContext = {
+      session: {
+        provider: "codex",
+        status: "closed",
+        threadId: "thread_dead",
+        runtimeMode: "full-access",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: true,
+        stdin: new PassThrough(),
+      },
+      stopping: true,
+    };
+    const discoveryContext = { discovery: true };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_dead", deadContext);
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+
+    await expect(
+      (
+        manager as unknown as {
+          resolveContextForDiscovery: () => Promise<unknown>;
+        }
+      ).resolveContextForDiscovery(),
+    ).resolves.toBe(discoveryContext);
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd());
   });
 
   it("retries skills/list with cwd when a runtime rejects cwds", async () => {
@@ -3198,7 +3297,7 @@ describe("handleServerNotification error normalization", () => {
 });
 
 describe("CodexAppServerManager process teardown", () => {
-  it("keeps one stop in flight and publishes closed only after exit proof", async () => {
+  it("keeps one stop in flight and publishes closed eagerly", async () => {
     let proveExit: (() => void) | undefined;
     const exitProof = new Promise<void>((resolve) => {
       proveExit = resolve;
@@ -3253,15 +3352,87 @@ describe("CodexAppServerManager process teardown", () => {
     const concurrentStop = manager.stopSession(threadId);
 
     expect(teardownProcessTree).toHaveBeenCalledTimes(1);
-    expect(closedEvents).toHaveLength(0);
-    expect(manager.hasSession(threadId)).toBe(true);
-    expect(manager.listSessions()[0]).toMatchObject({ status: "ready" });
+    // Closed publishes eagerly: the session must become unroutable the moment
+    // stop begins, with teardown proof continuing behind the returned promise.
+    expect(closedEvents).toEqual(["session/closed"]);
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toHaveLength(0);
+    expect(
+      (
+        manager as unknown as {
+          sessions: Map<ThreadId, unknown>;
+        }
+      ).sessions.has(threadId),
+    ).toBe(true);
 
     proveExit?.();
     await Promise.all([firstStop, concurrentStop]);
 
     expect(closedEvents).toEqual(["session/closed"]);
     expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toHaveLength(0);
+  });
+
+  it("retains the replacement barrier and retries after teardown proof fails", async () => {
+    const teardownProcessTree = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("rootExited=false; surviving process remains"))
+      .mockResolvedValueOnce({
+        escalated: true,
+        signalErrors: [],
+      });
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-stop-proof-retry");
+    const closedEvents: string[] = [];
+    manager.on("event", (event) => {
+      if (event.method === "session/closed") {
+        closedEvents.push(event.method);
+      }
+    });
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: {
+        pid: 42_425,
+        exitCode: null,
+        signalCode: null,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+
+    await expect(manager.stopSession(threadId)).rejects.toThrow(
+      "Failed to prove Codex app-server process-tree exit",
+    );
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toHaveLength(0);
+    expect(closedEvents).toEqual(["session/closed"]);
+
+    await manager.stopSession(threadId);
+    expect(teardownProcessTree).toHaveBeenCalledTimes(2);
+    expect(manager.listSessions()).toHaveLength(0);
+    expect(closedEvents).toEqual(["session/closed"]);
   });
 });
 

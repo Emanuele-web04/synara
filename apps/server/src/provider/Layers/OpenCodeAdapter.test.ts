@@ -834,6 +834,37 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(gateway.revoked).toEqual(["gateway-token-1", "gateway-token-2"]);
   });
 
+  it("treats missing and repeated session stops as successful cleanup", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-idempotent-stop");
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: "/repo",
+        });
+        yield* adapter.stopSession(threadId);
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.abortCalls).toHaveLength(1);
+  });
+
   it("keeps shared external OpenCode servers identity-only and never installs a token", async () => {
     const runtime = createMockOpenCodeRuntime();
     const gateway = makeGatewayCredentials();

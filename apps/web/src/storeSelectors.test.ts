@@ -212,6 +212,42 @@ describe("thread shell route selectors", () => {
     expect(after).toEqual({
       envMode: "worktree",
       worktreePath: "/repo/.worktrees/feature",
+      workingDirectory: null,
+    });
+  });
+
+  it("updates workspace metadata when a Studio working directory changes", () => {
+    const selectWorkspaceMetadata = createThreadWorkspaceMetadataSelector(threadIdA);
+    const before = selectWorkspaceMetadata(
+      makeState({
+        threadIds: [threadIdA],
+        threadShellById: {
+          [threadIdA]: {
+            ...shellA,
+            envMode: "local",
+            workingDirectory: "/repo/one",
+          },
+        },
+      }),
+    );
+    const after = selectWorkspaceMetadata(
+      makeState({
+        threadIds: [threadIdA],
+        threadShellById: {
+          [threadIdA]: {
+            ...shellA,
+            envMode: "local",
+            workingDirectory: "/repo/two",
+          },
+        },
+      }),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after).toEqual({
+      envMode: "local",
+      worktreePath: null,
+      workingDirectory: "/repo/two",
     });
   });
 });

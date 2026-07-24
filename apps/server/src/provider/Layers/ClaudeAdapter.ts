@@ -157,6 +157,7 @@ import {
 } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "claudeAgent" as const;
+const CLAUDE_COMMAND_DISCOVERY_THREAD_ID = ThreadId.makeUnsafe("claude:command-discovery");
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
@@ -1522,6 +1523,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
 
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
+    const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
+    const failedCommandDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
     const sessionLifecycleLocks = new Map<ThreadId, Semaphore.Semaphore>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
@@ -1583,6 +1586,38 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         Effect.asVoid,
       );
     };
+    const teardownFailedStartupProcess = Effect.fnUntraced(function* (
+      threadId: ThreadId,
+      owner: ClaudeProcessOwner,
+    ) {
+      yield* teardownClaudeProcess(threadId, owner);
+      if (failedStartupProcessOwners.get(threadId) === owner) {
+        failedStartupProcessOwners.delete(threadId);
+      }
+    });
+    const teardownFailedCommandDiscoveryProcesses = () =>
+      Effect.forEach(
+        failedCommandDiscoveryProcessOwners,
+        (owner) =>
+          teardownClaudeProcess(CLAUDE_COMMAND_DISCOVERY_THREAD_ID, owner).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                failedCommandDiscoveryProcessOwners.delete(owner);
+              }),
+            ),
+        ),
+        { discard: true },
+      );
+    const teardownCommandDiscoveryProcess = (owner: ClaudeProcessOwner) =>
+      teardownClaudeProcess(CLAUDE_COMMAND_DISCOVERY_THREAD_ID, owner).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            if (owner.process) {
+              failedCommandDiscoveryProcessOwners.add(owner);
+            }
+          }),
+        ),
+      );
 
     const offerRuntimeEvent = (
       context: ClaudeSessionContext,
@@ -4005,6 +4040,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         } catch (cause) {
           yield* emitRuntimeError(context, "Failed to close Claude runtime query.", cause);
         }
+        // Do not release session ownership until teardown proves the old
+        // process tree exited. The stopped context remains non-routable and
+        // prevents a replacement process from being spawned concurrently.
         yield* teardownClaudeProcess(context.session.threadId, context.processOwner);
 
         const updatedAt = yield* nowIso;
@@ -4498,6 +4536,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         };
         const claudeSubagents = buildClaudeSdkSubagents();
         const claudeSdkEnv = yield* resolveClaudeSdkEnv;
+        const failedStartupProcessOwner = failedStartupProcessOwners.get(threadId);
+        if (failedStartupProcessOwner) {
+          // A prior createQuery failure may have happened after spawning. Do
+          // not create another runtime until that orphan's exit is proven.
+          yield* teardownFailedStartupProcess(threadId, failedStartupProcessOwner);
+        }
         const existing = sessions.get(threadId);
         if (existing) {
           // Retire and prove the old process tree before spawning its replacement.
@@ -4576,7 +4620,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }).pipe(
           Effect.tapError(() =>
             Effect.all([
-              teardownClaudeProcess(threadId, processOwner),
+              teardownClaudeProcess(threadId, processOwner).pipe(
+                Effect.catch((error) =>
+                  Effect.sync(() => {
+                    if (processOwner.process) {
+                      failedStartupProcessOwners.set(threadId, processOwner);
+                    }
+                  }).pipe(
+                    Effect.andThen(
+                      Effect.logWarning("claude.session.failed_start_teardown_unproven", {
+                        threadId,
+                        detail: error.message,
+                      }),
+                    ),
+                  ),
+                ),
+              ),
               gatewaySessionLease ? Effect.sync(gatewaySessionLease.release) : Effect.void,
             ]).pipe(Effect.asVoid),
           ),
@@ -5192,10 +5251,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         Effect.gen(function* () {
           const context = sessions.get(threadId);
           if (!context) {
-            return yield* new ProviderAdapterSessionNotFoundError({
-              provider: PROVIDER,
-              threadId,
-            });
+            return;
           }
           yield* stopSessionInternal(context, {
             emitExitEvent: true,
@@ -5220,41 +5276,51 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       cwd: string,
       env: NodeJS.ProcessEnv,
     ): Promise<ProviderListCommandsResult> {
+      // Never spawn another discovery process until every previously unproven
+      // process tree has been reaped successfully.
+      await Effect.runPromise(teardownFailedCommandDiscoveryProcesses());
+
       // Spawn a lightweight Claude Code process for native command discovery.
       // The SDK's supportedCommands() awaits an internal initialization promise
       // that only resolves when the async generator is iterated (driving the
       // subprocess handshake). We iterate in the background to unblock it.
       const processOwner: ClaudeProcessOwner = {};
-      const tempQuery = createQuery({
-        prompt: neverResolvingUserMessageStream(),
-        options: {
-          cwd,
-          pathToClaudeCodeExecutable: "claude",
-          settingSources: [...CLAUDE_SETTING_SOURCES],
-          permissionMode: "plan" as PermissionMode,
-          persistSession: false,
-          env,
-          spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
-        },
-      });
+      let tempQuery: ClaudeQueryRuntime | undefined;
 
       try {
+        // Query construction itself may invoke the spawn callback before
+        // throwing, so it belongs inside the same ownership boundary.
+        tempQuery = createQuery({
+          prompt: neverResolvingUserMessageStream(),
+          options: {
+            cwd,
+            pathToClaudeCodeExecutable: "claude",
+            settingSources: [...CLAUDE_SETTING_SOURCES],
+            permissionMode: "plan" as PermissionMode,
+            persistSession: false,
+            env,
+            spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
+          },
+        });
+        const queryRuntime = tempQuery;
+
         // Drive the iterator so the subprocess completes its init handshake.
         // This runs in the background; close() in the finally block stops it.
         void (async () => {
-          for await (const message of tempQuery) {
+          for await (const message of queryRuntime) {
             void message;
             /* consume until closed */
           }
         })().catch(() => undefined);
 
-        const commands = await tempQuery.supportedCommands();
+        const commands = await queryRuntime.supportedCommands();
         return mapSupportedCommands(commands);
       } finally {
-        tempQuery.close();
-        await Effect.runPromise(
-          teardownClaudeProcess(ThreadId.makeUnsafe("claude:command-discovery"), processOwner),
-        );
+        try {
+          tempQuery?.close();
+        } finally {
+          await Effect.runPromise(teardownCommandDiscoveryProcess(processOwner));
+        }
       }
     }
 
@@ -5324,24 +5390,40 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       } satisfies ProviderListSkillsResult);
 
     const stopAll: ClaudeAdapterShape["stopAll"] = () =>
-      Effect.forEach(
-        sessions,
-        ([, context]) =>
-          stopSessionInternal(context, {
-            emitExitEvent: true,
-          }),
-        { discard: true },
-      );
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          sessions,
+          ([, context]) =>
+            stopSessionInternal(context, {
+              emitExitEvent: true,
+            }),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          failedStartupProcessOwners,
+          ([threadId, owner]) => teardownFailedStartupProcess(threadId, owner),
+          { discard: true },
+        );
+        yield* teardownFailedCommandDiscoveryProcesses();
+      });
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(
-        sessions,
-        ([, context]) =>
-          stopSessionInternal(context, {
-            emitExitEvent: false,
-          }),
-        { discard: true },
-      ).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          sessions,
+          ([, context]) =>
+            stopSessionInternal(context, {
+              emitExitEvent: false,
+            }),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          failedStartupProcessOwners,
+          ([threadId, owner]) => teardownFailedStartupProcess(threadId, owner),
+          { discard: true },
+        );
+        yield* teardownFailedCommandDiscoveryProcesses();
+      }).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
     );
 
     const composerCapabilities: ProviderComposerCapabilities = {

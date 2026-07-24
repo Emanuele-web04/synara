@@ -102,11 +102,7 @@ export interface EnvironmentPanelProps {
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
    */
   isStudioChat: boolean;
-  /**
-   * Folder a Studio chat picked via the composer's "Use a folder" (null when none). Rendered
-   * as its own desktop-only panel row that opens the platform file manager, replacing the git
-   * rows Studio chats do not show.
-   */
+  /** Ordinary cwd selected for this Studio chat; this is not a Git worktree. */
   studioFolderPath?: string | null;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
@@ -326,8 +322,6 @@ export function EnvironmentPanel({
               });
               return;
             }
-            // showInFolder opens directories directly (and reveals plain files), so this
-            // lands the user inside the picked folder in the platform file manager.
             void api.shell
               .showInFolder(studioFolderPath)
               .then(onClose)

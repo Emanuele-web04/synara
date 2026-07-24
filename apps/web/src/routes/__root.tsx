@@ -62,6 +62,7 @@ import {
   onServerProviderStatusesUpdated,
   onServerSettingsUpdated,
   onServerWelcome,
+  onThreadStreamFailure,
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
@@ -73,9 +74,10 @@ import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
-import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   resolveThreadDetailSubscriptionLeaseIds,
+  subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
@@ -120,8 +122,16 @@ const seenProviderUpdateNotificationKeys = new Set<string>();
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 type ActiveProviderUpdateToast =
-  | { readonly kind: "prompt"; readonly key: string; readonly toastId: ProviderUpdateToastId }
-  | { readonly kind: "update"; readonly key: string; readonly toastId: ProviderUpdateToastId };
+  | {
+      readonly kind: "prompt";
+      readonly key: string;
+      readonly toastId: ProviderUpdateToastId;
+    }
+  | {
+      readonly kind: "update";
+      readonly key: string;
+      readonly toastId: ProviderUpdateToastId;
+    };
 
 function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
   return thread.latestTurn !== null || thread.session !== null;
@@ -895,8 +905,7 @@ function EventRouter() {
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
-  const setServerWorkspacePaths = useWorkspaceStore((store) => store.setServerWorkspacePaths);
-  const workspacePages = useWorkspaceStore((store) => store.workspacePages);
+  const setServerWorkspacePaths = useWorkspacePathsStore((store) => store.setServerWorkspacePaths);
   const serverThreads = useStore(selectAllThreads);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -921,7 +930,6 @@ function EventRouter() {
     retainedThreadIds,
     serverThreadIds,
   });
-  const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
@@ -934,10 +942,9 @@ function EventRouter() {
   // The refs are seeded via useRef init, so mount reads stay correct before this
   // runs; subsequent renders refresh them here instead of during render.
   useEffect(() => {
-    workspacePagesRef.current = workspacePages;
     pathnameRef.current = pathname;
     visibleThreadIdsRef.current = subscribedThreadIds;
-  }, [pathname, subscribedThreadIds, workspacePages]);
+  }, [pathname, subscribedThreadIds]);
 
   useEffect(() => {
     const api = readNativeApi();
@@ -964,24 +971,6 @@ function EventRouter() {
       threadSnapshotSequenceById.delete(threadId);
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
-    };
-
-    // Draft routes can subscribe before the server thread exists. Once the shell
-    // row appears, explicitly request the first thread snapshot so buffered detail
-    // events can flush instead of waiting forever.
-    const requestThreadSnapshot = async (threadId: ThreadId) => {
-      if (threadSnapshotSequenceById.has(threadId) || threadSnapshotRequestInFlight.has(threadId)) {
-        return;
-      }
-      threadSnapshotRequestInFlight.add(threadId);
-      // Keep the pending buffer intact and retry on the next shell/detail update
-      // if the subscribe fails; the request flag always clears afterward.
-      await api.orchestration
-        .subscribeThread({ threadId })
-        .catch(() => undefined)
-        .finally(() => {
-          threadSnapshotRequestInFlight.delete(threadId);
-        });
     };
 
     const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
@@ -1040,12 +1029,45 @@ function EventRouter() {
       );
     };
 
-    const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
-      const nextThreadIds = [...threadIds];
+    const enqueueThreadSubscriptionOperation = (operation: () => Promise<void>) => {
       reconcileThreadSubscriptionsChain = reconcileThreadSubscriptionsChain
         .catch(() => undefined)
-        .then(() => reconcileThreadSubscriptions(nextThreadIds));
+        .then(operation);
       return reconcileThreadSubscriptionsChain;
+    };
+
+    const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
+      const nextThreadIds = [...threadIds];
+      return enqueueThreadSubscriptionOperation(() => reconcileThreadSubscriptions(nextThreadIds));
+    };
+
+    const refreshThreadSnapshot = (threadId: ThreadId): Promise<void> => {
+      if (threadSnapshotRequestInFlight.has(threadId)) {
+        return Promise.resolve();
+      }
+      threadSnapshotRequestInFlight.add(threadId);
+      return enqueueThreadSubscriptionOperation(async () => {
+        if (disposed || !subscribedThreadIds.has(threadId)) {
+          return;
+        }
+        await api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined);
+        if (disposed || !subscribedThreadIds.has(threadId)) {
+          return;
+        }
+        await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
+      }).finally(() => {
+        threadSnapshotRequestInFlight.delete(threadId);
+      });
+    };
+
+    // Draft routes can subscribe before the server thread exists. Once the shell
+    // row appears, explicitly restart the stream for a first thread snapshot so
+    // buffered detail events can flush instead of waiting forever.
+    const requestThreadSnapshot = async (threadId: ThreadId) => {
+      if (threadSnapshotSequenceById.has(threadId)) {
+        return;
+      }
+      await refreshThreadSnapshot(threadId);
     };
 
     const shouldApplyBootstrapShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
@@ -1080,12 +1102,21 @@ function EventRouter() {
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
-      threadSnapshotSequenceById.clear();
-      pendingThreadEventsById.clear();
-      threadSnapshotRequestInFlight.clear();
-      threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
-      await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
+      await enqueueThreadSubscriptionOperation(async () => {
+        threadSnapshotSequenceById.clear();
+        pendingThreadEventsById.clear();
+        threadSnapshotRequestInFlight.clear();
+        threadReplayRequestInFlight.clear();
+        const previousThreadIds = [...subscribedThreadIds];
+        subscribedThreadIds.clear();
+        await Promise.all(
+          previousThreadIds.map((threadId) =>
+            api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
+          ),
+        );
+        await reconcileThreadSubscriptions(visibleThreadIdsRef.current);
+      });
     };
 
     const removeOrphanedTerminalsForCurrentState = () => {
@@ -1099,9 +1130,6 @@ function EventRouter() {
           archivedAt: thread.archivedAt ?? null,
         })),
         draftThreadIds,
-        retainedThreadIds: workspacePagesRef.current.map((workspace) =>
-          workspaceThreadId(workspace.id),
-        ),
       });
       // Right-dock terminals live under a synthetic scope derived from each active
       // thread; retain those scopes so docked terminals are not pruned mid-session.
@@ -1319,6 +1347,29 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
       queueDomainEvent(item.event);
     });
+    const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
+      const threadId = ThreadId.makeUnsafe(failure.threadId);
+      if (disposed || !subscribedThreadIds.has(threadId)) {
+        return;
+      }
+      // The stream is dead with retries and reconnects exhausted: forget its
+      // cursor so a future resubscribe requests a fresh snapshot, and surface
+      // the failure so the thread view stops posing as an empty conversation.
+      threadSnapshotSequenceById.delete(threadId);
+      threadSnapshotRequestInFlight.delete(threadId);
+      useStore.getState().markThreadDetailSyncFailed(threadId);
+    });
+    // Retention can evict a thread's detail slices while its stream lease stays
+    // active. The wiped messages never refresh on their own, so drop the cursor
+    // and restart the stream to fetch a fresh snapshot.
+    const unsubThreadDetailEviction = subscribeThreadDetailEvictions((threadId) => {
+      if (disposed || !subscribedThreadIds.has(threadId)) {
+        return;
+      }
+      threadSnapshotSequenceById.delete(threadId);
+      pendingThreadEventsById.set(threadId, []);
+      void refreshThreadSnapshot(threadId);
+    });
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
       if (event.type === "activity") {
@@ -1530,6 +1581,8 @@ function EventRouter() {
       );
       unsubShellEvent();
       unsubThreadEvent();
+      unsubThreadStreamFailure();
+      unsubThreadDetailEviction();
       unsubTerminalEvent();
       unsubDevServerEvent();
       unsubWelcome();

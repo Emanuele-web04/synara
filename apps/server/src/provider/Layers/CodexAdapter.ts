@@ -192,7 +192,10 @@ function toSessionError(
       cause,
     });
   }
-  if (normalized.includes("session is closed")) {
+  // A closed stdin is the transport-level signature of a dead app-server
+  // process; treat it as a closed session so callers recover via resume
+  // instead of surfacing a raw request failure.
+  if (normalized.includes("session is closed") || normalized.includes("stdin closed")) {
     return new ProviderAdapterSessionClosedError({
       provider: PROVIDER,
       threadId,

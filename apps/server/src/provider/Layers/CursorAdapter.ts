@@ -1339,7 +1339,8 @@ export function makeCursorAdapter(
       withThreadLock(
         threadId,
         Effect.gen(function* () {
-          const ctx = yield* requireSession(threadId);
+          const ctx = sessions.get(threadId);
+          if (!ctx) return;
           yield* stopSessionInternal(ctx);
         }),
       );

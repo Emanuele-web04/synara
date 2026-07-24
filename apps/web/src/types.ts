@@ -197,6 +197,7 @@ export interface ThreadWorkspaceState {
   envMode?: ThreadEnvironmentMode | undefined;
   branch: string | null;
   worktreePath: string | null;
+  workingDirectory?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
@@ -207,6 +208,7 @@ export interface ThreadWorkspacePatch {
   envMode?: ThreadEnvironmentMode | undefined;
   branch?: string | null;
   worktreePath?: string | null;
+  workingDirectory?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
@@ -306,6 +308,7 @@ export interface SidebarThreadSummary {
   envMode?: ThreadEnvironmentMode | undefined;
   branch: string | null;
   worktreePath: string | null;
+  workingDirectory?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;

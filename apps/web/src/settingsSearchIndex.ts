@@ -73,13 +73,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
   },
   {
-    id: "general:workspace-section",
-    section: "general",
-    title: "Workspace",
-    keywords:
-      "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible. sidebar section",
-  },
-  {
     id: "general:environment-default-open",
     section: "general",
     title: "Open by default",

@@ -18,12 +18,18 @@ import {
 import {
   shouldKeepServerLifecycleStream,
   getStreamCapacityRetryDelayMs,
+  getStreamDuplicateRetryDelayMs,
+  getStreamFailureCode,
   getTerminalCompatibilityError,
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
   makeRequestAbortScope,
+  MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS,
+  resolveStreamAdmissionRetry,
   shouldReconnectAfterStreamFailure,
+  threadStreamInputsEqual,
   WsTransport,
+  type WsThreadStreamFailure,
 } from "./wsTransport";
 import {
   addWsCompatibilityIssueListener,
@@ -84,10 +90,20 @@ interface WsTransportInternals {
   readonly streamCleanups: Map<string, () => void>;
   readonly streamSettled: Map<string, Promise<void>>;
   readonly streamCapacityRetries: Map<string, number>;
+  readonly streamDuplicateRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
-  startThreadStream(client: unknown, threadId: string, input: unknown): Promise<void>;
+  readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
+  startThreadStream(
+    client: unknown,
+    threadId: string,
+    input: unknown,
+    forceRestart?: boolean,
+  ): Promise<void>;
+  stopStream(key: string, options?: { readonly resetCapacityRetry?: boolean }): Promise<void>;
+  startStream(...args: unknown[]): void;
+  emitThreadStreamFailure(failure: WsThreadStreamFailure): void;
 }
 
 function makeBareTransport(): {
@@ -100,9 +116,11 @@ function makeBareTransport(): {
     streamCleanups: new Map(),
     streamSettled: new Map(),
     streamCapacityRetries: new Map(),
+    streamDuplicateRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
     threadSubscriptions: new Map(),
+    threadStreamFailureListeners: new Set(),
   });
   return { transport, internals };
 }
@@ -146,6 +164,11 @@ describe("WsTransport", () => {
         Cause.fail({ code: "STREAM_DUPLICATE_SUBSCRIPTION", retryable: false }),
       ),
     ).toBe(false);
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({ code: "THREAD_SNAPSHOT_NOT_FOUND", retryable: false }),
+      ),
+    ).toBe(false);
     expect(shouldReconnectAfterStreamFailure(Cause.fail(new Error("transient")))).toBe(true);
     expect(
       shouldReconnectAfterStreamFailure(
@@ -186,6 +209,104 @@ describe("WsTransport", () => {
         Cause.fail({ code: "WS_PROTOCOL_INCOMPATIBLE", retryable: false }),
       ),
     ).toBeNull();
+  });
+
+  it("retries duplicate-rejected streams in place despite the non-retryable marker", () => {
+    const duplicate = Cause.fail({
+      code: "STREAM_DUPLICATE_SUBSCRIPTION",
+      retryable: false,
+    });
+
+    expect(getStreamDuplicateRetryDelayMs(duplicate, 0)).toBe(250);
+    expect(
+      getStreamDuplicateRetryDelayMs(
+        Cause.fail({
+          code: "THREAD_STREAM_DUPLICATE_SUBSCRIPTION",
+          retryable: false,
+          retryAfterMs: 400,
+        }),
+        1,
+      ),
+    ).toBe(400);
+    expect(
+      getStreamDuplicateRetryDelayMs(duplicate, MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS),
+    ).toBeNull();
+    expect(
+      getStreamDuplicateRetryDelayMs(
+        Cause.fail({ code: "STREAM_CAPACITY_EXCEEDED", retryable: true }),
+        0,
+      ),
+    ).toBeNull();
+    expect(getStreamDuplicateRetryDelayMs(Cause.fail(new Error("transient")), 0)).toBeNull();
+  });
+
+  it("keeps duplicate retry admission independent from prior capacity retries", () => {
+    const capacity = Cause.fail({
+      code: "STREAM_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 1_000,
+    });
+    const duplicate = Cause.fail({
+      code: "STREAM_DUPLICATE_SUBSCRIPTION",
+      retryable: false,
+    });
+
+    expect(resolveStreamAdmissionRetry(capacity, 5, 0)).toEqual({
+      kind: "capacity",
+      attempt: 6,
+      delayMs: 1_000,
+    });
+    expect(resolveStreamAdmissionRetry(duplicate, 5, 0)).toEqual({
+      kind: "duplicate",
+      attempt: 1,
+      delayMs: 250,
+    });
+    expect(
+      resolveStreamAdmissionRetry(duplicate, 0, MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS),
+    ).toBeNull();
+  });
+
+  it("extracts the typed failure code used for thread stream failure reporting", () => {
+    expect(
+      getStreamFailureCode(Cause.fail({ code: "THREAD_SNAPSHOT_NOT_FOUND", retryable: false })),
+    ).toBe("THREAD_SNAPSHOT_NOT_FOUND");
+    expect(getStreamFailureCode(Cause.fail(new Error("transient")))).toBeNull();
+  });
+
+  it("treats structurally identical thread subscribe params as the same input", () => {
+    const input = { threadId: "thread-1" };
+
+    expect(threadStreamInputsEqual(input, input)).toBe(true);
+    expect(threadStreamInputsEqual(input, { threadId: "thread-1" })).toBe(true);
+    expect(threadStreamInputsEqual(input, { threadId: "thread-2" })).toBe(false);
+    expect(threadStreamInputsEqual(input, { threadId: "thread-1", extra: true })).toBe(false);
+    expect(threadStreamInputsEqual(undefined, { threadId: "thread-1" })).toBe(false);
+  });
+
+  it("delivers thread stream failures to listeners until they unsubscribe", () => {
+    const { transport, internals } = makeBareTransport();
+    const failure: WsThreadStreamFailure = {
+      threadId: "thread-failed",
+      code: "THREAD_SNAPSHOT_NOT_FOUND",
+      error: new Error("snapshot missing"),
+    };
+    const throwing = vi.fn(() => {
+      throw new Error("listener exploded");
+    });
+    const listener = vi.fn();
+
+    const unsubscribeThrowing = transport.onThreadStreamFailure(throwing);
+    const unsubscribe = transport.onThreadStreamFailure(listener);
+    internals.emitThreadStreamFailure(failure);
+
+    expect(throwing).toHaveBeenCalledWith(failure);
+    expect(listener).toHaveBeenCalledWith(failure);
+
+    unsubscribe();
+    unsubscribeThrowing();
+    internals.emitThreadStreamFailure(failure);
+
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it("waits for a thread stream to settle before resolving unsubscribe", async () => {
@@ -256,6 +377,64 @@ describe("WsTransport", () => {
 
     expect(cleanup).not.toHaveBeenCalled();
     expect(internals.streamCleanups.get(key)).toBe(cleanup);
+  });
+
+  it("force-restarts an identical live thread stream for a fresh snapshot", async () => {
+    const { internals } = makeBareTransport();
+    const threadId = "thread-force-snapshot";
+    const key = `orchestration.thread:${threadId}`;
+    const input = { threadId };
+    const cleanup = vi.fn();
+    const subscribeThread = vi.fn(() => ({}));
+    const stopStream = vi.fn(async () => {
+      internals.streamCleanups.delete(key);
+      internals.activeThreadStreamInputs.delete(key);
+    });
+    const startStream = vi.fn();
+    Object.assign(internals, {
+      disposed: false,
+      sessionVersion: 7,
+      stopStream,
+      startStream,
+    });
+    internals.threadSubscriptions.set(threadId, input);
+    internals.streamCleanups.set(key, cleanup);
+    internals.activeThreadStreamInputs.set(key, input);
+
+    await internals.startThreadStream(
+      { [ORCHESTRATION_WS_METHODS.subscribeThread]: subscribeThread },
+      threadId,
+      input,
+      true,
+    );
+
+    expect(stopStream).toHaveBeenCalledWith(key, { resetCapacityRetry: false });
+    expect(subscribeThread).toHaveBeenCalledWith(input);
+    expect(startStream).toHaveBeenCalledWith(
+      expect.anything(),
+      key,
+      {},
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("treats an explicit identical thread subscribe as a forced snapshot refresh", async () => {
+    const { transport, internals } = makeBareTransport();
+    const threadId = "thread-explicit-snapshot";
+    const input = { threadId };
+    const client = {};
+    const startThreadStream = vi.fn(async () => undefined);
+    Object.assign(internals, {
+      disposed: false,
+      getClient: vi.fn(async () => client),
+      startThreadStream,
+    });
+    internals.threadSubscriptions.set(threadId, input);
+
+    await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
+
+    expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input, true);
   });
 
   it("latches terminal compatibility guidance for late UI subscribers", () => {

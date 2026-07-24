@@ -2542,9 +2542,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
       Effect.gen(function* () {
         const context = sessions.get(threadId);
-        if (!context) {
-          return yield* new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId });
-        }
+        if (!context) return;
         yield* Effect.tryPromise({
           try: () => disposeSessionContext(context),
           catch: (cause) =>

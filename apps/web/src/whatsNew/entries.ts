@@ -1569,7 +1569,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "A new recent-view switcher lets you move through recent chats, terminals, and workspace surfaces with keyboard-first navigation and visible keycap hints.",
         details:
-          "Recent views are tracked in a dedicated store, activated through shared route logic, and covered by browser and unit tests so switching does not lose terminal/workspace state or collide with existing global shortcuts.",
+          "Recent views are tracked in a dedicated store, activated through shared route logic, and covered by browser and unit tests so switching does not lose terminal state or collide with existing global shortcuts.",
       },
       {
         id: "composer-mentions-drafts",
@@ -1775,9 +1775,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "sidebar-section-toggles",
-        title: "Chats and Workspace can be hidden",
+        title: "Chats can be hidden",
         description:
-          "New sidebar section toggles let you hide the standalone Chats footer list or the Workspace tab while keeping Threads always available.",
+          "A new sidebar section toggle lets you hide the standalone Chats footer list while keeping Projects available.",
       },
       {
         id: "legacy-database-repairs",

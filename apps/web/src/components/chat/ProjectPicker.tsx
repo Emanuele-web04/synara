@@ -36,7 +36,7 @@ import {
   ComboboxSeparator,
   ComboboxTrigger,
 } from "../ui/combobox";
-import { useWorkspaceStore } from "../../workspaceStore";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { useSpacesUiStore } from "../../spacesUiStore";
 
 interface ProjectPickerProps {
@@ -124,7 +124,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const spaces = useStore((state) => state.spaces);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);

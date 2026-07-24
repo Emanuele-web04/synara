@@ -84,34 +84,9 @@ describe("resolvePendingSidebarViewSelection", () => {
 
 describe("isProjectsSidebarSurface", () => {
   it("enables Space shortcuts only where the Space switcher is visible", () => {
-    expect(
-      isProjectsSidebarSurface({
-        isOnSettings: false,
-        isOnStudio: false,
-        isOnWorkspace: false,
-      }),
-    ).toBe(true);
-    expect(
-      isProjectsSidebarSurface({
-        isOnSettings: false,
-        isOnStudio: true,
-        isOnWorkspace: false,
-      }),
-    ).toBe(false);
-    expect(
-      isProjectsSidebarSurface({
-        isOnSettings: false,
-        isOnStudio: false,
-        isOnWorkspace: true,
-      }),
-    ).toBe(false);
-    expect(
-      isProjectsSidebarSurface({
-        isOnSettings: true,
-        isOnStudio: false,
-        isOnWorkspace: false,
-      }),
-    ).toBe(false);
+    expect(isProjectsSidebarSurface({ isOnSettings: false, isOnStudio: false })).toBe(true);
+    expect(isProjectsSidebarSurface({ isOnSettings: false, isOnStudio: true })).toBe(false);
+    expect(isProjectsSidebarSurface({ isOnSettings: true, isOnStudio: false })).toBe(false);
   });
 });
 

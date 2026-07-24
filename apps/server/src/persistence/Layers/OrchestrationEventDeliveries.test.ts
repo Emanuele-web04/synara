@@ -290,6 +290,15 @@ layer("OrchestrationEventDeliveryRepository", (it) => {
       assert.strictEqual(blockers.length, 1);
       assert.strictEqual(blockers[0]?.eventId, "evt-reconcile-delivery");
       assert.strictEqual(blockers[0]?.state, "uncertain");
+      assert.strictEqual(
+        (yield* repository.listBlockingDeliveries({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: "thread-reconcile",
+          afterEventSequence: eventSequence,
+          limit: 10,
+        })).length,
+        0,
+      );
 
       const stale = yield* repository.reconcile({
         reconciliationId: "reconcile-stale",

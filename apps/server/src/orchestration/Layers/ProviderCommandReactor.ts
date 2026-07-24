@@ -141,7 +141,9 @@ type ProviderAttemptOutcome =
   | { readonly _tag: "safe_retry"; readonly detail: string }
   | { readonly _tag: "uncertain"; readonly detail: string };
 
-function classifyProviderAttemptOutcome(exit: Exit.Exit<void, unknown>): ProviderAttemptOutcome {
+export function classifyProviderAttemptOutcome(
+  exit: Exit.Exit<void, unknown>,
+): ProviderAttemptOutcome {
   if (Exit.isSuccess(exit)) return { _tag: "accepted" };
   const detail = Cause.pretty(exit.cause);
   const failure = Cause.findErrorOption(exit.cause);
@@ -162,6 +164,11 @@ function classifyProviderAttemptOutcome(exit: Exit.Exit<void, unknown>): Provide
     default:
       return { _tag: "uncertain", detail };
   }
+}
+
+export function isSafeLegacyProviderBlocker(lastError: string | null): boolean {
+  const normalized = lastError?.toLowerCase() ?? "";
+  return normalized.includes("stdin closed before the frame was written");
 }
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
@@ -406,7 +413,10 @@ const make = Effect.gen(function* () {
   });
 
   const resolveProjectedThreadWorkspaceCwd = Effect.fnUntraced(function* (
-    thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">,
+    thread: Pick<
+      OrchestrationThread,
+      "projectId" | "envMode" | "worktreePath" | "workingDirectory"
+    >,
   ): Effect.fn.Return<string | undefined> {
     const project = yield* resolveThreadWorkspaceProject(thread);
     if (!project) {
@@ -3172,6 +3182,45 @@ const make = Effect.gen(function* () {
         eventSequence: event.sequence,
         threadId: event.payload.threadId,
       });
+      // A skipped turn start is a user-visible dead end: the projector has
+      // already shown the thread as "starting", so silence here reads as an
+      // infinite "Thinking". Surface the block and settle the session.
+      if (
+        event.type === "thread.turn-start-requested" ||
+        event.type === "thread.message-edit-resend-requested"
+      ) {
+        yield* Effect.gen(function* () {
+          const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: event.payload.threadId,
+          });
+          const blockerDetail =
+            Option.isSome(blocker) && blocker.value.lastError !== null
+              ? blocker.value.lastError
+              : "an earlier provider command failed";
+          const createdAt = new Date().toISOString();
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Thread is blocked by an earlier provider failure",
+            detail: `The message was not sent to the provider. Blocking failure: ${blockerDetail}`,
+            turnId: null,
+            createdAt,
+          });
+          yield* setThreadSessionError({
+            threadId: event.payload.threadId,
+            detail: `Thread is blocked by an earlier provider failure: ${blockerDetail}`,
+            createdAt,
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to surface quarantined-thread skip", {
+              threadId: event.payload.threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      }
       yield* requireCursorAdvance(event);
       return true;
     });
@@ -3448,6 +3497,93 @@ const make = Effect.gen(function* () {
           }),
         ),
       ) as ReturnType<ProviderCommandReactorShape["reconcileDelivery"]>;
+
+    const countSkippedPrompts = (input: {
+      readonly threadId: ThreadId;
+      readonly afterSequence: number;
+    }) => {
+      if (cursor <= input.afterSequence) return Effect.succeed(0);
+      return orchestrationEngine.readEventsThrough(input.afterSequence, cursor).pipe(
+        Stream.runFold(
+          () => 0,
+          (count: number, event) =>
+            isProviderIntentEvent(event) &&
+            event.payload.threadId === input.threadId &&
+            (event.type === "thread.turn-start-requested" ||
+              event.type === "thread.message-edit-resend-requested")
+              ? count + 1
+              : count,
+        ),
+      );
+    };
+
+    // Self-heal only legacy quarantines whose recorded details prove the
+    // command frame was never written. Exit-unproven process failures remain
+    // quarantined because the old provider may still be running.
+    // Skipped prompts are not replayed at startup; instead, surface a durable
+    // activity asking the user to resend them.
+    const startupRecoveryNotifiedThreads = new Set<ThreadId>();
+    yield* Effect.gen(function* () {
+      const pageSize = 100;
+      let afterEventSequence: number | undefined;
+      while (true) {
+        const startupBlockers = yield* deliveryRepository.listBlockingDeliveries({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          ...(afterEventSequence === undefined ? {} : { afterEventSequence }),
+          limit: pageSize,
+        });
+        for (const blocker of startupBlockers) {
+          if (!isSafeLegacyProviderBlocker(blocker.lastError)) continue;
+          const reconciled = yield* deliveryRepository.reconcile({
+            reconciliationId: crypto.randomUUID(),
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: blocker.eventSequence,
+            threadId: blocker.threadId,
+            expectedState: blocker.state,
+            outcome: "abandon",
+            reconciledBy: "system:provider-command-reactor",
+            note: "Recorded failure proves the provider never executed this command; settled at startup.",
+            reconciledAt: new Date().toISOString(),
+          });
+          if (Option.isNone(reconciled)) continue;
+
+          quarantinedThreads.delete(blocker.threadId);
+          if (!startupRecoveryNotifiedThreads.has(blocker.threadId)) {
+            const skippedPromptCount = yield* countSkippedPrompts({
+              threadId: blocker.threadId,
+              afterSequence: blocker.eventSequence,
+            });
+            if (skippedPromptCount > 0) {
+              const noun = skippedPromptCount === 1 ? "message was" : "messages were";
+              const createdAt = new Date().toISOString();
+              yield* appendProviderFailureActivity({
+                threadId: blocker.threadId,
+                kind: "provider.turn.start.failed",
+                summary: "Previous messages were not sent",
+                detail: `Synara recovered an earlier provider failure, but ${skippedPromptCount} ${noun} skipped while the thread was blocked. Resend ${skippedPromptCount === 1 ? "it" : "them"} to continue.`,
+                turnId: null,
+                createdAt,
+              });
+              startupRecoveryNotifiedThreads.add(blocker.threadId);
+            }
+          }
+          yield* Effect.logInfo("provider delivery blocker auto-healed at startup", {
+            eventSequence: blocker.eventSequence,
+            threadId: blocker.threadId,
+            lastError: blocker.lastError,
+          });
+        }
+        if (startupBlockers.length < pageSize) break;
+        afterEventSequence = startupBlockers[startupBlockers.length - 1]?.eventSequence;
+        if (afterEventSequence === undefined) break;
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider delivery blocker auto-heal failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
 
     const retryableDeliveries = yield* deliveryRepository.listRetryableDeliveries(
       PROVIDER_COMMAND_REACTOR_CONSUMER,

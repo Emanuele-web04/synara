@@ -47,7 +47,7 @@ export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "synara:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
-export type SidebarView = "threads" | "studio" | "workspace";
+export type SidebarView = "threads" | "studio";
 export type SidebarActionBadge = {
   readonly text: string;
   readonly accessibleLabel: string;
@@ -56,9 +56,8 @@ export type SidebarActionBadge = {
 export function isProjectsSidebarSurface(input: {
   readonly isOnSettings: boolean;
   readonly isOnStudio: boolean;
-  readonly isOnWorkspace: boolean;
 }): boolean {
-  return !input.isOnSettings && !input.isOnStudio && !input.isOnWorkspace;
+  return !input.isOnSettings && !input.isOnStudio;
 }
 
 /** Keep partial review counts visible without presenting them as exact. */

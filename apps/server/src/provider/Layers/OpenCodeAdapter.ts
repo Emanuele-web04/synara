@@ -3904,18 +3904,22 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const stopSession: OpenCodeAdapterShape["stopSession"] = Effect.fn("stopSession")(
         function* (threadId) {
-          const context = ensureAdapterSessionContext(threadId);
+          const context = sessions.get(threadId);
+          if (!context) return;
+          const wasStopped = yield* Ref.get(context.stopped);
           yield* stopOpenCodeContext(context);
           sessions.delete(threadId);
-          yield* emit(context, {
-            ...buildEventBase({ threadId }),
-            type: "session.exited",
-            payload: {
-              reason: "Session stopped.",
-              recoverable: false,
-              exitKind: "graceful",
-            },
-          });
+          if (!wasStopped) {
+            yield* emit(context, {
+              ...buildEventBase({ threadId }),
+              type: "session.exited",
+              payload: {
+                reason: "Session stopped.",
+                recoverable: false,
+                exitKind: "graceful",
+              },
+            });
+          }
         },
       );
 

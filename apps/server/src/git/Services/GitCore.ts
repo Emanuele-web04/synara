@@ -221,7 +221,7 @@ export interface GitCoreShape {
   readonly readStagedPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**
-   * Read committed branch changes against the upstream/base branch.
+   * Read aggregate branch changes from the upstream/base merge-base through the working tree.
    */
   readonly readBranchPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 

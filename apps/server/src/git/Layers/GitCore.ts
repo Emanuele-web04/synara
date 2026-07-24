@@ -1557,26 +1557,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return yield* createGitCommandError(
             "GitCore.readBranchPatch.base",
             cwd,
-            ["diff", "--patch", "--minimal", "<base>...HEAD"],
+            ["merge-base", "<base>", "HEAD"],
             "Cannot resolve a base branch for the current branch diff.",
           );
         }
 
-        const result = yield* execute({
-          operation: "GitCore.readBranchPatch.diffPatch",
+        const mergeBase = yield* executeGit(
+          "GitCore.readBranchPatch.mergeBase",
           cwd,
-          args: [
-            "diff",
-            "--patch",
-            "--minimal",
-            "--no-color",
-            "--no-ext-diff",
-            `${baseBranch}...HEAD`,
-          ],
-          maxOutputBytes: 10_000_000,
-        });
+          ["merge-base", baseBranch, "HEAD"],
+          {
+            fallbackErrorMessage: "Cannot resolve the merge base for the current branch diff.",
+          },
+        ).pipe(Effect.map((result) => result.stdout.trim()));
+        if (mergeBase.length === 0) {
+          return yield* createGitCommandError(
+            "GitCore.readBranchPatch.mergeBase",
+            cwd,
+            ["merge-base", baseBranch, "HEAD"],
+            "Cannot resolve the merge base for the current branch diff.",
+          );
+        }
 
-        return { patch: result.stdout };
+        const trackedPatch = yield* executeGit(
+          "GitCore.readBranchPatch.trackedPatch",
+          cwd,
+          ["diff", "--patch", "--minimal", "--no-color", "--no-ext-diff", mergeBase],
+          {
+            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+            maxOutputBytes: 10_000_000,
+          },
+        ).pipe(Effect.map((result) => result.stdout));
+        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readBranchPatch");
+
+        return {
+          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
+        };
       });
 
     const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd, filePaths) =>

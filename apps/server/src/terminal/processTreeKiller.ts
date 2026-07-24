@@ -7,8 +7,11 @@ import { spawnSync } from "node:child_process";
 import treeKill from "tree-kill";
 
 const PROCESS_TREE_SCAN_TIMEOUT_MS = 1_000;
-const PROCESS_TREE_SCAN_MAX_BUFFER_BYTES = 262_144;
-const PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES = 262_144;
+// Full-system `ps` output scales with host process count and command-line
+// length (Electron helpers alone run to kilobytes per line); an undersized cap
+// makes snapshot failure routine on busy machines.
+const PROCESS_TREE_SCAN_MAX_BUFFER_BYTES = 8_388_608;
+const PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES = 8_388_608;
 const POSIX_TREE_WALK_MAX_VISITED = 256;
 
 export type ProcessChildrenMap = Map<number, Array<CapturedProcess>>;

@@ -101,6 +101,7 @@ import Migration0082 from "./Migrations/082_AutomationMemory.ts";
 import Migration0083 from "./Migrations/083_AutomationHeartbeatEligibility.ts";
 import Migration0084 from "./Migrations/084_AutomationNotificationPolicy.ts";
 import Migration0085 from "./Migrations/085_AutomationSettings.ts";
+import Migration0086 from "./Migrations/086_NormalizeStudioThreadWorkspaces.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -201,6 +202,7 @@ export const migrationEntries = [
   [83, "AutomationHeartbeatEligibility", Migration0083],
   [84, "AutomationNotificationPolicy", Migration0084],
   [85, "AutomationSettings", Migration0085],
+  [86, "NormalizeStudioThreadWorkspaces", Migration0086],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

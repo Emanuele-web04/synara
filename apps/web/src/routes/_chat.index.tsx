@@ -15,7 +15,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { collectStudioProjectIds } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
@@ -23,9 +23,9 @@ function ChatIndexRouteView() {
   const projects = useStore((state) => state.projects);
   const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
   const createFreshChat = () => handleNewChat({ fresh: true });
 
   // Home chats restore the last visited route, except Studio threads — those belong to the

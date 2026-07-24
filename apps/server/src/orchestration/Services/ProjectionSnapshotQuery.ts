@@ -45,6 +45,7 @@ export interface ProjectionThreadCheckpointContext {
   readonly workspaceRoot: string;
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
+  readonly workingDirectory: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
   /** Completed file-change payloads, newest first, when explicitly requested by the caller. */
   readonly fileChangeActivityPayloads?: ReadonlyArray<unknown>;
@@ -67,6 +68,7 @@ export interface ProjectionFullThreadDiffContext {
   readonly workspaceRoot: string;
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
+  readonly workingDirectory: string | null;
   readonly latestCheckpointTurnCount: number;
   readonly baselineCheckpointRef: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;

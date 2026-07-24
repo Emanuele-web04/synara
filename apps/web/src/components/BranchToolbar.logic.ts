@@ -4,6 +4,7 @@ import {
   type AssociatedWorktreeMetadata,
 } from "@synara/shared/threadWorkspace";
 import { Schema } from "effect";
+import type { ThreadWorkspacePatch } from "../types";
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
@@ -35,6 +36,32 @@ export function resolveDraftEnvModeAfterBranchChange(input: {
     return "worktree";
   }
   return "local";
+}
+
+/**
+ * Studio threads use a concrete working directory as their entire workspace.
+ * Branch-selector patches still speak in project/worktree terms, so normalize
+ * them at this boundary instead of leaking worktree metadata into the thread.
+ */
+export function resolveFixedLocalWorkspacePatch(input: {
+  currentWorkingDirectory: string | null;
+  patch: ThreadWorkspacePatch;
+}): ThreadWorkspacePatch {
+  const workingDirectory =
+    input.patch.workingDirectory !== undefined
+      ? input.patch.workingDirectory
+      : (input.patch.worktreePath ?? input.currentWorkingDirectory);
+
+  return {
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    workingDirectory,
+    associatedWorktreePath: null,
+    associatedWorktreeBranch: null,
+    associatedWorktreeRef: null,
+    createBranchFlowCompleted: false,
+  };
 }
 
 export function resolveBranchToolbarValue(input: {

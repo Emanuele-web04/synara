@@ -20,11 +20,13 @@ const EMPTY_THREAD_SHELLS: ThreadShell[] = [];
 export interface ThreadWorkspaceMetadata {
   envMode: ThreadEnvironmentMode | undefined;
   worktreePath: string | null;
+  workingDirectory: string | null;
 }
 
 const EMPTY_THREAD_WORKSPACE_METADATA: ThreadWorkspaceMetadata = Object.freeze({
   envMode: undefined,
   worktreePath: null,
+  workingDirectory: null,
 });
 
 function createStableEntitySelector<T extends { id: string }>(
@@ -160,6 +162,7 @@ export function createThreadWorkspaceMetadataSelector(
 ): (state: AppState) => ThreadWorkspaceMetadata {
   let previousEnvMode: ThreadEnvironmentMode | undefined = undefined;
   let previousWorktreePath: string | null = null;
+  let previousWorkingDirectory: string | null = null;
   let previousResult = EMPTY_THREAD_WORKSPACE_METADATA;
 
   return (state) => {
@@ -171,16 +174,22 @@ export function createThreadWorkspaceMetadataSelector(
     const source = state.threadShellById?.[threadId];
     const envMode = source?.envMode;
     const worktreePath = source?.worktreePath ?? null;
-    if (previousEnvMode === envMode && previousWorktreePath === worktreePath) {
+    const workingDirectory = source?.workingDirectory ?? null;
+    if (
+      previousEnvMode === envMode &&
+      previousWorktreePath === worktreePath &&
+      previousWorkingDirectory === workingDirectory
+    ) {
       return previousResult;
     }
 
     previousEnvMode = envMode;
     previousWorktreePath = worktreePath;
+    previousWorkingDirectory = workingDirectory;
     previousResult =
-      envMode === undefined && worktreePath === null
+      envMode === undefined && worktreePath === null && workingDirectory === null
         ? EMPTY_THREAD_WORKSPACE_METADATA
-        : { envMode, worktreePath };
+        : { envMode, worktreePath, workingDirectory };
     return previousResult;
   };
 }

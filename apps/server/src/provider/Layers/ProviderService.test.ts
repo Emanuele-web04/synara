@@ -678,6 +678,28 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("runs the idempotent adapter cleanup barrier for an inactive binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-explicit-stop-inactive");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      routing.codex.stopSession.mockClear();
+      routing.codex.hasSession.mockReturnValueOnce(Effect.succeed(false));
+
+      yield* provider.stopSession({ threadId });
+
+      assert.deepEqual(routing.codex.stopSession.mock.calls, [[threadId]]);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
   it.effect("serializes lifecycle mutations and persists a fresh generation per start", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

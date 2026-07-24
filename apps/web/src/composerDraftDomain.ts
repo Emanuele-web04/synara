@@ -190,6 +190,7 @@ export interface DraftThreadState {
   entryPoint: ThreadPrimarySurface;
   branch: string | null;
   worktreePath: string | null;
+  workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
   isTemporary?: boolean;
@@ -199,6 +200,7 @@ export interface DraftThreadState {
 interface DraftThreadMutationOptions {
   branch?: string | null;
   worktreePath?: string | null;
+  workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   createdAt?: string;
   envMode?: DraftThreadEnvMode;
@@ -244,6 +246,7 @@ export interface ComposerDraftStoreState {
       createdAt?: string;
       branch?: string | null;
       worktreePath?: string | null;
+      workingDirectory?: string | null;
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
@@ -428,6 +431,10 @@ export function buildDraftThreadState(input: {
     branch:
       options?.branch === undefined ? (existingThread?.branch ?? null) : (options.branch ?? null),
     worktreePath: nextWorktreePath,
+    workingDirectory:
+      options?.workingDirectory === undefined
+        ? (existingThread?.workingDirectory ?? null)
+        : (options.workingDirectory ?? null),
     lastKnownPr:
       options?.lastKnownPr === undefined
         ? (existingThread?.lastKnownPr ?? null)
@@ -455,6 +462,7 @@ export function draftThreadStatesEqual(
     left.entryPoint === right.entryPoint &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
+    (left.workingDirectory ?? null) === (right.workingDirectory ?? null) &&
     Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     left.envMode === right.envMode &&
     (left.isTemporary === true) === (right.isTemporary === true) &&

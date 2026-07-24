@@ -30,6 +30,7 @@ function makeThreadCheckpointContext(input: {
     workspaceRoot: input.workspaceRoot,
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
+    workingDirectory: null,
     checkpoints: [
       {
         turnId: TurnId.makeUnsafe("turn-1"),
@@ -62,6 +63,7 @@ function makeFullThreadDiffContext(input: {
     workspaceRoot: input.workspaceRoot,
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
+    workingDirectory: null,
     latestCheckpointTurnCount: input.latestCheckpointTurnCount,
     baselineCheckpointRef: input.baselineCheckpointRef ?? input.toCheckpointRef,
     toCheckpointRef: input.toCheckpointRef,

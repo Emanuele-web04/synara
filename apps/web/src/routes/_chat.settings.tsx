@@ -236,9 +236,6 @@ function SettingsRouteView() {
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
-    ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
-      ? ["Workspace section"]
-      : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
@@ -524,15 +521,6 @@ function SettingsRouteView() {
           description: "Show the Studio tab in the sidebar switcher.",
           resetLabel: "studio section",
           ariaLabel: "Show the Studio section in the sidebar",
-        })}
-
-        {renderBooleanSettingRow({
-          settingKey: "showWorkspaceSection",
-          title: "Workspace",
-          description:
-            "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible.",
-          resetLabel: "workspace section",
-          ariaLabel: "Show the Workspace section in the sidebar",
         })}
       </SettingsSection>
 
@@ -1002,7 +990,7 @@ function SettingsRouteView() {
         {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
-          chat/workspace headers — so the collapsed-state toggle sits by the traffic
+          chat and route headers — so the collapsed-state toggle sits by the traffic
           lights instead of floating in the centered settings body. It renders nothing
           while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
           adds no navigation chrome in the common (open) state and never shifts the centered

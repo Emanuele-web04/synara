@@ -6,6 +6,7 @@ import {
   resetRetainedThreadDetailSubscriptionsForTests,
   resolveThreadDetailSubscriptionLeaseIds,
   retainThreadDetailSubscription,
+  subscribeThreadDetailEvictions,
 } from "./threadDetailSubscriptionRetention";
 
 describe("threadDetailSubscriptionRetention", () => {
@@ -179,6 +180,27 @@ describe("threadDetailSubscriptionRetention", () => {
       ...visible,
       ...retained.slice(0, WS_STREAM_LIMITS.threadPerClient - visible.length),
     ]);
+  });
+
+  it("notifies eviction subscribers so lease owners can refresh wiped detail", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-eviction-listener");
+    const listener = vi.fn();
+    const unsubscribe = subscribeThreadDetailEvictions(listener);
+
+    const release = retainThreadDetailSubscription(threadId);
+    release();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    expect(listener).toHaveBeenCalledWith(threadId);
+
+    unsubscribe();
+    const secondThreadId = ThreadId.makeUnsafe("thread-eviction-listener-2");
+    const releaseSecond = retainThreadDetailSubscription(secondThreadId);
+    releaseSecond();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it("releases normalized detail when an idle lease is evicted", () => {

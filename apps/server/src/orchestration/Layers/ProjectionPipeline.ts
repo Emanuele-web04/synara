@@ -516,7 +516,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const applyThreadsProjection: ProjectorDefinition["apply"] = (event, attachmentSideEffects) =>
     Effect.gen(function* () {
       switch (event.type) {
-        case "thread.created":
+        case "thread.created": {
+          const project = yield* projectionProjectRepository.getById({
+            projectId: event.payload.projectId,
+          });
+          const isStudio = Option.isSome(project) && project.value.kind === "studio";
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
@@ -524,13 +528,22 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
-            envMode: event.payload.envMode ?? "local",
-            branch: event.payload.branch,
-            worktreePath: event.payload.worktreePath,
-            associatedWorktreePath: event.payload.associatedWorktreePath ?? null,
-            associatedWorktreeBranch: event.payload.associatedWorktreeBranch ?? null,
-            associatedWorktreeRef: event.payload.associatedWorktreeRef ?? null,
-            createBranchFlowCompleted: event.payload.createBranchFlowCompleted ?? false,
+            envMode: isStudio ? "local" : (event.payload.envMode ?? "local"),
+            branch: isStudio ? null : event.payload.branch,
+            worktreePath: isStudio ? null : event.payload.worktreePath,
+            workingDirectory: isStudio
+              ? (event.payload.workingDirectory ?? event.payload.worktreePath)
+              : (event.payload.workingDirectory ?? null),
+            associatedWorktreePath: isStudio
+              ? null
+              : (event.payload.associatedWorktreePath ?? null),
+            associatedWorktreeBranch: isStudio
+              ? null
+              : (event.payload.associatedWorktreeBranch ?? null),
+            associatedWorktreeRef: isStudio ? null : (event.payload.associatedWorktreeRef ?? null),
+            createBranchFlowCompleted: isStudio
+              ? false
+              : (event.payload.createBranchFlowCompleted ?? false),
             isPinned: event.payload.isPinned ?? false,
             parentThreadId: event.payload.parentThreadId ?? null,
             creationSource: event.payload.creationSource ?? null,
@@ -559,8 +572,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             deletedAt: null,
           });
           return;
+        }
 
         case "thread.meta-updated": {
+          const currentThread = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          const project = Option.isSome(currentThread)
+            ? yield* projectionProjectRepository.getById({
+                projectId: currentThread.value.projectId,
+              })
+            : Option.none();
+          const isStudio = Option.isSome(project) && project.value.kind === "studio";
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
             const nextCreateBranchFlowCompleted =
               event.payload.createBranchFlowCompleted !== undefined
@@ -574,11 +597,30 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.payload.modelSelection !== undefined
                 ? { modelSelection: event.payload.modelSelection }
                 : {}),
-              ...(event.payload.envMode !== undefined ? { envMode: event.payload.envMode } : {}),
-              ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
-              ...(event.payload.worktreePath !== undefined
-                ? { worktreePath: event.payload.worktreePath }
-                : {}),
+              ...(isStudio
+                ? {
+                    envMode: "local" as const,
+                    branch: null,
+                    worktreePath: null,
+                    workingDirectory:
+                      event.payload.workingDirectory !== undefined
+                        ? event.payload.workingDirectory
+                        : event.payload.worktreePath !== undefined
+                          ? event.payload.worktreePath
+                          : (thread.workingDirectory ?? thread.worktreePath),
+                  }
+                : {
+                    ...(event.payload.envMode !== undefined
+                      ? { envMode: event.payload.envMode }
+                      : {}),
+                    ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
+                    ...(event.payload.worktreePath !== undefined
+                      ? { worktreePath: event.payload.worktreePath }
+                      : {}),
+                    ...(event.payload.workingDirectory !== undefined
+                      ? { workingDirectory: event.payload.workingDirectory }
+                      : {}),
+                  }),
               ...(event.payload.associatedWorktreePath !== undefined
                 ? { associatedWorktreePath: event.payload.associatedWorktreePath }
                 : {}),
@@ -590,6 +632,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : {}),
               ...(nextCreateBranchFlowCompleted !== undefined
                 ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
+                : {}),
+              ...(isStudio
+                ? {
+                    associatedWorktreePath: null,
+                    associatedWorktreeBranch: null,
+                    associatedWorktreeRef: null,
+                    createBranchFlowCompleted: false,
+                  }
                 : {}),
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
               ...(event.payload.parentThreadId !== undefined

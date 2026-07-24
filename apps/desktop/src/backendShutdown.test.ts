@@ -6,10 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DESKTOP_BACKEND_SHUTDOWN_PATH,
+  PosixBackendShutdownTimeoutError,
+  retainLiveBackendAfterShutdownFailure,
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
   shouldDeferDesktopWindowClose,
   startDesktopBackendShutdownRequest,
+  stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
   WindowsBackendShutdownTimeoutError,
   type BackendShutdownProcess,
@@ -68,6 +71,123 @@ async function expectPromisePending(promise: Promise<unknown>): Promise<void> {
   await Promise.resolve();
   expect(settled).toBe(false);
 }
+
+describe("retainLiveBackendAfterShutdownFailure", () => {
+  it("restores ownership only when the attempted child is still alive", () => {
+    const liveChild = makeTestBackendShutdownProcess();
+    expect(retainLiveBackendAfterShutdownFailure(null, liveChild)).toBe(liveChild);
+
+    liveChild.exit(0);
+    expect(retainLiveBackendAfterShutdownFailure(null, liveChild)).toBeNull();
+
+    const replacement = makeTestBackendShutdownProcess();
+    expect(retainLiveBackendAfterShutdownFailure(replacement, liveChild)).toBe(replacement);
+  });
+});
+
+describe("stopPosixBackendAndWait", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves only after the child exits", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const shutdown = stopPosixBackendAndWait({
+      child,
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+    });
+
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+    await vi.advanceTimersByTimeAsync(7_999);
+    await expectPromisePending(shutdown);
+
+    child.exit(0);
+
+    await expect(shutdown).resolves.toBeUndefined();
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("force-kills a surviving child and still requires an exit event", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const shutdown = stopPosixBackendAndWait({
+      child,
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(child.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+    await expectPromisePending(shutdown);
+
+    child.exit(null, "SIGKILL");
+    await expect(shutdown).resolves.toBeUndefined();
+  });
+
+  it("rejects instead of allowing updater handoff while the child is still alive", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const shutdown = stopPosixBackendAndWait({
+      child,
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+    });
+
+    const rejection = expect(shutdown).rejects.toMatchObject({
+      name: "PosixBackendShutdownTimeoutError",
+      forced: true,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    expect(child.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("shares duplicate shutdown calls for the same process", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const input = {
+      child,
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+    };
+
+    const first = stopPosixBackendAndWait(input);
+    const second = stopPosixBackendAndWait(input);
+    expect(second).toBe(first);
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+
+    child.exit(0);
+    await expect(first).resolves.toBeUndefined();
+  });
+
+  it("validates timing before signaling the child", async () => {
+    const child = makeTestBackendShutdownProcess();
+
+    await expect(
+      stopPosixBackendAndWait({
+        child,
+        forceKillDelayMs: 10_000,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(RangeError);
+    expect(child.killSignals).toEqual([]);
+  });
+
+  it("exposes whether the force-kill attempt ran before timeout", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const shutdown = stopPosixBackendAndWait({
+      child,
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+    });
+
+    const rejection = expect(shutdown).rejects.toBeInstanceOf(PosixBackendShutdownTimeoutError);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+  });
+});
 
 describe("stopWindowsBackendAndWait", () => {
   beforeEach(() => {
@@ -469,6 +589,18 @@ describe("runAfterDesktopShutdown", () => {
       runAfterDesktopShutdown(Promise.reject(shutdownError), afterFailedShutdown),
     ).rejects.toBe(shutdownError);
     expect(afterFailedShutdown).not.toHaveBeenCalled();
+  });
+
+  it("can run quit cleanup after a failed shutdown while preserving the rejection", async () => {
+    const shutdownError = new Error("backend still running");
+    const afterFailedShutdown = vi.fn();
+
+    await expect(
+      runAfterDesktopShutdown(Promise.reject(shutdownError), afterFailedShutdown, {
+        runAfterShutdownFailure: true,
+      }),
+    ).rejects.toBe(shutdownError);
+    expect(afterFailedShutdown).toHaveBeenCalledOnce();
   });
 });
 

@@ -1878,9 +1878,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               retireRuntimeIdleGeneration(input.threadId);
               return;
             }
-            if (routed.isActive) {
-              yield* routed.adapter.stopSession(input.threadId);
-            }
+            // Adapter stop is an idempotent cleanup barrier. Even when the
+            // routable session is inactive, the adapter may retain ownership
+            // from a teardown whose exit proof previously failed.
+            yield* routed.adapter.stopSession(input.threadId);
             liveRuntimeTaskIds.delete(input.threadId);
             yield* waitForRuntimeIdleStop(input.threadId);
             yield* withBindingWriteLock(input.threadId, directory.remove(input.threadId));

@@ -24,6 +24,7 @@ import {
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolveFixedLocalWorkspacePatch,
 } from "./BranchToolbar.logic";
 import {
   BranchToolbarBranchSelector,
@@ -109,6 +110,9 @@ export interface BranchToolbarProps {
   variant?: BranchSelectorVariant;
   // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
   showBranchSelector?: boolean;
+  // Studio-like containers bind the toolbar to one concrete local folder and
+  // must not persist project/worktree metadata from branch selector actions.
+  fixedLocalWorkspaceCwd?: string | null;
 }
 
 export interface RuntimeUsageControlsProps {
@@ -224,6 +228,7 @@ export default function BranchToolbar({
   onComposerFocusRequest,
   variant = "toolbar",
   showBranchSelector = true,
+  fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
@@ -238,13 +243,24 @@ export default function BranchToolbar({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const hasServerThread = serverThread !== undefined;
   const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
-  const activeThreadBranch = serverThread?.branch ?? draftThread?.branch ?? null;
-  const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const activeThreadBranch = hasServerThread
+    ? (serverThread.branch ?? null)
+    : (draftThread?.branch ?? null);
+  const activeWorktreePath = hasServerThread
+    ? (serverThread.worktreePath ?? null)
+    : (draftThread?.worktreePath ?? null);
+  const activeWorkingDirectory = hasServerThread
+    ? (serverThread.workingDirectory ?? null)
+    : (draftThread?.workingDirectory ?? null);
   const activeProvider =
     serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
-  const branchCwd = activeWorktreePath ?? activeProject?.cwd ?? null;
-  const hasServerThread = serverThread !== undefined;
+  const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
+  const branchCwd = usesFixedLocalWorkspace
+    ? fixedLocalWorkspaceCwd
+    : (activeWorktreePath ?? activeWorkingDirectory ?? activeProject?.cwd ?? null);
+  const branchProjectCwd = usesFixedLocalWorkspace ? branchCwd : (activeProject?.cwd ?? null);
   const effectiveEnvMode = resolveEffectiveEnvMode({
     activeWorktreePath,
     hasServerThread,
@@ -259,6 +275,43 @@ export default function BranchToolbar({
   const setThreadWorkspace = useCallback(
     (patch: ThreadWorkspacePatch) => {
       if (!activeThreadId) return;
+      if (usesFixedLocalWorkspace) {
+        const nextWorkspace = resolveFixedLocalWorkspacePatch({
+          currentWorkingDirectory: activeWorkingDirectory,
+          patch,
+        });
+        const nextWorkingDirectory = nextWorkspace.workingDirectory ?? null;
+        if (nextWorkingDirectory === activeWorkingDirectory) {
+          return;
+        }
+
+        const api = readNativeApi();
+        if (serverThread?.session && api) {
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.session.stop",
+              commandId: newCommandId(),
+              threadId: activeThreadId,
+              createdAt: new Date().toISOString(),
+            })
+            .catch(() => undefined);
+        }
+        if (api && hasServerThread) {
+          void api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: activeThreadId,
+            ...nextWorkspace,
+          });
+        }
+        if (hasServerThread) {
+          setThreadWorkspaceAction(activeThreadId, nextWorkspace);
+          return;
+        }
+        setDraftThreadContext(threadId, nextWorkspace);
+        return;
+      }
+
       const branch = patch.branch !== undefined ? patch.branch : activeThreadBranch;
       const worktreePath =
         patch.worktreePath !== undefined ? patch.worktreePath : activeWorktreePath;
@@ -329,6 +382,7 @@ export default function BranchToolbar({
     [
       activeThreadId,
       activeThreadBranch,
+      activeWorkingDirectory,
       serverThread?.session,
       activeWorktreePath,
       hasServerThread,
@@ -339,17 +393,29 @@ export default function BranchToolbar({
       setDraftThreadContext,
       threadId,
       effectiveEnvMode,
+      usesFixedLocalWorkspace,
     ],
   );
 
   const canHandoffToWorktree = Boolean(
-    hasServerThread && envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+    !usesFixedLocalWorkspace &&
+      hasServerThread &&
+      envLocked &&
+      !activeWorktreePath &&
+      effectiveEnvMode === "local",
   );
-  const canHandoffToLocal = Boolean(hasServerThread && activeWorktreePath);
+  const canHandoffToLocal = Boolean(
+    !usesFixedLocalWorkspace && hasServerThread && activeWorktreePath,
+  );
   const canSwitchToWorktree = Boolean(
-    !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+    !usesFixedLocalWorkspace &&
+      !envLocked &&
+      !activeWorktreePath &&
+      effectiveEnvMode === "local",
   );
-  const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
+  const canSwitchToLocal = Boolean(
+    !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
+  );
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
   const usageSummary = useProviderUsageSummary({
@@ -504,7 +570,7 @@ export default function BranchToolbar({
 
         {showBranchSelector ? (
           <BranchToolbarBranchSelector
-            activeProjectCwd={activeProject.cwd}
+            activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}
             branchCwd={branchCwd}

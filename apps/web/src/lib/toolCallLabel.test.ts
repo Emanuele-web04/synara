@@ -181,16 +181,46 @@ describe("deriveSynaraMcpToolTitle", () => {
     ).toBe("Synara handled delete project");
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Synara is handling delete project",
-        status: "running",
+        toolName: "synara_is_handling_delete_project",
+        status: "completed",
       }),
-    ).toBe("Synara is handling delete project");
+    ).toBe("Synara handled delete project");
+  });
+
+  it("does not reinterpret free text beginning with fallback status copy", () => {
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Synara couldn't handle delete project",
+        title: "Synara is handling delete project after recovery",
+        status: "completed",
+      }),
+    ).toBeNull();
+    expect(
+      deriveSynaraMcpToolTitle({
+        title: "Synara handled delete project after recovery",
+        status: "running",
+      }),
+    ).toBeNull();
+    expect(
+      deriveSynaraMcpToolTitle({
+        title: "Synara couldn't handle delete project after recovery",
         status: "failed",
       }),
-    ).toBe("Synara couldn't handle delete project");
+    ).toBeNull();
+  });
+
+  it("leaves free-text activity summaries starting with Synara untouched", () => {
+    expect(
+      deriveSynaraMcpToolTitle({
+        title: "Synara recovered a stale running state",
+        status: "completed",
+      }),
+    ).toBeNull();
+    expect(
+      deriveSynaraMcpToolTitle({
+        fallbackLabel: "Synara restarted the provider session",
+        status: "running",
+      }),
+    ).toBeNull();
   });
 
   it("removes transport identifiers without hiding meaningful Synara details", () => {

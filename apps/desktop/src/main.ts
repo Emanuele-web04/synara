@@ -61,9 +61,11 @@ import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/static
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import {
+  retainLiveBackendAfterShutdownFailure,
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
   shouldDeferDesktopWindowClose,
+  stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
 } from "./backendShutdown";
 import {
@@ -102,6 +104,8 @@ import {
 } from "./resumableUpdateDownload";
 import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
+import { BackendStartupBlockDetector, type BackendStartupBlock } from "./backendStartupBlock";
+import { captureBackendProcessOutput } from "./backendProcessOutput";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
   type DownloadProgressSample,
@@ -264,6 +268,7 @@ let backendHttpUrl = "";
 let backendWsUrl = "";
 let backendReadinessAbortController: AbortController | null = null;
 let backendInitialWindowOpenInFlight: Promise<void> | null = null;
+let backendStartupBlockDialogInFlight: Promise<void> | null = null;
 let backendListeningDetector: ServerListeningDetector | null = null;
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -620,19 +625,6 @@ function initializePackagedLogging(): void {
     // Logging setup should never block app startup.
     console.error("[desktop] failed to initialize packaged logging", error);
   }
-}
-
-function captureBackendOutput(child: ChildProcess.ChildProcess): void {
-  const attachStream = (stream: NodeJS.ReadableStream | null | undefined): void => {
-    stream?.on("data", (chunk: unknown) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-      backendLogSink?.write(buffer);
-      backendListeningDetector?.push(buffer);
-    });
-  };
-
-  attachStream(child.stdout);
-  attachStream(child.stderr);
 }
 
 initializePackagedLogging();
@@ -2731,6 +2723,61 @@ function scheduleBackendRestart(reason: string): void {
   }, delayMs);
 }
 
+function handleBackendStartupBlock(block: BackendStartupBlock): void {
+  if (isQuitting || backendStartupBlockDialogInFlight) return;
+
+  const task = (async () => {
+    if (block.kind === "migration-recovery-required") {
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Synara needs to recover its database",
+        message: "A database migration did not finish safely.",
+        detail:
+          "Restart Synara to open the verified backup recovery flow. Provider and chat processes will remain stopped until recovery completes.",
+        buttons: ["Restart and recover", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (result.response === 0) {
+        app.relaunch();
+        requestGracefulAppQuit("migration recovery required");
+      } else {
+        requestGracefulAppQuit("migration recovery declined");
+      }
+      return;
+    }
+
+    const processDetail =
+      block.ownerPid === null
+        ? "Another Synara server is already using this database."
+        : `Another Synara server (process ${block.ownerPid}) is already using this database.`;
+    const result = await dialog.showMessageBox({
+      type: "warning",
+      title: "Synara is already running elsewhere",
+      message: "Your local Synara data is in use by another process.",
+      detail: `${processDetail}\n\nStop the other Synara app or development server, then try again. Your data has not been changed.`,
+      buttons: ["Try again", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (result.response === 0) {
+      // Let a fast failed retry present the block again instead of racing this
+      // dialog task's finalizer and leaving the window inert.
+      backendStartupBlockDialogInFlight = null;
+      await restartBackendAfterCrash("database lifecycle lock retry");
+    } else {
+      requestGracefulAppQuit("database lifecycle lock");
+    }
+  })().finally(() => {
+    if (backendStartupBlockDialogInFlight === task) {
+      backendStartupBlockDialogInFlight = null;
+    }
+  });
+  backendStartupBlockDialogInFlight = task;
+}
+
 async function restartBackendAfterCrash(reason: string): Promise<void> {
   if (isQuitting || backendProcess) {
     return;
@@ -2759,7 +2806,6 @@ function startBackend(): void {
     return;
   }
 
-  const captureBackendLogs = app.isPackaged && backendLogSink !== null;
   const child = ChildProcess.spawn(process.execPath, [...backendNodeArgs(), backendEntry], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
@@ -2769,9 +2815,12 @@ function startBackend(): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
     },
-    stdio: captureBackendLogs ? ["ignore", "pipe", "pipe"] : "inherit",
+    // Keep output piped in every environment so startup blockers and readiness
+    // are observable even when packaged log setup is unavailable.
+    stdio: ["ignore", "pipe", "pipe"],
   });
   const listeningDetector = new ServerListeningDetector();
+  const startupBlockDetector = new BackendStartupBlockDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
   let backendSessionClosed = false;
@@ -2784,11 +2833,33 @@ function startBackend(): void {
     "START",
     `pid=${child.pid ?? "unknown"} port=${backendPort} cwd=${resolveBackendCwd()}`,
   );
-  captureBackendOutput(child);
-
-  child.once("spawn", () => {
-    restartAttempt = 0;
+  const backendLogDestination = backendLogSink;
+  const backendOutputCapture = captureBackendProcessOutput({
+    stdout: child.stdout,
+    stderr: child.stderr,
+    ...(backendLogDestination
+      ? { writeLog: (chunk) => backendLogDestination.write(chunk) }
+      : {}),
+    writeStdout: (chunk) => {
+      process.stdout.write(chunk);
+    },
+    writeStderr: (chunk) => {
+      process.stderr.write(chunk);
+    },
+    detectors: [listeningDetector, startupBlockDetector],
   });
+
+  // A successful spawn only proves that Electron created the process. Reset the
+  // crash backoff after the backend actually listens; otherwise a startup error
+  // becomes a permanent 500 ms restart loop.
+  void listeningDetector.promise.then(
+    () => {
+      if (backendListeningDetector === listeningDetector) {
+        restartAttempt = 0;
+      }
+    },
+    () => undefined,
+  );
 
   child.on("error", (error) => {
     if (backendListeningDetector === listeningDetector) {
@@ -2814,12 +2885,19 @@ function startBackend(): void {
     if (backendProcess === child) {
       backendProcess = null;
     }
-    closeBackendSession(
-      `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
-    );
-    if (isQuitting) return;
-    const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
-    scheduleBackendRestart(reason);
+    void backendOutputCapture.drained.then(() => {
+      closeBackendSession(
+        `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
+      );
+      if (isQuitting) return;
+      const startupBlock = startupBlockDetector.read();
+      if (startupBlock) {
+        handleBackendStartupBlock(startupBlock);
+        return;
+      }
+      const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
+      scheduleBackendRestart(reason);
+    });
   });
 }
 
@@ -2868,56 +2946,23 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
       });
       requireWindowsBackendExit(result);
     } catch (error) {
-      if (
-        backendProcess === null &&
-        backendChild.exitCode === null &&
-        backendChild.signalCode === null
-      ) {
-        backendProcess = backendChild;
-      }
+      backendProcess = retainLiveBackendAfterShutdownFailure(backendProcess, backendChild);
       throw error;
     }
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
-    let exitTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function settle(): void {
-      if (settled) return;
-      settled = true;
-      backendChild.off("exit", onExit);
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-      }
-      if (exitTimeoutTimer) {
-        clearTimeout(exitTimeoutTimer);
-      }
-      resolve();
-    }
-
-    function onExit(): void {
-      settle();
-    }
-
-    backendChild.once("exit", onExit);
-    backendChild.kill("SIGTERM");
-
-    const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(1, timeoutMs - 500));
-    forceKillTimer = setTimeout(() => {
-      if (backendChild.exitCode === null && backendChild.signalCode === null) {
-        backendChild.kill("SIGKILL");
-      }
-    }, forceKillDelayMs);
-    forceKillTimer.unref();
-
-    exitTimeoutTimer = setTimeout(() => {
-      settle();
-    }, timeoutMs);
-    exitTimeoutTimer.unref();
-  });
+  const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
+  try {
+    await stopPosixBackendAndWait({
+      child: backendChild,
+      forceKillDelayMs,
+      timeoutMs,
+    });
+  } catch (error) {
+    backendProcess = retainLiveBackendAfterShutdownFailure(backendProcess, backendChild);
+    throw error;
+  }
 }
 
 async function disposeBrowserUsePipeServerForShutdown(reason: string): Promise<void> {
@@ -2942,19 +2987,23 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
 
   isQuitting = true;
   writeDesktopLogHeader(`${reason} shutdown start`);
-  const shutdown = runAfterDesktopShutdown(stopBackendAndWaitForExit(), async () => {
-    clearUpdateBackgroundBlurTimer();
-    clearUpdateCheckTimeoutTimer();
-    clearUpdatePollTimer();
-    cancelBackendReadinessWait();
-    appSnapManager?.dispose();
-    appSnapManager = null;
-    await disposeBrowserUsePipeServerForShutdown(reason);
-    browserManager.dispose();
-    restoreStdIoCapture?.();
-    desktopShutdownComplete = true;
-    writeDesktopLogHeader(`${reason} shutdown complete`);
-  });
+  const shutdown = runAfterDesktopShutdown(
+    stopBackendAndWaitForExit(),
+    async () => {
+      clearUpdateBackgroundBlurTimer();
+      clearUpdateCheckTimeoutTimer();
+      clearUpdatePollTimer();
+      cancelBackendReadinessWait();
+      appSnapManager?.dispose();
+      appSnapManager = null;
+      await disposeBrowserUsePipeServerForShutdown(reason);
+      browserManager.dispose();
+      restoreStdIoCapture?.();
+      desktopShutdownComplete = true;
+      writeDesktopLogHeader(`${reason} shutdown complete`);
+    },
+    { runAfterShutdownFailure: true },
+  );
   desktopShutdownPromise = shutdown;
 
   try {
@@ -2963,7 +3012,6 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
     if (desktopShutdownPromise === shutdown) {
       desktopShutdownPromise = null;
     }
-    isQuitting = false;
     throw error;
   }
 }
@@ -2979,6 +3027,7 @@ function requestGracefulAppQuit(reason: string): void {
       const message = formatErrorMessage(error);
       writeDesktopLogHeader(`${reason} shutdown failed message=${message}`);
       console.warn(`[desktop] Shutdown failed during ${reason}: ${message}`);
+      app.exit(1);
     },
   );
 }

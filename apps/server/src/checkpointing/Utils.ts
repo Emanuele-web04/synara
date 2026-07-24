@@ -123,6 +123,7 @@ export function resolveThreadWorkspaceCwd(input: {
     readonly projectId: ProjectId;
     readonly envMode?: "local" | "worktree" | undefined;
     readonly worktreePath: string | null;
+    readonly workingDirectory?: string | null | undefined;
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
@@ -141,6 +142,7 @@ export function resolveThreadWorkspaceCwd(input: {
       projectCwd,
       envMode: input.thread.envMode,
       worktreePath: input.thread.worktreePath,
+      workingDirectory: input.thread.workingDirectory,
     }) ?? undefined
   );
 }

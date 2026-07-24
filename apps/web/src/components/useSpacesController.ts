@@ -24,7 +24,7 @@ import { readNativeApi } from "../nativeApi";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
 import type { Project, SidebarThreadSummary, Space } from "../types";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { sortThreadsForSidebar } from "./Sidebar.logic";
 import type { SpaceEditorValue } from "./SpaceEditorDialog";
 import { useRouteSpaceSync } from "./useRouteSpaceSync";
@@ -76,9 +76,9 @@ export function useSpacesController(input: {
   const getLastSpaceThreadId = useSpacesUiStore((store) => store.getLastThreadId);
   const getLastSpaceProjectId = useSpacesUiStore((store) => store.getLastProjectId);
   const reconcileSpacesUi = useSpacesUiStore((store) => store.reconcile);
-  const homeDir = useWorkspaceStore((store) => store.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((store) => store.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((store) => store.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const workspacePaths = useMemo(
     () => ({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, studioWorkspaceRoot],

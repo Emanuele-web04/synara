@@ -74,7 +74,7 @@
   }
   :root {
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
-       hairlines (chat/workspace/dock/diff headers) AND the right-side pane splits
+       hairlines (chat/dock/diff headers) AND the right-side pane splits
        (diff/browser/dock). All resolve through here so those divider directions read
        as the same line. The rounded sidebar↔chat seam is intentionally NOT one of
        these — it stays at full --color-border (see --seam-line) so the card's outer
@@ -143,7 +143,7 @@
          + vertical line show — never the straight top/bottom/opposite strokes (those
          straight strokes were the "angle"/L the seam must not have). Color is
          `--seam-line`; the content-seam SidebarRail intensifies it on hover. */
-  /* Inset routes (settings/workspace) start at x=0 and offset content via padding,
+  /* Inset routes such as settings start at x=0 and offset content via padding,
      so clip the fill to the content box (backs only the chat area, never the sidebar
      padding). Plain fill, NO backdrop-filter: a backdrop-filter escapes the macOS
      window's rounded-corner clip and paints over the window edge. */
@@ -282,7 +282,7 @@
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
-     Bottom divider for every chat-surface chrome bar (chat/workspace/dock/diff headers),
+     Bottom divider for every chat-surface chrome bar (chat/dock/diff headers),
      same color as the vertical seam via --app-surface-divider. Painted as a 1px
      background gradient, NOT a CSS border or a positioned pseudo-element: a border would
      bleed into the seam corner, and an absolutely-positioned line would force the header
@@ -358,8 +358,8 @@
   }
 }
 
-/* One-shot entry for the sidebar's segment surface swap (Studio <-> Projects <->
-   Workspace). Keyed remounts play this on the incoming surface so the switch reads
+/* One-shot entry for the sidebar's segment surface swap (Studio <-> Projects).
+   Keyed remounts play this on the incoming surface so the switch reads
    as a movement instead of a hard cut. Enter-only by design: no exit or height
    animation, so it cannot feed back into list animation or scroll behavior. */
 @keyframes sidebar-surface-enter {

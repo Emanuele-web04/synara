@@ -117,6 +117,7 @@ export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
 // createCentralIconElement.
 export const AGENT_ROBOT_ICON_NAME = "robot";
 export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
+export const BookIcon: LucideIcon = centralIconWrapper("book-simple");
 export const BugIcon = adaptIcon(IconBug);
 export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
@@ -162,6 +163,7 @@ export const FolderOpenIcon = adaptIcon(IconFolderOpen);
 // explorer surface (right-dock explorer, editor Files activity, diff file-tree
 // toggle). Central "reversed" outline asset so it matches the rest of the chrome.
 export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
+export const GiftIcon: LucideIcon = centralIconWrapper("gift-2");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 export const GitForkIcon = centralIconWrapper("fork");
@@ -195,6 +197,7 @@ export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
 export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
+export const KeyboardIcon: LucideIcon = centralIconWrapper("keyboard");
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);
 export const Loader2Icon = adaptIcon(IconLoader2);
