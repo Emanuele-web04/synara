@@ -729,13 +729,15 @@ export default function DiffPanel({
       return viewport ? event.composedPath().includes(viewport) : false;
     };
     const isTextEditingEvent = (event: Event) =>
-      event.composedPath().some(
-        (target) =>
-          target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          (target instanceof HTMLElement &&
-            (target.isContentEditable || target.getAttribute("role") === "textbox")),
-      );
+      event
+        .composedPath()
+        .some(
+          (target) =>
+            target instanceof HTMLInputElement ||
+            target instanceof HTMLTextAreaElement ||
+            (target instanceof HTMLElement &&
+              (target.isContentEditable || target.getAttribute("role") === "textbox")),
+        );
     const handleKeyDown = (event: KeyboardEvent) => {
       const isWithinDiffViewport = resolveDiffSelectAllWithinViewport(
         isEventWithinDiffViewport(event),
