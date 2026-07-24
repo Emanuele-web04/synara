@@ -337,7 +337,7 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    'createRequire(\n  new URL("./package.json", import.meta.url),',
+    'createRequire(new URL("./package.json", import.meta.url)',
     "Expected desktop packaging to resolve dependencies from the owning scripts workspace.",
   );
   assertContains(

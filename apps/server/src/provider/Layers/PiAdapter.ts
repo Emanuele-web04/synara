@@ -7,9 +7,9 @@ import {
 } from "node:child_process";
 
 import type {
-  AuthStorage,
   BashOperations,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   AgentSession as PiAgentSession,
   AgentSessionEvent,
@@ -1163,20 +1163,30 @@ function makeAgentDir(
   return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
 }
 
-// Keep discovery registries isolated so extension provider registrations reflect
+// Keep discovery runtimes isolated so extension provider registrations reflect
 // the current agent dir + project cwd instead of stale state from prior listings.
-function createPiModelRegistry(
+async function createPiModelRuntime(
   agentDir: string,
-  piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
-): {
-  readonly authStorage: AuthStorage;
+  piSdk: Pick<PiCodingAgentModule, "ModelRuntime" | "ModelRegistry">,
+): Promise<{
+  readonly modelRuntime: ModelRuntime;
   readonly registry: ModelRegistry;
-} {
-  const authStorage = piSdk.AuthStorage.create(path.join(agentDir, "auth.json"));
+}> {
+  const modelRuntime = await piSdk.ModelRuntime.create({
+    authPath: path.join(agentDir, "auth.json"),
+    modelsPath: path.join(agentDir, "models.json"),
+  });
   return {
-    authStorage,
-    registry: piSdk.ModelRegistry.create(authStorage, path.join(agentDir, "models.json")),
+    modelRuntime,
+    registry: new piSdk.ModelRegistry(modelRuntime),
   };
+}
+
+function modelRegistryFacade(
+  modelRuntime: ModelRuntime,
+  piSdk: Pick<PiCodingAgentModule, "ModelRegistry">,
+): ModelRegistry {
+  return new piSdk.ModelRegistry(modelRuntime);
 }
 
 function extensionDisplayName(extension: {
@@ -1274,7 +1284,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
-    const modelRegistries = new Map<string, ModelRegistry>();
+    const modelRuntimes = new Map<string, ModelRuntime>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -1312,15 +1322,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }),
       });
 
-    const getModelRegistry = async (
+    const getModelRuntime = async (
       agentDir: string,
-      piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
-    ): Promise<ModelRegistry> => {
-      const existing = modelRegistries.get(agentDir);
+      piSdk: Pick<PiCodingAgentModule, "ModelRuntime" | "ModelRegistry">,
+    ): Promise<ModelRuntime> => {
+      const existing = modelRuntimes.get(agentDir);
       if (existing) return existing;
-      const { registry } = createPiModelRegistry(agentDir, piSdk);
-      modelRegistries.set(agentDir, registry);
-      return registry;
+      const { modelRuntime } = await createPiModelRuntime(agentDir, piSdk);
+      modelRuntimes.set(agentDir, modelRuntime);
+      return modelRuntime;
     };
 
     const makeEventBase = makePiRuntimeEventBase;
@@ -2017,7 +2027,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
     }) => {
-      const registry = await getModelRegistry(input.agentDir, input.sdk);
+      const modelRuntime = await getModelRuntime(input.agentDir, input.sdk);
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -2027,9 +2037,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const services = await input.sdk.createAgentSessionServices({
           cwd,
           agentDir,
-          modelRegistry: registry,
+          modelRuntime,
         });
-        const model = findModelInRegistry(services.modelRegistry, input.modelId);
+        const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
+        const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
           throw new Error(
             `Pi model '${input.modelId}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
@@ -2065,7 +2076,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         agentDir: input.agentDir,
         sessionManager: input.sessionManager,
       });
-      return { runtime, modelRegistry: runtime.services.modelRegistry };
+      return {
+        runtime,
+        modelRegistry: modelRegistryFacade(runtime.services.modelRuntime, input.sdk),
+      };
     };
 
     const startSession: PiAdapterShape["startSession"] = (input) =>
@@ -2653,21 +2667,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const piSdk = await loadPiCodingAgentModule();
           const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const { authStorage, registry } = createPiModelRegistry(agentDir, piSdk);
+          const { modelRuntime } = await createPiModelRuntime(agentDir, piSdk);
           const services = await piSdk.createAgentSessionServices({
             cwd,
             agentDir,
-            authStorage,
-            modelRegistry: registry,
+            modelRuntime,
           });
+          const registry = modelRegistryFacade(services.modelRuntime, piSdk);
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = getPiDiscoverableModels(services.modelRegistry).map((model) => {
+          const models = getPiDiscoverableModels(registry).map((model) => {
             const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
             return {
               slug: `${model.provider}/${model.id}`,
               name: model.name,
               upstreamProviderId: model.provider,
-              upstreamProviderName: services.modelRegistry.getProviderDisplayName(model.provider),
+              upstreamProviderName: registry.getProviderDisplayName(model.provider),
               ...(supportedThinkingOptions.length > 0
                 ? {
                     supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
