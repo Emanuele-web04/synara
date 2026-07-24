@@ -668,14 +668,15 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   if (platform === "win") {
     // Bun 1.3.12 can report a platform-only lockfile rewrite while resolving
     // this copied workspace on Windows even though the repository-level frozen
-    // install already passed. Keep the source tree immutable with --no-save.
+    // install already passed. GitHub Actions implicitly enables frozen mode, so
+    // disable it for this stage while keeping the copied tree immutable.
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
         // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
         shell: process.platform === "win32",
-      })`bun install --production --no-save --ignore-scripts --linker hoisted`,
+      })`bun install --production --no-save --no-frozen-lockfile --ignore-scripts --linker hoisted`,
     );
   } else {
     yield* runCommand(
