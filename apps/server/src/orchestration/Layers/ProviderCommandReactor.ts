@@ -881,6 +881,10 @@ const make = Effect.gen(function* () {
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
+      // Threads that already ran a provider session predate account selection
+      // and stay on the native account 0. A persisted thread account binding
+      // still takes precedence inside ProviderService (plan section 14).
+      ...(thread.session ? { accountOrdinal: 0 } : {}),
     };
 
     const resolveActiveSession = (threadId: ThreadId) =>
