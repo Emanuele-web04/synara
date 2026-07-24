@@ -12,6 +12,7 @@ import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPop
 import { ProviderIcon } from "~/components/ProviderIcon";
 import {
   Menu,
+  MenuGroup,
   MenuGroupLabel,
   MenuItem,
   MenuRadioGroup,
@@ -53,7 +54,9 @@ export function ProviderAccountMenu({
         {children}
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="top" className="w-60 min-w-60">
-        <MenuGroupLabel>Accounts</MenuGroupLabel>
+        <MenuGroup>
+          <MenuGroupLabel>Accounts</MenuGroupLabel>
+        </MenuGroup>
         {SUPPORTED_ACCOUNT_PROVIDERS.map((provider) => {
           const entry = providers.find((candidate) => candidate.provider === provider) ?? null;
           const visibleAccounts = entry?.accounts ?? [];
