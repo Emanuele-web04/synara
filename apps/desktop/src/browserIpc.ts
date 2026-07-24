@@ -10,7 +10,6 @@ import type {
   BrowserCaptureScreenshotResult,
   BrowserCopyLinkEvent,
   BrowserDetachWebviewInput,
-  BrowserExecuteCdpInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
   BrowserOpenInput,
@@ -74,7 +73,8 @@ export function registerBrowserIpcHandlers(
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.attachWebview);
   ipcMain.handle(
     BROWSER_IPC_CHANNELS.attachWebview,
-    async (_event, input: BrowserAttachWebviewInput) => browserManager.attachWebview(input),
+    async (event, input: BrowserAttachWebviewInput) =>
+      browserManager.attachWebview(input, event.sender.id),
   );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.detachWebview);
@@ -104,11 +104,6 @@ export function registerBrowserIpcHandlers(
   ipcMain.handle(BROWSER_IPC_CHANNELS.requestCopyLink, async (_event, input: BrowserTabInput) => {
     browserManager.copyLink(input);
   });
-
-  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.executeCdp);
-  ipcMain.handle(BROWSER_IPC_CHANNELS.executeCdp, async (_event, input: BrowserExecuteCdpInput) =>
-    browserManager.executeCdp(input),
-  );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.navigate);
   ipcMain.handle(BROWSER_IPC_CHANNELS.navigate, async (_event, input: BrowserNavigateInput) =>

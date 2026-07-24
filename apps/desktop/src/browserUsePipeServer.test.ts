@@ -1,48 +1,39 @@
-// FILE: browserUsePipeServer.test.ts
-// Purpose: Guards the desktop browser-use native pipe path helpers.
-// Layer: Desktop test
-// Depends on: Vitest and browserUsePipeServer path resolution exports
-
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
-import { basename, dirname, join } from "node:path";
 import { endianness, tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { basename, dirname, join } from "node:path";
 
+import { describe, expect, it, vi } from "vitest";
+
+import { BrowserAutomationHostError } from "./browserAutomation/hostErrors";
 import {
-  BrowserUsePipeServer,
+  BrowserHostPipeServer,
+  SYNARA_BROWSER_HOST_CAPABILITY_FD_ENV,
+  SYNARA_BROWSER_HOST_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_ENV,
-  resolveBrowserUsePipeBackendEnv,
-  resolveConfiguredBrowserUsePipePath,
-  resolveDefaultBrowserUsePipePath,
+  resolveBrowserHostPipeBackendEnv,
+  resolveConfiguredBrowserHostPipePath,
+  resolveDefaultBrowserHostPipePath,
 } from "./browserUsePipeServer";
 
-function encodeRequest(message: unknown): Buffer {
+const TEST_CAPABILITY = "synara-browser-host-test-capability-0123456789";
+
+const encodeRequest = (message: unknown): Buffer => {
   const payload = Buffer.from(JSON.stringify(message));
   const header = Buffer.alloc(4);
-  if (endianness() === "BE") {
-    header.writeUInt32BE(payload.length);
-  } else {
-    header.writeUInt32LE(payload.length);
-  }
+  if (endianness() === "BE") header.writeUInt32BE(payload.length);
+  else header.writeUInt32LE(payload.length);
   return Buffer.concat([header, payload]);
-}
+};
 
-async function connect(pipePath: string): Promise<Socket> {
-  return await new Promise((resolve, reject) => {
+const connect = (pipePath: string): Promise<Socket> =>
+  new Promise((resolve, reject) => {
     const socket = createConnection(pipePath, () => resolve(socket));
     socket.once("error", reject);
   });
-}
 
-async function request(socket: Socket, message: unknown): Promise<Record<string, unknown>> {
-  const response = readMessage(socket);
-  socket.write(encodeRequest(message));
-  return await response;
-}
-
-async function readMessage(socket: Socket): Promise<Record<string, unknown>> {
-  return await new Promise((resolve, reject) => {
+const readMessage = (socket: Socket): Promise<Record<string, unknown>> =>
+  new Promise((resolve, reject) => {
     let pending = Buffer.alloc(0);
     const onData = (chunk: Buffer) => {
       pending = Buffer.concat([pending, chunk]);
@@ -60,27 +51,33 @@ async function readMessage(socket: Socket): Promise<Record<string, unknown>> {
     socket.on("data", onData);
     socket.once("error", onError);
   });
-}
+
+const request = async (socket: Socket, message: unknown): Promise<Record<string, unknown>> => {
+  const response = readMessage(socket);
+  socket.write(encodeRequest(message));
+  return response;
+};
 
 async function withPipeServer(
   options: {
-    maxInFlightRequests?: number;
-    maxQueuedOutputBytes?: number;
-    browserManager?: unknown;
+    readonly maxInFlightRequests?: number;
+    readonly maxQueuedOutputBytes?: number;
+    readonly automationHost?: { executeTool: (request: unknown) => Promise<unknown> };
   },
   run: (socket: Socket) => Promise<void>,
 ): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "synara-browser-pipe-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "synara-browser-host-test-"));
   const pipePath = join(directory, "browser.sock");
-  const browserManager = options.browserManager ?? { getBrowserUseSnapshot: () => null };
-  const server = new BrowserUsePipeServer(browserManager as never, {
+  const server = new BrowserHostPipeServer({} as never, {
     pipePath,
-    ...(options.maxInFlightRequests !== undefined
-      ? { maxInFlightRequests: options.maxInFlightRequests }
-      : {}),
-    ...(options.maxQueuedOutputBytes !== undefined
-      ? { maxQueuedOutputBytes: options.maxQueuedOutputBytes }
-      : {}),
+    capability: TEST_CAPABILITY,
+    ...(options.maxInFlightRequests === undefined
+      ? {}
+      : { maxInFlightRequests: options.maxInFlightRequests }),
+    ...(options.maxQueuedOutputBytes === undefined
+      ? {}
+      : { maxQueuedOutputBytes: options.maxQueuedOutputBytes }),
+    ...(options.automationHost ? { automationHost: options.automationHost as never } : {}),
   });
   await server.start();
   const socket = await connect(pipePath);
@@ -93,244 +90,377 @@ async function withPipeServer(
   }
 }
 
-describe("browser-use pipe path resolution", () => {
-  it("creates a discoverable unix socket path under the Codex browser-use directory", () => {
-    const pipePath = resolveDefaultBrowserUsePipePath("darwin");
-
-    expect(dirname(pipePath)).toBe("/tmp/codex-browser-use");
-    expect(basename(pipePath)).toMatch(/^synara-iab-\d+-[0-9a-f-]{36}\.sock$/);
+describe("canonical browser host pipe resolution", () => {
+  it("creates a private unguessable Unix socket path", () => {
+    const first = resolveDefaultBrowserHostPipePath("darwin", 123);
+    const second = resolveDefaultBrowserHostPipePath("darwin", 123);
+    expect(dirname(first)).toBe(`${tmpdir()}/synara-browser-host`);
+    expect(basename(first)).toMatch(/^synara-browser-host-123-[0-9a-f-]{36}\.sock$/);
+    expect(first).not.toBe(second);
   });
 
-  it("prefers an explicit Synara pipe path from the environment", () => {
+  it("creates an unguessable per-process Windows named pipe", () => {
+    const pipePath = resolveDefaultBrowserHostPipePath("win32", 456);
+    expect(pipePath).toMatch(/^\\\\\.\\pipe\\synara-browser-host-456-[0-9a-f-]{36}$/);
+    expect(pipePath).not.toBe(resolveDefaultBrowserHostPipePath("win32", 456));
+  });
+
+  it("prefers the canonical env and accepts the legacy env as fallback", () => {
     expect(
-      resolveConfiguredBrowserUsePipePath(
+      resolveConfiguredBrowserHostPipePath(
         {
-          [SYNARA_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/synara.sock",
+          [SYNARA_BROWSER_HOST_PIPE_ENV]: "/canonical.sock",
+          [SYNARA_BROWSER_USE_PIPE_ENV]: "/legacy.sock",
         },
         "darwin",
       ),
-    ).toBe("/tmp/codex-browser-use/synara.sock");
-  });
-
-  it("falls back to the generated path when the environment is empty", () => {
-    expect(resolveConfiguredBrowserUsePipePath({}, "darwin")).toMatch(
-      /codex-browser-use\/synara-iab-\d+-[0-9a-f-]{36}\.sock$/,
-    );
-  });
-
-  it("publishes the browser-use pipe only after a listener becomes active", () => {
-    const inheritedEnv = {
-      KEEP_ME: "yes",
-      [SYNARA_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/stale.sock",
-    };
-    expect(resolveBrowserUsePipeBackendEnv(inheritedEnv, null)).toEqual({ KEEP_ME: "yes" });
-    expect(resolveBrowserUsePipeBackendEnv(inheritedEnv, "  ")).toEqual({ KEEP_ME: "yes" });
+    ).toBe("/canonical.sock");
     expect(
-      resolveBrowserUsePipeBackendEnv(inheritedEnv, "/tmp/codex-browser-use/synara.sock"),
-    ).toEqual({
+      resolveConfiguredBrowserHostPipePath(
+        {
+          [SYNARA_BROWSER_USE_PIPE_ENV]: String.raw`\\.\pipe\legacy`,
+        },
+        "win32",
+      ),
+    ).toBe(String.raw`\\.\pipe\legacy`);
+  });
+
+  it("publishes both env names only while a listener is active", () => {
+    const inherited = {
       KEEP_ME: "yes",
-      [SYNARA_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/synara.sock",
+      [SYNARA_BROWSER_HOST_PIPE_ENV]: "/stale-canonical.sock",
+      [SYNARA_BROWSER_USE_PIPE_ENV]: "/stale-legacy.sock",
+    };
+    expect(resolveBrowserHostPipeBackendEnv(inherited, null, null)).toEqual({ KEEP_ME: "yes" });
+    expect(resolveBrowserHostPipeBackendEnv(inherited, "/active.sock", 3)).toEqual({
+      KEEP_ME: "yes",
+      [SYNARA_BROWSER_HOST_PIPE_ENV]: "/active.sock",
+      [SYNARA_BROWSER_USE_PIPE_ENV]: "/active.sock",
+      [SYNARA_BROWSER_HOST_CAPABILITY_FD_ENV]: "3",
     });
   });
 
-  it("uses an unguessable path for each browser-use server generation", () => {
-    expect(resolveDefaultBrowserUsePipePath("darwin")).not.toBe(
-      resolveDefaultBrowserUsePipePath("darwin"),
-    );
-  });
-
-  it("fails closed on Windows until the named-pipe ACL is explicitly proven", () => {
-    expect(resolveDefaultBrowserUsePipePath("win32")).toBe("");
-    expect(
-      resolveConfiguredBrowserUsePipePath(
-        { [SYNARA_BROWSER_USE_PIPE_ENV]: String.raw`\\.\pipe\synara-browser` },
-        "win32",
-      ),
-    ).toBe("");
+  it("rejects a non-private configured parent without changing its permissions", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synara-browser-host-public-test-"));
+    await chmod(directory, 0o755);
+    const server = new BrowserHostPipeServer({} as never, {
+      pipePath: join(directory, "browser.sock"),
+      capability: TEST_CAPABILITY,
+      automationHost: { executeTool: async () => ({}) } as never,
+    });
+    try {
+      await expect(server.start()).rejects.toThrow("permissions are not private");
+      expect((await stat(directory)).mode & 0o777).toBe(0o755);
+    } finally {
+      await server.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 
-describe("browser-use pipe RPC compatibility", () => {
-  it("echoes and binds the Codex session id expected by IAB discovery", async () => {
-    await withPipeServer({}, async (socket) => {
-      const info = await request(socket, {
-        jsonrpc: "2.0",
+describe("canonical browser host RPC", () => {
+  it("rejects a discovered same-user pipe before binding any claimed session", async () => {
+    const executeTool = vi.fn(async () => ({ available: true }));
+    await withPipeServer({ automationHost: { executeTool } }, async (socket) => {
+      await expect(
+        request(socket, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getInfo",
+          params: { session_id: "forged-session", capability: "not-the-backend" },
+        }),
+      ).resolves.toMatchObject({
         id: 1,
-        method: "getInfo",
-        params: { session_id: "codex-session-1" },
-      });
-      expect(info).toMatchObject({
-        id: 1,
-        result: {
-          type: "iab",
-          metadata: {
-            codexAppBuildFlavor: "prod",
-            codexSessionId: "codex-session-1",
-          },
+        error: {
+          code: -32_010,
+          data: { error: { code: "BrowserAuthorizationDenied", phase: "auth" } },
         },
       });
-
       await expect(
         request(socket, {
           jsonrpc: "2.0",
           id: 2,
-          method: "getTabs",
-          params: { session_id: "codex-session-1" },
+          method: "executeTool",
+          params: {
+            session_id: "forged-session",
+            provider: "codex",
+            thread_id: "forged-thread",
+            name: "browser_status",
+            arguments: {},
+          },
         }),
-      ).resolves.toMatchObject({ id: 2, result: [] });
-
-      await expect(
-        request(socket, {
-          jsonrpc: "2.0",
-          id: 3,
-          method: "getTabs",
-          params: { session_id: "other-session" },
-        }),
-      ).resolves.toMatchObject({ id: 3, error: { message: expect.stringContaining("lease") } });
+      ).resolves.toMatchObject({ error: { message: expect.any(String) } });
+      expect(executeTool).not.toHaveBeenCalled();
     });
   });
 
-  it("settles requests instead of destroying the pipe at the in-flight limit", async () => {
-    await withPipeServer({ maxInFlightRequests: 0 }, async (socket) => {
-      for (const id of [1, 2]) {
-        await expect(
-          request(socket, { jsonrpc: "2.0", id, method: "ping", params: {} }),
-        ).resolves.toMatchObject({
-          id,
-          error: { message: "Too many in-flight browser-use requests" },
+  it("binds getInfo then routes executeTool with session and thread scope", async () => {
+    const executeTool = vi.fn(async () => ({ available: true }));
+    await withPipeServer({ automationHost: { executeTool } }, async (socket) => {
+      await expect(
+        request(socket, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getInfo",
+          params: { session_id: "session-1", capability: TEST_CAPABILITY },
+        }),
+      ).resolves.toMatchObject({
+        id: 1,
+        result: {
+          type: "synara-browser-host",
+          metadata: { sessionId: "session-1", physicalScope: "visible-shared-electron-webview" },
+        },
+      });
+      await expect(
+        request(socket, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "executeTool",
+          params: {
+            session_id: "session-1",
+            provider: "claude",
+            thread_id: "thread-1",
+            name: "browser_status",
+            arguments: {},
+            workspace_root: "/workspace/project-one",
+          },
+        }),
+      ).resolves.toMatchObject({ id: 2, result: { available: true } });
+      expect(executeTool).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        provider: "claude",
+        threadId: "thread-1",
+        name: "browser_status",
+        arguments: {},
+        workspaceRoot: "/workspace/project-one",
+        signal: expect.any(AbortSignal),
+      });
+    });
+  });
+
+  it("rejects a workspace root that is not an absolute bounded host field", async () => {
+    const executeTool = vi.fn(async () => ({ available: true }));
+    await withPipeServer({ automationHost: { executeTool } }, async (socket) => {
+      await request(socket, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getInfo",
+        params: { session_id: "session-1", capability: TEST_CAPABILITY },
+      });
+      await expect(
+        request(socket, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "executeTool",
+          params: {
+            session_id: "session-1",
+            provider: "codex",
+            thread_id: "thread-1",
+            name: "browser_upload",
+            arguments: {},
+            workspace_root: "../project-one",
+          },
+        }),
+      ).resolves.toMatchObject({
+        id: 2,
+        error: { data: { error: { code: "BrowserInputUnsupported" } } },
+      });
+      expect(executeTool).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns canonical errors in JSON-RPC error.data", async () => {
+    const automationHost = {
+      executeTool: async () => {
+        throw new BrowserAutomationHostError({
+          code: "BrowserAuthorizationDenied",
+          retryable: false,
+          phase: "auth",
+          effectMayHaveCommitted: false,
         });
-        expect(socket.destroyed).toBe(false);
+      },
+    };
+    await withPipeServer({ automationHost }, async (socket) => {
+      await request(socket, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getInfo",
+        params: { session_id: "session-1", capability: TEST_CAPABILITY },
+      });
+      await expect(
+        request(socket, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "executeTool",
+          params: {
+            session_id: "session-1",
+            provider: "cursor",
+            thread_id: "thread-1",
+            name: "browser_tabs",
+            arguments: {},
+          },
+        }),
+      ).resolves.toMatchObject({
+        error: {
+          code: -32_010,
+          data: {
+            type: "synara_browser_error",
+            version: 1,
+            error: { code: "BrowserAuthorizationDenied", phase: "auth" },
+          },
+        },
+      });
+    });
+  });
+
+  it("does not expose the retired low-level CDP/IAB methods", async () => {
+    await withPipeServer({}, async (socket) => {
+      await request(socket, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getInfo",
+        params: { session_id: "session-1", capability: TEST_CAPABILITY },
+      });
+      for (const [index, method] of ["getTabs", "createTab", "attach", "executeCdp"].entries()) {
+        await expect(
+          request(socket, {
+            jsonrpc: "2.0",
+            id: index + 2,
+            method,
+            params: { session_id: "session-1" },
+          }),
+        ).resolves.toMatchObject({ error: { message: expect.stringContaining("No handler") } });
       }
     });
   });
 
-  it("preserves successful RPC outcomes when their replies exceed the queue budget", async () => {
-    let executeCalls = 0;
-    const browserManager = {
-      getBrowserUseSnapshot: () => ({
-        threadId: "thread-1",
-        state: {
-          open: true,
-          activeTabId: "tab-1",
-          tabs: [
-            {
-              id: "tab-1",
-              title: "Tab",
-              url: "about:blank",
-              lastCommittedUrl: null,
-            },
-          ],
-        },
-      }),
-      executeCdp: async () => {
-        executeCalls += 1;
-        return { payload: "x".repeat(1_024) };
-      },
-    };
-
-    await withPipeServer({ maxQueuedOutputBytes: 1, browserManager }, async (socket) => {
-      const info = await request(socket, {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getInfo",
-        params: { session_id: "codex-session-1" },
-      });
-      expect(info).toMatchObject({ id: 1, result: { type: "iab" } });
-
-      const tabs = await request(socket, {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "getTabs",
-        params: { session_id: "codex-session-1" },
-      });
-      const tabId = (tabs.result as Array<{ id: number }>)[0]?.id;
-
+  it("settles overload requests without destroying the connection", async () => {
+    await withPipeServer({ maxInFlightRequests: 0 }, async (socket) => {
       await expect(
         request(socket, {
           jsonrpc: "2.0",
-          id: 3,
-          method: "executeCdp",
-          params: {
-            session_id: "codex-session-1",
-            target: { tabId },
-            method: "Runtime.evaluate",
-          },
+          id: 1,
+          method: "ping",
+          params: {},
         }),
-      ).resolves.toMatchObject({ id: 3, result: { payload: "x".repeat(1_024) } });
-      expect(executeCalls).toBe(1);
+      ).resolves.toMatchObject({
+        id: 1,
+        error: { message: "Too many in-flight browser host requests" },
+      });
       expect(socket.destroyed).toBe(false);
     });
   });
 
-  it("signals CDP detachment instead of silently dropping notifications at capacity", async () => {
-    let cdpListener: ((event: { method: string; params?: unknown }) => void) | null = null;
-    let disposeCalls = 0;
-    const browserManager = {
-      getBrowserUseSnapshot: () => ({
-        threadId: "thread-1",
-        state: {
-          open: true,
-          activeTabId: "tab-1",
-          tabs: [
-            {
-              id: "tab-1",
-              title: "Tab",
-              url: "about:blank",
-              lastCommittedUrl: null,
-            },
-          ],
-        },
-      }),
-      attachBrowserUseTab: async () => {},
-      subscribeToCdpEvents: (
-        _target: unknown,
-        listener: (event: { method: string; params?: unknown }) => void,
-      ) => {
-        cdpListener = listener;
-        return () => {
-          cdpListener = null;
-          disposeCalls += 1;
-        };
-      },
-    };
-
-    await withPipeServer({ maxQueuedOutputBytes: 256, browserManager }, async (socket) => {
+  it("aborts an in-flight desktop tool when its pipe client disconnects", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let resolveAborted!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      resolveAborted = resolve;
+    });
+    const executeTool = vi.fn((rawRequest: unknown) => {
+      const signal = (rawRequest as { signal: AbortSignal }).signal;
+      observedSignal = signal;
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            resolveAborted();
+            reject(new Error("cancelled"));
+          },
+          { once: true },
+        );
+      });
+    });
+    await withPipeServer({ automationHost: { executeTool } }, async (socket) => {
       await request(socket, {
         jsonrpc: "2.0",
         id: 1,
         method: "getInfo",
-        params: { session_id: "codex-session-1" },
+        params: { session_id: "session-abort", capability: TEST_CAPABILITY },
       });
-      const tabs = await request(socket, {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "getTabs",
-        params: { session_id: "codex-session-1" },
-      });
-      const tabId = (tabs.result as Array<{ id: number }>)[0]?.id;
-      await request(socket, {
-        jsonrpc: "2.0",
-        id: 3,
-        method: "attach",
-        params: { session_id: "codex-session-1", tabId },
-      });
-
-      const notification = readMessage(socket);
-      cdpListener?.({
-        method: "Network.dataReceived",
-        params: { payload: "x".repeat(1_024) },
-      });
-
-      await expect(notification).resolves.toMatchObject({
-        method: "onCDPEvent",
-        params: {
-          source: { tabId },
-          method: "Inspector.detached",
-          params: { reason: "Browser-use output capacity exceeded" },
-        },
-      });
-      expect(disposeCalls).toBe(1);
-      expect(socket.destroyed).toBe(false);
+      socket.write(
+        encodeRequest({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "executeTool",
+          params: {
+            session_id: "session-abort",
+            provider: "codex",
+            thread_id: "thread-1",
+            name: "browser_wait",
+            arguments: {},
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(executeTool).toHaveBeenCalledTimes(1));
+      socket.destroy();
+      await aborted;
+      expect(observedSignal?.aborted).toBe(true);
     });
+  });
+
+  it("preserves a successful bounded response above the notification queue budget", async () => {
+    const payload = "x".repeat(4_096);
+    await withPipeServer(
+      {
+        maxQueuedOutputBytes: 1,
+        automationHost: { executeTool: async () => ({ payload }) },
+      },
+      async (socket) => {
+        await request(socket, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getInfo",
+          params: { session_id: "session-1", capability: TEST_CAPABILITY },
+        });
+        await expect(
+          request(socket, {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "executeTool",
+            params: {
+              session_id: "session-1",
+              provider: "gemini",
+              thread_id: "thread-1",
+              name: "browser_status",
+              arguments: {},
+            },
+          }),
+        ).resolves.toMatchObject({ result: { payload } });
+        expect(socket.destroyed).toBe(false);
+      },
+    );
+  });
+
+  it("frames a screenshot-sized response larger than the former 8 MiB ceiling", async () => {
+    const payload = "x".repeat(8 * 1024 * 1024 + 1_024);
+    await withPipeServer(
+      {
+        maxQueuedOutputBytes: 1,
+        automationHost: { executeTool: async () => ({ payload }) },
+      },
+      async (socket) => {
+        await request(socket, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getInfo",
+          params: { session_id: "session-large", capability: TEST_CAPABILITY },
+        });
+        const response = await request(socket, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "executeTool",
+          params: {
+            session_id: "session-large",
+            provider: "codex",
+            thread_id: "thread-1",
+            name: "browser_snapshot",
+            arguments: {},
+          },
+        });
+        expect((response.result as { payload: string }).payload).toHaveLength(payload.length);
+        expect(socket.destroyed).toBe(false);
+      },
+    );
   });
 });

@@ -1,7 +1,7 @@
 // FILE: BrowserPanel.logic.ts
-// Purpose: Holds the address-bar sync rules and suggestions for the in-app browser panel.
+// Purpose: Holds address-bar rules plus renderer lifecycle guards for the in-app browser panel.
 // Layer: Component logic helper
-// Exports: browserAddressDisplayValue, normalizeBrowserAddressInput, buildBrowserAddressSuggestions
+// Exports: address helpers, panel hide scheduling, and one-shot renderer-loss recovery
 // Depends on: shared browser URL rules, browser tab metadata, and thread-local browser history
 
 import {
@@ -13,6 +13,87 @@ import type { BrowserTabState } from "@synara/contracts";
 import type { BrowserHistoryEntry } from "../browserStateStore";
 
 const BROWSER_SUGGESTION_LIMIT = 6;
+
+export interface BrowserRendererRecovery {
+  readonly tabId: string;
+  readonly generation: number;
+}
+
+interface BrowserRendererLossHandlerInput<TRenderer> {
+  readonly renderer: TRenderer;
+  readonly rendererGeneration: number;
+  readonly tabId: string;
+  readonly isCurrent: (renderer: TRenderer) => boolean;
+  readonly detach: (renderer: TRenderer) => void;
+  readonly recover: (recovery: BrowserRendererRecovery) => void;
+}
+
+/**
+ * Coalesces Electron's overlapping guest-loss signals into one renderer
+ * replacement. The current-renderer guard also makes a queued event from an
+ * older guest harmless after its successor has attached.
+ */
+export function createBrowserRendererLossHandler<TRenderer>({
+  renderer,
+  rendererGeneration,
+  tabId,
+  isCurrent,
+  detach,
+  recover,
+}: BrowserRendererLossHandlerInput<TRenderer>): () => void {
+  let handled = false;
+  return () => {
+    if (handled || !isCurrent(renderer)) {
+      return;
+    }
+    handled = true;
+    try {
+      detach(renderer);
+    } finally {
+      recover({ tabId, generation: rendererGeneration + 1 });
+    }
+  };
+}
+
+export interface BrowserPanelHideScheduler {
+  readonly cancel: (threadId: string) => void;
+  readonly schedule: (threadId: string, hide: () => void) => void;
+}
+
+type BrowserPanelHideTimer = ReturnType<typeof globalThis.setTimeout>;
+
+/**
+ * Defers renderer teardown by one task so React StrictMode's development-only
+ * setup/cleanup/setup cycle can cancel the passive hide before it reaches the
+ * desktop human-control boundary. A real unmount has no matching setup and
+ * therefore still calls hide on the next task.
+ */
+export function createBrowserPanelHideScheduler(
+  setTimer: (callback: () => void) => BrowserPanelHideTimer = (callback) =>
+    globalThis.setTimeout(callback, 0),
+  clearTimer: (timer: BrowserPanelHideTimer) => void = (timer) => globalThis.clearTimeout(timer),
+): BrowserPanelHideScheduler {
+  const pendingByThreadId = new Map<string, BrowserPanelHideTimer>();
+
+  function cancel(threadId: string): void {
+    const pending = pendingByThreadId.get(threadId);
+    if (pending === undefined) return;
+    pendingByThreadId.delete(threadId);
+    clearTimer(pending);
+  }
+
+  function schedule(threadId: string, hide: () => void): void {
+    cancel(threadId);
+    const pending = setTimer(() => {
+      if (pendingByThreadId.get(threadId) !== pending) return;
+      pendingByThreadId.delete(threadId);
+      hide();
+    });
+    pendingByThreadId.set(threadId, pending);
+  }
+
+  return { cancel, schedule };
+}
 
 interface ResolveBrowserAddressSyncInput {
   activeTabId: string | null;

@@ -777,6 +777,47 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it("projects a turn/completed provider notification with interrupted state as interrupted", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-completed-interrupted");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-completed-interrupted"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-interrupted"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { state: "interrupted" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.status === "interrupted" &&
+        entry.session.activeTurnId === null &&
+        entry.latestTurn?.state === "interrupted" &&
+        entry.activities.some((activity) => activity.id === "evt-turn-completed-interrupted"),
+    );
+    expect(thread.activities).toContainEqual(
+      expect.objectContaining({
+        kind: "turn.completed",
+        summary: "Turn interrupted",
+        payload: expect.objectContaining({ state: "interrupted" }),
+      }),
+    );
+  });
+
   it("appends generated-image markdown to the turn's assistant message when the turn settles", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-image");

@@ -3,7 +3,7 @@
 // Layer: Web transport tests
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
-import { Cause } from "effect";
+import { Cause, Effect, Exit, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ORCHESTRATION_WS_METHODS,
@@ -17,6 +17,7 @@ import {
 
 import {
   shouldKeepServerLifecycleStream,
+  getUnexpectedStreamCompletionRetryDelayMs,
   getStreamCapacityRetryDelayMs,
   getTerminalCompatibilityError,
   isTerminalCompatibilityFailure,
@@ -85,8 +86,21 @@ interface WsTransportInternals {
   readonly streamSettled: Map<string, Promise<void>>;
   readonly streamCapacityRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
+  readonly streamCompletionRetries: Map<string, number>;
+  readonly streamCompletionRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
+  disposed: boolean;
+  sessionVersion: number;
+  reconnect(): Promise<unknown>;
+  startStream<T>(
+    client: unknown,
+    key: string,
+    stream: unknown,
+    listener: (event: T) => void,
+    restart?: () => void,
+  ): void;
+  stopStream(key: string): Promise<void>;
   startThreadStream(client: unknown, threadId: string, input: unknown): Promise<void>;
 }
 
@@ -101,10 +115,33 @@ function makeBareTransport(): {
     streamSettled: new Map(),
     streamCapacityRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
+    streamCompletionRetries: new Map(),
+    streamCompletionRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
     threadSubscriptions: new Map(),
+    disposed: false,
+    sessionVersion: 1,
+    getClientRuntime: () => ({
+      runCallback: (
+        effect: Effect.Effect<unknown, Error>,
+        options: { readonly onExit: (exit: Exit.Exit<unknown, Error>) => void },
+      ) =>
+        Effect.runCallback(effect, {
+          onExit: (exit) => {
+            void Promise.resolve().then(() => options.onExit(exit));
+          },
+        }),
+    }),
+    reconnect: vi.fn(async () => ({})),
   });
   return { transport, internals };
+}
+
+function bindWindowTimersToCurrentGlobals(): void {
+  Object.assign(window, {
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+  });
 }
 
 beforeEach(() => {
@@ -186,6 +223,94 @@ describe("WsTransport", () => {
         Cause.fail({ code: "WS_PROTOCOL_INCOMPATIBLE", retryable: false }),
       ),
     ).toBeNull();
+  });
+
+  it("backs off unexpected normal stream completions with a bounded delay", () => {
+    expect(getUnexpectedStreamCompletionRetryDelayMs(1)).toBe(100);
+    expect(getUnexpectedStreamCompletionRetryDelayMs(2)).toBe(200);
+    expect(getUnexpectedStreamCompletionRetryDelayMs(7)).toBe(5_000);
+    expect(getUnexpectedStreamCompletionRetryDelayMs(100)).toBe(5_000);
+  });
+
+  it("reconnects after an unexpected normal completion instead of reopening a zombie stream", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.domain";
+      const snapshots: string[] = [];
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream<string>(
+        {},
+        key,
+        Stream.make("snapshot"),
+        (event) => snapshots.push(event),
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(internals.streamCompletionRetryTimers.has(key)).toBe(true);
+      expect(internals.streamCleanups.has(key)).toBe(false);
+      expect(snapshots).toEqual(["snapshot"]);
+
+      expect(reconnect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(99);
+      expect(reconnect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reconnect).toHaveBeenCalledTimes(1);
+      expect(restart).not.toHaveBeenCalled();
+      expect(snapshots).toEqual(["snapshot"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending normal-completion restart when the stream is unsubscribed", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.domain";
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream({}, key, Stream.empty, () => undefined, restart);
+      await Promise.resolve();
+      await internals.stopStream(key);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(restart).not.toHaveBeenCalled();
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(internals.streamCompletionRetryTimers.has(key)).toBe(false);
+      expect(internals.streamCompletionRetries.has(key)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart a normally-completed stream from a superseded session generation", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.domain";
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream({}, key, Stream.empty, () => undefined, restart);
+      await Promise.resolve();
+      internals.sessionVersion += 1;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(restart).not.toHaveBeenCalled();
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for a thread stream to settle before resolving unsubscribe", async () => {

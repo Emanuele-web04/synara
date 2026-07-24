@@ -60,6 +60,7 @@ import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
+import { useWorkspaceStore } from "../workspaceStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -1829,6 +1830,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentUploadSequence = 0;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
+    useWorkspaceStore.setState({
+      homeDir: null,
+      chatWorkspaceRoot: null,
+      studioWorkspaceRoot: null,
+    });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     useComposerDraftStore.setState({
@@ -4446,19 +4452,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }),
     });
 
-    const findDispatchedCommand = (type: string) =>
+    const findDispatchedCommand = (
+      type: string,
+      matches: (command: Record<string, unknown>) => boolean,
+    ) =>
       wsRequests
-        .map((request) =>
-          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-          "command" in request &&
-          request.command &&
-          typeof request.command === "object" &&
-          "type" in request.command &&
-          request.command.type === type
-            ? (request.command as Record<string, unknown>)
-            : null,
-        )
-        .find(Boolean);
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === type && matches(command));
 
     try {
       await page.getByRole("button", { name: "Add project", exact: true }).click();
@@ -4479,9 +4479,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       let createdSpaceId: unknown;
       await vi.waitFor(
         () => {
-          const spaceCreateCommand = findDispatchedCommand("space.create");
+          const spaceCreateCommand = findDispatchedCommand(
+            "space.create",
+            (command) => command.name === "Focus",
+          );
           expect(spaceCreateCommand).toBeDefined();
-          expect(spaceCreateCommand?.name).toBe("Focus");
           createdSpaceId = spaceCreateCommand?.spaceId;
         },
         { timeout: 8_000, interval: 16 },
@@ -4493,9 +4495,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
-          const projectCreateCommand = findDispatchedCommand("project.create");
+          const projectCreateCommand = findDispatchedCommand(
+            "project.create",
+            (command) => command.workspaceRoot === "/repo/spaced-project",
+          );
           expect(projectCreateCommand).toBeDefined();
-          expect(projectCreateCommand?.workspaceRoot).toBe("/repo/spaced-project");
           expect(projectCreateCommand?.spaceId).toBe(createdSpaceId);
         },
         { timeout: 8_000, interval: 16 },

@@ -11,6 +11,80 @@ export type DockPaneActivationReason = "explicit" | "restore";
 export type DockPaneRuntimeMode = "live" | "preview";
 
 export const DOCK_PANE_DEFERRED_HYDRATION_FRAMES = 2;
+// requestAnimationFrame is intentionally suspended by Chromium for hidden or
+// offscreen documents. A route transition can commit a restored dock while its
+// subtree is still offscreen, so frame-only promotion can leave a heavy pane in
+// preview forever even after the route becomes visible. Keep the paint-friendly
+// frame path, but cap it with a task-based fallback.
+export const DOCK_PANE_DEFERRED_HYDRATION_TIMEOUT_MS = 250;
+
+export interface DeferredDockPaneHydrationScheduler {
+  readonly requestFrame: (callback: () => void) => number;
+  readonly cancelFrame: (frameId: number) => void;
+  readonly setTimer: (callback: () => void, delayMs: number) => number;
+  readonly clearTimer: (timerId: number) => void;
+}
+
+/**
+ * Promotes a restored heavy pane after the requested number of paint frames,
+ * with a bounded timeout for Electron/Chromium states where rAF is paused.
+ * Completion and cancellation are both exactly-once.
+ */
+export function scheduleDeferredDockPaneHydration(input: {
+  readonly onHydrate: () => void;
+  readonly scheduler: DeferredDockPaneHydrationScheduler;
+  readonly frames?: number;
+  readonly timeoutMs?: number;
+}): () => void {
+  const frames = Math.max(0, input.frames ?? DOCK_PANE_DEFERRED_HYDRATION_FRAMES);
+  const timeoutMs = Math.max(0, input.timeoutMs ?? DOCK_PANE_DEFERRED_HYDRATION_TIMEOUT_MS);
+  let completed = false;
+  let frameId: number | null = null;
+  let timerId: number | null = null;
+  let framesRemaining = frames;
+
+  function clearScheduledWork(): void {
+    if (frameId !== null) {
+      input.scheduler.cancelFrame(frameId);
+      frameId = null;
+    }
+    if (timerId !== null) {
+      input.scheduler.clearTimer(timerId);
+      timerId = null;
+    }
+  }
+
+  const finish = () => {
+    if (completed) return;
+    completed = true;
+    clearScheduledWork();
+    input.onHydrate();
+  };
+
+  const tick = () => {
+    frameId = null;
+    if (completed) return;
+    framesRemaining -= 1;
+    if (framesRemaining <= 0) {
+      finish();
+      return;
+    }
+    frameId = input.scheduler.requestFrame(tick);
+  };
+
+  timerId = input.scheduler.setTimer(finish, timeoutMs);
+  if (framesRemaining <= 0) {
+    finish();
+  } else {
+    frameId = input.scheduler.requestFrame(tick);
+  }
+
+  return () => {
+    if (completed) return;
+    completed = true;
+    clearScheduledWork();
+  };
+}
 
 const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "browser",

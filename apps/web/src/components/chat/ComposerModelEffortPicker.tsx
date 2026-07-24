@@ -186,7 +186,6 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
           <>
             <SettingsIcon
               aria-hidden="true"
-              data-slot="composer-traits-status-icon"
               className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
             />
             <span className="sr-only">{triggerStatusLabel}</span>

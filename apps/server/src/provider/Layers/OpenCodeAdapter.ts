@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -16,7 +17,19 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { Cause, Deferred, Effect, Exit, Layer, Option, Queue, Ref, Scope, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect";
 import type {
   AssistantMessage,
   OpencodeClient,
@@ -41,7 +54,9 @@ import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGatew
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
@@ -133,6 +148,71 @@ const OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_00
 const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
 const OPENCODE_EVENT_RECONNECT_DELAYS_MS = [250, 1_000, 2_500, 5_000] as const;
 const OPENCODE_MAX_RELATED_SESSIONS = 256;
+const OPENCODE_EXTERNAL_MCP_LOCK_WAIT_TIMEOUT = "15 minutes";
+const OPENCODE_EXTERNAL_MCP_SETUP_TIMEOUT = "30 seconds";
+const OPENCODE_EXTERNAL_MCP_SCRUB_TIMEOUT = "5 seconds";
+const OPENCODE_INERT_MCP_URL = "http://127.0.0.1:9/__synara_inactive_mcp__";
+
+interface ExternalOpenCodeMcpLockEntry {
+  readonly semaphore: Semaphore.Semaphore;
+  users: number;
+}
+
+interface ExternalOpenCodeMcpTurnControl {
+  readonly scope: Scope.Closeable;
+  readonly turnId: TurnId;
+}
+
+// OpenCode and Kilo use the same external server protocol and can point at the
+// same process. Keep this registry module-global so both adapter layers share
+// one FIFO admission queue for each server/directory MCP registry.
+const externalOpenCodeMcpLocks = new Map<string, ExternalOpenCodeMcpLockEntry>();
+
+function externalOpenCodeMcpLockKey(serverUrl: string, directory: string): string {
+  const normalizedUrl = new URL(serverUrl).toString();
+  return `${normalizedUrl}\u0000${resolvePath(directory)}`;
+}
+
+const acquireExternalOpenCodeMcpTurnControl = Effect.fn("acquireExternalOpenCodeMcpTurnControl")(
+  function* (key: string) {
+    const entry = yield* Effect.sync(() => {
+      const existing = externalOpenCodeMcpLocks.get(key);
+      if (existing) {
+        existing.users += 1;
+        return existing;
+      }
+      const created: ExternalOpenCodeMcpLockEntry = {
+        semaphore: Semaphore.makeUnsafe(1),
+        users: 1,
+      };
+      externalOpenCodeMcpLocks.set(key, created);
+      return created;
+    });
+    const scope = yield* Scope.make();
+    yield* Scope.addFinalizer(
+      scope,
+      Effect.sync(() => {
+        entry.users -= 1;
+        if (entry.users === 0 && externalOpenCodeMcpLocks.get(key) === entry) {
+          externalOpenCodeMcpLocks.delete(key);
+        }
+      }),
+    );
+
+    const acquired = yield* Effect.exit(
+      Effect.uninterruptibleMask((restore) =>
+        restore(entry.semaphore.take(1)).pipe(
+          Effect.tap(() => Scope.addFinalizer(scope, entry.semaphore.release(1))),
+        ),
+      ),
+    );
+    if (Exit.isFailure(acquired)) {
+      yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
+      return yield* Effect.failCause(acquired.cause);
+    }
+    return { scope };
+  },
+);
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -150,6 +230,8 @@ interface OpenCodeSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
+  readonly externalMcpLockKey?: string;
+  externalMcpTurnControl?: ExternalOpenCodeMcpTurnControl;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
   readonly client: OpencodeClient;
@@ -193,6 +275,117 @@ function releaseOpenCodeGatewayLease(context: OpenCodeSessionContext): void {
   context.gatewaySessionLease?.release();
   delete context.gatewaySessionLease;
 }
+
+const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(function* (input: {
+  readonly client: OpencodeClient;
+  readonly directory: string;
+  readonly displayName: string;
+  readonly connection: AgentGatewaySessionLease["connection"];
+}) {
+  const result = yield* runOpenCodeSdk("mcp.add", () =>
+    input.client.mcp.add({
+      directory: input.directory,
+      name: SYNARA_MCP_SERVER_NAME,
+      config: buildOpenCodeMcpServer(input.connection),
+    }),
+  );
+  const status = result.data?.[SYNARA_MCP_SERVER_NAME];
+  if (status?.status === "connected") {
+    return;
+  }
+  return yield* new OpenCodeRuntimeError({
+    operation: "mcp.add",
+    detail:
+      status?.status === "failed"
+        ? `${input.displayName} Synara MCP connection failed: ${status.error}`
+        : `${input.displayName} Synara MCP connection did not become ready.`,
+  });
+});
+
+const releaseExternalOpenCodeMcpTurnControl = Effect.fn("releaseExternalOpenCodeMcpTurnControl")(
+  function* (context: OpenCodeSessionContext, ownerTurnId?: TurnId) {
+    const control = context.externalMcpTurnControl;
+    if (!control || (ownerTurnId !== undefined && control.turnId !== ownerTurnId)) {
+      return;
+    }
+    delete context.externalMcpTurnControl;
+
+    // Replace the dynamic entry before releasing the permit. A plain disconnect
+    // leaves OpenCode's in-memory config (including the bearer token) available
+    // to a later `mcp.connect`; an inert, header-free config closes the prior
+    // client and removes that reconnect path without rotating the session lease.
+    yield* runOpenCodeSdk("mcp.add.inactive", () =>
+      context.client.mcp.add({
+        directory: context.directory,
+        name: SYNARA_MCP_SERVER_NAME,
+        config: {
+          type: "remote",
+          url: OPENCODE_INERT_MCP_URL,
+          enabled: false,
+          oauth: false,
+        },
+      }),
+    ).pipe(
+      Effect.timeout(OPENCODE_EXTERNAL_MCP_SCRUB_TIMEOUT),
+      Effect.ignore({ log: true }),
+      Effect.ensuring(Scope.close(control.scope, Exit.void).pipe(Effect.ignore)),
+    );
+  },
+);
+
+const prepareExternalOpenCodeMcpTurnControl = Effect.fn("prepareExternalOpenCodeMcpTurnControl")(
+  function* (context: OpenCodeSessionContext, displayName: string, turnId: TurnId) {
+    const key = context.externalMcpLockKey;
+    if (!key) {
+      return;
+    }
+    if (context.externalMcpTurnControl) {
+      return yield* new OpenCodeRuntimeError({
+        operation: "mcp.add",
+        detail: `${displayName} already has an active turn using this external MCP registry.`,
+      });
+    }
+    const lease = context.gatewaySessionLease;
+    if (!lease) {
+      return yield* new OpenCodeRuntimeError({
+        operation: "mcp.add",
+        detail: `${displayName} has no active Synara Agent Gateway lease.`,
+      });
+    }
+
+    const control = yield* acquireExternalOpenCodeMcpTurnControl(key).pipe(
+      Effect.timeoutOrElse({
+        duration: OPENCODE_EXTERNAL_MCP_LOCK_WAIT_TIMEOUT,
+        onTimeout: () =>
+          Effect.fail(
+            new OpenCodeRuntimeError({
+              operation: "mcp.add",
+              detail: `${displayName} timed out waiting for exclusive access to the external MCP registry.`,
+            }),
+          ),
+      }),
+    );
+    context.externalMcpTurnControl = { ...control, turnId };
+    yield* installOpenCodeGatewayMcp({
+      client: context.client,
+      directory: context.directory,
+      displayName,
+      connection: lease.connection,
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: OPENCODE_EXTERNAL_MCP_SETUP_TIMEOUT,
+        onTimeout: () =>
+          Effect.fail(
+            new OpenCodeRuntimeError({
+              operation: "mcp.add",
+              detail: `${displayName} timed out while installing thread-scoped Synara MCP control.`,
+            }),
+          ),
+      }),
+      Effect.onError(() => releaseExternalOpenCodeMcpTurnControl(context)),
+    );
+  },
+);
 
 interface OpenCodeMessageSnapshot {
   readonly info: {
@@ -692,7 +885,14 @@ function updateProviderSession(
   return nextSession;
 }
 
-function clearActiveTurnState(context: OpenCodeSessionContext): void {
+const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function* (
+  context: OpenCodeSessionContext,
+  options?: { readonly cancelGatewayTurn?: boolean },
+) {
+  if (options?.cancelGatewayTurn !== false) {
+    yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+  }
+  yield* releaseExternalOpenCodeMcpTurnControl(context);
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
   context.activeTurnProviderActivitySerial = 0;
@@ -711,7 +911,7 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   // would misclassify that echo as a real resolution (orphaned "Approval resolved" in the
   // UI). Ids are unique per request so stale entries are inert; the set is freed with the
   // session context when the session is removed.
-}
+});
 
 function markOpenCodeTurnProviderActivity(
   context: OpenCodeSessionContext,
@@ -1105,6 +1305,18 @@ function buildOpenCodeThreadSnapshot(input: {
   };
 }
 
+const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResources")(function* (
+  context: OpenCodeSessionContext,
+) {
+  yield* clearActiveTurnState(context).pipe(
+    Effect.ensuring(
+      Scope.close(context.sessionScope, Exit.void).pipe(
+        Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
+      ),
+    ),
+  );
+});
+
 const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   context: OpenCodeSessionContext,
 ) {
@@ -1116,9 +1328,7 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
   ).pipe(Effect.ignore({ log: true }));
 
-  yield* Scope.close(context.sessionScope, Exit.void).pipe(
-    Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
-  );
+  yield* releaseOpenCodeSessionResources(context);
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -1293,9 +1503,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             sessionID: context.openCodeSessionId,
           }),
         ).pipe(Effect.ignore({ log: true }));
-        yield* Scope.close(context.sessionScope, Exit.void).pipe(
-          Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
-        );
+        yield* releaseOpenCodeSessionResources(context);
       });
 
       const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
@@ -1490,7 +1698,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (context.activeTurnId !== input.turnId) {
           return false;
         }
-        clearActiveTurnState(context);
+        yield* clearActiveTurnState(context);
         updateProviderSession(
           context,
           input.errorMessage
@@ -1986,7 +2194,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ) {
                 return requestError;
               }
-              clearActiveTurnState(context);
+              yield* clearActiveTurnState(context);
               updateProviderSession(
                 context,
                 {
@@ -2039,7 +2247,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               if (context.activeTurnId !== input.turnId) {
                 return requestError;
               }
-              clearActiveTurnState(context);
+              yield* clearActiveTurnState(context);
               updateProviderSession(
                 context,
                 {
@@ -2986,7 +3194,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               break;
             }
             const activeTurnId = context.activeTurnId;
-            clearActiveTurnState(context);
+            yield* clearActiveTurnState(context);
             updateProviderSession(
               context,
               {
@@ -3407,14 +3615,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           const resumedSessionId = extractResumeSessionId(input.resumeCursor);
-          // OpenCode's MCP registry is process/directory scoped, not session
-          // scoped. A gateway token is therefore issued only for a managed
-          // server that this runtime isolates to the exact Synara thread.
-          const agentGatewaySessionLease = serverUrl
-            ? undefined
-            : acquireAgentGatewaySessionLease(agentGatewayCredentials, input.threadId, provider);
+          // Managed servers keep a private process for this session. External
+          // servers share a directory-scoped MCP registry, so their gateway MCP
+          // is installed under the full-turn lock immediately before prompting.
+          const agentGatewaySessionLease = acquireAgentGatewaySessionLease(
+            agentGatewayCredentials,
+            input.threadId,
+            provider,
+          );
           const agentGatewayConnection = agentGatewaySessionLease?.connection;
-          const poolIsolationKey = agentGatewayConnection ? randomUUID() : undefined;
+          const poolIsolationKey = agentGatewayConnection && !serverUrl ? randomUUID() : undefined;
 
           let sessionScopeTransferred = false;
           const installed = yield* Effect.acquireUseRelease(
@@ -3439,28 +3649,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       cliSpec: adapterConfig.cliSpec,
                       ...(server.external && serverPassword ? { serverPassword } : {}),
                     });
-                    const gatewayControlAvailable = agentGatewayConnection
-                      ? yield* runOpenCodeSdk("mcp.add", () =>
-                          client.mcp.add({
-                            directory,
-                            name: SYNARA_MCP_SERVER_NAME,
-                            config: buildOpenCodeMcpServer(agentGatewayConnection),
-                          }),
-                        ).pipe(
-                          Effect.flatMap((result) => {
-                            const status = result.data?.[SYNARA_MCP_SERVER_NAME];
-                            return status?.status === "connected"
-                              ? Effect.void
-                              : Effect.fail(
-                                  new OpenCodeRuntimeError({
-                                    operation: "mcp.add",
-                                    detail:
-                                      status?.status === "failed"
-                                        ? `${adapterConfig.displayName} Synara MCP connection failed: ${status.error}`
-                                        : `${adapterConfig.displayName} Synara MCP connection did not become ready.`,
-                                  }),
-                                );
-                          }),
+                    let gatewayControlAvailable = false;
+                    if (agentGatewayConnection) {
+                      if (server.external) {
+                        gatewayControlAvailable = true;
+                      } else {
+                        gatewayControlAvailable = yield* installOpenCodeGatewayMcp({
+                          client,
+                          directory,
+                          displayName: adapterConfig.displayName,
+                          connection: agentGatewayConnection,
+                        }).pipe(
                           Effect.as(true),
                           Effect.catchCause((cause) =>
                             Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
@@ -3473,8 +3672,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                               Effect.as(false),
                             ),
                           ),
-                        )
-                      : false;
+                        );
+                      }
+                    }
                     const createSessionId = resumedSessionId
                       ? // A resumed provider may still be executing an interrupted Plan turn.
                         // Install the read-only ruleset until Synara dispatches a new turn with a
@@ -3545,6 +3745,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       openCodeSessionId,
                       modelContextLimitBySlug,
                       gatewayControlAvailable,
+                      ...(server.external && gatewayControlAvailable
+                        ? { externalMcpLockKey: externalOpenCodeMcpLockKey(server.url, directory) }
+                        : {}),
                     };
                   }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
                 );
@@ -3593,6 +3796,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     ? {
                         gatewaySessionLease: agentGatewaySessionLease,
                       }
+                    : {}),
+                  ...(started.externalMcpLockKey
+                    ? { externalMcpLockKey: started.externalMcpLockKey }
                     : {}),
                   ...(input.lifecycleGeneration !== undefined
                     ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -3678,9 +3884,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
-      const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+      const sendTurnImpl = Effect.fn("sendTurn")(function* (
+        input: Parameters<OpenCodeAdapterShape["sendTurn"]>[0],
+        turnId: TurnId,
+      ) {
         const context = ensureAdapterSessionContext(input.threadId);
-        const turnId = TurnId.makeUnsafe(`${adapterConfig.turnIdPrefix}-${randomUUID()}`);
         const modelSelection =
           input.modelSelection ??
           (context.session.model ? { provider, model: context.session.model } : undefined);
@@ -3719,6 +3927,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             issue: `${adapterConfig.displayName} turns require text input or at least one attachment.`,
           });
         }
+        yield* prepareExternalOpenCodeMcpTurnControl(
+          context,
+          adapterConfig.displayName,
+          turnId,
+        ).pipe(Effect.mapError(toAdapterRequestError));
         const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
           provider,
           scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
@@ -3834,17 +4047,60 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         };
       });
 
+      const sendTurn: OpenCodeAdapterShape["sendTurn"] = (input) => {
+        const turnId = TurnId.makeUnsafe(`${adapterConfig.turnIdPrefix}-${randomUUID()}`);
+        return sendTurnImpl(input, turnId).pipe(
+          // Covers interruption and every failure after the external permit is
+          // acquired, including failures before the provider prompt is forked.
+          Effect.onError(() => {
+            const context = sessions.get(input.threadId);
+            if (!context) {
+              return Effect.void;
+            }
+            if (context.activeTurnId === turnId) {
+              return clearActiveTurnState(context).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() =>
+                    updateProviderSession(
+                      context,
+                      { status: "ready" },
+                      { clearActiveTurnId: true },
+                    ),
+                  ),
+                ),
+              );
+            }
+            return releaseExternalOpenCodeMcpTurnControl(context, turnId);
+          }),
+        );
+      };
+
       const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
         function* (threadId, turnId) {
           const context = ensureAdapterSessionContext(threadId);
+          if (turnId !== undefined && turnId !== context.activeTurnId) {
+            yield* Effect.logWarning("opencode.stale_interrupt_ignored", {
+              provider,
+              threadId,
+              requestedTurnId: turnId,
+              activeTurnId: context.activeTurnId,
+            });
+            return;
+          }
           const activeTurnId = turnId ?? context.activeTurnId;
-          yield* runOpenCodeSdk("session.abort", () =>
-            context.client.session.abort({
-              sessionID: context.openCodeSessionId,
+          yield* withAgentGatewayTurnCancellation(
+            context.gatewaySessionLease,
+            activeTurnId,
+            Effect.gen(function* () {
+              yield* runOpenCodeSdk("session.abort", () =>
+                context.client.session.abort({
+                  sessionID: context.openCodeSessionId,
+                }),
+              ).pipe(Effect.mapError(toAdapterRequestError));
+              yield* clearActiveTurnState(context, { cancelGatewayTurn: false });
+              updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
             }),
-          ).pipe(Effect.mapError(toAdapterRequestError));
-          clearActiveTurnState(context);
-          updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
+          );
           if (activeTurnId) {
             yield* emit(context, {
               ...buildEventBase({ threadId, turnId: activeTurnId }),

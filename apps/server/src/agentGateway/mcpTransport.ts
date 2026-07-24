@@ -1,5 +1,5 @@
 import { ThreadId, type OrchestrationThreadShell } from "@synara/contracts";
-import { Effect, Option } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Option } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { AgentGatewayShape } from "./Services/AgentGateway.ts";
@@ -14,6 +14,7 @@ import {
   JSON_RPC_METHOD_NOT_FOUND,
   mcpToolResultError,
   parseMcpMessage,
+  type JsonRpcId,
   type JsonRpcRequest,
 } from "./protocol.ts";
 import {
@@ -26,6 +27,37 @@ import { errorText } from "./toolInput.ts";
 
 const MCP_MAX_BATCH_MESSAGES = 50;
 
+type McpJsonRpcResponse = Record<string, unknown>;
+
+type McpResponseSlot =
+  | { readonly kind: "immediate"; readonly response: McpJsonRpcResponse }
+  | {
+      readonly kind: "request";
+      readonly fiber: Fiber.Fiber<McpJsonRpcResponse, never>;
+    }
+  | { readonly kind: "none" };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function invalidRequestResponse(
+  status: number,
+  message: string,
+  id: JsonRpcId = null,
+): { readonly status: number; readonly body: McpJsonRpcResponse } {
+  return {
+    status,
+    body: jsonRpcError(id, JSON_RPC_INVALID_REQUEST, message),
+  };
+}
+
+function requestIdKey(id: JsonRpcId): string {
+  return `${typeof id}:${String(id)}`;
+}
+
 export function makeAgentGatewayMcpTransport(input: {
   readonly credentials: AgentGatewayCredentialsShape;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
@@ -36,7 +68,6 @@ export function makeAgentGatewayMcpTransport(input: {
   ) => Effect.Effect<OrchestrationThreadShell, unknown>;
 }): AgentGatewayShape["handleMcpPost"] {
   const toolsByName = new Map(input.tools.map((tool) => [tool.definition.name, tool]));
-
   const handleRequest = (request: JsonRpcRequest, context: Omit<ToolContext, "jsonRpcRequestId">) =>
     Effect.gen(function* () {
       switch (request.method) {
@@ -65,10 +96,7 @@ export function makeAgentGatewayMcpTransport(input: {
             return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, `Unknown tool "${toolName}".`);
           }
           const rawArgs = request.params.arguments;
-          const args =
-            typeof rawArgs === "object" && rawArgs !== null && !Array.isArray(rawArgs)
-              ? (rawArgs as Record<string, unknown>)
-              : {};
+          const args = asRecord(rawArgs) ?? {};
           const requiredCapability = tool.requiredCapability;
           if (!context.callerCapabilities.has(requiredCapability)) {
             return jsonRpcResult(
@@ -116,39 +144,27 @@ export function makeAgentGatewayMcpTransport(input: {
       const token = extractBearerToken(requestInput.authorizationHeader);
       const callerSession = token ? input.credentials.verifySession(token) : null;
       if (!token || !callerSession) {
-        return {
-          status: 401,
-          body: jsonRpcError(
-            null,
-            JSON_RPC_INVALID_REQUEST,
-            "caller_session_inactive: Missing, revoked, or invalid provider-session credential.",
-          ),
-        };
+        return invalidRequestResponse(
+          401,
+          "caller_session_inactive: Missing, revoked, or invalid provider-session credential.",
+        );
       }
       const callerThreadId = callerSession.threadId;
       const callerThread = yield* input.snapshotQuery
         .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
       if (Option.isNone(callerThread)) {
-        return {
-          status: 401,
-          body: jsonRpcError(
-            null,
-            JSON_RPC_INVALID_REQUEST,
-            "Bearer token refers to a thread that no longer exists.",
-          ),
-        };
+        return invalidRequestResponse(
+          401,
+          "Bearer token refers to a thread that no longer exists.",
+        );
       }
       const liveProvider = callerThread.value.session?.providerName;
       if ((liveProvider ?? callerThread.value.modelSelection.provider) !== callerSession.provider) {
-        return {
-          status: 401,
-          body: jsonRpcError(
-            null,
-            JSON_RPC_INVALID_REQUEST,
-            "caller_session_inactive: Provider session no longer owns this thread.",
-          ),
-        };
+        return invalidRequestResponse(
+          401,
+          "caller_session_inactive: Provider session no longer owns this thread.",
+        );
       }
       const callerWriteAuthority =
         callerThread.value.latestTurn?.state === "running"
@@ -160,8 +176,11 @@ export function makeAgentGatewayMcpTransport(input: {
             return yield* Effect.fail(
               new GatewayToolError(
                 "caller_turn_inactive",
-                "This Synara write was rejected because no caller turn was active when the MCP request arrived.",
-                { callerThreadId },
+                "This Synara write was rejected because this credential had no write authority for the exact active turn when the MCP request arrived.",
+                {
+                  callerThreadId,
+                  latestTurnId: callerThread.value.latestTurn?.turnId ?? null,
+                },
               ),
             );
           }
@@ -224,62 +243,145 @@ export function makeAgentGatewayMcpTransport(input: {
         ? requestInput.body
         : [requestInput.body];
       if (rawMessages.length === 0) {
-        return {
-          status: 400,
-          body: jsonRpcError(null, JSON_RPC_INVALID_REQUEST, "Empty JSON-RPC batch."),
-        };
+        return invalidRequestResponse(400, "Empty JSON-RPC batch.");
       }
       if (rawMessages.length > MCP_MAX_BATCH_MESSAGES) {
-        return {
-          status: 400,
-          body: jsonRpcError(
-            null,
-            JSON_RPC_INVALID_REQUEST,
-            `JSON-RPC batches may contain at most ${MCP_MAX_BATCH_MESSAGES} messages.`,
-          ),
-        };
+        return invalidRequestResponse(
+          400,
+          `JSON-RPC batches may contain at most ${MCP_MAX_BATCH_MESSAGES} messages.`,
+        );
       }
       const parsedMessages = rawMessages.map(parseMcpMessage);
       const requestIds = new Set<string>();
       for (const parsed of parsedMessages) {
         if (parsed.kind !== "request") continue;
-        const key = `${typeof parsed.request.id}:${String(parsed.request.id)}`;
+        const key = requestIdKey(parsed.request.id);
         if (requestIds.has(key)) {
-          return {
-            status: 400,
-            body: jsonRpcError(
-              parsed.request.id,
-              JSON_RPC_INVALID_REQUEST,
-              `Duplicate JSON-RPC request id ${JSON.stringify(parsed.request.id)} in one batch.`,
-            ),
-          };
+          return invalidRequestResponse(
+            400,
+            `Duplicate JSON-RPC request id ${JSON.stringify(parsed.request.id)} in one batch.`,
+            parsed.request.id,
+          );
         }
         requestIds.add(key);
       }
-      const responses: Array<Record<string, unknown>> = [];
+      const responseSlots: McpResponseSlot[] = [];
+      const cancellationRequestIds: Array<string | number> = [];
+
+      // Start every request before awaiting any of them. Apart from avoiding
+      // head-of-line blocking for ordinary batches, this guarantees that a
+      // cancellation notification in the same batch can see its target even
+      // when the notification appears first.
       for (const parsed of parsedMessages) {
         switch (parsed.kind) {
-          case "request":
-            responses.push(
-              yield* handleRequest(parsed.request, context).pipe(
-                Effect.catch((error) =>
-                  Effect.succeed(
-                    jsonRpcResult(parsed.request.id, mcpToolResultError(errorText(error))),
-                  ),
+          case "request": {
+            const registered = yield* Deferred.make<void>();
+            let unregister: () => void = () => undefined;
+            let requestStarted = false;
+            let cancellationRequested = false;
+            const requestEffect = Deferred.await(registered).pipe(
+              Effect.andThen(handleRequest(parsed.request, context)),
+              Effect.catch((error) =>
+                Effect.succeed(
+                  jsonRpcResult(parsed.request.id, mcpToolResultError(errorText(error))),
                 ),
               ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  unregister();
+                }),
+              ),
             );
+            const fiber = yield* requestEffect.pipe(Effect.forkChild({ startImmediately: true }));
+            unregister = input.credentials.registerInFlightRequest({
+              sessionKey: callerSession.sessionKey,
+              turnId: context.callerTurnId,
+              requestId: parsed.request.id,
+              cancel: () => {
+                cancellationRequested = true;
+                if (!requestStarted) return Promise.resolve();
+                return new Promise<void>((resolve) => {
+                  // Avoid interrupting re-entrantly while an async Effect is
+                  // still installing its AbortController finalizer. The fiber
+                  // observer is the cleanup barrier returned to Stop.
+                  queueMicrotask(() => {
+                    if (fiber.pollUnsafe() !== undefined) {
+                      resolve();
+                      return;
+                    }
+                    fiber.addObserver(() => resolve());
+                    fiber.interruptUnsafe();
+                  });
+                });
+              },
+            });
+            if (cancellationRequested) {
+              // A terminal-turn tombstone cancelled this request during
+              // registration. The handler is still fenced behind `registered`,
+              // so a direct interruption is safe and no browser work can start.
+              fiber.interruptUnsafe();
+            } else {
+              requestStarted = true;
+              yield* Deferred.succeed(registered, undefined);
+            }
+            responseSlots.push({ kind: "request", fiber });
             break;
-          case "notification":
+          }
+          case "notification": {
+            if (parsed.notification.method === "notifications/cancelled") {
+              const cancelledId = parsed.notification.params.requestId;
+              if (typeof cancelledId === "string" || typeof cancelledId === "number") {
+                cancellationRequestIds.push(cancelledId);
+              }
+            }
+            responseSlots.push({ kind: "none" });
+            break;
+          }
           case "response":
+            responseSlots.push({ kind: "none" });
             break;
           case "invalid":
-            responses.push(
-              jsonRpcError(parsed.id, JSON_RPC_INVALID_REQUEST, "Invalid JSON-RPC message."),
-            );
+            responseSlots.push({
+              kind: "immediate",
+              response: jsonRpcError(
+                parsed.id,
+                JSON_RPC_INVALID_REQUEST,
+                "Invalid JSON-RPC message.",
+              ),
+            });
             break;
         }
       }
+
+      for (const cancelledId of cancellationRequestIds) {
+        input.credentials.cancelInFlightRequests({
+          sessionKey: callerSession.sessionKey,
+          requestId: cancelledId,
+        });
+      }
+
+      const resolvedResponses = yield* Effect.forEach(
+        responseSlots,
+        (slot) => {
+          if (slot.kind === "none") return Effect.succeed(null);
+          if (slot.kind === "immediate") return Effect.succeed(slot.response);
+          return Fiber.await(slot.fiber).pipe(
+            Effect.map((exit) =>
+              Exit.match(exit, {
+                onFailure: (cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? null
+                    : jsonRpcResult(null, mcpToolResultError(Cause.pretty(cause))),
+                onSuccess: (response) => response,
+              }),
+            ),
+          );
+        },
+        { concurrency: "unbounded" },
+      );
+      const responses = resolvedResponses.filter(
+        (response): response is McpJsonRpcResponse => response !== null,
+      );
       if (responses.length === 0) return { status: 202 };
       return {
         status: 200,
