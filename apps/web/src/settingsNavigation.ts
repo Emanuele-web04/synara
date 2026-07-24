@@ -13,6 +13,7 @@ export const SETTINGS_SECTION_IDS = [
   "shortcuts",
   "worktrees",
   "archived",
+  "accounts",
   "models",
   "providers",
   "skills",
@@ -124,6 +125,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "View and restore archived threads.",
     icon: "archive",
     eyebrow: "Thread management",
+  },
+  {
+    id: "accounts",
+    group: "synara",
+    label: "Accounts",
+    description: "Connected provider accounts and the active numbered slot per provider.",
+    icon: "user",
+    eyebrow: "Identities",
   },
   {
     id: "models",

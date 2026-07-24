@@ -25,6 +25,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { AccountsSettingsPanel } from "~/components/settings/AccountsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import {
   ArchivedSettingsPanel,
@@ -1084,6 +1085,7 @@ function SettingsRouteView() {
                   updateSettings={updateSettings}
                   resetEpoch={resetEpoch}
                 />
+                <AccountsSettingsPanel active={activeSection === "accounts"} />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
