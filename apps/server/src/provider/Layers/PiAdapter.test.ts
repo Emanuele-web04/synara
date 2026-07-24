@@ -14,6 +14,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
   getPiSupportedThinkingOptions,
@@ -203,6 +204,39 @@ function makePiModel(input: {
 }
 
 describe("getPiDiscoverableModels", () => {
+  it("isolates extension providers between sessions that share an agent directory", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
+
+    try {
+      const firstRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const secondRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const firstRegistry = new ModelRegistry(firstRuntime);
+      const secondRegistry = new ModelRegistry(secondRuntime);
+
+      firstRegistry.registerProvider("project-local", {
+        baseUrl: "http://127.0.0.1:11434/v1",
+        api: "openai-completions",
+        apiKey: "test-key",
+        models: [
+          {
+            id: "project-model",
+            name: "Project Model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+          },
+        ],
+      });
+
+      expect(firstRegistry.find("project-local", "project-model")).toBeDefined();
+      expect(secondRegistry.find("project-local", "project-model")).toBeUndefined();
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("includes custom-provider models authenticated through auth.json semantics", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));
     const modelsPath = path.join(agentDir, "models.json");

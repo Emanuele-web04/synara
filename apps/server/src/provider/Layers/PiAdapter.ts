@@ -1163,23 +1163,16 @@ function makeAgentDir(
   return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
 }
 
-// Keep discovery runtimes isolated so extension provider registrations reflect
-// the current agent dir + project cwd instead of stale state from prior listings.
-async function createPiModelRuntime(
+// Keep session runtimes isolated so project extension provider registrations
+// cannot leak between threads that share an agent directory.
+export async function createPiModelRuntime(
   agentDir: string,
-  piSdk: Pick<PiCodingAgentModule, "ModelRuntime" | "ModelRegistry">,
-): Promise<{
-  readonly modelRuntime: ModelRuntime;
-  readonly registry: ModelRegistry;
-}> {
-  const modelRuntime = await piSdk.ModelRuntime.create({
+  piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
+): Promise<ModelRuntime> {
+  return piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
   });
-  return {
-    modelRuntime,
-    registry: new piSdk.ModelRegistry(modelRuntime),
-  };
 }
 
 function modelRegistryFacade(
@@ -1284,7 +1277,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
-    const modelRuntimes = new Map<string, ModelRuntime>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -1321,17 +1313,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             cause,
           }),
       });
-
-    const getModelRuntime = async (
-      agentDir: string,
-      piSdk: Pick<PiCodingAgentModule, "ModelRuntime" | "ModelRegistry">,
-    ): Promise<ModelRuntime> => {
-      const existing = modelRuntimes.get(agentDir);
-      if (existing) return existing;
-      const { modelRuntime } = await createPiModelRuntime(agentDir, piSdk);
-      modelRuntimes.set(agentDir, modelRuntime);
-      return modelRuntime;
-    };
 
     const makeEventBase = makePiRuntimeEventBase;
 
@@ -2027,7 +2008,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
     }) => {
-      const modelRuntime = await getModelRuntime(input.agentDir, input.sdk);
+      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk);
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -2667,7 +2648,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const piSdk = await loadPiCodingAgentModule();
           const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const { modelRuntime } = await createPiModelRuntime(agentDir, piSdk);
+          const modelRuntime = await createPiModelRuntime(agentDir, piSdk);
           const services = await piSdk.createAgentSessionServices({
             cwd,
             agentDir,
