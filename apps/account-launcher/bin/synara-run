@@ -1,0 +1,4 @@
+#!/bin/sh
+# Synara `synara run <provider> [--ordinal N] [--] <args...>` wrapper.
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec bun "$dir/../src/launcher.ts" run "$@"
