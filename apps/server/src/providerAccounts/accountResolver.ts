@@ -7,7 +7,7 @@ import "./codexAccountEnvironment";
 
 import { type ResolveAccountLaunchInput, type ResolvedAccountLaunch } from "@synara/contracts";
 import { supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
-import { accountAgentHome } from "@synara/shared/providerAccounts/accountPaths";
+import { accountAgentHome, accountAppDataDir } from "@synara/shared/providerAccounts/accountPaths";
 import { Data, Effect } from "effect";
 
 import { resolveAccountEnvironmentBuilder } from "./accountEnvironment";
@@ -113,8 +113,10 @@ export function makeAccountResolver(input: AccountResolverInput) {
       const launchEnvironment = builder({
         provider,
         ordinal,
+        surface,
         authMethod,
         agentHome: accountAgentHome(storage.root, provider, ordinal),
+        appDataDir: accountAppDataDir(storage.root, provider, ordinal),
         ...(apiKey !== null ? { apiKey } : {}),
       });
 

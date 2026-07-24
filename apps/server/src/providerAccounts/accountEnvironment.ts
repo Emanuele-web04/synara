@@ -5,6 +5,7 @@
 //          applyAccountEnvironmentOverrides, ACCOUNT_ENV_UNSET.
 
 import type {
+  AccountSurface,
   AgentAuthMethod,
   ProcessEnvRecord,
   SupportedAccountProvider,
@@ -21,8 +22,10 @@ export const ACCOUNT_ENV_UNSET = "";
 export interface AccountEnvironmentBuildInput {
   readonly provider: SupportedAccountProvider;
   readonly ordinal: number;
+  readonly surface: AccountSurface;
   readonly authMethod: AgentAuthMethod;
   readonly agentHome: string;
+  readonly appDataDir: string;
   readonly apiKey?: string;
 }
 
