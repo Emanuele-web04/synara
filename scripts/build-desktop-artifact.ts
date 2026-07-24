@@ -39,9 +39,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
-const requireFromScriptsWorkspace = createRequire(
-  new URL("./package.json", import.meta.url),
-);
+const requireFromScriptsWorkspace = createRequire(new URL("./package.json", import.meta.url));
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -438,14 +436,16 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    // The solid ICNS is the bundle icon on every macOS release; Icon Composer glass alters the mark.
+    // Solid opaque ICNS is the closed-state / bundle icon (macOS applies its own
+    // squircle). Legacy PNG with baked corners stays as dock-icon.png for
+    // applyLegacyMacDockIcon on Darwin < 25.
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
       })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
     );
 
-    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
   });
 }
 
