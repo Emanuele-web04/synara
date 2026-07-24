@@ -8,8 +8,8 @@
 - Added 23 internal Synara MCP tools for discovering context and capabilities; listing projects and tasks; reading transcripts; waiting for one or many tasks; creating one task or an exact parallel batch; continuing, steering, queuing, or interrupting work; renaming and archiving tasks; and inspecting activity, orchestration events, provider runtime events, and synthesized diagnostics.
 - Added durable, idempotent multi-task creation across providers and models, with isolated worktrees, explicit target selection, privilege caps, crash recovery, operation ownership, compensation, result waiting, and visible provenance for agent-created work.
 - Added agent-facing MCP tools for creating, suggesting, listing, viewing, replacing, pausing, deleting, remembering, and reporting results from Synara automations.
-- Added guided External MCP integrations for Codex, Claude Code, Claude Desktop, and other local MCP-capable applications.
-- Added a one-prompt external setup flow with resumable pairing, automatic local stdio configuration, connection verification, copy-ready manual configuration, and the exact executable and Synara data directory from the running installation.
+- Added guided External MCP integrations for Codex, Claude Code, and other agentic MCP clients, plus copy-ready manual configuration for Claude Desktop and clients that cannot complete the setup prompt.
+- Added a one-prompt external setup flow for agentic clients with resumable pairing, automatic local stdio configuration, connection verification, and the exact executable and Synara data directory from the running installation.
 - Added External MCP tools for one-call workspace overview, allowed-project discovery, provider/model capability discovery, idempotent task creation, bounded task waiting, and paginated task reading.
 - Added all-or-selected project authorization, expiring and revocable credentials, capability-filtered tool catalogs, per-minute and active-task limits, durable request replay, and explicit advanced permissions for project-wide task reading, local-checkout execution, and full-access execution.
 - Added Project Spaces with names, curated icons, persisted ordering, project assignment, drag-and-drop movement, bulk moves, activity indicators, and a Void view for unassigned projects.
@@ -43,7 +43,9 @@
 - Independent attachment reads and checkpoint resolution run concurrently at turn start.
 - Streaming projection uses fewer SQL operations and avoids redundant nested savepoints.
 - The React Compiler was upgraded and enabled across substantially more of the web app; redundant memoization and dead interface code were removed.
+- The application architecture received a broad maintainability pass: the web store, composer drafts, chat, transcript, and sidebar controllers were decomposed; duplicated domain, protocol, browser, and runtime logic was consolidated; and obsolete modules and the retired internal ACP compatibility package were removed.
 - Provider ACP handling now uses the official Agent Client Protocol SDK rather than the retired internal compatibility package.
+- Provider callback and event ingress is now bounded, and restart reconciliation repairs provider and terminal activity that could otherwise drift during bursts or interrupted sessions.
 - Provider updates install into the same npm prefix as the detected executable, preventing a successful update from landing in a different Node installation.
 - The CLI publish flow now builds an isolated package stage and includes the migration-backup restore executable.
 - The running-task spinner is slimmer and slower, dialog and input chrome is more consistent, composer picker rows are easier to scan, sidebar branding is quieter, and the retired World Cup playground has been removed.

@@ -12,11 +12,13 @@ sessions.
    managed worktrees, and approval-required execution. Higher-impact permissions are under
    **Advanced permissions**.
 3. Choose **Create integration**.
-4. Copy the generated setup prompt into Codex, Claude Code, Claude Desktop, or another local
-   MCP-capable app. The prompt guides that agent through the one-time pairing, installs the correct
-   local stdio configuration, and verifies the connection with `synara_overview`. Synara uses the
-   exact executable and data directory of the running installation; no global `synara` command,
-   project ID, model slug, request ID, or credential handling is required from the user.
+4. For Codex, Claude Code, or another agentic MCP client, copy the generated setup prompt into the
+   client. The prompt guides that agent through the one-time pairing, installs the correct local
+   stdio configuration, and verifies the connection with `synara_overview`. For Claude Desktop or a
+   client that cannot run the setup prompt, complete pairing in Synara and use the copy-ready JSON
+   configuration instead. Synara uses the exact executable and data directory of the running
+   installation; no global `synara` command, project ID, model slug, request ID, or credential
+   handling is required from the user.
 5. Synara moves from **Waiting for pairing** to **Paired** after the local credential exchange, then
    to **Connected** after the client makes its first request.
 
@@ -24,8 +26,9 @@ If the page is reloaded or the pairing code expires, use **Resume pairing** besi
 For an already paired integration, **Continue setup** restores the setup prompt. A new pairing code
 never replaces an already paired credential.
 
-The generated prompt is the recommended path. The commands and configuration below document the
-equivalent manual setup for clients that cannot complete it automatically.
+The generated prompt is the recommended path for agentic clients. The commands and configuration
+below document the equivalent manual setup for Claude Desktop and other clients that cannot complete
+it automatically.
 
 The guided flow avoids asking the user for project IDs, provider/model slugs, request IDs, data paths,
 or credentials. The generated launcher is structurally equivalent to:
