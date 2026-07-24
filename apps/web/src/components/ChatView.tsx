@@ -10775,9 +10775,35 @@ export default function ChatView({
                       ) : (
                         <>
                           What should we do in{" "}
-                          <span className={COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}>
-                            {activeProjectDisplayName ?? "this folder"}
-                          </span>
+                          {showEmptyLandingProjectPicker ? (
+                            <ProjectPicker
+                              align="center"
+                              side="bottom"
+                              selectionMode="project"
+                              selectedProjectId={activeProject.id}
+                              selectedWorkspaceRoot={activeProject.cwd}
+                              showResetToHome
+                              onSelectProject={handleSelectProjectForEmptyDraft}
+                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+                              onResetToHome={handleResetWorkspaceToHome}
+                              renderTrigger={
+                                <button
+                                  type="button"
+                                  data-testid="empty-landing-heading-project-trigger"
+                                  className={cn(
+                                    COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                                    "cursor-pointer rounded-sm underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none",
+                                  )}
+                                >
+                                  {activeProjectDisplayName ?? "this folder"}
+                                </button>
+                              }
+                            />
+                          ) : (
+                            <span className={COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}>
+                              {activeProjectDisplayName ?? "this folder"}
+                            </span>
+                          )}
                           ?
                         </>
                       )}
