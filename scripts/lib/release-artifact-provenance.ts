@@ -31,6 +31,7 @@ export interface ReleaseArtifactProvenanceInput {
   readonly lockfileSha256: string;
   readonly publication: boolean;
   readonly signed: boolean;
+  readonly allowUnsignedWindowsPublication?: boolean;
   readonly expectedMacTeamId?: string;
   readonly expectedWindowsPublisher?: string;
   readonly expectedWindowsSubjectDn?: string;
@@ -85,6 +86,12 @@ type SigningEvidence =
     }
   | {
       readonly status: "unsigned-build-only";
+      readonly scheme: "none";
+      readonly identity: null;
+      readonly checks: ReadonlyArray<string>;
+    }
+  | {
+      readonly status: "unsigned-explicit-release";
       readonly scheme: "none";
       readonly identity: null;
       readonly checks: ReadonlyArray<string>;
@@ -400,6 +407,15 @@ function resolveSigningEvidence(
 
   if (!input.signed) {
     if (input.publication) {
+      if (input.platform === "win" && input.allowUnsignedWindowsPublication === true) {
+        requireSingleArtifact(artifacts, ".exe");
+        return {
+          status: "unsigned-explicit-release",
+          scheme: "none",
+          identity: null,
+          checks: ["explicit version-scoped Windows release exception"],
+        };
+      }
       throw new Error(`Publishing ${input.platform} artifacts requires verified signing.`);
     }
     requireSingleArtifact(artifacts, input.platform === "mac" ? ".dmg" : ".exe");

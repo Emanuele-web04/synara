@@ -23,6 +23,14 @@ function createAssets(): string {
   return root;
 }
 
+function createWindowsAssets(): string {
+  const root = mkdtempSync(join(tmpdir(), "synara-windows-provenance-test-"));
+  temporaryRoots.push(root);
+  writeFileSync(join(root, "Synara-1.2.3-x64.exe"), "unsigned-windows-bytes");
+  writeFileSync(join(root, "latest.yml"), "version: 1.2.3\n");
+  return root;
+}
+
 describe("release artifact provenance", () => {
   it("hashes the exact collected Linux assets into a deterministic manifest", async () => {
     const assetsDirectory = createAssets();
@@ -74,5 +82,45 @@ describe("release artifact provenance", () => {
         signed: false,
       }),
     ).rejects.toThrow("requires an exact source tag");
+  });
+
+  it("records an explicit version-scoped unsigned Windows publication", async () => {
+    const result = await writeReleaseArtifactProvenance({
+      assetsDirectory: createWindowsAssets(),
+      platform: "win",
+      arch: "x64",
+      target: "nsis",
+      version: "1.2.3",
+      sourceCommit: "a".repeat(40),
+      sourceTag: "v1.2.3",
+      lockfileSha256: "b".repeat(64),
+      publication: true,
+      signed: false,
+      allowUnsignedWindowsPublication: true,
+    });
+
+    expect(result.manifest.signing).toEqual({
+      status: "unsigned-explicit-release",
+      scheme: "none",
+      identity: null,
+      checks: ["explicit version-scoped Windows release exception"],
+    });
+  });
+
+  it("still rejects unsigned Windows publication without the explicit exception", async () => {
+    await expect(
+      writeReleaseArtifactProvenance({
+        assetsDirectory: createWindowsAssets(),
+        platform: "win",
+        arch: "x64",
+        target: "nsis",
+        version: "1.2.3",
+        sourceCommit: "a".repeat(40),
+        sourceTag: "v1.2.3",
+        lockfileSha256: "b".repeat(64),
+        publication: true,
+        signed: false,
+      }),
+    ).rejects.toThrow("requires verified signing");
   });
 });
