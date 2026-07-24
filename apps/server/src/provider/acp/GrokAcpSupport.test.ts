@@ -169,25 +169,34 @@ describe("resolveGrokAcpAuthMethodId", () => {
   });
 
   it("examines the supplied child environment instead of process globals", async () => {
-    process.env.XAI_API_KEY = "xai-native-key";
+    const savedXaiApiKey = process.env.XAI_API_KEY;
+    try {
+      process.env.XAI_API_KEY = "xai-native-key";
 
-    await expect(
-      Effect.runPromise(
-        resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["cached_token", "xai.api_key"]), {
-          GROK_HOME: "/accounts/grok/1/agent/home",
-        }),
-      ),
-    ).resolves.toBe("cached_token");
+      await expect(
+        Effect.runPromise(
+          resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["cached_token", "xai.api_key"]), {
+            GROK_HOME: "/accounts/grok/1/agent/home",
+          }),
+        ),
+      ).resolves.toBe("cached_token");
 
-    delete process.env.XAI_API_KEY;
+      delete process.env.XAI_API_KEY;
 
-    await expect(
-      Effect.runPromise(
-        resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["cached_token", "xai.api_key"]), {
-          XAI_API_KEY: "xai-managed-key",
-        }),
-      ),
-    ).resolves.toBe("xai.api_key");
+      await expect(
+        Effect.runPromise(
+          resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["cached_token", "xai.api_key"]), {
+            XAI_API_KEY: "xai-managed-key",
+          }),
+        ),
+      ).resolves.toBe("xai.api_key");
+    } finally {
+      if (savedXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = savedXaiApiKey;
+      }
+    }
   });
 });
 
