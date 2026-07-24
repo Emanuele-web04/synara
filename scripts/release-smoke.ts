@@ -302,8 +302,8 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    "bun install --production --no-save --no-frozen-lockfile --ignore-scripts --linker hoisted",
-    "Expected Windows staging to override CI's implicit frozen mode without mutating the copied workspace.",
+    "bun install --production --no-frozen-lockfile --ignore-scripts --linker hoisted",
+    "Expected Windows staging to allow Bun's platform-only rewrite of the temporary lockfile copy.",
   );
   assertNotContains(
     buildScript,
