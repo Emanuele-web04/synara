@@ -284,6 +284,12 @@ function verifyReleaseWorkflowSafety(): void {
 
 function verifyDesktopStageLockAuthority(): void {
   const buildScript = readFileSync(resolve(repoRoot, "scripts/build-desktop-artifact.ts"), "utf8");
+  const gitAttributes = readFileSync(resolve(repoRoot, ".gitattributes"), "utf8");
+  assertContains(
+    gitAttributes,
+    "bun.lock text eol=lf",
+    "Expected bun.lock to retain byte-identical LF endings on every release runner.",
+  );
   assertContains(
     buildScript,
     "bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop",
