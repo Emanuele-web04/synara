@@ -1,19 +1,14 @@
-// FILE: accountResolver.ts
-// Purpose: Deterministic account selection for provider launches (plan section 12).
-// Layer: Server service internals
-// Exports: makeAccountResolver, ProviderAccountResolutionError.
-
-import "@synara/shared/providerAccounts/codexAccountEnvironment";
-import "@synara/shared/providerAccounts/claudeAccountEnvironment";
-import "@synara/shared/providerAccounts/cursorAccountEnvironment";
-import "@synara/shared/providerAccounts/grokAccountEnvironment";
-
-import { type ResolveAccountLaunchInput, type ResolvedAccountLaunch } from "@synara/contracts";
+import {
+  type ResolveAccountLaunchInput,
+  type ResolvedAccountLaunch,
+  type SupportedAccountProvider,
+} from "@synara/contracts";
 import { supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
 import { accountAgentHome, accountAppDataDir } from "@synara/shared/providerAccounts/accountPaths";
 import { Data, Effect } from "effect";
 
-import { resolveAccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
+import type { AccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
+import { accountEnvironmentBuilders } from "@synara/shared/providerAccounts/accountEnvironmentBuilders";
 import type { AccountStorageShape, ProviderAccountStorageError } from "./accountStorage";
 
 export class ProviderAccountResolutionError extends Data.TaggedError(
@@ -22,8 +17,8 @@ export class ProviderAccountResolutionError extends Data.TaggedError(
   readonly code:
     | "account-not-found"
     | "binding-unavailable"
-    | "generation-mismatch"
-    | "environment-unavailable";
+    | "binding-conflict"
+    | "generation-mismatch";
   readonly detail: string;
 }> {}
 
@@ -33,12 +28,14 @@ const NATIVE_GENERATION = 1;
 
 export interface AccountResolverInput {
   readonly storage: AccountStorageShape;
+  readonly environmentBuilders?: Record<SupportedAccountProvider, AccountEnvironmentBuilder>;
 }
 
 export type AccountResolverShape = ReturnType<typeof makeAccountResolver>;
 
 export function makeAccountResolver(input: AccountResolverInput) {
   const { storage } = input;
+  const environmentBuilders = input.environmentBuilders ?? accountEnvironmentBuilders;
 
   const resolveAccountLaunch = (
     launchInput: ResolveAccountLaunchInput,
@@ -48,6 +45,19 @@ export function makeAccountResolver(input: AccountResolverInput) {
   > =>
     Effect.gen(function* () {
       const { provider, surface } = launchInput;
+      // A thread already bound to one account must never be silently launched
+      // with another: an explicit selection that conflicts with the persisted
+      // binding fails closed instead of being overridden either way.
+      if (
+        launchInput.explicitOrdinal !== undefined &&
+        launchInput.threadBinding !== undefined &&
+        launchInput.threadBinding.ordinal !== launchInput.explicitOrdinal
+      ) {
+        return yield* new ProviderAccountResolutionError({
+          code: "binding-conflict",
+          detail: `This thread is already bound to '${provider}' account ${launchInput.threadBinding.ordinal}; it cannot be launched with account ${launchInput.explicitOrdinal}. Start a new thread to use a different account.`,
+        });
+      }
       const ordinal =
         launchInput.threadBinding?.ordinal ??
         launchInput.explicitOrdinal ??
@@ -93,14 +103,7 @@ export function makeAccountResolver(input: AccountResolverInput) {
         });
       }
 
-      const builder = resolveAccountEnvironmentBuilder(provider);
-      if (builder === undefined) {
-        return yield* new ProviderAccountResolutionError({
-          code: "environment-unavailable",
-          detail: `No managed environment builder is registered for provider '${provider}'.`,
-        });
-      }
-
+      const builder = environmentBuilders[provider];
       const authMethod = binding.authMethod;
       const apiKey =
         surface === "agent" && authMethod === "apiKey"

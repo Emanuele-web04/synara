@@ -1,7 +1,3 @@
-// FILE: accountResolver.test.ts
-// Purpose: Focused tests for fail-closed account launch resolution.
-// Layer: Server unit tests
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,7 +88,7 @@ describe("accountResolver", () => {
     expect(resolved.profilePath).toBeUndefined();
   });
 
-  it("prefers the thread binding over explicit ordinal and active pointer", async () => {
+  it("prefers the thread binding over the active pointer", async () => {
     await Effect.runPromise(storage.writeAccount(codexAccount({ ordinal: 1 })));
     await Effect.runPromise(storage.writeAccount(codexAccount({ ordinal: 2 })));
     await Effect.runPromise(storage.writeActiveOrdinal("codex", 2));
@@ -101,11 +97,25 @@ describe("accountResolver", () => {
       resolver.resolveAccountLaunch({
         provider: "codex",
         surface: "agent",
-        explicitOrdinal: 2,
         threadBinding: { ordinal: 1, agentGeneration: 1 },
       }),
     );
     expect(resolved.ordinal).toBe(1);
+  });
+
+  it("fails closed when an explicit ordinal conflicts with the thread binding", async () => {
+    await Effect.runPromise(storage.writeAccount(codexAccount({ ordinal: 1 })));
+    await Effect.runPromise(storage.writeAccount(codexAccount({ ordinal: 2 })));
+
+    await expectResolutionFailure(
+      resolver.resolveAccountLaunch({
+        provider: "codex",
+        surface: "agent",
+        explicitOrdinal: 2,
+        threadBinding: { ordinal: 1, agentGeneration: 1 },
+      }),
+      "binding-conflict",
+    );
   });
 
   it("uses the explicit ordinal over the active pointer", async () => {
