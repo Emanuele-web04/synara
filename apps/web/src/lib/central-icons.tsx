@@ -102,12 +102,12 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
 
   return (
     <span
+      data-slot={CENTRAL_ICON_SLOT}
       {...props}
       ref={ref}
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      data-slot={CENTRAL_ICON_SLOT}
       className={cn(CENTRAL_ICON_BASE_CLASS, className)}
       style={maskStyle}
     />
