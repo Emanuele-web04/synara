@@ -3,6 +3,8 @@
 // Layer: Server service implementation
 // Exports: ProviderAccountsLive, makeProviderAccounts.
 
+import "../claudeAppLaunch";
+
 import {
   ProviderAccountsSnapshot,
   SupportedAccountProvider,

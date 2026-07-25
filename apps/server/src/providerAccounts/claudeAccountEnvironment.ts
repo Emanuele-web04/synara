@@ -31,15 +31,17 @@ export function buildClaudeAccountEnvironment(
   for (const name of CLAUDE_CONFLICTING_ENV_VARS) {
     environment[name] = ACCOUNT_ENV_UNSET;
   }
-  environment.CLAUDE_CONFIG_DIR = input.agentHome;
-  if (input.authMethod === "apiKey" && input.apiKey !== undefined) {
+  // The app surface is the Claude desktop app: OAuth/browser-based, isolated
+  // through its own CLAUDE_CONFIG_DIR under the account app data dir. API keys
+  // are not a substitute for the desktop login, so no key is injected there.
+  const configDir = input.surface === "app" ? input.appDataDir : input.agentHome;
+  environment.CLAUDE_CONFIG_DIR = configDir;
+  if (input.surface === "agent" && input.authMethod === "apiKey" && input.apiKey !== undefined) {
     environment.ANTHROPIC_API_KEY = input.apiKey;
   }
   // OAuth accounts authenticate through CLAUDE_CONFIG_DIR/.credentials.json
-  // (the file credential store inside the account agent home). The Claude
-  // desktop app binding is OAuth/browser-based and separate from this agent
-  // environment; the app launch path ships with the desktop app work (PR7).
-  return { environment, profilePath: input.agentHome };
+  // (the file credential store inside the isolated config dir).
+  return { environment, profilePath: configDir };
 }
 
 registerAccountEnvironmentBuilder("claudeAgent", buildClaudeAccountEnvironment);
