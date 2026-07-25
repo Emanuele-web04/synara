@@ -1,9 +1,7 @@
-// FILE: cliIntegration.ts
-// Purpose: Real CLI integration for managed accounts: installs/uninstalls the
-//          provider shims into <account-root>/bin and reports health
-//          (installed state, launcher version, PATH visibility).
-// Layer: Server service internals
-// Exports: makeCliIntegration.
+// CLI integration for managed accounts: installs/uninstalls the provider
+// shims into <account-root>/bin and reports health (installed state,
+// launcher version, PATH visibility). This module is the single source of
+// truth for shim scripts; nothing ships pre-generated shims.
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -22,7 +20,6 @@ export class CliIntegrationError extends Data.TaggedError("CliIntegrationError")
   readonly cause?: unknown;
 }> {}
 
-const LAUNCHER_VERSION = "0.0.0-alpha.1";
 const VERSION_FILE = "launcher-version";
 
 // The standalone launcher entry point, resolved relative to this module so
@@ -33,6 +30,21 @@ const defaultLauncherEntry = (): string =>
     path.dirname(fileURLToPath(import.meta.url)),
     "../../../account-launcher/src/launcher.ts",
   );
+
+// The launcher package.json is the single source of truth for the installed
+// launcher version; a hardcoded constant here would silently drift.
+const readLauncherVersion = async (launcherEntry: string): Promise<string> => {
+  const packageJsonPath = path.resolve(path.dirname(launcherEntry), "..", "package.json");
+  const parsed = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as { version?: unknown };
+  if (typeof parsed.version !== "string" || parsed.version.length === 0) {
+    throw new Error(`No version field in ${packageJsonPath}.`);
+  }
+  return parsed.version;
+};
+
+// Single-quote a path for /bin/sh so spaces or metacharacters in the
+// account root or checkout path cannot break out of the shim command.
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 export interface CliIntegrationInput {
   readonly root: string;
@@ -45,7 +57,7 @@ const shimScript = (shimName: string, launcherEntry: string): string =>
   [
     "#!/bin/sh",
     "# Synara provider shim (installed by Synara CLI integration).",
-    `${SYNARA_LAUNCHER_SHIM}=${shimName} exec bun "${launcherEntry}" "$@"`,
+    `${SYNARA_LAUNCHER_SHIM}=${shimName} exec bun ${shellQuote(launcherEntry)} "$@"`,
     "",
   ].join("\n");
 
@@ -129,13 +141,14 @@ export function makeCliIntegration(input: CliIntegrationInput) {
         } catch {
           throw new Error(`Launcher entry point not found at ${launcherEntry}.`);
         }
+        const launcherVersion = await readLauncherVersion(launcherEntry);
         await fs.mkdir(shimDir, { recursive: true, mode: 0o755 });
         for (const name of shimNames) {
           const shimPath = path.join(shimDir, name);
           await fs.writeFile(shimPath, shimScript(name, launcherEntry), { mode: 0o755 });
           await fs.chmod(shimPath, 0o755);
         }
-        await fs.writeFile(path.join(shimDir, VERSION_FILE), `${LAUNCHER_VERSION}\n`, {
+        await fs.writeFile(path.join(shimDir, VERSION_FILE), `${launcherVersion}\n`, {
           mode: 0o644,
         });
       },

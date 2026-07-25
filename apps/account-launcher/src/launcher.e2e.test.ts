@@ -1,11 +1,3 @@
-// FILE: launcher.e2e.test.ts
-// Purpose: Hermetic end-to-end tests for the standalone launcher binary: shims
-//          installed into a temp SYNARA_ACCOUNT_HOME, PATH pointed at
-//          <root>/bin, real `bun launcher.ts` child processes, a fake `codex`
-//          binary receiving the managed environment, plus bypass and
-//          recursion-guard behavior. No server, no network.
-// Layer: Standalone launcher end-to-end tests
-
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

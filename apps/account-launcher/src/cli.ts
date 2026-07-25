@@ -1,8 +1,3 @@
-// FILE: cli.ts
-// Purpose: Argument parsing for the standalone account launcher (plan section 21).
-// Layer: Standalone launcher (no server imports)
-// Exports: parseLauncherInvocation, LauncherInvocation, LauncherUsageError.
-
 import type { SupportedAccountProvider } from "@synara/contracts";
 import {
   providerForShimCommand,

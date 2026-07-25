@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-// FILE: launcher.ts
-// Purpose: Entry point for `synara-account-launcher` (plan section 21).
-//          Standalone: no Electron, no WebSocket, no server, no database.
-//          Prints nothing on success; errors go to stderr with an exit code.
-// Layer: Standalone launcher
+// Entry point for `synara-account-launcher`. Standalone: no Electron, no
+// WebSocket, no server, no database. Prints nothing on success; errors go to
+// stderr with an exit code.
 
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
-import * as url from "node:url";
 
 import { resolveAccountRoot } from "@synara/shared/providerAccounts/accountPaths";
 import {
@@ -22,9 +19,6 @@ import {
 } from "./accountResolution.ts";
 import { LauncherUsageError, parseLauncherInvocation } from "./cli.ts";
 import { resolveRealBinary } from "./binaryResolution.ts";
-
-// The shell shims live in bin/ next to this package's src/.
-const shimDir = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "..", "bin");
 
 function fail(message: string, exitCode: number): never {
   process.stderr.write(`synara-account-launcher: ${message}\n`);
@@ -41,20 +35,21 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): never {
   }
   const command = providerShimCommands[invocation.provider];
 
-  // Installed shims live in <account-root>/bin; both that directory and the
-  // package-local bin/ must never resolve as the "real" binary.
+  // Installed shims live in <account-root>/bin; that directory must never
+  // resolve as the "real" binary (shims copied elsewhere are caught by the
+  // shim-signature check inside resolveRealBinary).
   const installedShimDir = path.join(resolveAccountRoot({ env }), "bin");
   const binary = resolveRealBinary({
     command,
     pathEnv: env.PATH,
-    shimDir: [shimDir, installedShimDir],
+    shimDir: installedShimDir,
   });
   if (binary === null) {
     fail(`Could not find the real '${command}' binary on PATH.`, 127);
   }
 
-  // Recursion protection (plan section 21.5): Synara-internal launches run the
-  // native binary untouched. Control variables still never reach the child.
+  // Synara-internal launches run the native binary untouched. Control
+  // variables still never reach the child.
   let overrides: Readonly<Record<string, string>> = {};
   if (!isLauncherBypass(env)) {
     try {
@@ -76,7 +71,7 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): never {
 
   // Node cannot execvp; spawnSync with inherited stdio keeps the provider in
   // the foreground process group so terminal signals and exit codes behave
-  // natively. TODO: true exec semantics via a compiled binary (plan 21.3).
+  // natively.
   const result = spawnSync(binary, [...invocation.providerArgs], {
     stdio: "inherit",
     env: childEnv,

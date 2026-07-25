@@ -1,7 +1,3 @@
-// FILE: cliIntegration.test.ts
-// Purpose: Focused tests for provider shim installation and diagnostics.
-// Layer: Server unit tests
-
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -21,8 +17,10 @@ describe("cliIntegration", () => {
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "synara-cli-integration-"));
-    launcherEntry = join(root, "launcher.ts");
+    mkdirSync(join(root, "launcher", "src"), { recursive: true });
+    launcherEntry = join(root, "launcher", "src", "launcher.ts");
     writeFileSync(launcherEntry, "// launcher entry\n");
+    writeFileSync(join(root, "launcher", "package.json"), JSON.stringify({ version: "1.2.3" }));
   });
 
   afterEach(() => {
