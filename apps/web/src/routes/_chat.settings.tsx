@@ -1,8 +1,3 @@
-// FILE: _chat.settings.tsx
-// Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
-// Layer: Route screen
-// Exports: Settings route component for `/settings`
-
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";

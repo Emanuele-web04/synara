@@ -1,9 +1,3 @@
-// FILE: appLaunch.ts
-// Purpose: Desktop app launch plan generation and generic launcher (plan sections 27-28).
-// Layer: Server service internals
-// Exports: makeAppLaunch, ProviderAppLaunchError,
-//          registerProviderAppLaunchSpec, resolveProviderAppLaunchSpec.
-
 import { spawn } from "node:child_process";
 
 import type {
@@ -39,8 +33,8 @@ export type ProviderAppLaunchSpecResolver = (
   input: ProviderAppLaunchSpecInput,
 ) => ProviderAppLaunchSpec | undefined;
 
-// Providers register their desktop app spec from their own module (the Claude
-// desktop path lands with PR7); adding a provider never edits a central switch.
+// Providers register their desktop app spec from their own module; adding a
+// provider never edits a central switch.
 const specResolvers = new Map<SupportedAccountProvider, ProviderAppLaunchSpecResolver>();
 
 export function registerProviderAppLaunchSpec(
@@ -158,7 +152,7 @@ export function makeAppLaunch(input: AppLaunchInput) {
         processStartedAt: now(),
         ...(plan.expectedAppVersion !== undefined ? { appVersion: plan.expectedAppVersion } : {}),
       };
-      // Best-effort tracking only (plan section 27.5): a failed lease write
+      // Best-effort tracking only: a failed lease write
       // must never prevent the launch itself.
       yield* storage
         .writeAppLease(lease)

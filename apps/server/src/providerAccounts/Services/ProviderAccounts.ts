@@ -1,8 +1,3 @@
-// FILE: ProviderAccounts.ts
-// Purpose: Provider account management service contract (plan sections 9-13, 38).
-// Layer: Server service contract
-// Exports: ProviderAccounts, ProviderAccountsShape, ProviderAccountsError.
-
 import type {
   ProviderAccountsBeginConnectInput,
   ProviderAccountsBeginConnectResult,

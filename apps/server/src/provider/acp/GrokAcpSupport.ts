@@ -158,7 +158,7 @@ export const makeGrokAcpRuntime = (
         ...input,
         spawn,
         // Authentication selection must examine the exact environment supplied
-        // to the child process, not process-global credentials (plan 8.4).
+        // to the child process, not process-global credentials.
         resolveAuthMethodId: (initializeResult) =>
           resolveGrokAcpAuthMethodId(initializeResult, spawn.env),
         authenticateMeta: { headless: true },

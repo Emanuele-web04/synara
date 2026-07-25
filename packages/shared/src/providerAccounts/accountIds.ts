@@ -1,7 +1,3 @@
-// FILE: accountIds.ts
-// Purpose: Stable naming helpers for provider account slots (provider + ordinal).
-// Layer: Cross-package pure utility
-
 import type { AccountSurface, SupportedAccountProvider } from "@synara/contracts";
 
 export function validateOrdinal(ordinal: number): number {

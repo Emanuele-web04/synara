@@ -1,8 +1,3 @@
-// FILE: wsNativeApi.ts
-// Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
-// Layer: Web transport adapter
-// Exports: createWsNativeApi and event subscription helpers for server push channels.
-
 import {
   type AuthBearerBootstrapResult,
   type AuthBootstrapInput,

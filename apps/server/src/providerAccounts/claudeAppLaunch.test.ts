@@ -1,7 +1,3 @@
-// FILE: claudeAppLaunch.test.ts
-// Purpose: Focused tests for Claude desktop launch plan generation.
-// Layer: Server unit tests
-
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";

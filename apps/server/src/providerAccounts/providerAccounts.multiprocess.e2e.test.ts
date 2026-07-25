@@ -1,12 +1,3 @@
-// FILE: providerAccounts.multiprocess.e2e.test.ts
-// Purpose: Cross-process end-to-end test for API-key connects: two separate OS
-//          processes (this Vitest process plus a spawned bun worker) connect
-//          accounts concurrently against the same temp account root and must
-//          end up with distinct ordinals and intact secrets. Verifies the
-//          mkdir-based ordinal reservation is safe across processes, not just
-//          across fibers.
-// Layer: Server end-to-end tests
-
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

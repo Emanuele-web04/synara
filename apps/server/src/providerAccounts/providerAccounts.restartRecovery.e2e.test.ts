@@ -1,11 +1,3 @@
-// FILE: providerAccounts.restartRecovery.e2e.test.ts
-// Purpose: End-to-end restart recovery across real OS processes: a spawned
-//          service process begins an OAuth connect and is SIGKILLed mid-flow;
-//          a fresh process over the same account root must surface the
-//          operation as terminal, clean the pending directory, and leak no
-//          ordinal.
-// Layer: Server end-to-end tests
-
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

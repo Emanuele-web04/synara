@@ -1,9 +1,3 @@
-// FILE: ProviderAccountMenu.tsx
-// Purpose: Sidebar quick-switch popup for provider accounts (plan section 36.1). Shows the
-//          active numbered slot per provider, a submenu to switch slots, and links to
-//          Settings → Accounts.
-// Layer: App component
-
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";

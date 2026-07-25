@@ -1,8 +1,3 @@
-// FILE: ProviderAccounts.test.ts
-// Purpose: Verifies the live service synthesizes the native account zero for
-//          every provider and reports real CLI integration status (no stubs).
-// Layer: Server unit tests
-
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

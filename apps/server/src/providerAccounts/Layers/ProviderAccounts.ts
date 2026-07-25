@@ -1,8 +1,3 @@
-// FILE: ProviderAccounts.ts
-// Purpose: Live provider account management service (plan sections 9-13, 38).
-// Layer: Server service implementation
-// Exports: ProviderAccountsLive, makeProviderAccounts.
-
 import "../claudeAppLaunch";
 
 import {

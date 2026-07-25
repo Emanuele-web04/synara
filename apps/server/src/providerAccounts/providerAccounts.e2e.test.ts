@@ -1,11 +1,3 @@
-// FILE: providerAccounts.e2e.test.ts
-// Purpose: Hermetic end-to-end tests for the global accounts system: connect
-//          workflows, account switching, launcher environment isolation, shim
-//          spawning, restart recovery, and concurrent connects. Everything
-//          runs against a temp account root with fake login runners and a
-//          fake provider binary — no network, no real provider CLIs.
-// Layer: Server end-to-end tests
-
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

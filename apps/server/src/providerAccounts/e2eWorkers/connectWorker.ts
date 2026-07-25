@@ -1,9 +1,3 @@
-// FILE: connectWorker.ts
-// Purpose: Helper process for the multi-process connect E2E test. Runs a batch
-//          of API-key connects against an account root passed on argv and
-//          prints the resulting ordinals as JSON. Not a test file.
-// Layer: Server end-to-end test fixture
-
 import { Effect } from "effect";
 
 import { makeAccountConnect } from "../accountConnect";

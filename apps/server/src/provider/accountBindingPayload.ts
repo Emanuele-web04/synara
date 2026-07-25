@@ -1,9 +1,3 @@
-// FILE: accountBindingPayload.ts
-// Purpose: Public-safe account binding stored in provider runtime payloads
-//          (plan section 13.3). Never contains environments or secrets.
-// Layer: Server provider internals
-// Exports: ThreadAccountBinding, readAccountBindingFromRuntimePayload.
-
 import { Schema } from "effect";
 
 export const ThreadAccountBinding = Schema.Struct({

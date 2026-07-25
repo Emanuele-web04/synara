@@ -1,7 +1,3 @@
-// FILE: capabilities.ts
-// Purpose: Authentication and surface support matrix (plan section 7).
-// Layer: Cross-package pure utility
-
 import type {
   AccountSupportLevel,
   AccountSurface,

@@ -1,11 +1,3 @@
-// FILE: providerAccounts.crossProvider.e2e.test.ts
-// Purpose: Cross-provider isolation end to end: a Claude and a Grok API-key
-//          account created concurrently over the same account root must
-//          resolve launch environments that only carry their own provider's
-//          credentials and strip their own provider's inherited auth, without
-//          touching the other provider's variables.
-// Layer: Server end-to-end tests
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

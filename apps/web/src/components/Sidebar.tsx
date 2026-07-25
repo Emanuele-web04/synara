@@ -1,7 +1,3 @@
-// FILE: Sidebar.tsx
-// Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
-// Exports: Sidebar
-
 import {
   ArchiveIcon,
   ClockIcon,

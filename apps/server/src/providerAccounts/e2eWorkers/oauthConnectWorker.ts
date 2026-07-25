@@ -1,10 +1,3 @@
-// FILE: oauthConnectWorker.ts
-// Purpose: Helper process for the restart-recovery E2E test. Starts an OAuth
-//          connect whose fake login never completes against the account root
-//          passed on argv, prints the operation id, then stays alive until it
-//          is killed. Not a test file.
-// Layer: Server end-to-end test fixture
-
 import { Effect } from "effect";
 
 import { makeAccountConnect } from "../accountConnect";

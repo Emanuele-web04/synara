@@ -1,10 +1,3 @@
-// FILE: AccountConnectDialog.tsx
-// Purpose: Managed provider-account connection dialog. Offers only the auth
-//          methods the capability matrix supports, drives the OAuth device
-//          flow with status polling / cancellation, and takes API keys.
-// Layer: Shared UI component
-// Exports: AccountConnectDialog, AccountConnectRequest
-
 import type {
   ProviderAccountCapabilities,
   ProviderAccountsConnectStatus,

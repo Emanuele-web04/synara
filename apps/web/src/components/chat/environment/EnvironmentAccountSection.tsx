@@ -1,8 +1,3 @@
-// FILE: EnvironmentAccountSection.tsx
-// Purpose: "Account" section of the Environment panel — shows the provider account slot the
-//          active thread is bound to (plan section 36.5). Existing sessions stay bound to
-//          their original account, so this reflects the thread's binding, not the active slot.
-
 import type { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";

@@ -1,9 +1,3 @@
-// FILE: claudeAppLaunch.ts
-// Purpose: Claude desktop app launch spec and plan builder (plan sections 8.2, 27).
-// Layer: Server service internals
-// Exports: resolveClaudeDesktopExecutable, buildClaudeDesktopLaunchPlan
-//          (also self-registers the app launch spec for "claudeAgent").
-
 import { join } from "node:path";
 
 import type { ProviderAccountLaunchContext, ProviderAppLaunchPlan } from "@synara/contracts";
@@ -23,7 +17,7 @@ const currentPlatform = (): ClaudeDesktopPlatform => ({
 /**
  * Resolves the official Claude desktop app executable for the host platform.
  * Returns undefined where no official desktop build exists: launch must stay
- * unavailable rather than guessing at a binary (plan section 8.2).
+ * unavailable rather than guessing at a binary.
  */
 export function resolveClaudeDesktopExecutable(
   host: ClaudeDesktopPlatform = currentPlatform(),

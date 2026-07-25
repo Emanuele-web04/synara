@@ -1,7 +1,3 @@
-// FILE: launcherProtocol.ts
-// Purpose: Environment protocol between the global launcher and provider processes.
-// Layer: Cross-package pure utility
-
 import type { SupportedAccountProvider } from "@synara/contracts";
 
 export const SYNARA_LAUNCHER_BYPASS = "SYNARA_LAUNCHER_BYPASS";
