@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.1",
+    date: "Jul 25",
+    features: [
+      {
+        id: "database-recovery",
+        title: "Updates recover safely from interrupted migrations",
+        description:
+          "Synara now detects and repairs the database state that could leave some 0.6.0 installations stuck during startup.",
+        details:
+          "Migration lineage is validated before launch, recovery uses verified backups and resumable markers, and the desktop supervisor distinguishes recoverable migration failures from ordinary backend exits. The recovery path is covered on macOS, Linux, and Windows, including Windows-specific process and filesystem behavior.",
+      },
+      {
+        id: "simpler-project-navigation",
+        title: "Projects are easier to enter and switch",
+        description:
+          "Start from the project you want directly in the new-task heading, with fewer intermediate workspace screens and steadier navigation state.",
+        details:
+          "The project name in the empty-chat heading is now a picker trigger, Space navigation is normalized through one shared path, and Studio workspace metadata is repaired during migration so restored tasks open in the right place.",
+      },
+      {
+        id: "reliable-diffs-and-git",
+        title: "Diff and Git tools stay in sync",
+        description:
+          "Switch diff views, refresh repository state, and copy large virtualized changes without stale controls or missing content.",
+        details:
+          "The diff toolbar now derives its mode and selection consistently, Select All copies the complete virtualized diff, Git status refreshes after actions, and branch controls handle repository and worktree state more predictably.",
+      },
+      {
+        id: "steadier-agent-sessions",
+        title: "Agent sessions settle and recover more cleanly",
+        description:
+          "Claude, OpenCode, Pi, Codex, and other providers keep their model choices, runtime state, and shutdown boundaries aligned through reconnects and failures.",
+        details:
+          "This release fixes Pi model discovery against the current runtime SDK, ignores stale OpenCode plan agents, hardens Claude resume and permission handling, preserves WebSocket requests across reconnect boundaries, and proves process-tree teardown before replacing desktop or provider backends.",
+      },
+      {
+        id: "clearer-live-status",
+        title: "Live work is easier to read",
+        description:
+          "Automation rows show state-specific icons, task hydration is calmer, and active conversations avoid unnecessary projection and subscription churn.",
+        details:
+          "Automation status now distinguishes running, attention, failure, and settled states at a glance. Store projection, thread-detail retention, terminal cleanup, and sidebar updates were tightened so busy workspaces remain responsive and predictable.",
+      },
+    ],
+  },
+  {
     version: "0.6.0",
     date: "Jul 24",
     features: [

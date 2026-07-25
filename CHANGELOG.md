@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.1 - 2026-07-25
+
+### Added
+
+- Added guarded desktop recovery for the interrupted or partially applied migration state that could leave some 0.6.0 databases unable to start.
+- Added migration-lineage validation and replay coverage, including a Windows CI gate for the recovery path.
+- Added dynamic, state-specific icons to automation rows.
+- Added a project picker directly to the new-task heading.
+
+### Changed
+
+- Simplified project, Space, and Studio navigation and normalized restored Studio workspace metadata so tasks reopen in the correct location.
+- Refactored desktop backend supervision, shutdown, and process-tree teardown so replacement and restart only proceed after the previous runtime is proven stopped.
+- Reduced redundant projection, thread-detail subscription, terminal-state, and sidebar work during active conversations.
+- Aligned Pi model discovery with the current ModelRuntime SDK and tightened Claude, OpenCode, Codex, Cursor, Droid, Grok, and Antigravity session lifecycle handling.
+- Bumped Synara release package versions to `0.6.1` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed 0.6.0 database recovery when a migration had committed schema changes without advancing the recorded lineage, while preserving verified backups and resumable recovery markers.
+- Fixed migration replay across historically edited migration files and rejected unsafe lineage mismatches before application startup.
+- Fixed desktop startup and shutdown races, including Windows backend termination, stale process replacement, and misleading startup-block diagnostics.
+- Fixed diff view toggles, stale Git status refreshes, and Select All copying only the rendered portion of a virtualized diff.
+- Fixed stale OpenCode plan-agent state, Pi model discovery, Claude resume and permission edge cases, and provider process teardown after interrupted sessions.
+- Fixed project heading colors, empty-chat project selection, Space routing, and restored Studio task workspace paths.
+- Fixed outbound HTTP pinning so Happy Eyeballs behavior remains available.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,501 files.
+- `bun run lint` passed with 290 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing TS44 informational JSON/schema-preference messages and Astro/Vite deprecation notices were reported.
+- `bun run release:smoke` passed and retained the pinned dependency graph.
+- `bun run build` passed with 5 successful Turbo tasks; existing Astro/Vite deprecations and tsdown/plugin timing warnings remain non-blocking.
+- Full `bun run test` passed with 8 successful Turbo tasks in 16m15.769s. Web passed 256 files / 3,107 tests; server/CLI passed 274 files / 2,860 tests with 2 skipped files and 7 skipped tests; all remaining package suites passed. No targeted reruns were required.
+
 ## 0.6.0 - 2026-07-24
 
 ### Added
