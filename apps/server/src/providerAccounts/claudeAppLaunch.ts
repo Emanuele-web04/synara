@@ -7,7 +7,6 @@
 import { join } from "node:path";
 
 import type { ProviderAccountLaunchContext, ProviderAppLaunchPlan } from "@synara/contracts";
-import { supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
 
 import { registerProviderAppLaunchSpec } from "./appLaunch";
 
@@ -45,14 +44,18 @@ export interface ClaudeDesktopLaunchPlanInput {
 }
 
 /**
- * Builds the Claude desktop app launch plan. Managed accounts carry the
- * resolved app-surface environment (CLAUDE_CONFIG_DIR pinned to the account
- * app data dir with conflicting inherited auth stripped); account 0 opens the
- * official app with no environment overrides.
+ * Builds the Claude desktop app launch plan. Only the native account 0 can
+ * open the official desktop app: there is no verified mechanism to isolate
+ * Claude Desktop profiles (CLAUDE_CONFIG_DIR is proven for the Claude Code
+ * CLI only), so managed ordinals return undefined instead of pretending an
+ * unproven isolation works.
  */
 export function buildClaudeDesktopLaunchPlan(
   input: ClaudeDesktopLaunchPlanInput,
 ): ProviderAppLaunchPlan | undefined {
+  if (input.ordinal > 0) {
+    return undefined;
+  }
   const executable = resolveClaudeDesktopExecutable(input.host ?? currentPlatform());
   if (executable === undefined) {
     return undefined;
@@ -63,8 +66,8 @@ export function buildClaudeDesktopLaunchPlan(
     appGeneration: input.accountLaunch?.generation ?? 1,
     executable,
     args: [],
-    environment: input.accountLaunch?.environment ?? {},
-    supportLevel: input.ordinal > 0 ? supportLevelFor("claudeAgent", "app", "oauth") : "supported",
+    environment: {},
+    supportLevel: "supported",
   } satisfies ProviderAppLaunchPlan;
 }
 

@@ -6,8 +6,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_ENV_UNSET } from "@synara/shared/providerAccounts/accountEnvironment";
-import { buildClaudeAccountEnvironment } from "./claudeAccountEnvironment";
+import { buildClaudeAccountEnvironment } from "@synara/shared/providerAccounts/claudeAccountEnvironment";
 import { buildClaudeDesktopLaunchPlan, resolveClaudeDesktopExecutable } from "./claudeAppLaunch";
 
 const DARWIN_EXECUTABLE = "/Applications/Claude.app/Contents/MacOS/Claude";
@@ -49,7 +48,7 @@ describe("buildClaudeDesktopLaunchPlan", () => {
     });
   });
 
-  it("builds a managed account plan carrying the resolved app environment", () => {
+  it("refuses managed ordinals until desktop isolation is proven", () => {
     const launchEnvironment = buildClaudeAccountEnvironment({
       provider: "claudeAgent",
       ordinal: 2,
@@ -68,15 +67,7 @@ describe("buildClaudeDesktopLaunchPlan", () => {
       },
       host: { platform: "darwin" },
     });
-    expect(plan).toBeDefined();
-    expect(plan?.ordinal).toBe(2);
-    expect(plan?.appGeneration).toBe(3);
-    expect(plan?.supportLevel).toBe("experimental");
-    expect(plan?.environment.CLAUDE_CONFIG_DIR).toBe("/accounts/claudeAgent/2/app/data");
-    // Inherited auth must never leak into the desktop app launch.
-    expect(plan?.environment.ANTHROPIC_API_KEY).toBe(ACCOUNT_ENV_UNSET);
-    expect(plan?.environment.CLAUDE_CODE_OAUTH_TOKEN).toBe(ACCOUNT_ENV_UNSET);
-    expect(plan?.environment.ANTHROPIC_BASE_URL).toBe(ACCOUNT_ENV_UNSET);
+    expect(plan).toBeUndefined();
   });
 
   it("returns undefined where no official desktop build exists", () => {
