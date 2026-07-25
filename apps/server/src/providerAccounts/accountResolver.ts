@@ -3,6 +3,7 @@
 // Layer: Server service internals
 // Exports: makeAccountResolver, ProviderAccountResolutionError.
 
+import "./claudeAccountEnvironment";
 import "./codexAccountEnvironment";
 
 import { type ResolveAccountLaunchInput, type ResolvedAccountLaunch } from "@synara/contracts";
