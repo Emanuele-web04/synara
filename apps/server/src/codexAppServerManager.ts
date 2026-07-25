@@ -819,6 +819,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   ) {
     // Managed accounts pin CODEX_HOME to the account agent home and skip the
     // shared overlay config, so nothing from the native home can leak in.
+    // This intentionally also omits the gateway MCP config: the account
+    // environment overrides (applied last, below) repoint CODEX_HOME at the
+    // account home, so config appended to the overlay would never be read.
+    // Synara-side MCP features are therefore unavailable in managed launches
+    // until the account home gains its own managed config section.
     const env = await buildCodexProcessEnv({
       ...(accountLaunch?.profilePath
         ? { homePath: accountLaunch.profilePath }

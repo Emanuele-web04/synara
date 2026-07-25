@@ -344,8 +344,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
     // Optional so embedded/test layers without account management keep native
-    // launch behavior for every provider.
+    // launch behavior for every provider — but the degradation is explicit:
+    // it is logged once at startup, never silently skipped per launch.
     const providerAccounts = Option.getOrUndefined(yield* Effect.serviceOption(ProviderAccounts));
+    if (providerAccounts === undefined) {
+      yield* Effect.logWarning(
+        "ProviderService.provider_accounts_unavailable: managed account resolution is disabled; all launches use native provider accounts.",
+      );
+    }
     const isSupportedAccountProvider = Schema.is(SupportedAccountProvider);
 
     const resolveAccountForLaunch = (resolveInput: {
@@ -369,7 +375,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ? resolveInput.persistedBinding
             : undefined;
         // Legacy migration: threads with provider history but no persisted
-        // account binding stay on the native account 0 (plan section 14).
+        // account binding stay on the native account 0.
         const threadBinding =
           readAccountBindingFromRuntimePayload(persisted?.runtimePayload) ??
           (persisted !== undefined ? { ordinal: 0, agentGeneration: 1 } : undefined);
@@ -1309,7 +1315,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : {}),
               });
               // Persist the binding before launch so a crash mid-startup can
-              // never re-resolve to a different account (plan section 13).
+              // never re-resolve to a different account.
               if (account.accountBinding !== undefined) {
                 yield* withBindingWriteLock(
                   threadId,
