@@ -1,7 +1,3 @@
-// FILE: accountPaths.ts
-// Purpose: Pure path helpers for the machine-global account root layout.
-// Layer: Cross-package pure utility (no fs side effects)
-
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -37,10 +33,6 @@ export function resolveAccountRoot(options: ResolveAccountRootOptions = {}): str
       ? env.XDG_DATA_HOME
       : join(home, ".local", "share");
   return join(xdgDataHome, "synara", "accounts");
-}
-
-export function accountRootPath(root: string): string {
-  return root;
 }
 
 export function activePointerDir(root: string): string {

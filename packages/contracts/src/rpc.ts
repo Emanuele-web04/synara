@@ -1077,23 +1077,6 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
 
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
-// Kept as a standalone group until the server implements the providerAccounts
-// handlers, at which point it merges into WsFeatureRpcGroup.
-export const WsProviderAccountsRpcGroup = RpcGroup.make(
-  WsProviderAccountsGetSnapshotRpc,
-  WsProviderAccountsBeginConnectRpc,
-  WsProviderAccountsGetConnectStatusRpc,
-  WsProviderAccountsCancelConnectRpc,
-  WsProviderAccountsSetActiveRpc,
-  WsProviderAccountsDisconnectBindingRpc,
-  WsProviderAccountsHideRpc,
-  WsProviderAccountsLaunchRpc,
-  WsProviderAccountsGetIntegrationStatusRpc,
-  WsProviderAccountsUpdateCliIntegrationRpc,
-  WsProviderAccountsGetDoctorReportRpc,
-  WsProviderAccountsGetThreadBindingRpc,
-);
-
 export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationImportThreadRpc,

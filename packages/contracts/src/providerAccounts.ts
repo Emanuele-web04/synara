@@ -187,7 +187,7 @@ export const ProviderAppLaunchPlan = Schema.Struct({
 });
 export type ProviderAppLaunchPlan = typeof ProviderAppLaunchPlan.Type;
 
-// RPC surface (plan section 38)
+// RPC surface
 
 export const PROVIDER_ACCOUNTS_WS_METHODS = {
   getSnapshot: "providerAccounts.getSnapshot",
@@ -309,10 +309,10 @@ export const ProviderAccountsIntegrationStatus = Schema.Struct({
   cliIntegrationEnabled: Schema.Boolean,
   launcherInstalled: Schema.Boolean,
   launcherVersion: Schema.optional(TrimmedNonEmptyString),
-  shimDir: Schema.optional(TrimmedNonEmptyString),
-  shimDirOnPath: Schema.optional(Schema.Boolean),
-  launcherEntryExists: Schema.optional(Schema.Boolean),
-  platformSupported: Schema.optional(Schema.Boolean),
+  shimDir: TrimmedNonEmptyString,
+  shimDirOnPath: Schema.Boolean,
+  launcherEntryExists: Schema.Boolean,
+  platformSupported: Schema.Boolean,
 });
 export type ProviderAccountsIntegrationStatus = typeof ProviderAccountsIntegrationStatus.Type;
 

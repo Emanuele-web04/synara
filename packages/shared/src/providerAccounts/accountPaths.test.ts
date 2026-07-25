@@ -6,7 +6,6 @@ import {
   accountAppDataDir,
   accountDir,
   accountJsonPath,
-  accountRootPath,
   accountsDir,
   activePointerDir,
   activePointerPath,
@@ -61,7 +60,6 @@ describe("layout helpers", () => {
   const root = "/root/accounts";
 
   it("builds the documented filesystem layout", () => {
-    expect(accountRootPath(root)).toBe(root);
     expect(versionFilePath(root)).toBe(join(root, "version"));
     expect(activePointerDir(root)).toBe(join(root, "active"));
     expect(activePointerPath(root, "codex")).toBe(join(root, "active", "codex"));

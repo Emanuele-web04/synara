@@ -1,8 +1,3 @@
-// FILE: providerAccountsReactQuery.ts
-// Purpose: React Query hooks and presentation helpers for the providerAccounts RPC surface.
-// Layer: Web data access
-// Exports: query options, mutation hooks, and shared account label helpers.
-
 import type {
   AccountBindingState,
   AccountOrdinal,
@@ -202,7 +197,7 @@ export const ACCOUNT_SUPPORT_LEVEL_LABELS: Record<AccountSupportLevel, string> =
   unsupported: "Unsupported",
 };
 
-/** "k••••@example.com · ChatGPT Plus" style identity line (plan section 36.3). */
+/** "k••••@example.com · ChatGPT Plus" style identity line. */
 export function accountIdentityLabel(identity?: {
   readonly hint?: string | undefined;
   readonly plan?: string | undefined;
@@ -212,11 +207,4 @@ export function accountIdentityLabel(identity?: {
     (part): part is string => typeof part === "string" && part.length > 0,
   );
   return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-export function providerSnapshotEntry(
-  snapshot: ProviderAccountsSnapshot | undefined,
-  provider: SupportedAccountProvider,
-) {
-  return snapshot?.providers.find((entry) => entry.provider === provider) ?? null;
 }

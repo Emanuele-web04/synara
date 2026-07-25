@@ -1,9 +1,6 @@
-// FILE: doctorReport.ts
-// Purpose: Account-system diagnostics: active pointers, record schemas,
-//          missing secrets, orphaned pending directories, stale app leases,
-//          and launcher installation/PATH health.
-// Layer: Server service internals
-// Exports: makeDoctorReport.
+// Account-system diagnostics: active pointers, record schemas, missing
+// secrets, orphaned pending directories, stale app leases, and launcher
+// installation/PATH health.
 
 import { SupportedAccountProvider, type ProviderAccountsDoctorReport } from "@synara/contracts";
 import { Effect } from "effect";
@@ -188,7 +185,7 @@ export function makeDoctorReport(input: DoctorReportInput) {
         "Provider shims are not installed. Enable CLI integration in Settings to launch managed accounts from a terminal.",
       );
     }
-    if (status.launcherEntryExists === false) {
+    if (!status.launcherEntryExists) {
       return check(
         "cli-integration",
         "CLI integration",
@@ -196,12 +193,12 @@ export function makeDoctorReport(input: DoctorReportInput) {
         `The launcher entry point is missing (${cliIntegration.launcherEntry}). Reinstall CLI integration.`,
       );
     }
-    if (status.shimDirOnPath !== true) {
+    if (!status.shimDirOnPath) {
       return check(
         "cli-integration",
         "CLI integration",
         "warning",
-        `Shims are installed but ${status.shimDir ?? "the shim directory"} is not on PATH.`,
+        `Shims are installed but ${status.shimDir} is not on PATH.`,
       );
     }
     const shadowed = yield* cliIntegration.listShadowedShims;
@@ -210,7 +207,7 @@ export function makeDoctorReport(input: DoctorReportInput) {
         "cli-integration",
         "CLI integration",
         "warning",
-        `Shim(s) ${shadowed.join(", ")} resolve to another PATH entry before ${status.shimDir ?? "the shim directory"}. Move it earlier on PATH.`,
+        `Shim(s) ${shadowed.join(", ")} resolve to another PATH entry before ${status.shimDir}. Move it earlier on PATH.`,
       );
     }
     return check(
