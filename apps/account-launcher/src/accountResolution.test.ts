@@ -113,7 +113,7 @@ describe("resolveLaunchEnvironment", () => {
     ).toThrow("Invalid SYNARA_ACCOUNT_OVERRIDE");
   });
 
-  it("rejects managed accounts for providers without an environment builder", () => {
+  it("resolves managed accounts for every supported provider", () => {
     const filePath = accountJsonPath(root, "grok", 1);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(
@@ -125,9 +125,23 @@ describe("resolveLaunchEnvironment", () => {
         agent: { state: "connected", authMethod: "oauth", generation: 1 },
       }),
     );
-    expect(() =>
-      resolveLaunchEnvironment({ root, provider: "grok", explicitOrdinal: 1, env: {} }),
-    ).toThrow("not supported by the launcher yet");
+    const launch = resolveLaunchEnvironment({
+      root,
+      provider: "grok",
+      explicitOrdinal: 1,
+      env: {},
+    });
+    expect(launch.ordinal).toBe(1);
+    expect(launch.overrides.GROK_HOME).toContain(path.join("accounts", "grok", "1"));
+  });
+
+  it("fails closed on a corrupted active pointer", () => {
+    const pointer = activePointerPath(root, "codex");
+    fs.mkdirSync(path.dirname(pointer), { recursive: true });
+    fs.writeFileSync(pointer, "garbage");
+    expect(() => resolveLaunchEnvironment({ root, provider: "codex", env: {} })).toThrow(
+      "corrupted",
+    );
   });
 });
 
