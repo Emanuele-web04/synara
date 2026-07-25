@@ -1,10 +1,3 @@
-// FILE: accountEnvironment.ts
-// Purpose: Provider environment builder registry for managed account launches.
-// Layer: Cross-package pure utility (plan section 13); used by the server
-//        resolver and the standalone account launcher.
-// Exports: registerAccountEnvironmentBuilder, resolveAccountEnvironmentBuilder,
-//          applyAccountEnvironmentOverrides, ACCOUNT_ENV_UNSET.
-
 import type {
   AccountSurface,
   AgentAuthMethod,
@@ -38,24 +31,6 @@ export interface AccountLaunchEnvironment {
 export type AccountEnvironmentBuilder = (
   input: AccountEnvironmentBuildInput,
 ) => AccountLaunchEnvironment;
-
-// Providers register their builder from their own module (see
-// codexAccountEnvironment.ts and its siblings); adding a provider never
-// edits a central switch.
-const builders = new Map<SupportedAccountProvider, AccountEnvironmentBuilder>();
-
-export function registerAccountEnvironmentBuilder(
-  provider: SupportedAccountProvider,
-  builder: AccountEnvironmentBuilder,
-): void {
-  builders.set(provider, builder);
-}
-
-export function resolveAccountEnvironmentBuilder(
-  provider: SupportedAccountProvider,
-): AccountEnvironmentBuilder | undefined {
-  return builders.get(provider);
-}
 
 /** Applies account environment overrides onto a child process environment. */
 export function applyAccountEnvironmentOverrides(

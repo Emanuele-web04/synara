@@ -1,21 +1,11 @@
-// FILE: accountResolution.ts
-// Purpose: Fail-closed account resolution for the standalone launcher
-//          (plan sections 12, 21, 25). Reads the global account root directly;
-//          no server, no database, no Effect runtime.
-// Layer: Standalone launcher
-// Exports: resolveLaunchEnvironment, buildChildEnvironment, AccountLaunchError.
+// Fail-closed account resolution for the standalone launcher. Reads the
+// global account root directly; no server, no database, no Effect runtime.
 
 import * as fs from "node:fs";
 
 import type { AgentAuthMethod, SupportedAccountProvider } from "@synara/contracts";
-import {
-  ACCOUNT_ENV_UNSET,
-  resolveAccountEnvironmentBuilder,
-} from "@synara/shared/providerAccounts/accountEnvironment";
-import "@synara/shared/providerAccounts/codexAccountEnvironment";
-import "@synara/shared/providerAccounts/claudeAccountEnvironment";
-import "@synara/shared/providerAccounts/cursorAccountEnvironment";
-import "@synara/shared/providerAccounts/grokAccountEnvironment";
+import { ACCOUNT_ENV_UNSET } from "@synara/shared/providerAccounts/accountEnvironment";
+import { accountEnvironmentBuilders } from "@synara/shared/providerAccounts/accountEnvironmentBuilders";
 import {
   accountAgentHome,
   accountAppDataDir,
@@ -129,8 +119,8 @@ export function resolveLaunchEnvironment(input: ResolveLaunchInput): ResolvedLau
   const ordinal =
     overrideOrdinal ?? input.explicitOrdinal ?? readActiveOrdinal(root, provider) ?? 0;
 
-  // Account zero is the native account: preserve native behavior (plan
-  // section 25) — no sanitization, no managed environment.
+  // Account zero is the native account: preserve native behavior — no
+  // sanitization, no managed environment.
   if (ordinal === 0) return { ordinal: 0, overrides: {} };
 
   const binding = readAgentBinding(root, provider, ordinal);
@@ -140,14 +130,7 @@ export function resolveLaunchEnvironment(input: ResolveLaunchInput): ResolvedLau
     );
   }
 
-  const builder = resolveAccountEnvironmentBuilder(provider);
-  if (builder === undefined) {
-    // TODO(PR3-PR5): claudeAgent, cursor, and grok managed launches arrive
-    // with their shared environment builders.
-    throw new AccountLaunchError(
-      `Managed '${provider}' accounts are not supported by the launcher yet.`,
-    );
-  }
+  const builder = accountEnvironmentBuilders[provider];
 
   let apiKey: string | undefined;
   if (binding.authMethod === "apiKey") {
@@ -176,7 +159,7 @@ export function resolveLaunchEnvironment(input: ResolveLaunchInput): ResolvedLau
  * Builds the child environment: strips launcher control variables so they
  * never leak into the provider process, then applies the account overrides
  * (removals marked with `ACCOUNT_ENV_UNSET`, e.g. conflicting provider
- * credentials from the parent shell — plan section 25).
+ * credentials from the parent shell).
  */
 export function buildChildEnvironment(
   parentEnv: NodeJS.ProcessEnv,

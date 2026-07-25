@@ -1,7 +1,3 @@
-// FILE: grokAccountEnvironment.test.ts
-// Purpose: Focused tests for the Grok managed-account environment builder.
-// Layer: Cross-package pure utility tests
-
 import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_ENV_UNSET } from "./accountEnvironment";

@@ -1,11 +1,5 @@
-// FILE: cursorAccountEnvironment.ts
-// Purpose: Cursor managed-account environment builder (plan section 8.3).
-// Layer: Cross-package pure utility
-// Exports: buildCursorAccountEnvironment (also self-registers for "cursor").
-
 import {
   ACCOUNT_ENV_UNSET,
-  registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
 } from "./accountEnvironment";
@@ -26,11 +20,7 @@ export function buildCursorAccountEnvironment(
   if (input.authMethod === "apiKey" && input.apiKey !== undefined) {
     environment.CURSOR_API_KEY = input.apiKey;
   }
-  // Cursor agent OAuth stays unsupported for managed accounts (plan section
-  // 8.3); the app OAuth binding resolves through this same builder but its
-  // desktop launch plan (--user-data-dir/--extensions-dir) ships with the
-  // app-launch foundation (PR6/7).
+  // Cursor agent OAuth stays unsupported for managed accounts; the app OAuth
+  // binding resolves through this same builder.
   return { environment, profilePath: input.agentHome };
 }
-
-registerAccountEnvironmentBuilder("cursor", buildCursorAccountEnvironment);

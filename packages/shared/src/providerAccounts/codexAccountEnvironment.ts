@@ -1,11 +1,5 @@
-// FILE: codexAccountEnvironment.ts
-// Purpose: Codex managed-account environment builder (plan section 13.1).
-// Layer: Cross-package pure utility
-// Exports: buildCodexAccountEnvironment (also self-registers for "codex").
-
 import {
   ACCOUNT_ENV_UNSET,
-  registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
 } from "./accountEnvironment";
@@ -34,5 +28,3 @@ export function buildCodexAccountEnvironment(
   // credential store inside the account agent home).
   return { environment, profilePath: input.agentHome };
 }
-
-registerAccountEnvironmentBuilder("codex", buildCodexAccountEnvironment);

@@ -1,20 +1,14 @@
-// FILE: cursorAccountEnvironment.test.ts
-// Purpose: Focused tests for the Cursor managed-account environment builder.
-// Layer: Cross-package pure utility tests
-
 import { describe, expect, it } from "vitest";
 
-import {
-  ACCOUNT_ENV_UNSET,
-  resolveAccountEnvironmentBuilder,
-} from "@synara/shared/providerAccounts/accountEnvironment";
+import { ACCOUNT_ENV_UNSET } from "@synara/shared/providerAccounts/accountEnvironment";
+import { accountEnvironmentBuilders } from "@synara/shared/providerAccounts/accountEnvironmentBuilders";
 import { buildCursorAccountEnvironment } from "./cursorAccountEnvironment";
 
 const agentHome = "/accounts/cursor/2/agent/home";
 
 describe("buildCursorAccountEnvironment", () => {
-  it("registers itself for the cursor provider", () => {
-    expect(resolveAccountEnvironmentBuilder("cursor")).toBe(buildCursorAccountEnvironment);
+  it("is the registry entry for the cursor provider", () => {
+    expect(accountEnvironmentBuilders.cursor).toBe(buildCursorAccountEnvironment);
   });
 
   it("injects the managed API key and isolates the config dir", () => {

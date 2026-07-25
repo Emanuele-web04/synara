@@ -1,7 +1,3 @@
-// FILE: appLaunch.test.ts
-// Purpose: Focused tests for desktop app launch plan generation and the generic launcher.
-// Layer: Server unit tests
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +6,7 @@ import type { ProviderAccountRecord, ProviderAppLaunchPlan } from "@synara/contr
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { registerAccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
+import { accountEnvironmentBuilders } from "@synara/shared/providerAccounts/accountEnvironmentBuilders";
 import { makeAccountResolver } from "./accountResolver";
 import {
   makeAccountStorage,
@@ -45,11 +41,15 @@ describe("appLaunch", () => {
       executable: "/opt/apps/cursor",
       args: ["--user-data-dir", appDataDir],
     }));
-    registerAccountEnvironmentBuilder("cursor", (input) => ({
+  });
+
+  const testEnvironmentBuilders = {
+    ...accountEnvironmentBuilders,
+    cursor: (input: Parameters<(typeof accountEnvironmentBuilders)["cursor"]>[0]) => ({
       environment: { SYNARA_TEST_SURFACE: input.surface },
       profilePath: input.appDataDir,
-    }));
-  });
+    }),
+  };
 
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
@@ -58,7 +58,7 @@ describe("appLaunch", () => {
   const makeLaunch = (options?: { spawnProcess?: AppProcessSpawner; now?: () => string }) =>
     makeAppLaunch({
       storage,
-      resolver: makeAccountResolver({ storage }),
+      resolver: makeAccountResolver({ storage, environmentBuilders: testEnvironmentBuilders }),
       ...(options?.spawnProcess !== undefined ? { spawnProcess: options.spawnProcess } : {}),
       ...(options?.now !== undefined ? { now: options.now } : {}),
     });
@@ -198,7 +198,10 @@ describe("appLaunch", () => {
       };
       const launch = makeAppLaunch({
         storage: failingStorage,
-        resolver: makeAccountResolver({ storage: failingStorage }),
+        resolver: makeAccountResolver({
+          storage: failingStorage,
+          environmentBuilders: testEnvironmentBuilders,
+        }),
         spawnProcess: () => ({ pid: 99 }),
       });
       const lease = await Effect.runPromise(launch.launchApp(plan()));

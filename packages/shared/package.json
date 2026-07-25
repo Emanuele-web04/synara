@@ -220,6 +220,10 @@
       "types": "./src/providerAccounts/accountEnvironment.ts",
       "import": "./src/providerAccounts/accountEnvironment.ts"
     },
+    "./providerAccounts/accountEnvironmentBuilders": {
+      "types": "./src/providerAccounts/accountEnvironmentBuilders.ts",
+      "import": "./src/providerAccounts/accountEnvironmentBuilders.ts"
+    },
     "./providerAccounts/codexAccountEnvironment": {
       "types": "./src/providerAccounts/codexAccountEnvironment.ts",
       "import": "./src/providerAccounts/codexAccountEnvironment.ts"

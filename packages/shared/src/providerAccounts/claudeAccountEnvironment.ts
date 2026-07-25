@@ -1,11 +1,5 @@
-// FILE: claudeAccountEnvironment.ts
-// Purpose: Claude managed-account environment builder (plan section 8.2).
-// Layer: Cross-package pure utility
-// Exports: buildClaudeAccountEnvironment (also self-registers for "claudeAgent").
-
 import {
   ACCOUNT_ENV_UNSET,
-  registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
 } from "./accountEnvironment";
@@ -43,5 +37,3 @@ export function buildClaudeAccountEnvironment(
   // (the file credential store inside the isolated config dir).
   return { environment, profilePath: configDir };
 }
-
-registerAccountEnvironmentBuilder("claudeAgent", buildClaudeAccountEnvironment);

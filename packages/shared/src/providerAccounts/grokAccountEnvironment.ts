@@ -1,11 +1,5 @@
-// FILE: grokAccountEnvironment.ts
-// Purpose: Grok managed-account environment builder (plan section 8.4).
-// Layer: Cross-package pure utility
-// Exports: buildGrokAccountEnvironment (also self-registers for "grok").
-
 import {
   ACCOUNT_ENV_UNSET,
-  registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
 } from "./accountEnvironment";
@@ -29,5 +23,3 @@ export function buildGrokAccountEnvironment(
   // GROK_HOME (the account agent home).
   return { environment, profilePath: input.agentHome };
 }
-
-registerAccountEnvironmentBuilder("grok", buildGrokAccountEnvironment);
