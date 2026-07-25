@@ -6,6 +6,7 @@
 import "./claudeAccountEnvironment";
 import "./codexAccountEnvironment";
 import "./cursorAccountEnvironment";
+import "./grokAccountEnvironment";
 
 import { type ResolveAccountLaunchInput, type ResolvedAccountLaunch } from "@synara/contracts";
 import { supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
