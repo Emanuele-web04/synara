@@ -1,0 +1,155 @@
+// FILE: cliIntegration.ts
+// Purpose: Real CLI integration for managed accounts: installs/uninstalls the
+//          provider shims into <account-root>/bin and reports health
+//          (installed state, launcher version, PATH visibility).
+// Layer: Server service internals
+// Exports: makeCliIntegration.
+
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import type { ProviderAccountsIntegrationStatus } from "@synara/contracts";
+import {
+  providerShimCommands,
+  SYNARA_LAUNCHER_SHIM,
+} from "@synara/shared/providerAccounts/launcherProtocol";
+import { Data, Effect } from "effect";
+
+export class CliIntegrationError extends Data.TaggedError("CliIntegrationError")<{
+  readonly operation: string;
+  readonly detail: string;
+  readonly cause?: unknown;
+}> {}
+
+const LAUNCHER_VERSION = "0.0.0-alpha.1";
+const VERSION_FILE = "launcher-version";
+
+// The standalone launcher entry point, resolved relative to this module so
+// the shims work from a source checkout. A packaged runtime must ship the
+// launcher and keep this relative layout.
+const defaultLauncherEntry = (): string =>
+  path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../account-launcher/src/launcher.ts",
+  );
+
+export interface CliIntegrationInput {
+  readonly root: string;
+  readonly launcherEntry?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+}
+
+const shimScript = (shimName: string, launcherEntry: string): string =>
+  [
+    "#!/bin/sh",
+    "# Synara provider shim (installed by Synara CLI integration).",
+    `${SYNARA_LAUNCHER_SHIM}=${shimName} exec bun "${launcherEntry}" "$@"`,
+    "",
+  ].join("\n");
+
+export type CliIntegrationShape = ReturnType<typeof makeCliIntegration>;
+
+export function makeCliIntegration(input: CliIntegrationInput) {
+  const { root } = input;
+  const launcherEntry = input.launcherEntry ?? defaultLauncherEntry();
+  const env = input.env ?? process.env;
+  const platform = input.platform ?? process.platform;
+  const shimDir = path.join(root, "bin");
+
+  const tryFs = <A>(operation: string, detail: string, run: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: run,
+      catch: (cause) => new CliIntegrationError({ operation, detail, cause }),
+    });
+
+  const shimNames = [...Object.values(providerShimCommands)];
+
+  const isShimDirOnPath = (): boolean => {
+    const pathValue = env.PATH ?? "";
+    return pathValue.split(path.delimiter).some((entry) => {
+      if (entry.length === 0) return false;
+      return path.resolve(entry) === path.resolve(shimDir);
+    });
+  };
+
+  const getStatus: Effect.Effect<ProviderAccountsIntegrationStatus, CliIntegrationError> = tryFs(
+    "cliIntegration.getStatus",
+    "Failed to inspect the CLI integration state.",
+    async () => {
+      const installed = await Promise.all(
+        shimNames.map(async (name) => {
+          try {
+            await fs.access(path.join(shimDir, name), fs.constants.X_OK);
+            return true;
+          } catch {
+            return false;
+          }
+        }),
+      );
+      const allInstalled = installed.every((flag) => flag);
+      let launcherVersion: string | undefined;
+      try {
+        launcherVersion = (await fs.readFile(path.join(shimDir, VERSION_FILE), "utf8")).trim();
+      } catch {
+        launcherVersion = undefined;
+      }
+      return {
+        cliIntegrationEnabled: allInstalled,
+        launcherInstalled: allInstalled,
+        ...(launcherVersion !== undefined && launcherVersion.length > 0 ? { launcherVersion } : {}),
+        shimDir,
+        shimDirOnPath: isShimDirOnPath(),
+      } satisfies ProviderAccountsIntegrationStatus;
+    },
+  );
+
+  const install = Effect.gen(function* () {
+    if (platform === "win32") {
+      return yield* new CliIntegrationError({
+        operation: "cliIntegration.install",
+        detail: "CLI integration is not supported on Windows yet.",
+      });
+    }
+    yield* tryFs(
+      "cliIntegration.install",
+      `Failed to install provider shims into ${shimDir}.`,
+      async () => {
+        try {
+          await fs.access(launcherEntry);
+        } catch {
+          throw new Error(`Launcher entry point not found at ${launcherEntry}.`);
+        }
+        await fs.mkdir(shimDir, { recursive: true, mode: 0o755 });
+        for (const name of shimNames) {
+          const shimPath = path.join(shimDir, name);
+          await fs.writeFile(shimPath, shimScript(name, launcherEntry), { mode: 0o755 });
+          await fs.chmod(shimPath, 0o755);
+        }
+        await fs.writeFile(path.join(shimDir, VERSION_FILE), `${LAUNCHER_VERSION}\n`, {
+          mode: 0o644,
+        });
+      },
+    );
+    return yield* getStatus;
+  });
+
+  const uninstall = Effect.gen(function* () {
+    yield* tryFs(
+      "cliIntegration.uninstall",
+      `Failed to remove provider shims from ${shimDir}.`,
+      async () => {
+        for (const name of [...shimNames, VERSION_FILE]) {
+          await fs.rm(path.join(shimDir, name), { force: true });
+        }
+        await fs.rmdir(shimDir).catch(() => undefined);
+      },
+    );
+    return yield* getStatus;
+  });
+
+  const update = (enabled: boolean) => (enabled ? install : uninstall);
+
+  return { shimDir, launcherEntry, getStatus, install, uninstall, update, isShimDirOnPath };
+}
