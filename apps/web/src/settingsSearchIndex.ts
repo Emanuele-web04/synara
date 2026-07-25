@@ -311,6 +311,16 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
+  // ── Accounts ──────────────────────────────────────────────────────────────────
+  {
+    id: "accounts:accounts",
+    section: "accounts",
+    title: "Accounts",
+    keywords:
+      "Connected provider accounts, active numbered slot, switch account, sign in, connect, disconnect. codex claude cursor grok oauth api key",
+    target: null,
+  },
+
   // ── Models ────────────────────────────────────────────────────────────────────
   {
     id: "models:git-writing-model",
