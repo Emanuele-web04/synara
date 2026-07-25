@@ -1,9 +1,3 @@
-// FILE: AccountsSettingsPanel.tsx
-// Purpose: Settings → Accounts panel (plan sections 36.2–36.4). Lists each supported
-//          provider's numbered account slots with identity, agent/app binding state,
-//          support-level labels, and per-account actions.
-// Layer: Settings UI components
-
 import type {
   AccountOrdinal,
   ProviderAccountCapabilities,
@@ -43,11 +37,13 @@ function AccountRow({
   provider,
   account,
   isActive,
+  appLaunchSupported,
   onReconnect,
 }: {
   provider: SupportedAccountProvider;
   account: ProviderAccountView;
   isActive: boolean;
+  appLaunchSupported: boolean;
   onReconnect: (ordinal: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -102,7 +98,7 @@ function AccountRow({
                   Reconnect agent
                 </Button>
               ) : null}
-              {account.app ? (
+              {account.app && appLaunchSupported ? (
                 <Button
                   size="xs"
                   variant="outline"
@@ -180,6 +176,10 @@ function ProviderAccountsSection({
   const oauthSupported = capabilities !== null && capabilities.agent.oauth !== "unsupported";
   const apiKeySupported = capabilities !== null && capabilities.agent.apiKey !== "unsupported";
   const connectable = oauthSupported || apiKeySupported;
+  // Desktop app launching stays hidden while the provider's app surface is
+  // unsupported: the launch would always fail server-side.
+  const appLaunchSupported =
+    capabilities !== null && capabilities.app.supportLevel !== "unsupported";
 
   return (
     <SettingsSection title={accountProviderLabel(provider)}>
@@ -189,6 +189,7 @@ function ProviderAccountsSection({
           provider={provider}
           account={account}
           isActive={account.ordinal === (activeOrdinal ?? 0)}
+          appLaunchSupported={appLaunchSupported}
           onReconnect={(ordinal) =>
             capabilities !== null
               ? onConnect({ provider, capabilities, reconnectOrdinal: ordinal })

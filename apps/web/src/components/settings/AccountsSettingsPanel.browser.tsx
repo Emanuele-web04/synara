@@ -1,10 +1,3 @@
-// FILE: AccountsSettingsPanel.browser.tsx
-// Purpose: Browser end-to-end test for Settings → Accounts: renders the real
-//          panel against a fake providerAccounts native API (no network, no
-//          server), verifies account-zero and managed rows, and drives the
-//          connect dialog through the API-key flow.
-// Layer: Browser UI test
-
 import "../../index.css";
 
 import type { ProviderAccountsConnectStatus, ProviderAccountsSnapshot } from "@synara/contracts";
