@@ -50,6 +50,20 @@ describe("resolveRealBinary", () => {
     expect(resolved).toBeNull();
   });
 
+  it("excludes every listed shim directory", () => {
+    const installedDir = path.join(base, "installed-shims");
+    fs.mkdirSync(installedDir);
+    writeExecutable(shimDir, "codex");
+    writeExecutable(installedDir, "codex");
+    const real = writeExecutable(realDir, "codex");
+    const resolved = resolveRealBinary({
+      command: "codex",
+      pathEnv: [installedDir, shimDir, realDir].join(path.delimiter),
+      shimDir: [shimDir, installedDir],
+    });
+    expect(resolved).toBe(fs.realpathSync(real));
+  });
+
   it("skips non-executable files on unix", () => {
     fs.writeFileSync(path.join(realDir, "codex"), "not executable");
     fs.chmodSync(path.join(realDir, "codex"), 0o644);

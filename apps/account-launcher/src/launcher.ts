@@ -41,7 +41,14 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): never {
   }
   const command = providerShimCommands[invocation.provider];
 
-  const binary = resolveRealBinary({ command, pathEnv: env.PATH, shimDir });
+  // Installed shims live in <account-root>/bin; both that directory and the
+  // package-local bin/ must never resolve as the "real" binary.
+  const installedShimDir = path.join(resolveAccountRoot({ env }), "bin");
+  const binary = resolveRealBinary({
+    command,
+    pathEnv: env.PATH,
+    shimDir: [shimDir, installedShimDir],
+  });
   if (binary === null) {
     fail(`Could not find the real '${command}' binary on PATH.`, 127);
   }

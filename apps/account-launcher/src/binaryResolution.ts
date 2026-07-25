@@ -10,8 +10,8 @@ import * as path from "node:path";
 export interface ResolveRealBinaryInput {
   readonly command: string;
   readonly pathEnv: string | undefined;
-  /** Directory containing the Synara shims; excluded from the search. */
-  readonly shimDir: string;
+  /** Directories containing Synara shims; excluded from the search. */
+  readonly shimDir: string | readonly string[];
   readonly platform?: NodeJS.Platform;
   readonly pathExtEnv?: string | undefined;
 }
@@ -43,13 +43,14 @@ function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean 
  */
 export function resolveRealBinary(input: ResolveRealBinaryInput): string | null {
   const platform = input.platform ?? process.platform;
-  const shimDirReal = canonicalize(input.shimDir) ?? path.resolve(input.shimDir);
+  const shimDirs = typeof input.shimDir === "string" ? [input.shimDir] : input.shimDir;
+  const shimDirsReal = shimDirs.map((dir) => canonicalize(dir) ?? path.resolve(dir));
   const searchDirs = (input.pathEnv ?? "")
     .split(path.delimiter)
     .filter((dir) => dir.length > 0)
     .filter((dir) => {
       const real = canonicalize(dir) ?? path.resolve(dir);
-      return real !== shimDirReal;
+      return !shimDirsReal.includes(real);
     });
 
   const extensions =
@@ -62,7 +63,7 @@ export function resolveRealBinary(input: ResolveRealBinaryInput): string | null 
       const candidate = path.join(dir, input.command + extension.toLowerCase());
       const real = canonicalize(candidate);
       if (real === null) continue;
-      if (path.dirname(real) === shimDirReal) continue;
+      if (shimDirsReal.includes(path.dirname(real))) continue;
       if (isExecutableFile(real, platform)) return real;
     }
   }
