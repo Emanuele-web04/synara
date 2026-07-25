@@ -40,8 +40,8 @@ export type AccountEnvironmentBuilder = (
 ) => AccountLaunchEnvironment;
 
 // Providers register their builder from their own module (see
-// codexAccountEnvironment.ts); adding a provider never edits a central switch.
-// TODO(PR3-PR5): register claudeAgent, cursor, and grok builders.
+// codexAccountEnvironment.ts and its siblings); adding a provider never
+// edits a central switch.
 const builders = new Map<SupportedAccountProvider, AccountEnvironmentBuilder>();
 
 export function registerAccountEnvironmentBuilder(
