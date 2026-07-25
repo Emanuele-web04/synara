@@ -404,6 +404,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       modelSelection: thread.modelSelection,
       resumeCursor: providerResumeCursorForImport(thread.modelSelection.provider, externalId),
       runtimeMode: thread.runtimeMode,
+      // Imported provider-native threads were created outside Synara under the
+      // native account 0 (plan section 14).
+      accountOrdinal: 0,
     });
 
     yield* Effect.gen(function* () {

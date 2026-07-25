@@ -28,7 +28,10 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderStartOptions,
+  SupportedAccountProvider,
   TurnId,
+  type ProviderAccountLaunchContext,
+  type ProviderKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@synara/contracts";
@@ -70,6 +73,11 @@ import {
   makeProviderRuntimeEventPumpHealthRegistry,
   runProviderRuntimeEventPump,
 } from "../providerRuntimeEventPump.ts";
+import {
+  readAccountBindingFromRuntimePayload,
+  type ThreadAccountBinding,
+} from "../accountBindingPayload.ts";
+import { ProviderAccounts } from "../../providerAccounts/Services/ProviderAccounts.ts";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -178,6 +186,7 @@ function toRuntimePayloadFromSession(
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly lifecycleGeneration?: string;
+    readonly accountBinding?: ThreadAccountBinding;
   },
 ): Record<string, unknown> {
   return {
@@ -194,6 +203,7 @@ function toRuntimePayloadFromSession(
     ...(extra?.lifecycleGeneration !== undefined
       ? { lifecycleGeneration: extra.lifecycleGeneration }
       : {}),
+    ...(extra?.accountBinding !== undefined ? { accountBinding: extra.accountBinding } : {}),
   };
 }
 
@@ -333,6 +343,68 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
+    // Optional so embedded/test layers without account management keep native
+    // launch behavior for every provider.
+    const providerAccounts = Option.getOrUndefined(yield* Effect.serviceOption(ProviderAccounts));
+    const isSupportedAccountProvider = Schema.is(SupportedAccountProvider);
+
+    const resolveAccountForLaunch = (resolveInput: {
+      readonly operation: string;
+      readonly provider: ProviderKind;
+      readonly persistedBinding?: ProviderRuntimeBinding;
+      readonly explicitOrdinal?: number;
+    }): Effect.Effect<
+      {
+        readonly accountBinding?: ThreadAccountBinding;
+        readonly accountLaunch?: ProviderAccountLaunchContext;
+      },
+      ProviderValidationError
+    > =>
+      Effect.gen(function* () {
+        if (providerAccounts === undefined || !isSupportedAccountProvider(resolveInput.provider)) {
+          return {};
+        }
+        const persisted =
+          resolveInput.persistedBinding?.provider === resolveInput.provider
+            ? resolveInput.persistedBinding
+            : undefined;
+        // Legacy migration: threads with provider history but no persisted
+        // account binding stay on the native account 0 (plan section 14).
+        const threadBinding =
+          readAccountBindingFromRuntimePayload(persisted?.runtimePayload) ??
+          (persisted !== undefined ? { ordinal: 0, agentGeneration: 1 } : undefined);
+        const resolved = yield* providerAccounts
+          .resolveLaunch({
+            provider: resolveInput.provider,
+            surface: "agent",
+            ...(resolveInput.explicitOrdinal !== undefined
+              ? { explicitOrdinal: resolveInput.explicitOrdinal }
+              : {}),
+            ...(threadBinding !== undefined ? { threadBinding } : {}),
+          })
+          .pipe(
+            // A selected managed account that is missing, disconnected, or
+            // generation-mismatched fails closed; never fall back silently.
+            Effect.mapError((cause) =>
+              toValidationError(resolveInput.operation, cause.detail, cause),
+            ),
+          );
+        return {
+          accountBinding: { ordinal: resolved.ordinal, agentGeneration: resolved.generation },
+          ...(resolved.ordinal > 0
+            ? {
+                accountLaunch: {
+                  ordinal: resolved.ordinal,
+                  generation: resolved.generation,
+                  environment: resolved.environment,
+                  ...(resolved.profilePath !== undefined
+                    ? { profilePath: resolved.profilePath }
+                    : {}),
+                },
+              }
+            : {}),
+        };
+      });
     const lifecycle = makeProviderLifecycleCoordinator();
     for (const binding of yield* directory.listBindings()) {
       if (binding.lifecycleGeneration !== undefined) {
@@ -522,6 +594,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly providerOptions?: unknown;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
+        readonly accountBinding?: ThreadAccountBinding;
       },
     ) =>
       directory.upsert({
@@ -1091,9 +1164,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
           const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
 
+          const recoveredAccount = yield* resolveAccountForLaunch({
+            operation: input.operation,
+            provider: binding.provider,
+            persistedBinding: binding,
+          });
           const resumed = yield* adapter.startSession({
             threadId: binding.threadId,
             provider: binding.provider,
+            ...(recoveredAccount.accountLaunch !== undefined
+              ? { accountLaunch: recoveredAccount.accountLaunch }
+              : {}),
             lifecycleGeneration: lease.generation,
             ...(persistedCwd ? { cwd: persistedCwd } : {}),
             ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
@@ -1112,6 +1193,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             binding.threadId,
             upsertSessionBinding(resumed, binding.threadId, {
               lifecycleGeneration: lease.generation,
+              ...(recoveredAccount.accountBinding !== undefined
+                ? { accountBinding: recoveredAccount.accountBinding }
+                : {}),
             }),
           );
           yield* analytics.record("provider.session.recovered", {
@@ -1216,8 +1300,32 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const adapter = yield* registry.getByProvider(input.provider);
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
+              const account = yield* resolveAccountForLaunch({
+                operation: "ProviderService.startSession",
+                provider: input.provider,
+                ...(persistedBinding !== undefined ? { persistedBinding } : {}),
+                ...(input.accountOrdinal !== undefined
+                  ? { explicitOrdinal: input.accountOrdinal }
+                  : {}),
+              });
+              // Persist the binding before launch so a crash mid-startup can
+              // never re-resolve to a different account (plan section 13).
+              if (account.accountBinding !== undefined) {
+                yield* withBindingWriteLock(
+                  threadId,
+                  directory.upsert({
+                    threadId,
+                    provider: input.provider,
+                    runtimeMode: input.runtimeMode,
+                    runtimePayload: { accountBinding: account.accountBinding },
+                  }),
+                );
+              }
               const session = yield* adapter.startSession({
                 ...input,
+                ...(account.accountLaunch !== undefined
+                  ? { accountLaunch: account.accountLaunch }
+                  : {}),
                 lifecycleGeneration: lease.generation,
                 ...(effectiveProviderOptions !== undefined
                   ? { providerOptions: effectiveProviderOptions }
@@ -1241,6 +1349,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   modelSelection: input.modelSelection,
                   providerOptions: effectiveProviderOptions,
                   lifecycleGeneration: lease.generation,
+                  ...(account.accountBinding !== undefined
+                    ? { accountBinding: account.accountBinding }
+                    : {}),
                 }),
               );
               yield* analytics.record("provider.session.started", {
@@ -1286,9 +1397,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       if (replacementStarted) {
                         yield* adapter.stopSession(threadId);
                       }
+                      const restoredAccount = yield* resolveAccountForLaunch({
+                        operation: "ProviderService.startSession",
+                        provider: persistedBinding.provider,
+                        persistedBinding,
+                      });
                       const restored = yield* previousAdapter.startSession({
                         threadId,
                         provider: persistedBinding.provider,
+                        ...(restoredAccount.accountLaunch !== undefined
+                          ? { accountLaunch: restoredAccount.accountLaunch }
+                          : {}),
                         lifecycleGeneration: previousGeneration,
                         runtimeMode: persistedBinding.runtimeMode ?? "full-access",
                         ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
