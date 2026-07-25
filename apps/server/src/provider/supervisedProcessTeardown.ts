@@ -9,6 +9,10 @@ import { Effect } from "effect";
 const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;
 const DEFAULT_POLL_MS = 25;
+// Each descendant inspection shells out to a synchronous `ps`, so it must not run
+// once per poll: that put ~120 blocking scans on the event loop per teardown, and
+// the session reaper runs teardowns on a timer with no user present.
+const DEFAULT_INSPECT_INTERVAL_MS = 250;
 
 export interface SupervisedProcessTeardownInput {
   readonly rootPid: number;
@@ -17,6 +21,8 @@ export interface SupervisedProcessTeardownInput {
   readonly termGraceMs?: number;
   readonly forceExitMs?: number;
   readonly pollMs?: number;
+  /** Minimum gap between descendant `ps` inspections while polling for exit proof. */
+  readonly inspectIntervalMs?: number;
 }
 
 export interface ProcessExitHandle {
@@ -158,26 +164,46 @@ export async function teardownProviderProcessTree(
     });
   };
 
+  // An empty incomplete capture means descendant state is unknown, not verified
+  // empty. Releasing ownership on it could let a replacement start while a
+  // reparented descendant from the old provider is still running.
+  const inspectDescendants = (): ReadonlyArray<CapturedProcess> | null => {
+    const inspection =
+      tree.captureComplete === false ? undefined : deps.processTreeKiller.inspect?.(tree);
+    return inspection?.verified === true ? inspection.survivors : null;
+  };
+
   const waitForExitProof = async (timeoutMs: number) => {
     const deadline = deps.now() + timeoutMs;
+    const inspectIntervalMs = positiveDuration(
+      input.inspectIntervalMs,
+      DEFAULT_INSPECT_INTERVAL_MS,
+    );
     let remainingDescendants: ReadonlyArray<CapturedProcess> | null = null;
+    let lastInspectedAt: number | null = null;
     do {
       // Flush a root-exit resolution caused synchronously by a signal test double.
       await Promise.resolve();
-      const inspection =
-        tree.captureComplete === false ? undefined : deps.processTreeKiller.inspect?.(tree);
-      remainingDescendants = inspection?.verified === true ? inspection.survivors : null;
-      // An empty incomplete capture means descendant state is unknown, not
-      // verified empty. Releasing ownership here could let a replacement start
-      // while a reparented descendant from the old provider is still running.
-      if (rootExited && remainingDescendants !== null && remainingDescendants.length === 0) {
-        return { proven: true as const, remainingDescendants };
+      // Descendants can only prove exit once the root itself has, so inspecting
+      // before that spends a blocking `ps` on a result that cannot end the wait.
+      // Throttling the repeats keeps the poll responsive to the root's exit while
+      // costing a couple of scans per teardown instead of one per poll.
+      const sinceLastInspect = lastInspectedAt === null ? null : deps.now() - lastInspectedAt;
+      if (rootExited && (sinceLastInspect === null || sinceLastInspect >= inspectIntervalMs)) {
+        lastInspectedAt = deps.now();
+        remainingDescendants = inspectDescendants();
+        if (remainingDescendants !== null && remainingDescendants.length === 0) {
+          return { proven: true as const, remainingDescendants };
+        }
       }
       const remainingMs = deadline - deps.now();
       if (remainingMs <= 0) break;
       await deps.sleep(Math.min(positiveDuration(input.pollMs, DEFAULT_POLL_MS), remainingMs));
     } while (deps.now() <= deadline);
-    return { proven: false as const, remainingDescendants };
+    // Giving up reports which descendants are still alive, so refresh the survivor
+    // list once here rather than leaving it unknown when the gate above skipped
+    // every poll's inspection.
+    return { proven: false as const, remainingDescendants: inspectDescendants() };
   };
 
   signal("SIGTERM", true);

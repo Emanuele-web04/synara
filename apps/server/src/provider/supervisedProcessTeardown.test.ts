@@ -179,4 +179,85 @@ describe("teardownProviderProcessTree", () => {
       remainingDescendantPids: [302],
     });
   });
+
+  it("does not scan descendants before the root proves exit", async () => {
+    // Each inspection is a synchronous `ps`. Descendant identity cannot end the
+    // wait until the root has exited, so polling it beforehand only blocks the
+    // event loop. Only the two give-up scans that build the failure detail remain.
+    const tree: CapturedProcessTree = {
+      descendants: [{ pid: 602, command: "stuck-provider" }],
+      captureComplete: true,
+    };
+    let inspectCalls = 0;
+    const clock = deterministicClock();
+
+    const failure = await teardownProviderProcessTree(
+      {
+        rootPid: 601,
+        rootExited: new Promise(() => undefined),
+        termGraceMs: 500,
+        forceExitMs: 500,
+      },
+      {
+        processTreeKiller: {
+          capture: () => tree,
+          inspect: () => {
+            inspectCalls += 1;
+            return { verified: true, survivors: tree.descendants };
+          },
+          signal: () => undefined,
+        },
+        ...clock,
+      },
+    ).catch((error: unknown) => error);
+
+    expect(inspectCalls).toBe(2);
+    expect(failure).toMatchObject({ remainingDescendantPids: [602] });
+  });
+
+  it("throttles descendant scans instead of running one per poll", async () => {
+    const tree: CapturedProcessTree = {
+      descendants: [{ pid: 702, command: "provider-worker" }],
+      captureComplete: true,
+    };
+    let inspectCalls = 0;
+    let sleepCalls = 0;
+    let resolveRootExit: (() => void) | undefined;
+    const rootExited = new Promise<void>((resolve) => {
+      resolveRootExit = resolve;
+    });
+    let now = 0;
+
+    await teardownProviderProcessTree(
+      {
+        rootPid: 701,
+        rootExited,
+        termGraceMs: 1_000,
+        forceExitMs: 1_000,
+        pollMs: 25,
+        inspectIntervalMs: 250,
+      },
+      {
+        processTreeKiller: {
+          capture: () => tree,
+          inspect: () => {
+            inspectCalls += 1;
+            return { verified: true, survivors: tree.descendants };
+          },
+          signal: ({ signal }) => {
+            if (signal === "SIGTERM") resolveRootExit?.();
+          },
+        },
+        now: () => now,
+        sleep: async (milliseconds: number) => {
+          sleepCalls += 1;
+          now += milliseconds;
+        },
+      },
+    ).catch(() => undefined);
+
+    // The root exits immediately, so every poll used to trigger its own `ps`.
+    expect(sleepCalls).toBeGreaterThan(60);
+    expect(inspectCalls).toBeLessThanOrEqual(sleepCalls / 4);
+  });
 });

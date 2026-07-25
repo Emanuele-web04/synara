@@ -3,6 +3,7 @@ import { ThreadId, WS_STREAM_LIMITS } from "@synara/contracts";
 import { useStore } from "./store";
 import {
   getRetainedThreadDetailIdsSnapshot,
+  isThreadDetailRetained,
   resetRetainedThreadDetailSubscriptionsForTests,
   resolveThreadDetailSubscriptionLeaseIds,
   retainThreadDetailSubscription,
@@ -222,5 +223,47 @@ describe("threadDetailSubscriptionRetention", () => {
     expect(state.messageByThreadId?.[threadId]).toBeUndefined();
     expect(state.activityIdsByThreadId?.[threadId]).toBeUndefined();
     expect(state.activityByThreadId?.[threadId]).toBeUndefined();
+  });
+
+  it("reports retention ownership so lease owners can free detail nothing owns", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-ownership");
+
+    const release = retainThreadDetailSubscription(threadId);
+    expect(isThreadDetailRetained(threadId)).toBe(true);
+
+    release();
+    expect(isThreadDetailRetained(threadId)).toBe(true);
+
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    expect(isThreadDetailRetained(threadId)).toBe(false);
+  });
+
+  it("stops owning an evicted thread whose detail a raced snapshot restored", () => {
+    // Regression: eviction wipes detail and notifies lease owners, which refresh the
+    // thread. When that snapshot lands before the lease drops, the restored slices
+    // belong to no retention entry — and eviction only ever runs from a retention
+    // entry, so the lease owner must be able to see that nothing owns them.
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-raced-snapshot");
+
+    const release = retainThreadDetailSubscription(threadId);
+    release();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
+
+    // The refreshed snapshot lands and repopulates the store.
+    useStore.setState({
+      messageIdsByThreadId: { [threadId]: [] },
+      messageByThreadId: { [threadId]: {} },
+    });
+
+    expect(isThreadDetailRetained(threadId)).toBe(false);
+    expect(useStore.getState().messageByThreadId?.[threadId]).toBeDefined();
+
+    // The lease owner evicts on lease drop precisely because retention disclaims it.
+    useStore.getState().evictThreadDetail(threadId);
+    expect(useStore.getState().messageByThreadId?.[threadId]).toBeUndefined();
   });
 });

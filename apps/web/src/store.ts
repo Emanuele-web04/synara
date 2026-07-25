@@ -270,6 +270,7 @@ interface AppStore extends AppState {
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
   applyOrchestrationEventsHotPath: (events: ReadonlyArray<OrchestrationEvent>) => void;
   evictThreadDetail: (threadId: ThreadId) => void;
+  evictThreadDetails: (threadIds: readonly ThreadId[]) => void;
   markThreadDetailSyncFailed: (threadId: ThreadId) => void;
   clearThreadDetailSyncFailure: (threadId: ThreadId) => void;
   removeDeletedProjectFromClientState: (projectId: Project["id"]) => void;
@@ -304,6 +305,17 @@ export const useStore = create<AppStore>((set) => ({
     ),
   evictThreadDetail: (threadId) =>
     set((state) => evictThreadDetailFromClientState(state, threadId)),
+  // Dropping a batch of leases evicts several threads at once. Every store update
+  // re-runs the retention reconcile, so folding them into one write keeps that at
+  // a single pass instead of one per thread.
+  evictThreadDetails: (threadIds) =>
+    set((state) => {
+      let nextState: AppState = state;
+      for (const threadId of threadIds) {
+        nextState = evictThreadDetailFromClientState(nextState, threadId);
+      }
+      return nextState;
+    }),
   markThreadDetailSyncFailed: (threadId) =>
     set((state) => markThreadDetailSyncFailedInClientState(state, threadId)),
   clearThreadDetailSyncFailure: (threadId) =>

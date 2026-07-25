@@ -76,10 +76,12 @@ import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
+  isThreadDetailRetained,
   resolveThreadDetailSubscriptionLeaseIds,
   subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
+import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useAppTypography } from "../hooks/useAppTypography";
@@ -894,6 +896,26 @@ function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   );
 }
 
+/**
+ * Frees the detail of threads whose stream lease just dropped and that nothing
+ * else owns. Batched into one store write because every write re-runs the
+ * retention reconcile.
+ */
+function releaseOrphanedThreadDetail(input: {
+  readonly releasedThreadIds: readonly ThreadId[];
+  readonly keptThreadIds?: ReadonlySet<ThreadId> | undefined;
+}): void {
+  const orphanedThreadIds = selectOrphanedThreadDetailIds({
+    releasedThreadIds: input.releasedThreadIds,
+    isRetained: isThreadDetailRetained,
+    keptThreadIds: input.keptThreadIds,
+  });
+  if (orphanedThreadIds.length === 0) {
+    return;
+  }
+  useStore.getState().evictThreadDetails(orphanedThreadIds);
+}
+
 function EventRouter() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
@@ -1012,6 +1034,11 @@ function EventRouter() {
         threadReplayRequestInFlight.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
+      // A retention eviction can refresh a thread whose lease is dropping in the
+      // same tick, so the refreshed snapshot may already have landed. Retention
+      // no longer owns the entry, and eviction only runs from retention entries,
+      // so without this the restored slices stay in the store forever.
+      releaseOrphanedThreadDetail({ releasedThreadIds: removals });
       await Promise.all(
         removals.map((threadId) =>
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
@@ -1110,6 +1137,14 @@ function EventRouter() {
         threadReplayRequestInFlight.clear();
         const previousThreadIds = [...subscribedThreadIds];
         subscribedThreadIds.clear();
+        // Reconnect drops every lease at once, so the reconcile below sees no
+        // removals to clean up. Free detail for threads that retention does not
+        // own and the reconcile will not re-lease, while leaving the threads it
+        // does re-lease untouched so a reconnect never blanks the open chat.
+        releaseOrphanedThreadDetail({
+          releasedThreadIds: previousThreadIds,
+          keptThreadIds: new Set(visibleThreadIdsRef.current),
+        });
         await Promise.all(
           previousThreadIds.map((threadId) =>
             api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
@@ -1322,8 +1357,16 @@ function EventRouter() {
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
       if (item.kind === "snapshot") {
         const threadId = item.snapshot.thread.id;
-        threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
         threadSnapshotRequestInFlight.delete(threadId);
+        // The lease can drop while its refreshed snapshot is in flight. Applying it
+        // then would restore detail slices that no retention entry owns, and since
+        // eviction only runs from retention entries nothing would ever free them.
+        if (!canApplyThreadSnapshot({ threadId, leasedThreadIds: subscribedThreadIds })) {
+          threadSnapshotSequenceById.delete(threadId);
+          pendingThreadEventsById.delete(threadId);
+          return;
+        }
+        threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
         syncServerThreadDetailHotPath(item.snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(item.snapshot.thread);
         flushThreadBuffer(threadId, item.snapshot.snapshotSequence);
@@ -1574,6 +1617,13 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);
+      // Same shape as reconnect: every lease drops at once, and a remount re-leases
+      // only the visible threads. Keeping those avoids blanking the open chat, and
+      // anything recently viewed is owned by retention, which evicts it on schedule.
+      releaseOrphanedThreadDetail({
+        releasedThreadIds: [...subscribedThreadIds],
+        keptThreadIds: new Set(visibleThreadIdsRef.current),
+      });
       void Promise.all(
         [...subscribedThreadIds].map((threadId) =>
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),

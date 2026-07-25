@@ -19,6 +19,7 @@ import {
   setThreadWorkspace,
   setAllProjectsExpanded,
   syncServerReadModel,
+  useStore,
 } from "./store";
 import type { AppState } from "./storeState";
 import {
@@ -32,6 +33,35 @@ import {
 } from "./storeTestFixtures";
 
 describe("store facade", () => {
+  it("frees a batch of thread details in a single store write", () => {
+    // Dropping several leases at once must not cost one update per thread: every
+    // update re-runs the retention reconcile that decides what to evict next.
+    const first = ThreadId.makeUnsafe("thread-batch-1");
+    const second = ThreadId.makeUnsafe("thread-batch-2");
+    const kept = ThreadId.makeUnsafe("thread-batch-kept");
+    const initialState = useStore.getState();
+    useStore.setState({
+      messageIdsByThreadId: { [first]: [], [second]: [], [kept]: [] },
+      messageByThreadId: { [first]: {}, [second]: {}, [kept]: {} },
+    });
+
+    const updates = vi.fn();
+    const unsubscribe = useStore.subscribe(updates);
+    try {
+      useStore.getState().evictThreadDetails([first, second]);
+    } finally {
+      unsubscribe();
+    }
+
+    const state = useStore.getState();
+    expect(updates).toHaveBeenCalledTimes(1);
+    expect(state.messageByThreadId?.[first]).toBeUndefined();
+    expect(state.messageByThreadId?.[second]).toBeUndefined();
+    expect(state.messageByThreadId?.[kept]).toBeDefined();
+
+    useStore.setState(initialState);
+  });
+
   it("applies a Space order immediately for optimistic drag feedback", () => {
     const workSpaceId = SpaceId.makeUnsafe("space-work");
     const sideSpaceId = SpaceId.makeUnsafe("space-side");

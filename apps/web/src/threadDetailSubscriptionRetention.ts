@@ -174,6 +174,12 @@ function reconcileRetentionEntries(): void {
   evictIdleEntriesToCapacity();
 }
 
+// This reconcile is re-entrant by design: it can evict, and eviction writes to the
+// store, which synchronously runs this subscriber again. It stays correct because
+// `evictEntry` deletes its entry before touching the store, and every step re-reads
+// the live map, so a nested pass can only evict entries the outer pass has not
+// claimed. The eviction notice is the one part that must not run inline — lease
+// owners answer it by queueing a stream refresh rather than writing state here.
 useStore.subscribe(() => {
   reconcileRetentionEntries();
 });
@@ -241,6 +247,16 @@ export function subscribeThreadDetailEvictions(listener: (threadId: ThreadId) =>
 
 export function getRetainedThreadDetailIdsSnapshot(): readonly ThreadId[] {
   return cachedSnapshot;
+}
+
+/**
+ * Whether retention still owns this thread's warm detail. Subscription owners
+ * check this when a stream lease drops: detail that no retention entry owns and
+ * no lease references would otherwise stay in the store for the session's
+ * lifetime, because eviction only ever runs from a retention entry.
+ */
+export function isThreadDetailRetained(threadId: ThreadId): boolean {
+  return retainedThreadEntries.has(threadId);
 }
 
 export function resolveThreadDetailSubscriptionLeaseIds(input: {
