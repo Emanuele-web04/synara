@@ -216,14 +216,37 @@ export const ProviderAccountsSnapshot = Schema.Struct({
 });
 export type ProviderAccountsSnapshot = typeof ProviderAccountsSnapshot.Type;
 
-export const ProviderAccountsBeginConnectInput = Schema.Struct({
+// Discriminated union: only meaningful surface/auth combinations are
+// representable. The server additionally validates provider capability
+// support before creating an operation.
+export const ProviderAccountsAgentOauthConnect = Schema.Struct({
+  kind: Schema.Literals(["agent-oauth"]),
   provider: SupportedAccountProvider,
-  surface: AccountSurface,
-  authMethod: AgentAuthMethod,
+  ordinal: Schema.optional(AccountOrdinal),
+});
+export type ProviderAccountsAgentOauthConnect = typeof ProviderAccountsAgentOauthConnect.Type;
+
+export const ProviderAccountsAgentApiKeyConnect = Schema.Struct({
+  kind: Schema.Literals(["agent-api-key"]),
+  provider: SupportedAccountProvider,
   ordinal: Schema.optional(AccountOrdinal),
   // Write-only input: the server must never echo this value back.
-  apiKey: Schema.optional(TrimmedNonEmptyString),
+  apiKey: TrimmedNonEmptyString,
 });
+export type ProviderAccountsAgentApiKeyConnect = typeof ProviderAccountsAgentApiKeyConnect.Type;
+
+export const ProviderAccountsAppOauthConnect = Schema.Struct({
+  kind: Schema.Literals(["app-oauth"]),
+  provider: SupportedAccountProvider,
+  ordinal: Schema.optional(AccountOrdinal),
+});
+export type ProviderAccountsAppOauthConnect = typeof ProviderAccountsAppOauthConnect.Type;
+
+export const ProviderAccountsBeginConnectInput = Schema.Union([
+  ProviderAccountsAgentOauthConnect,
+  ProviderAccountsAgentApiKeyConnect,
+  ProviderAccountsAppOauthConnect,
+]);
 export type ProviderAccountsBeginConnectInput = typeof ProviderAccountsBeginConnectInput.Type;
 
 export const ProviderAccountsBeginConnectResult = Schema.Struct({
@@ -286,6 +309,8 @@ export const ProviderAccountsIntegrationStatus = Schema.Struct({
   cliIntegrationEnabled: Schema.Boolean,
   launcherInstalled: Schema.Boolean,
   launcherVersion: Schema.optional(TrimmedNonEmptyString),
+  shimDir: Schema.optional(TrimmedNonEmptyString),
+  shimDirOnPath: Schema.optional(Schema.Boolean),
 });
 export type ProviderAccountsIntegrationStatus = typeof ProviderAccountsIntegrationStatus.Type;
 
