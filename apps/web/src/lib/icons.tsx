@@ -78,8 +78,6 @@ function centralIconWrapper(name: string, variant?: CentralIconVariant): LucideI
   return function CentralIconWrapper({ className, style, ...rest }) {
     const ariaLabelRaw = (rest as { ["aria-label"]?: unknown })["aria-label"];
     const label = typeof ariaLabelRaw === "string" ? ariaLabelRaw : undefined;
-    const dataSlotRaw = (rest as { ["data-slot"]?: unknown })["data-slot"];
-    const dataSlot = typeof dataSlotRaw === "string" ? dataSlotRaw : undefined;
     return (
       <CentralIcon
         name={name}
@@ -87,7 +85,6 @@ function centralIconWrapper(name: string, variant?: CentralIconVariant): LucideI
         className={typeof className === "string" ? className : undefined}
         style={style as CSSProperties | undefined}
         label={label}
-        {...(dataSlot !== undefined ? { "data-slot": dataSlot } : {})}
       />
     );
   };
