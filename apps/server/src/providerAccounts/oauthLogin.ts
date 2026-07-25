@@ -34,7 +34,37 @@ export type OAuthLoginRunner = (request: OAuthLoginRequest) => OAuthLoginHandle;
 // Shared with startup recovery: pending login directories younger than this
 // may belong to a still-running login and must not be reclaimed.
 export const OAUTH_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
-const URL_PATTERN = /https:\/\/[^\s"'<>)\]]+/;
+const URL_PATTERN = /https:\/\/[^\s"'<>)\]]+/g;
+
+// Hosts a provider's login flow is allowed to send the user to. Output from
+// the provider CLI is untrusted; URLs on other hosts are never surfaced as
+// verification links.
+const CODEX_AUTH_HOSTS = ["auth.openai.com", "openai.com"];
+
+function hostMatches(hostname: string, expected: string): boolean {
+  return hostname === expected || hostname.endsWith(`.${expected}`);
+}
+
+/**
+ * Returns the first https URL in `text` whose hostname is one of
+ * `expectedAuthHosts` (or a subdomain of one), or undefined when none match.
+ */
+export function findVerificationUrl(
+  text: string,
+  expectedAuthHosts: ReadonlyArray<string>,
+): string | undefined {
+  for (const match of text.matchAll(URL_PATTERN)) {
+    try {
+      const { hostname } = new URL(match[0]);
+      if (expectedAuthHosts.some((expected) => hostMatches(hostname, expected))) {
+        return match[0];
+      }
+    } catch {
+      // Not a parseable URL; keep scanning.
+    }
+  }
+  return undefined;
+}
 
 // Environment variables that could redirect the login away from the isolated
 // profile home or reuse the native identity.
@@ -77,10 +107,10 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
   let reportedUrl = false;
   const inspectOutput = (chunk: Buffer) => {
     if (reportedUrl) return;
-    const match = URL_PATTERN.exec(chunk.toString("utf8"));
-    if (match !== null) {
+    const url = findVerificationUrl(chunk.toString("utf8"), CODEX_AUTH_HOSTS);
+    if (url !== undefined) {
       reportedUrl = true;
-      request.onVerification({ verificationUrl: match[0] });
+      request.onVerification({ verificationUrl: url });
     }
   };
   child.stdout.on("data", inspectOutput);

@@ -22,6 +22,7 @@ import {
   accountIdentityLabel,
   accountProviderLabel,
   accountSlotLabel,
+  normalizeConnectProviderParam,
   providerAccountsIntegrationStatusQueryOptions,
   providerAccountsSnapshotQueryOptions,
   SUPPORTED_ACCOUNT_PROVIDERS,
@@ -177,7 +178,7 @@ function AccountRow({
                   disabled={hide.isPending}
                   onClick={() => {
                     void confirmDestructiveAccountAction(
-                      `Hide ${slotLabel}? It disappears from menus, but its credentials stay on this machine.`,
+                      `Hide ${slotLabel}? It disappears from menus, but its credentials stay on this machine and it can be unhidden later.`,
                     ).then((confirmed) => {
                       if (!confirmed) return;
                       hide.mutate({ provider, ordinal: account.ordinal });
@@ -190,7 +191,8 @@ function AccountRow({
             </div>
             {!isNative ? (
               <div className="pt-1 text-muted-foreground text-xs">
-                Hide removes the account from menus without deleting its credentials.
+                Hide only removes the account from menus. Its credentials stay on this machine and
+                the account can be unhidden later.
               </div>
             ) : null}
           </DisclosureRegion>
@@ -350,9 +352,13 @@ export function AccountsSettingsPanel({
   const [consumedConnectProvider, setConsumedConnectProvider] = useState<string | null>(null);
 
   const providers = snapshotQuery.data?.providers ?? [];
+  const requestedProvider =
+    active && typeof connectProvider === "string"
+      ? normalizeConnectProviderParam(connectProvider)
+      : null;
   const requestedEntry =
-    active && typeof connectProvider === "string" && connectProvider !== consumedConnectProvider
-      ? (providers.find((candidate) => candidate.provider === connectProvider) ?? null)
+    requestedProvider !== null && requestedProvider !== consumedConnectProvider
+      ? (providers.find((candidate) => candidate.provider === requestedProvider) ?? null)
       : null;
 
   useEffect(() => {

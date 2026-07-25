@@ -207,7 +207,7 @@ describe("AccountsSettingsPanel", () => {
 
     await page.getByRole("button", { name: "Codex 1 Active" }).click();
     expect(document.body.textContent).toContain(
-      "Hide removes the account from menus without deleting its credentials.",
+      "Hide only removes the account from menus. Its credentials stay on this machine and the account can be unhidden later.",
     );
 
     // Declined confirmation leaves the account untouched.
@@ -265,8 +265,57 @@ describe("AccountsSettingsPanel", () => {
   });
 
   it("opens the connect dialog for a deep-linked provider", async () => {
-    await renderPanel({ connectProvider: "codex" });
+    const screen = await renderPanel({ connectProvider: "codex" });
     const dialog = page.getByRole("dialog");
     await expect.element(dialog.getByText("Connect Codex account")).toBeVisible();
+    // Unmount before afterEach clears the body so the dialog portal detaches cleanly.
+    screen.unmount();
+  });
+
+  it("opens the connect dialog for a hyphenated provider-name alias", async () => {
+    const screen = await renderPanel({ connectProvider: "codex-agent" });
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog.getByText("Connect Codex account")).toBeVisible();
+    screen.unmount();
+  });
+
+  it("refetches the snapshot after a disconnect so the row label refreshes", async () => {
+    await renderPanel();
+    await vi.waitFor(() => expect(document.body.textContent).toContain("API key ending e2e1"));
+
+    // After the disconnect succeeds, the server reports the slot as needing
+    // sign-in with no stored identity.
+    harness.getSnapshot.mockImplementation(
+      async () =>
+        ({
+          providers: [
+            {
+              provider: "codex",
+              activeOrdinal: 1,
+              accounts: [
+                { provider: "codex", ordinal: 0, createdAt: "2026-01-01T00:00:00.000Z" },
+                {
+                  provider: "codex",
+                  ordinal: 1,
+                  createdAt: "2026-01-02T00:00:00.000Z",
+                  agent: { generation: 1, state: "needs-auth", authMethod: "apiKey" },
+                },
+              ],
+              capabilities: {
+                agent: { oauth: "supported", apiKey: "supported" },
+                app: { oauth: "unsupported", supportLevel: "unsupported" },
+              },
+            },
+          ],
+        }) as unknown as ProviderAccountsSnapshot,
+    );
+
+    await page.getByRole("button", { name: "Codex 1 Active" }).click();
+    await page.getByRole("button", { name: "Disconnect agent" }).click();
+    await vi.waitFor(() => expect(harness.disconnectBinding).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain("API key ending e2e1");
+      expect(document.body.textContent).toContain("Agent: Needs sign-in");
+    });
   });
 });

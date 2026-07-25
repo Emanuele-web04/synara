@@ -188,6 +188,26 @@ export function accountProviderLabel(provider: SupportedAccountProvider): string
   return PROVIDER_DISPLAY_NAMES[provider];
 }
 
+const CONNECT_PARAM_ALIASES: Record<string, SupportedAccountProvider> = {
+  claude: "claudeAgent",
+  codex: "codex",
+  cursor: "cursor",
+  grok: "grok",
+};
+
+/**
+ * Resolves a `?connect=` deep-link value to a supported provider. Accepts the
+ * raw provider kind (`claudeAgent`) plus friendly aliases with or without a
+ * hyphenated agent suffix (`claude`, `claude-agent`, `cursor-agent`).
+ */
+export function normalizeConnectProviderParam(raw: string): SupportedAccountProvider | null {
+  const direct = SUPPORTED_ACCOUNT_PROVIDERS.find((provider) => provider === raw);
+  if (direct !== undefined) return direct;
+  const compact = raw.toLowerCase().replace(/-/g, "");
+  const base = compact.endsWith("agent") ? compact.slice(0, -"agent".length) : compact;
+  return CONNECT_PARAM_ALIASES[base] ?? null;
+}
+
 /** Numbered slot label, e.g. "Codex 3"; ordinal 0 is your own unmanaged login. */
 export function accountSlotLabel(
   provider: SupportedAccountProvider,

@@ -55,8 +55,8 @@ describe("codexOauthLoginRunner", () => {
   it("surfaces the first verification URL printed on stdout and succeeds", async () => {
     installFakeCodex(
       [
-        `echo "Open https://auth.example.com/device?code=abc to continue"`,
-        `echo "second https://auth.example.com/ignored"`,
+        `echo "Open https://auth.openai.com/device?code=abc to continue"`,
+        `echo "second https://auth.openai.com/ignored"`,
         `printf '{"tokens":{"id_token":"${makeIdToken("kartik@example.com")}"}}' > "$CODEX_HOME/auth.json"`,
       ].join("\n"),
     );
@@ -68,13 +68,14 @@ describe("codexOauthLoginRunner", () => {
     });
     const outcome = await handle.done;
     expect(outcome).toEqual({ ok: true, identityHint: "k\u2022\u2022\u2022\u2022@example.com" });
-    expect(verifications).toEqual(["https://auth.example.com/device?code=abc"]);
+    expect(verifications).toEqual(["https://auth.openai.com/device?code=abc"]);
   });
 
-  it("extracts a verification URL printed on stderr", async () => {
+  it("ignores URLs on unexpected hosts and surfaces the first on a known auth host", async () => {
     installFakeCodex(
       [
-        `echo "Visit https://auth.example.com/from-stderr" 1>&2`,
+        `echo "Visit https://evil.com/login first"`,
+        `echo "Then open https://auth.openai.com/device?code=real"`,
         `printf '{}' > "$CODEX_HOME/auth.json"`,
       ].join("\n"),
     );
@@ -86,7 +87,43 @@ describe("codexOauthLoginRunner", () => {
     });
     const outcome = await handle.done;
     expect(outcome.ok).toBe(true);
-    expect(verifications).toEqual(["https://auth.example.com/from-stderr"]);
+    expect(verifications).toEqual(["https://auth.openai.com/device?code=real"]);
+  });
+
+  it("never surfaces a verification URL when only unexpected hosts are printed", async () => {
+    installFakeCodex(
+      [
+        `echo "Visit https://evil.com/login and https://auth.openai.com.evil.net/phish"`,
+        `printf '{}' > "$CODEX_HOME/auth.json"`,
+      ].join("\n"),
+    );
+    const verifications: Array<unknown> = [];
+    const handle = codexOauthLoginRunner({
+      provider: "codex",
+      profileHome,
+      onVerification: (info) => verifications.push(info),
+    });
+    const outcome = await handle.done;
+    expect(outcome.ok).toBe(true);
+    expect(verifications).toEqual([]);
+  });
+
+  it("extracts a verification URL printed on stderr", async () => {
+    installFakeCodex(
+      [
+        `echo "Visit https://auth.openai.com/from-stderr" 1>&2`,
+        `printf '{}' > "$CODEX_HOME/auth.json"`,
+      ].join("\n"),
+    );
+    const verifications: Array<string | undefined> = [];
+    const handle = codexOauthLoginRunner({
+      provider: "codex",
+      profileHome,
+      onVerification: (info) => verifications.push(info.verificationUrl),
+    });
+    const outcome = await handle.done;
+    expect(outcome.ok).toBe(true);
+    expect(verifications).toEqual(["https://auth.openai.com/from-stderr"]);
   });
 
   it("succeeds without an identity hint when the login emits no URL and no id token", async () => {
