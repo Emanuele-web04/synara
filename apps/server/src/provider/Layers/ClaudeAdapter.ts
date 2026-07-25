@@ -101,7 +101,7 @@ import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
-import { applyAccountEnvironmentOverrides } from "../../providerAccounts/accountEnvironment.ts";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import { buildClaudeDesktopLaunchPlan } from "../../providerAccounts/claudeAppLaunch.ts";
 import {
   CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,

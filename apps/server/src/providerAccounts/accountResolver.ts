@@ -3,8 +3,9 @@
 // Layer: Server service internals
 // Exports: makeAccountResolver, ProviderAccountResolutionError.
 
+import "@synara/shared/providerAccounts/codexAccountEnvironment";
+
 import "./claudeAccountEnvironment";
-import "./codexAccountEnvironment";
 import "./cursorAccountEnvironment";
 import "./grokAccountEnvironment";
 
@@ -13,7 +14,7 @@ import { supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
 import { accountAgentHome, accountAppDataDir } from "@synara/shared/providerAccounts/accountPaths";
 import { Data, Effect } from "effect";
 
-import { resolveAccountEnvironmentBuilder } from "./accountEnvironment";
+import { resolveAccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
 import type { AccountStorageShape, ProviderAccountStorageError } from "./accountStorage";
 
 export class ProviderAccountResolutionError extends Data.TaggedError(

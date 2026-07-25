@@ -19,7 +19,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { SessionConfigOption as SessionConfigOptionCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
-import { applyAccountEnvironmentOverrides } from "../../providerAccounts/accountEnvironment.ts";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,

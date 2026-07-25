@@ -1,6 +1,6 @@
 // FILE: codexAccountEnvironment.ts
 // Purpose: Codex managed-account environment builder (plan section 13.1).
-// Layer: Server service internals
+// Layer: Cross-package pure utility
 // Exports: buildCodexAccountEnvironment (also self-registers for "codex").
 
 import {

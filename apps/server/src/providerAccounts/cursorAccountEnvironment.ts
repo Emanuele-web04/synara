@@ -8,7 +8,7 @@ import {
   registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
-} from "./accountEnvironment";
+} from "@synara/shared/providerAccounts/accountEnvironment";
 
 // Inherited auth overrides that would leak the native account into a managed
 // launch. Stripped before account-specific values are applied. Cursor managed

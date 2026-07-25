@@ -1,0 +1,4 @@
+#!/bin/sh
+# Synara provider shim: forwards to synara-account-launcher (plan section 21).
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SYNARA_LAUNCHER_SHIM=codex exec bun "$dir/../src/launcher.ts" "$@"

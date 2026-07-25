@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_ENV_UNSET } from "./accountEnvironment";
+import { ACCOUNT_ENV_UNSET } from "@synara/shared/providerAccounts/accountEnvironment";
 import { buildClaudeAccountEnvironment } from "./claudeAccountEnvironment";
 import { buildClaudeDesktopLaunchPlan, resolveClaudeDesktopExecutable } from "./claudeAppLaunch";
 

@@ -5,8 +5,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { SupportedAccountProvider } from "@synara/contracts";
-import { accountDirName, activePointerFileName } from "./accountIds";
+import type { AccountSurface, SupportedAccountProvider } from "@synara/contracts";
+import { accountDirName, activePointerFileName, secretName } from "./accountIds";
 
 export interface ResolveAccountRootOptions {
   readonly platform?: NodeJS.Platform;
@@ -85,6 +85,24 @@ export function accountAppDataDir(
   ordinal: number,
 ): string {
   return join(accountDir(root, provider, ordinal), "app", "data");
+}
+
+// Mirrors the ServerSecretStore file naming so both stores stay compatible.
+export function secretFileName(name: string): string {
+  return `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}.bin`;
+}
+
+export function secretsDir(root: string): string {
+  return join(root, "secrets");
+}
+
+export function accountSecretPath(
+  root: string,
+  provider: SupportedAccountProvider,
+  ordinal: number,
+  surface: AccountSurface,
+): string {
+  return join(secretsDir(root), secretFileName(secretName(provider, ordinal, surface)));
 }
 
 export function pendingDir(root: string, provider: SupportedAccountProvider): string {

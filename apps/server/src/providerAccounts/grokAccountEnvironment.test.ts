@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_ENV_UNSET } from "./accountEnvironment";
+import { ACCOUNT_ENV_UNSET } from "@synara/shared/providerAccounts/accountEnvironment";
 import { buildGrokAccountEnvironment } from "./grokAccountEnvironment";
 
 const AGENT_HOME = "/accounts/grok/1/agent/home";

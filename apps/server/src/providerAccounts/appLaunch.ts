@@ -14,7 +14,7 @@ import type {
 import { accountAppDataDir } from "@synara/shared/providerAccounts/accountPaths";
 import { Data, Effect } from "effect";
 
-import { applyAccountEnvironmentOverrides } from "./accountEnvironment";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import type { AccountResolverShape } from "./accountResolver";
 import type { AccountStorageShape } from "./accountStorage";
 

@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_ENV_UNSET, resolveAccountEnvironmentBuilder } from "./accountEnvironment";
+import { ACCOUNT_ENV_UNSET, resolveAccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
 import { buildCursorAccountEnvironment } from "./cursorAccountEnvironment";
 
 const agentHome = "/accounts/cursor/2/agent/home";

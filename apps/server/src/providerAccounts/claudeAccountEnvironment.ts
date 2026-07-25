@@ -8,7 +8,7 @@ import {
   registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
-} from "./accountEnvironment";
+} from "@synara/shared/providerAccounts/accountEnvironment";
 
 // Inherited auth overrides that would leak the native account (or reroute
 // requests through Bedrock/Vertex/custom gateways) into a managed launch.

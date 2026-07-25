@@ -11,7 +11,7 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ServerSecretStoreShape } from "../auth/Services/ServerSecretStore";
-import { registerAccountEnvironmentBuilder } from "./accountEnvironment";
+import { registerAccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
 import { makeAccountResolver } from "./accountResolver";
 import {
   makeAccountStorage,

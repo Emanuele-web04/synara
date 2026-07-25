@@ -51,7 +51,7 @@ import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
 import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
-import { applyAccountEnvironmentOverrides } from "./providerAccounts/accountEnvironment.ts";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import {
   teardownChildProcessTree,
