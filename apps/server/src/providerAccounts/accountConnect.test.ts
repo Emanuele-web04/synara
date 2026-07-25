@@ -1,12 +1,21 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ProviderAccountsBeginConnectInput } from "@synara/contracts";
+import {
+  accountDir,
+  accountSecretPath,
+  secretsDir,
+} from "@synara/shared/providerAccounts/accountPaths";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeAccountConnect, type AccountConnectShape } from "./accountConnect";
+import { makeAccountResolver } from "./accountResolver";
 import { makeAccountStorage, type AccountStorageShape } from "./accountStorage";
+import { makeCliIntegration } from "./cliIntegration";
+import { makeDoctorReport } from "./doctorReport";
 import type { OAuthLoginOutcome, OAuthLoginRunner } from "./oauthLogin";
 
 const expectFailureDetail = async (
@@ -235,5 +244,135 @@ describe("accountConnect", () => {
   it("protects the native account 0 from disconnect and hide", async () => {
     await expectFailureDetail(connect.disconnectBinding("codex", 0, "agent"), /native account/);
     await expectFailureDetail(connect.hide("codex", 0), /native account/);
+  });
+
+  describe("capability matrix at beginConnect", () => {
+    const matrix: ReadonlyArray<{
+      readonly request: ProviderAccountsBeginConnectInput;
+      readonly supported: boolean;
+    }> = [
+      { request: { kind: "agent-api-key", provider: "codex", apiKey: "k" }, supported: true },
+      { request: { kind: "agent-api-key", provider: "claudeAgent", apiKey: "k" }, supported: true },
+      { request: { kind: "agent-api-key", provider: "cursor", apiKey: "k" }, supported: true },
+      { request: { kind: "agent-api-key", provider: "grok", apiKey: "k" }, supported: true },
+      { request: { kind: "agent-oauth", provider: "codex" }, supported: true },
+      { request: { kind: "agent-oauth", provider: "claudeAgent" }, supported: false },
+      { request: { kind: "agent-oauth", provider: "cursor" }, supported: false },
+      { request: { kind: "agent-oauth", provider: "grok" }, supported: false },
+      { request: { kind: "app-oauth", provider: "codex" }, supported: false },
+      { request: { kind: "app-oauth", provider: "claudeAgent" }, supported: false },
+      { request: { kind: "app-oauth", provider: "cursor" }, supported: false },
+      { request: { kind: "app-oauth", provider: "grok" }, supported: false },
+    ];
+
+    it.each(matrix)("$request.kind for $request.provider", async ({ request, supported }) => {
+      if (supported) {
+        const { operationId } = await Effect.runPromise(connect.beginConnect(request));
+        expect(operationId).toBeTruthy();
+      } else {
+        await expectFailureDetail(connect.beginConnect(request), /not supported/);
+      }
+    });
+  });
+
+  describe("secret hygiene", () => {
+    const apiKey = "sk-hygiene-secret-000042";
+
+    it("never echoes the API key in connect status objects", async () => {
+      const { operationId } = await Effect.runPromise(
+        connect.beginConnect({ kind: "agent-api-key", provider: "cursor", apiKey }),
+      );
+      const status = await Effect.runPromise(connect.getConnectStatus(operationId));
+      expect(JSON.stringify(status)).not.toContain(apiKey);
+    });
+
+    it("never echoes the API key in connect failure details", async () => {
+      const failure = await Effect.runPromise(
+        Effect.flip(
+          connect.beginConnect({ kind: "agent-api-key", provider: "grok", ordinal: 9, apiKey }),
+        ),
+      );
+      expect(JSON.stringify(failure)).not.toContain(apiKey);
+    });
+
+    it("never echoes the API key when the secret write itself fails", async () => {
+      // A directory squatting on the secret path makes the write fail.
+      mkdirSync(accountSecretPath(root, "grok", 1, "agent"), { recursive: true });
+      const failure = await Effect.runPromise(
+        Effect.flip(connect.beginConnect({ kind: "agent-api-key", provider: "grok", apiKey })),
+      );
+      expect(JSON.stringify(failure.detail)).not.toContain(apiKey);
+    });
+
+    it("never echoes the API key in resolver error details", async () => {
+      await Effect.runPromise(
+        connect.beginConnect({ kind: "agent-api-key", provider: "cursor", apiKey }),
+      );
+      await Effect.runPromise(storage.deleteSecret("cursor", 1, "agent"));
+      const resolver = makeAccountResolver({ storage });
+      const failure = await Effect.runPromise(
+        Effect.flip(resolver.resolveAccountLaunch({ provider: "cursor", surface: "agent" })),
+      );
+      expect(JSON.stringify(failure)).not.toContain(apiKey);
+    });
+
+    it("never echoes the API key in the doctor report", async () => {
+      await Effect.runPromise(
+        connect.beginConnect({ kind: "agent-api-key", provider: "cursor", apiKey }),
+      );
+      const doctor = makeDoctorReport({
+        storage,
+        cliIntegration: makeCliIntegration({ root, env: { PATH: "" } }),
+      });
+      const report = await Effect.runPromise(doctor.generate);
+      expect(JSON.stringify(report)).not.toContain(apiKey);
+    });
+
+    it("writes secrets 0o600 inside 0o700 directories", async () => {
+      await Effect.runPromise(
+        connect.beginConnect({ kind: "agent-api-key", provider: "cursor", apiKey }),
+      );
+      const secretMode = statSync(accountSecretPath(root, "cursor", 1, "agent")).mode & 0o777;
+      expect(secretMode).toBe(0o600);
+      expect(statSync(secretsDir(root)).mode & 0o777).toBe(0o700);
+      expect(statSync(accountDir(root, "cursor", 1)).mode & 0o777).toBe(0o700);
+    });
+  });
+
+  describe("cross-provider isolation", () => {
+    it("keeps concurrent same-ordinal accounts of different providers fully separate", async () => {
+      await Promise.all([
+        Effect.runPromise(
+          connect.beginConnect({ kind: "agent-api-key", provider: "codex", apiKey: "sk-codex-1" }),
+        ),
+        Effect.runPromise(
+          connect.beginConnect({ kind: "agent-api-key", provider: "grok", apiKey: "xai-grok-1" }),
+        ),
+      ]);
+      await expect(Effect.runPromise(storage.readActiveOrdinal("codex"))).resolves.toBe(1);
+      await expect(Effect.runPromise(storage.readActiveOrdinal("grok"))).resolves.toBe(1);
+
+      const resolver = makeAccountResolver({ storage });
+      const codexLaunch = await Effect.runPromise(
+        resolver.resolveAccountLaunch({ provider: "codex", surface: "agent" }),
+      );
+      const grokLaunch = await Effect.runPromise(
+        resolver.resolveAccountLaunch({ provider: "grok", surface: "agent" }),
+      );
+
+      expect(codexLaunch.environment.OPENAI_API_KEY).toBe("sk-codex-1");
+      expect(codexLaunch.environment.CODEX_HOME).toContain(join("codex", "1"));
+      // Conflicting inherited codex vars are marked unset, and no grok
+      // credentials appear anywhere in the codex launch environment.
+      expect(codexLaunch.environment.OPENAI_BASE_URL).toBe("");
+      expect(JSON.stringify(codexLaunch.environment)).not.toContain("xai-grok-1");
+      expect(codexLaunch.environment.XAI_API_KEY).toBeUndefined();
+
+      expect(grokLaunch.environment.XAI_API_KEY).toBe("xai-grok-1");
+      expect(grokLaunch.environment.GROK_HOME).toContain(join("grok", "1"));
+      expect(grokLaunch.environment.GROK_CODE_XAI_API_KEY).toBe("");
+      expect(JSON.stringify(grokLaunch.environment)).not.toContain("sk-codex-1");
+      expect(grokLaunch.environment.OPENAI_API_KEY).toBeUndefined();
+    });
   });
 });

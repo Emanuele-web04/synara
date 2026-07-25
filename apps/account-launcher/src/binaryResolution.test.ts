@@ -79,4 +79,69 @@ describe("resolveRealBinary", () => {
   it("returns null when the binary is missing", () => {
     expect(resolveRealBinary({ command: "codex", pathEnv: realDir, shimDir })).toBeNull();
   });
+
+  describe("windows semantics", () => {
+    it("splits PATH on ';' and matches PATHEXT extensions", () => {
+      const real = writeExecutable(realDir, "codex.exe");
+      const resolved = resolveRealBinary({
+        command: "codex",
+        pathEnv: [shimDir, realDir].join(";"),
+        shimDir,
+        platform: "win32",
+        pathExtEnv: ".COM;.EXE",
+      });
+      expect(resolved).toBe(fs.realpathSync(real));
+    });
+
+    it("matches lowercase extensions for uppercase PATHEXT entries", () => {
+      const real = writeExecutable(realDir, "codex.cmd");
+      const resolved = resolveRealBinary({
+        command: "codex",
+        pathEnv: realDir,
+        shimDir,
+        platform: "win32",
+        pathExtEnv: ".EXE;.CMD",
+      });
+      expect(resolved).toBe(fs.realpathSync(real));
+    });
+
+    it("does not treat ':' as a PATH separator on win32", () => {
+      writeExecutable(realDir, "codex.exe");
+      const resolved = resolveRealBinary({
+        command: "codex",
+        // A single (invalid) entry on win32; would be two entries on posix.
+        pathEnv: [realDir, realDir].join(":"),
+        shimDir,
+        platform: "win32",
+        pathExtEnv: ".EXE",
+      });
+      expect(resolved).toBeNull();
+    });
+
+    it("still excludes the shim directory on win32", () => {
+      writeExecutable(shimDir, "codex.exe");
+      const resolved = resolveRealBinary({
+        command: "codex",
+        pathEnv: shimDir,
+        shimDir,
+        platform: "win32",
+        pathExtEnv: ".EXE",
+      });
+      expect(resolved).toBeNull();
+    });
+
+    it("returns files without the executable bit on win32 (PATHEXT is the check)", () => {
+      const filePath = path.join(realDir, "codex.exe");
+      fs.writeFileSync(filePath, "MZ");
+      fs.chmodSync(filePath, 0o644);
+      const resolved = resolveRealBinary({
+        command: "codex",
+        pathEnv: realDir,
+        shimDir,
+        platform: "win32",
+        pathExtEnv: ".EXE",
+      });
+      expect(resolved).toBe(fs.realpathSync(filePath));
+    });
+  });
 });

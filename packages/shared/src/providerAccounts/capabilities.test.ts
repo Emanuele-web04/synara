@@ -1,3 +1,8 @@
+import {
+  SupportedAccountProvider,
+  type AccountSurface,
+  type AgentAuthMethod,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { authCapabilities, isConnectSupported, supportLevelFor } from "./capabilities";
@@ -39,6 +44,36 @@ describe("supportLevelFor", () => {
     expect(supportLevelFor("cursor", "app", "oauth")).toBe("unsupported");
     expect(supportLevelFor("codex", "app", "apiKey")).toBe("unsupported");
     expect(supportLevelFor("grok", "app", "oauth")).toBe("unsupported");
+  });
+});
+
+describe("full provider × surface × auth matrix", () => {
+  // The only supported combos today: API-key agent connects everywhere,
+  // plus managed OAuth agent login for codex.
+  const supportedCombos = new Set([
+    "codex/agent/oauth",
+    "codex/agent/apiKey",
+    "claudeAgent/agent/apiKey",
+    "cursor/agent/apiKey",
+    "grok/agent/apiKey",
+  ]);
+
+  const combos = SupportedAccountProvider.literals.flatMap((provider) =>
+    (["agent", "app"] as const satisfies ReadonlyArray<AccountSurface>).flatMap((surface) =>
+      (["oauth", "apiKey"] as const satisfies ReadonlyArray<AgentAuthMethod>).map((authMethod) => ({
+        provider,
+        surface,
+        authMethod,
+      })),
+    ),
+  );
+
+  it.each(combos)("$provider/$surface/$authMethod", ({ provider, surface, authMethod }) => {
+    const expected = supportedCombos.has(`${provider}/${surface}/${authMethod}`)
+      ? "supported"
+      : "unsupported";
+    expect(supportLevelFor(provider, surface, authMethod)).toBe(expected);
+    expect(isConnectSupported(provider, surface, authMethod)).toBe(expected === "supported");
   });
 });
 

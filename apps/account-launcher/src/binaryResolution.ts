@@ -65,8 +65,10 @@ export function resolveRealBinary(input: ResolveRealBinaryInput): string | null 
   const platform = input.platform ?? process.platform;
   const shimDirs = typeof input.shimDir === "string" ? [input.shimDir] : input.shimDir;
   const shimDirsReal = shimDirs.map((dir) => canonicalize(dir) ?? path.resolve(dir));
+  // PATH entry separator follows the target platform, not the host runtime.
+  const delimiter = platform === "win32" ? ";" : ":";
   const searchDirs = (input.pathEnv ?? "")
-    .split(path.delimiter)
+    .split(delimiter)
     .filter((dir) => dir.length > 0)
     .filter((dir) => {
       const real = canonicalize(dir) ?? path.resolve(dir);
