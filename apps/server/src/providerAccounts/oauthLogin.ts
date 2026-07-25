@@ -1,10 +1,3 @@
-// FILE: oauthLogin.ts
-// Purpose: Provider OAuth login runners for managed account connects.
-//          Each runner drives the provider's official login command inside an
-//          isolated profile home and reports verification info and completion.
-// Layer: Server service internals
-// Exports: OAuthLoginRunner types, codexOauthLoginRunner, defaultOauthLoginRunners.
-
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -38,7 +31,9 @@ export interface OAuthLoginHandle {
 
 export type OAuthLoginRunner = (request: OAuthLoginRequest) => OAuthLoginHandle;
 
-const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+// Shared with startup recovery: pending login directories younger than this
+// may belong to a still-running login and must not be reclaimed.
+export const OAUTH_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const URL_PATTERN = /https:\/\/[^\s"'<>)\]]+/;
 
 // Environment variables that could redirect the login away from the isolated
@@ -96,7 +91,7 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
       cancelled = true;
       child.kill("SIGTERM");
       resolve({ ok: false, error: "Codex login timed out after 10 minutes." });
-    }, LOGIN_TIMEOUT_MS);
+    }, OAUTH_LOGIN_TIMEOUT_MS);
     timeout.unref();
 
     child.on("error", (cause) => {

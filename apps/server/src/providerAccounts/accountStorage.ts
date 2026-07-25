@@ -1,8 +1,3 @@
-// FILE: accountStorage.ts
-// Purpose: Filesystem storage for the machine-global provider account root.
-// Layer: Server service internals (plan sections 9-11)
-// Exports: makeAccountStorage, AccountStorageShape, ProviderAccountStorageError.
-
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -308,7 +303,7 @@ export function makeAccountStorage(input: AccountStorageInput) {
     );
 
   // Allocates the ordinal only at finalization so failed or cancelled logins
-  // never consume account numbers (plan section 10). The ordinal directory is
+  // never consume account numbers. The ordinal directory is
   // reserved atomically, then the pending contents move into it.
   const finalizePendingDirectory = (provider: SupportedAccountProvider, operationId: string) =>
     withProviderLock(
@@ -320,9 +315,16 @@ export function makeAccountStorage(input: AccountStorageInput) {
             `Failed to finalize pending directory for '${provider}' operation '${operationId}'.`,
             async () => {
               const target = accountDir(root, provider, ordinal);
-              await fs.rm(target, { recursive: true, force: true });
+              // POSIX rename atomically replaces the freshly reserved empty
+              // directory: there is no delete-then-rename window in which a
+              // crash could strand an empty consumed ordinal.
               await fs.rename(pendingPath(root, provider, operationId), target);
-              await fs.rm(path.join(target, "operation.json"), { force: true });
+              // Post-rename cleanup is best effort; the account is already in
+              // place, so a failure here must not trigger the rollback (which
+              // would delete real credentials).
+              await fs
+                .rm(path.join(target, "operation.json"), { force: true })
+                .catch(() => undefined);
               await fs.chmod(target, PRIVATE_DIRECTORY_MODE).catch(() => undefined);
               return ordinal;
             },

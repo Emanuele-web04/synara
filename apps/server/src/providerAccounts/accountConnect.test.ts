@@ -1,7 +1,3 @@
-// FILE: accountConnect.test.ts
-// Purpose: Focused tests for the account connect/disconnect lifecycle.
-// Layer: Server unit tests
-
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

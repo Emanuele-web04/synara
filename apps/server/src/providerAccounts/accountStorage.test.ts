@@ -1,7 +1,3 @@
-// FILE: accountStorage.test.ts
-// Purpose: Focused tests for filesystem account storage.
-// Layer: Server unit tests
-
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

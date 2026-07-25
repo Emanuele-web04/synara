@@ -1,8 +1,3 @@
-// FILE: accountConnect.ts
-// Purpose: Account connect/disconnect lifecycle operations (plan section 10).
-// Layer: Server service internals
-// Exports: makeAccountConnect, ProviderAccountConnectError.
-
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
@@ -16,11 +11,12 @@ import {
 } from "@synara/contracts";
 import { isConnectSupported, supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
 import { accountAgentHome, pendingPath } from "@synara/shared/providerAccounts/accountPaths";
-import { Data, Effect } from "effect";
+import { Cause, Data, Effect } from "effect";
 
 import type { AccountStorageShape, ProviderAccountStorageError } from "./accountStorage";
 import {
   defaultOauthLoginRunners,
+  OAUTH_LOGIN_TIMEOUT_MS,
   type OAuthLoginHandle,
   type OAuthLoginRunner,
 } from "./oauthLogin";
@@ -44,7 +40,16 @@ type ConnectOperation = {
   userCode?: string;
   error?: string;
   loginHandle?: OAuthLoginHandle;
+  // Epoch millis when the operation reached a terminal state; used to evict
+  // old entries so the operations map cannot grow without bound.
+  finishedAt?: number;
 };
+
+// Terminal operations stay queryable for a grace period, then are evicted.
+const TERMINAL_OPERATION_TTL_MS = 30 * 60 * 1000;
+
+const isTerminalState = (state: ProviderAccountsConnectStatus["state"]): boolean =>
+  state === "succeeded" || state === "failed" || state === "cancelled";
 
 const toStatus = (operation: ConnectOperation): ProviderAccountsConnectStatus => ({
   operationId: operation.operationId,
@@ -72,6 +77,19 @@ export function makeAccountConnect(input: AccountConnectInput) {
   const now = input.now ?? (() => new Date().toISOString());
   const oauthLoginRunners = input.oauthLoginRunners ?? defaultOauthLoginRunners;
   const operations = new Map<string, ConnectOperation>();
+
+  const evictExpiredOperations = () => {
+    const cutoff = Date.now() - TERMINAL_OPERATION_TTL_MS;
+    for (const [operationId, operation] of operations) {
+      if (
+        isTerminalState(operation.state) &&
+        operation.finishedAt !== undefined &&
+        operation.finishedAt < cutoff
+      ) {
+        operations.delete(operationId);
+      }
+    }
+  };
 
   const connectError = (operation: string, detail: string) =>
     new ProviderAccountConnectError({ operation, detail });
@@ -143,15 +161,21 @@ export function makeAccountConnect(input: AccountConnectInput) {
 
   const activateIfFirst = (provider: SupportedAccountProvider, ordinal: number) =>
     Effect.gen(function* () {
-      // First connected account becomes active so new threads use it.
-      if ((yield* storage.readActiveOrdinal(provider)) === null) {
+      // First connected account becomes active so new threads use it. A
+      // corrupted pointer read must not fail the connect itself (the doctor
+      // report and pointer repair handle it), but a failed pointer write is
+      // surfaced: silently swallowing it would leave the user believing the
+      // new account is active while launches keep using the native account.
+      const active = yield* storage.readActiveOrdinal(provider).pipe(
+        Effect.tapCause((cause) =>
+          Effect.logWarning("providerAccounts.active_pointer_read_failed", { cause }),
+        ),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (active === null) {
         yield* storage.writeActiveOrdinal(provider, ordinal);
       }
-    }).pipe(
-      // A corrupted pointer must not fail the connect itself; the doctor
-      // report and pointer repair handle it.
-      Effect.ignore,
-    );
+    });
 
   // API-key connects are transactional: the ordinal directory is reserved
   // atomically under the provider lock, the secret is written before the
@@ -179,6 +203,16 @@ export function makeAccountConnect(input: AccountConnectInput) {
             : undefined;
         const ordinal = operation.reconnectOrdinal ?? reservedOrdinal!;
 
+        // Reconnects overwrite the existing secret: capture it first so a
+        // failed record write can restore it instead of leaving the account
+        // pointing at a key that was never recorded.
+        const previousSecret =
+          operation.reconnectOrdinal !== undefined
+            ? yield* storage
+                .readSecret(provider, ordinal, "agent")
+                .pipe(Effect.orElseSucceed(() => null))
+            : null;
+
         const writeAll = Effect.gen(function* () {
           const existing = yield* storage.readAccount(provider, ordinal);
           yield* storage.writeSecret(provider, ordinal, "agent", apiKey);
@@ -189,20 +223,24 @@ export function makeAccountConnect(input: AccountConnectInput) {
               verification: "unknown",
             }),
           );
+          yield* activateIfFirst(provider, ordinal);
         });
 
-        yield* writeAll.pipe(
-          Effect.tapError(() =>
-            reservedOrdinal !== undefined
-              ? storage.releaseOrdinalDirectory(provider, reservedOrdinal).pipe(Effect.ignore)
-              : Effect.void,
-          ),
-        );
+        const rollback =
+          reservedOrdinal !== undefined
+            ? // Releasing the reserved directory also removes the freshly
+              // written secret file, so no orphaned key survives a failure.
+              storage.releaseOrdinalDirectory(provider, reservedOrdinal).pipe(Effect.ignore)
+            : previousSecret !== null
+              ? storage.writeSecret(provider, ordinal, "agent", previousSecret).pipe(Effect.ignore)
+              : storage.deleteSecret(provider, ordinal, "agent").pipe(Effect.ignore);
+
+        yield* writeAll.pipe(Effect.tapError(() => rollback));
 
         delete operation.apiKey;
-        yield* activateIfFirst(provider, ordinal);
         operation.state = "succeeded";
         operation.ordinal = ordinal;
+        operation.finishedAt = Date.now();
         return toStatus(operation);
       }),
     );
@@ -231,6 +269,7 @@ export function makeAccountConnect(input: AccountConnectInput) {
       yield* activateIfFirst(provider, ordinal);
       operation.state = "succeeded";
       operation.ordinal = ordinal;
+      operation.finishedAt = Date.now();
       return toStatus(operation);
     });
 
@@ -238,6 +277,8 @@ export function makeAccountConnect(input: AccountConnectInput) {
     if (operation.state === "pending" || operation.state === "waiting-for-user") {
       operation.state = "failed";
       operation.error = detail;
+      operation.finishedAt = Date.now();
+      delete operation.apiKey;
     }
   };
 
@@ -275,12 +316,19 @@ export function makeAccountConnect(input: AccountConnectInput) {
         finalizeOauthConnect(
           operation.operationId,
           outcome.identityHint !== undefined ? { hint: outcome.identityHint } : undefined,
-        ).pipe(Effect.ignore),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logError("providerAccounts.oauth_finalize_failed", { cause });
+              const failure = Cause.findErrorOption(cause);
+              const detail =
+                failure._tag === "Some" ? failure.value.detail : "An unexpected error occurred.";
+              failOperation(operation, `Failed to finalize the OAuth connection: ${detail}`);
+              return toStatus(operation);
+            }),
+          ),
+        ),
       ).catch(() => undefined);
-      const finalState = operations.get(operation.operationId)?.state;
-      if (finalState !== "succeeded") {
-        failOperation(operation, "Failed to finalize the OAuth connection.");
-      }
     });
   };
 
@@ -314,6 +362,8 @@ export function makeAccountConnect(input: AccountConnectInput) {
         }
       }
 
+      evictExpiredOperations();
+
       const operation: ConnectOperation = {
         operationId: randomUUID(),
         provider,
@@ -327,7 +377,11 @@ export function makeAccountConnect(input: AccountConnectInput) {
 
       if (connectInput.kind === "agent-api-key") {
         // API-key connects need no external login step; finalize immediately.
-        yield* finalizeApiKeyConnect(operation);
+        // On failure the operation is marked failed and the in-memory key is
+        // dropped so it cannot linger past its only use.
+        yield* finalizeApiKeyConnect(operation).pipe(
+          Effect.tapError((error) => Effect.sync(() => failOperation(operation, error.detail))),
+        );
         return { operationId: operation.operationId };
       }
 
@@ -348,6 +402,9 @@ export function makeAccountConnect(input: AccountConnectInput) {
             surface,
             authMethod,
             startedAt: now(),
+            // Owner pid so sibling server instances sharing the account root
+            // can tell a live in-flight login from an interrupted one.
+            pid: process.pid,
           }),
         );
         profileHome = path.join(
@@ -371,6 +428,7 @@ export function makeAccountConnect(input: AccountConnectInput) {
         Effect.gen(function* () {
           if (operation.state === "waiting-for-user" || operation.state === "pending") {
             operation.state = "cancelled";
+            operation.finishedAt = Date.now();
             operation.loginHandle?.cancel();
             if (operation.reconnectOrdinal === undefined && operation.authMethod === "oauth") {
               yield* storage.cancelPendingDirectory(operation.provider, operation.operationId);
@@ -453,10 +511,21 @@ export function makeAccountConnect(input: AccountConnectInput) {
       }
     });
 
+  const isPidAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // Startup recovery: pending directories left behind by a previous process
   // are interrupted OAuth connects. Register each as a failed operation so
   // status queries return a truthful terminal state, then remove the
-  // directories so no ordinal or disk state leaks.
+  // directory. The account root is machine-global, so a pending directory
+  // whose owner process is still alive (or which is younger than the login
+  // timeout) belongs to a live sibling instance and must be left alone.
   const recoverInterruptedOperations = Effect.gen(function* () {
     for (const provider of SupportedAccountProvider.literals) {
       const pendingIds = yield* storage
@@ -468,19 +537,43 @@ export function makeAccountConnect(input: AccountConnectInput) {
           .pipe(Effect.orElseSucceed(() => null));
         let surface: AccountSurface = "agent";
         let authMethod: AgentAuthMethod = "oauth";
+        let ownerPid: number | undefined;
+        let startedAtMs: number | undefined;
         if (raw !== null) {
           try {
             const parsed = JSON.parse(raw) as {
               surface?: AccountSurface;
               authMethod?: AgentAuthMethod;
+              pid?: number;
+              startedAt?: string;
             };
             if (parsed.surface === "agent" || parsed.surface === "app") surface = parsed.surface;
             if (parsed.authMethod === "oauth" || parsed.authMethod === "apiKey") {
               authMethod = parsed.authMethod;
             }
+            if (typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+              ownerPid = parsed.pid;
+            }
+            if (typeof parsed.startedAt === "string") {
+              const ms = Date.parse(parsed.startedAt);
+              if (!Number.isNaN(ms)) startedAtMs = ms;
+            }
           } catch {
             // Corrupted metadata still yields a terminal failed status.
           }
+        }
+        // A pending directory owned by a live sibling process is in-flight and
+        // must be left alone. When ownership is unknown (legacy metadata), the
+        // login timeout is the only signal: leave fresh directories for their
+        // (possibly live) owner and only reap them once they are stale.
+        const ownedByLiveSibling =
+          ownerPid !== undefined && ownerPid !== process.pid && isPidAlive(ownerPid);
+        const unknownOwnerStillFresh =
+          ownerPid === undefined &&
+          startedAtMs !== undefined &&
+          Date.now() - startedAtMs < OAUTH_LOGIN_TIMEOUT_MS;
+        if (ownedByLiveSibling || unknownOwnerStillFresh) {
+          continue;
         }
         operations.set(operationId, {
           operationId,
@@ -488,10 +581,19 @@ export function makeAccountConnect(input: AccountConnectInput) {
           surface,
           authMethod,
           state: "failed",
+          finishedAt: Date.now(),
           error: "The connect operation was interrupted by a server restart. Start a new connect.",
         });
+        yield* storage.cancelPendingDirectory(provider, operationId).pipe(Effect.ignore);
       }
-      yield* storage.cleanupPendingDirectories(provider);
+      // Remove the provider's pending directory once nothing is left in it;
+      // a directory that still holds live sibling operations is kept.
+      const remaining = yield* storage
+        .listPendingOperations(provider)
+        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+      if (pendingIds.length > 0 && remaining.length === 0) {
+        yield* storage.cleanupPendingDirectories(provider).pipe(Effect.ignore);
+      }
     }
   });
 
