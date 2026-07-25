@@ -164,14 +164,13 @@ export async function teardownProviderProcessTree(
     do {
       // Flush a root-exit resolution caused synchronously by a signal test double.
       await Promise.resolve();
-      const inspection = deps.processTreeKiller.inspect?.(tree);
+      const inspection =
+        tree.captureComplete === false ? undefined : deps.processTreeKiller.inspect?.(tree);
       remainingDescendants = inspection?.verified === true ? inspection.survivors : null;
-      if (
-        rootExited &&
-        tree.captureComplete !== false &&
-        remainingDescendants !== null &&
-        remainingDescendants.length === 0
-      ) {
+      // An empty incomplete capture means descendant state is unknown, not
+      // verified empty. Releasing ownership here could let a replacement start
+      // while a reparented descendant from the old provider is still running.
+      if (rootExited && remainingDescendants !== null && remainingDescendants.length === 0) {
         return { proven: true as const, remainingDescendants };
       }
       const remainingMs = deadline - deps.now();

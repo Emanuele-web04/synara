@@ -55,11 +55,13 @@ export function resolveFilePreviewWorkspaceRoot(input: {
   projectCwd?: string | null | undefined;
   threadEnvMode?: ThreadEnvironmentMode | null | undefined;
   threadWorktreePath?: string | null | undefined;
+  threadWorkingDirectory?: string | null | undefined;
 }): string | null {
   return resolveThreadWorkspaceCwd({
     projectCwd: input.projectCwd,
     envMode: input.threadEnvMode,
     worktreePath: input.threadWorktreePath,
+    workingDirectory: input.threadWorkingDirectory,
   });
 }
 

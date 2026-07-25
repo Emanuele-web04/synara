@@ -12,7 +12,7 @@ import { cn } from "~/lib/utils";
  *
  * It renders in two distinct places — inside the OPEN sidebar header (where it
  * slides off-canvas with the sidebar) and in host top bars AFTER an off-canvas
- * close (chat/workspace/settings/plugin headers). Keeping it in ONE component is
+ * close (chat/settings/plugin headers). Keeping it in ONE component is
  * what makes those two states visually identical: same trigger tone, icon size,
  * and gap, so toggling the sidebar never changes the button's brightness or the
  * cluster spacing. The wrapper layout (hidden/md:flex, ml-auto, …) varies per host,

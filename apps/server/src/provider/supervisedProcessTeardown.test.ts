@@ -98,6 +98,61 @@ describe("teardownProviderProcessTree", () => {
     expect(signals.at(-1)).toEqual({ signal: "SIGKILL", includeRootTree: false });
   });
 
+  it("does not accept root exit as descendant proof when the snapshot failed", async () => {
+    const tree: CapturedProcessTree = { descendants: [], captureComplete: false };
+    const signals: Array<{ signal: TerminalKillSignal; includeRootTree: boolean | undefined }> = [];
+    const clock = deterministicClock();
+
+    const failure = await teardownProviderProcessTree(
+      {
+        rootPid: 401,
+        rootExited: Promise.resolve(),
+        termGraceMs: 10,
+        forceExitMs: 10,
+        pollMs: 5,
+      },
+      {
+        processTreeKiller: {
+          capture: () => tree,
+          inspect: () => ({ verified: true, survivors: [] }),
+          signal: ({ signal, includeRootTree }) => signals.push({ signal, includeRootTree }),
+        },
+        ...clock,
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderProcessExitUnprovenError);
+    expect(failure).toMatchObject({
+      rootPid: 401,
+      rootExited: true,
+      captureComplete: false,
+      remainingDescendantPids: null,
+    });
+    expect(signals).toEqual([
+      { signal: "SIGTERM", includeRootTree: true },
+      { signal: "SIGKILL", includeRootTree: false },
+    ]);
+  });
+
+  it("still fails closed on an incomplete snapshot when the root never proves exit", async () => {
+    const tree: CapturedProcessTree = { descendants: [], captureComplete: false };
+    const clock = deterministicClock();
+
+    const failure = await teardownProviderProcessTree(
+      { rootPid: 501, rootExited: new Promise(() => undefined), termGraceMs: 5, forceExitMs: 5 },
+      {
+        processTreeKiller: {
+          capture: () => tree,
+          inspect: () => ({ verified: true, survivors: [] }),
+          signal: () => undefined,
+        },
+        ...clock,
+      },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProviderProcessExitUnprovenError);
+    expect(failure).toMatchObject({ rootPid: 501, rootExited: false, captureComplete: false });
+  });
+
   it("fails closed when forced termination cannot prove process-tree exit", async () => {
     const tree: CapturedProcessTree = {
       descendants: [{ pid: 302, command: "stuck-provider" }],

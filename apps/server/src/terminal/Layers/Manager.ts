@@ -120,6 +120,16 @@ const TERMINAL_ENV_BLOCKLIST = new Set([
   "TERM_PROGRAM",
   "TERM_PROGRAM_VERSION",
   "TERM_SESSION_ID",
+  // Color-control identity is also the host's, not the PTY's: a server launched
+  // from a non-interactive harness shell (e.g. `codex exec` sets NO_COLOR=1)
+  // would otherwise blank every ANSI color in every spawned terminal. COLORTERM
+  // is stripped here and pinned below alongside TERM.
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "COLORFGBG",
+  "COLORTERM",
   "GHOSTTY_RESOURCES_DIR",
   "GHOSTTY_BIN_DIR",
   "ITERM_PROFILE",
@@ -633,9 +643,11 @@ function createTerminalSpawnEnv(
     if (shouldExcludeTerminalEnvKey(key)) continue;
     spawnEnv[key] = value;
   }
-  // Pin TERM to the embedded renderer's capabilities; a caller-provided
-  // runtimeEnv may still override it deliberately below.
+  // Pin TERM/COLORTERM to the embedded renderer's capabilities (xterm.js
+  // renders truecolor SGR); a caller-provided runtimeEnv may still override
+  // them deliberately below.
   spawnEnv.TERM = TERMINAL_SPAWN_TERM;
+  spawnEnv.COLORTERM = "truecolor";
   if (runtimeEnv) {
     for (const [key, value] of Object.entries(runtimeEnv)) {
       spawnEnv[key] = value;

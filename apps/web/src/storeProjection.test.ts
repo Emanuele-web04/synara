@@ -17,7 +17,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyShellEvent,
+  clearThreadDetailSyncFailureInClientState,
   evictThreadDetailFromClientState,
+  markThreadDetailSyncFailedInClientState,
   removeDeletedProjectFromClientState,
   removeDeletedThreadFromClientState,
   syncServerShellSnapshot,
@@ -1604,5 +1606,64 @@ describe("store projection", () => {
     expect(next.threadTurnStateById).toBe(hydratedState.threadTurnStateById);
     expect(next.sidebarThreadSummaryById).toBe(hydratedState.sidebarThreadSummaryById);
     expect(threadsOf(next)[0]).toBe(thread);
+  });
+});
+
+describe("thread detail sync state", () => {
+  const threadId = ThreadId.makeUnsafe("thread-1");
+
+  it("marks a thread synced when its detail snapshot is applied and clears it on eviction", () => {
+    const synced = syncServerThreadDetailHotPath(makeState(makeThread()), makeReadModelThread({}));
+
+    expect(synced.threadDetailSyncById?.[threadId]).toBe("synced");
+
+    const evicted = evictThreadDetailFromClientState(synced, threadId);
+
+    expect(evicted.threadDetailSyncById?.[threadId]).toBeUndefined();
+  });
+
+  it("clears the sync flag when a thread is deleted", () => {
+    const synced = syncServerThreadDetailHotPath(makeState(makeThread()), makeReadModelThread({}));
+
+    const removed = removeDeletedThreadFromClientState(synced, threadId);
+
+    expect(removed.threadDetailSyncById?.[threadId]).toBeUndefined();
+  });
+
+  it("keeps applied detail authoritative over a late stream failure", () => {
+    const synced = syncServerThreadDetailHotPath(makeState(makeThread()), makeReadModelThread({}));
+
+    const afterFailure = markThreadDetailSyncFailedInClientState(synced, threadId);
+
+    expect(afterFailure).toBe(synced);
+    expect(afterFailure.threadDetailSyncById?.[threadId]).toBe("synced");
+  });
+
+  it("records a failure for an unsynced thread and clears it only from the failed state", () => {
+    const failed = markThreadDetailSyncFailedInClientState(makeState(makeThread()), threadId);
+
+    expect(failed.threadDetailSyncById?.[threadId]).toBe("failed");
+
+    const cleared = clearThreadDetailSyncFailureInClientState(failed, threadId);
+
+    expect(cleared.threadDetailSyncById?.[threadId]).toBeUndefined();
+
+    const synced = syncServerThreadDetailHotPath(makeState(makeThread()), makeReadModelThread({}));
+
+    expect(clearThreadDetailSyncFailureInClientState(synced, threadId)).toBe(synced);
+  });
+
+  it("marks read-model threads synced and drops flags for threads absent from snapshots", () => {
+    const ghostId = ThreadId.makeUnsafe("thread-ghost");
+    const base = makeState(makeThread());
+    const withGhost = {
+      ...base,
+      threadDetailSyncById: { [ghostId]: "failed" as const },
+    };
+
+    const next = syncServerReadModel(withGhost, makeReadModel(makeReadModelThread({})));
+
+    expect(next.threadDetailSyncById?.[threadId]).toBe("synced");
+    expect(next.threadDetailSyncById?.[ghostId]).toBeUndefined();
   });
 });

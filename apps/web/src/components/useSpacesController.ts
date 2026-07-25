@@ -11,6 +11,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SidebarThreadSortOrder } from "../appSettings";
+import { spaceKey } from "../lib/spaceGrouping";
+import { resolveSpaceSelectionTarget } from "../lib/spaceNavigation";
 import {
   createSpace,
   deleteSpace,
@@ -24,7 +26,7 @@ import { readNativeApi } from "../nativeApi";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
 import type { Project, SidebarThreadSummary, Space } from "../types";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { sortThreadsForSidebar } from "./Sidebar.logic";
 import type { SpaceEditorValue } from "./SpaceEditorDialog";
 import { useRouteSpaceSync } from "./useRouteSpaceSync";
@@ -76,9 +78,9 @@ export function useSpacesController(input: {
   const getLastSpaceThreadId = useSpacesUiStore((store) => store.getLastThreadId);
   const getLastSpaceProjectId = useSpacesUiStore((store) => store.getLastProjectId);
   const reconcileSpacesUi = useSpacesUiStore((store) => store.reconcile);
-  const homeDir = useWorkspaceStore((store) => store.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((store) => store.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((store) => store.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const workspacePaths = useMemo(
     () => ({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, studioWorkspaceRoot],
@@ -178,48 +180,39 @@ export function useSpacesController(input: {
 
       selectSpaceForNavigation(spaceId);
 
-      const availableThreads = sidebarThreads.filter((thread) => {
-        if (thread.archivedAt != null) return false;
-        const project = projectById.get(thread.projectId);
-        return (
-          isOrdinarySpaceProject(project, workspacePaths) && (project.spaceId ?? null) === spaceId
-        );
+      const target = resolveSpaceSelectionTarget({
+        spaceId,
+        projects: ordinarySpaceProjects,
+        projectById,
+        threads: sidebarThreads,
+        rememberedThreadId: getLastSpaceThreadId(spaceId),
+        rememberedProjectId: getLastSpaceProjectId(spaceId),
+        paths: workspacePaths,
+        sortThreads: (threads) => sortThreadsForSidebar(threads, sidebarThreadSortOrder),
       });
-      const rememberedThreadId = getLastSpaceThreadId(spaceId);
-      const rememberedThread = rememberedThreadId
-        ? availableThreads.find((thread) => thread.id === rememberedThreadId)
-        : null;
-      if (rememberedThread) {
-        activateThreadFromSidebarIntent(rememberedThread.id);
+
+      if (target.kind === "thread") {
+        activateThreadFromSidebarIntent(target.threadId);
         return;
       }
 
-      const rememberedProjectId = getLastSpaceProjectId(spaceId);
-      const rememberedProject = rememberedProjectId
-        ? ordinarySpaceProjects.find(
-            (project) =>
-              project.id === rememberedProjectId && (project.spaceId ?? null) === spaceId,
-          )
-        : null;
-      if (rememberedProject) {
+      if (target.kind === "project") {
         startTransition(() => {
           void navigate({
             to: "/kanban/$projectId",
-            params: { projectId: rememberedProject.id },
+            params: { projectId: target.projectId },
           });
         });
         return;
       }
 
-      const targetThread =
-        sortThreadsForSidebar(availableThreads, sidebarThreadSortOrder)[0] ?? null;
-      if (targetThread) {
-        activateThreadFromSidebarIntent(targetThread.id);
-        return;
-      }
-
+      // An empty Space still has to be entered. The landing has to say *which* Space it is
+      // entering: a bare "/" restores the last remembered thread route, which belongs to the
+      // Space being left, and useRouteSpaceSync would then adopt that thread's Space and undo
+      // the click. On an upgraded install every project keeps `spaceId = null`, so every
+      // user-created Space is empty and this is the only path a Space switch can take.
       startTransition(() => {
-        void navigate({ to: "/" });
+        void navigate({ to: "/", search: { space: spaceKey(target.spaceId) } });
       });
     },
     [
@@ -324,7 +317,9 @@ export function useSpacesController(input: {
             activeRouteProject ??
             (isOnKanban && routeProjectId ? (projectById.get(routeProjectId) ?? null) : null);
           if (!isOrdinarySpaceProject(activeContextProject, workspacePaths)) {
-            void navigate({ to: "/" });
+            // Same explicit landing as an empty-Space switch: we just selected Void, so the
+            // restore must not reopen a thread that files into some other Space.
+            void navigate({ to: "/", search: { space: spaceKey(null) } });
           }
         }
       } catch (error) {

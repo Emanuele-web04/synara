@@ -21,12 +21,23 @@ type RetainedThreadEntry = {
 
 const retainedThreadEntries = new Map<ThreadId, RetainedThreadEntry>();
 const listeners = new Set<() => void>();
+const evictionListeners = new Set<(threadId: ThreadId) => void>();
 let cachedSnapshot: readonly ThreadId[] = [];
 
 function emitChange(): void {
   cachedSnapshot = [...retainedThreadEntries.keys()];
   for (const listener of listeners) {
     listener();
+  }
+}
+
+function emitEviction(threadId: ThreadId): void {
+  for (const listener of evictionListeners) {
+    try {
+      listener(threadId);
+    } catch {
+      // Eviction listeners must not break retention bookkeeping.
+    }
   }
 }
 
@@ -95,6 +106,7 @@ function evictEntry(
     return;
   }
   useStore.getState().evictThreadDetail(threadId);
+  emitEviction(threadId);
   if (options?.notify !== false) {
     emitChange();
   }
@@ -212,6 +224,18 @@ export function subscribeRetainedThreadDetailIds(listener: () => void): () => vo
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+  };
+}
+
+/**
+ * Fires after a thread's detail slices were evicted from the store. Subscription
+ * owners use this to refresh threads whose stream lease is still active, since an
+ * eviction wipes messages without triggering a new snapshot on its own.
+ */
+export function subscribeThreadDetailEvictions(listener: (threadId: ThreadId) => void): () => void {
+  evictionListeners.add(listener);
+  return () => {
+    evictionListeners.delete(listener);
   };
 }
 

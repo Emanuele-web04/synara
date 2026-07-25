@@ -201,6 +201,8 @@ export function SingleChatSurface(props: {
     projectCwd: activeProject?.cwd ?? null,
     threadEnvMode: threadWorkspaceMetadata.envMode ?? draftThread?.envMode ?? null,
     threadWorktreePath: threadWorkspaceMetadata.worktreePath ?? draftThread?.worktreePath ?? null,
+    threadWorkingDirectory:
+      threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
   const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();

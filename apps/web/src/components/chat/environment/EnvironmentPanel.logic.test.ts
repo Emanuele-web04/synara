@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { shouldShowStudioFolderRow } from "./EnvironmentPanel.logic";
 
 describe("shouldShowStudioFolderRow", () => {
-  it("shows a picked Studio folder only when the native shell can open it", () => {
+  it("shows a picked Studio reference folder only when the native shell can open it", () => {
     expect(
       shouldShowStudioFolderRow({
         isStudioChat: true,
@@ -32,13 +32,6 @@ describe("shouldShowStudioFolderRow", () => {
       shouldShowStudioFolderRow({
         isStudioChat: true,
         studioFolderPath: null,
-        nativeShellAvailable: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldShowStudioFolderRow({
-        isStudioChat: true,
-        studioFolderPath: "",
         nativeShellAvailable: true,
       }),
     ).toBe(false);

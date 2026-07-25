@@ -526,6 +526,25 @@ export function resolveActiveTurnLiveDiffState(input: {
   };
 }
 
+export type ThreadDetailHydration = "ready" | "loading" | "failed";
+
+/**
+ * A server thread's shell row alone cannot distinguish "no messages" from
+ * "history not loaded yet", so an empty timeline only counts as a genuine empty
+ * landing once the detail snapshot has been applied. Local draft threads have no
+ * server detail to wait for and are always ready.
+ */
+export function resolveThreadDetailHydration(input: {
+  readonly isServerThread: boolean;
+  readonly hasTimelineEntries: boolean;
+  readonly detailSyncState: "synced" | "failed" | null;
+}): ThreadDetailHydration {
+  if (!input.isServerThread || input.hasTimelineEntries || input.detailSyncState === "synced") {
+    return "ready";
+  }
+  return input.detailSyncState === "failed" ? "failed" : "loading";
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -549,6 +568,7 @@ export function buildLocalDraftThread(
     envMode: draftThread.envMode,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
+    workingDirectory: draftThread.workingDirectory ?? null,
     lastKnownPr: draftThread.lastKnownPr ?? null,
     handoff: null,
     turnDiffSummaries: [],

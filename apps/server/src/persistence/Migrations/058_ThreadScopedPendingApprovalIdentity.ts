@@ -1,13 +1,27 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { primaryKeyColumns, tableExists } from "./schemaHelpers.ts";
+
 /** Scope provider request ids to their owning thread without discarding legacy rows. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // Migration 62 retires this table into projection_pending_interactions, so a
+  // replay of the 54.. range finds no legacy table to rebuild. Guard on the
+  // pre-state — its absence, or an already thread-scoped key, means the rebuild
+  // has happened and re-running it would discard settled rows.
+  if (!(yield* tableExists(sql, "projection_pending_approvals"))) {
+    return;
+  }
+  const primaryKey = yield* primaryKeyColumns(sql, "projection_pending_approvals");
+  if (primaryKey.includes("thread_id")) {
+    return;
+  }
+
   yield* sql`DROP TABLE IF EXISTS projection_pending_approvals_v58`;
   yield* sql`
-    CREATE TABLE projection_pending_approvals_v58 (
+    CREATE TABLE IF NOT EXISTS projection_pending_approvals_v58 (
       request_id TEXT NOT NULL,
       thread_id TEXT NOT NULL,
       turn_id TEXT,
@@ -45,11 +59,11 @@ export default Effect.gen(function* () {
   `;
 
   yield* sql`
-    CREATE INDEX idx_projection_pending_approvals_thread_status
+    CREATE INDEX IF NOT EXISTS idx_projection_pending_approvals_thread_status
     ON projection_pending_approvals(thread_id, status)
   `;
   yield* sql`
-    CREATE INDEX idx_projection_pending_approvals_request_id
+    CREATE INDEX IF NOT EXISTS idx_projection_pending_approvals_request_id
     ON projection_pending_approvals(request_id)
   `;
 });

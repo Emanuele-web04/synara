@@ -168,6 +168,7 @@ describe("threadBootstrap", () => {
     });
     expect(createActiveDraftThreadSnapshot(makeDraftThread(), PROJECT_ID)).toEqual({
       ...makeDraftThread(),
+      workingDirectory: null,
       lastKnownPr: null,
     });
   });
@@ -189,6 +190,7 @@ describe("threadBootstrap", () => {
     ).toEqual({
       branch: "feature/draft-thread",
       worktreePath: "/repo/.worktrees/draft-thread",
+      workingDirectory: null,
       envMode: "worktree",
     });
   });
@@ -210,6 +212,7 @@ describe("threadBootstrap", () => {
     ).toEqual({
       branch: null,
       worktreePath: null,
+      workingDirectory: null,
       envMode: "local",
     });
   });
@@ -227,6 +230,7 @@ describe("threadBootstrap", () => {
     ).toEqual({
       branch: "feature/server-thread",
       worktreePath: "/repo/.worktrees/server-thread",
+      workingDirectory: null,
       envMode: "worktree",
     });
   });
@@ -246,6 +250,7 @@ describe("threadBootstrap", () => {
       createdAt: "2026-04-05T10:00:00.000Z",
       branch: "feature/new-terminal",
       worktreePath: "/repo/.worktrees/new-terminal",
+      workingDirectory: null,
       envMode: "worktree",
       runtimeMode: "full-access",
       entryPoint: "terminal",
@@ -265,6 +270,7 @@ describe("threadBootstrap", () => {
       createdAt: "2026-04-05T10:00:00.000Z",
       branch: null,
       worktreePath: null,
+      workingDirectory: null,
       envMode: "local",
       runtimeMode: "full-access",
       entryPoint: "chat",
@@ -297,6 +303,7 @@ describe("threadBootstrap", () => {
       envMode: "worktree",
       branch: "feature/terminal-bootstrap",
       worktreePath: "/repo/.worktrees/terminal-bootstrap",
+      workingDirectory: null,
       lastKnownPr: null,
     });
   });

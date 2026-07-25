@@ -123,6 +123,7 @@ export interface OrchestrationEventDeliveryRepositoryShape {
   readonly listBlockingDeliveries: (input: {
     readonly consumerName: string;
     readonly threadId?: string | undefined;
+    readonly afterEventSequence?: number | undefined;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ProviderBlockingDeliveryEvidence>, PersistenceSqlError>;
   readonly listRetryableDeliveries: (

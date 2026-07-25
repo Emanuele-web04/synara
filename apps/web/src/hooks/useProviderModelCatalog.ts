@@ -61,25 +61,78 @@ export function useProviderModelCatalog(input: {
   cwd?: string | null;
   /** Per-provider selected-model hints so an unknown selection still lists itself. */
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
+  /**
+   * Restrict background discovery to the providers used by a non-picker surface.
+   * Picker surfaces can omit this to use the visible-provider list from settings.
+   */
+  prefetchProviders?: ReadonlyArray<ProviderKind>;
   /** Preserve eager Claude/Codex agent discovery on surfaces that already prefetch both. */
   agentDiscoveryPolicy?: "selected" | "eager-core";
 }): ProviderModelCatalog {
   const { selectedProvider, discoveryEnabled, modelHintByProvider } = input;
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
-  const { settings } = useAppSettings();
+  const { settings, serverSettings } = useAppSettings();
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
+  const hiddenProviderSet = useMemo(
+    () => new Set<ProviderKind>(settings.hiddenProviders),
+    [settings.hiddenProviders],
+  );
+  const prefetchProviderSet = useMemo(
+    () =>
+      input.prefetchProviders === undefined ? null : new Set<ProviderKind>(input.prefetchProviders),
+    [input.prefetchProviders],
+  );
+  const shouldDiscoverProvider = (
+    provider: ProviderKind,
+    prefetchRequested = discoveryEnabled,
+  ): boolean => {
+    // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
+    // undefined while the settings query is in flight and stays undefined if it
+    // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
+    // that as "disabled" would silence discovery for every provider, including the
+    // selected one, which is precisely the "my model disappeared" symptom. Mirrors
+    // the server-side fallback in ProviderDiscoveryService.listModels.
+    if (serverSettings?.providers[provider]?.enabled === false) {
+      return false;
+    }
+    if (provider === selectedProvider) {
+      return true;
+    }
+    if (!prefetchRequested) {
+      return false;
+    }
+    return prefetchProviderSet?.has(provider) ?? !hiddenProviderSet.has(provider);
+  };
+
+  const claudeModelDiscoveryEnabled = shouldDiscoverProvider("claudeAgent");
+  const codexModelDiscoveryEnabled = shouldDiscoverProvider("codex");
+  const cursorModelDiscoveryEnabled = shouldDiscoverProvider("cursor");
+  const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
+  const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
+  const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", false);
+  const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
+  const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
+  const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
 
   const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({ provider: "claudeAgent" }),
+    providerModelsQueryOptions({
+      provider: "claudeAgent",
+      enabled: claudeModelDiscoveryEnabled,
+    }),
   );
-  const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const codexDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "codex",
+      enabled: codexModelDiscoveryEnabled,
+    }),
+  );
   const cursorDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "cursor",
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
-      enabled: selectedProvider === "cursor" || discoveryEnabled,
+      enabled: cursorModelDiscoveryEnabled,
     }),
   );
   const antigravityModelsQuery = useQuery(
@@ -87,14 +140,14 @@ export function useProviderModelCatalog(input: {
       provider: "antigravity",
       binaryPath: settings.antigravityBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "antigravity" || discoveryEnabled,
+      enabled: antigravityModelDiscoveryEnabled,
     }),
   );
   const grokDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "grok",
       binaryPath: settings.grokBinaryPath || null,
-      enabled: selectedProvider === "grok" || discoveryEnabled,
+      enabled: grokModelDiscoveryEnabled,
     }),
   );
   const droidDynamicModelsQuery = useQuery(
@@ -104,7 +157,7 @@ export function useProviderModelCatalog(input: {
       cwd: discoveryCwd,
       // Droid probes every model through a disposable ACP session. Keep it
       // provider-scoped instead of warming it from unrelated picker/settings UI.
-      enabled: selectedProvider === "droid",
+      enabled: droidModelDiscoveryEnabled,
     }),
   );
   const openCodeDynamicModelsQuery = useQuery(
@@ -112,7 +165,7 @@ export function useProviderModelCatalog(input: {
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "opencode" || discoveryEnabled,
+      enabled: openCodeModelDiscoveryEnabled,
     }),
   );
   const kiloDynamicModelsQuery = useQuery(
@@ -120,7 +173,7 @@ export function useProviderModelCatalog(input: {
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "kilo" || discoveryEnabled,
+      enabled: kiloModelDiscoveryEnabled,
     }),
   );
   const piDynamicModelsQuery = useQuery(
@@ -129,7 +182,7 @@ export function useProviderModelCatalog(input: {
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "pi" || discoveryEnabled,
+      enabled: piModelDiscoveryEnabled,
     }),
   );
 
@@ -137,13 +190,13 @@ export function useProviderModelCatalog(input: {
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "claudeAgent",
-      enabled: agentDiscoveryPolicy === "eager-core" || selectedProvider === "claudeAgent",
+      enabled: shouldDiscoverProvider("claudeAgent", agentDiscoveryPolicy === "eager-core"),
     }),
   );
   const codexDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "codex",
-      enabled: agentDiscoveryPolicy === "eager-core" || selectedProvider === "codex",
+      enabled: shouldDiscoverProvider("codex", agentDiscoveryPolicy === "eager-core"),
     }),
   );
   const openCodeDynamicAgentsQuery = useQuery(
@@ -151,7 +204,7 @@ export function useProviderModelCatalog(input: {
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "opencode" || discoveryEnabled,
+      enabled: openCodeModelDiscoveryEnabled,
     }),
   );
   const kiloDynamicAgentsQuery = useQuery(
@@ -159,7 +212,7 @@ export function useProviderModelCatalog(input: {
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "kilo" || discoveryEnabled,
+      enabled: kiloModelDiscoveryEnabled,
     }),
   );
 
@@ -168,7 +221,6 @@ export function useProviderModelCatalog(input: {
     [cursorDynamicModelsQuery.data?.models],
   );
 
-  const cursorModelDiscoveryEnabled = selectedProvider === "cursor" || discoveryEnabled;
   const hasResolvedCursorModelDiscovery =
     (cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
       cursorDynamicModelsQuery.data?.source === "cursor.acp") &&
@@ -177,7 +229,6 @@ export function useProviderModelCatalog(input: {
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
-  const droidModelDiscoveryEnabled = selectedProvider === "droid";
   const hasResolvedDroidModelDiscovery =
     droidDynamicModelsQuery.data?.source === "droid-acp" &&
     (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -185,7 +236,6 @@ export function useProviderModelCatalog(input: {
     droidModelDiscoveryEnabled &&
     !hasResolvedDroidModelDiscovery &&
     isInitialModelDiscoveryPending(droidDynamicModelsQuery);
-  const kiloModelDiscoveryEnabled = selectedProvider === "kilo" || discoveryEnabled;
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
@@ -194,7 +244,6 @@ export function useProviderModelCatalog(input: {
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     isInitialModelDiscoveryPending(kiloDynamicModelsQuery);
-  const openCodeModelDiscoveryEnabled = selectedProvider === "opencode" || discoveryEnabled;
   const hasResolvedOpenCodeModelDiscovery =
     (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
       openCodeDynamicModelsQuery.data?.source === "opencode") &&
@@ -203,7 +252,6 @@ export function useProviderModelCatalog(input: {
     openCodeModelDiscoveryEnabled &&
     !hasResolvedOpenCodeModelDiscovery &&
     isInitialModelDiscoveryPending(openCodeDynamicModelsQuery);
-  const piModelDiscoveryEnabled = selectedProvider === "pi" || discoveryEnabled;
   const hasResolvedPiModelDiscovery =
     piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
     (piDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -212,10 +260,12 @@ export function useProviderModelCatalog(input: {
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
+    antigravityModelDiscoveryEnabled &&
     !(
       antigravityModelsQuery.data?.source === "antigravity.cli" &&
       (antigravityModelsQuery.data.models.length ?? 0) > 0
-    ) && isInitialModelDiscoveryPending(antigravityModelsQuery);
+    ) &&
+    isInitialModelDiscoveryPending(antigravityModelsQuery);
 
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {

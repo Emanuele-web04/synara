@@ -32,6 +32,7 @@ export async function dispatchThreadRename(input: {
         envMode: DraftThreadEnvMode;
         branch: string | null;
         worktreePath: string | null;
+        workingDirectory: string | null;
         lastKnownPr?: OrchestrationThreadPullRequest | null;
         createdAt: string;
       }
@@ -64,6 +65,7 @@ export async function dispatchThreadRename(input: {
         envMode: input.createIfMissing.envMode,
         branch: input.createIfMissing.branch,
         worktreePath: input.createIfMissing.worktreePath,
+        workingDirectory: input.createIfMissing.workingDirectory,
         ...(input.createIfMissing.lastKnownPr !== undefined
           ? { lastKnownPr: input.createIfMissing.lastKnownPr }
           : {}),

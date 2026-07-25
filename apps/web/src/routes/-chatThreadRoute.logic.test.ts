@@ -44,6 +44,17 @@ describe("resolveFilePreviewWorkspaceRoot", () => {
     ).toBe("/repo/project");
   });
 
+  it("uses a Studio thread working directory ahead of its container project", () => {
+    expect(
+      resolveFilePreviewWorkspaceRoot({
+        projectCwd: "/synara/studio",
+        threadEnvMode: "local",
+        threadWorktreePath: null,
+        threadWorkingDirectory: "/repo/external",
+      }),
+    ).toBe("/repo/external");
+  });
+
   it("uses the materialized worktree for worktree-backed threads", () => {
     expect(
       resolveFilePreviewWorkspaceRoot({

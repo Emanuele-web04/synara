@@ -2007,10 +2007,7 @@ export function makeDroidAdapter(
             yield* sessionTeardownGate.awaitPending(threadId);
             return;
           }
-          return yield* new ProviderAdapterSessionNotFoundError({
-            provider: PROVIDER,
-            threadId,
-          });
+          return;
         }),
       );
 

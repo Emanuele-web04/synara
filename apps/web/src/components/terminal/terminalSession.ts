@@ -1,6 +1,6 @@
 // FILE: terminalSession.ts
 // Purpose: Shared terminal-session primitives reused by every terminal surface
-//          (chat drawer, workspace page, right-dock pane): a stable id factory and
+//          (chat drawer and right-dock pane): a stable id factory and
 //          the dispose + server-close + fallback routine that was duplicated verbatim.
 // Layer: Web terminal runtime helpers
 // Depends on: terminalRuntimeRegistry (xterm instances), NativeApi terminal channel.

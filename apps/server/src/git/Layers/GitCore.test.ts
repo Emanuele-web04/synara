@@ -1932,7 +1932,7 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("reads branch, staged, and unstaged patches as separate scopes", () =>
+    it.effect("reads branch as the aggregate diff while preserving focused scopes", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
@@ -1951,8 +1951,9 @@ it.layer(TestLayer)("git integration", (it) => {
 
         const branchPatch = (yield* core.readBranchPatch(tmp)).patch;
         expect(branchPatch).toContain("diff --git a/branch.txt b/branch.txt");
-        expect(branchPatch).not.toContain("staged.txt");
-        expect(branchPatch).not.toContain("untracked.txt");
+        expect(branchPatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(branchPatch).toContain("diff --git a/README.md b/README.md");
+        expect(branchPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
 
         const stagedPatch = (yield* core.readStagedPatch(tmp)).patch;
         expect(stagedPatch).toContain("diff --git a/staged.txt b/staged.txt");

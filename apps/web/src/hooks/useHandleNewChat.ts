@@ -1,11 +1,11 @@
 import { ensureHomeChatProject } from "../lib/chatProjects";
 import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { useHandleNewThread } from "./useHandleNewThread";
 
 export function useHandleNewChat() {
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const { handleNewThread } = useHandleNewThread();
 
   const handleNewChat = async (options?: {

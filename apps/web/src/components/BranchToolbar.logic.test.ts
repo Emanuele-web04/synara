@@ -6,6 +6,7 @@ import {
   resolveBranchSelectionTarget,
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
+  resolveFixedLocalWorkspacePatch,
   resolveBranchToolbarValue,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
@@ -49,6 +50,52 @@ describe("resolveDraftEnvModeAfterBranchChange", () => {
         effectiveEnvMode: "local",
       }),
     ).toBe("worktree");
+  });
+});
+
+describe("resolveFixedLocalWorkspacePatch", () => {
+  it("preserves the selected folder for branch-only updates", () => {
+    expect(
+      resolveFixedLocalWorkspacePatch({
+        currentWorkingDirectory: "/repo/current",
+        patch: { branch: "feature/demo", worktreePath: null },
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: "/repo/current",
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+    });
+  });
+
+  it("uses an existing worktree selection as the next concrete folder", () => {
+    expect(
+      resolveFixedLocalWorkspacePatch({
+        currentWorkingDirectory: "/repo/current",
+        patch: {
+          branch: "feature/demo",
+          worktreePath: "/repo/.worktrees/feature-demo",
+        },
+      }),
+    ).toMatchObject({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: "/repo/.worktrees/feature-demo",
+    });
+  });
+
+  it("honors an explicit working-directory clear", () => {
+    expect(
+      resolveFixedLocalWorkspacePatch({
+        currentWorkingDirectory: "/repo/current",
+        patch: { workingDirectory: null },
+      }).workingDirectory,
+    ).toBeNull();
   });
 });
 

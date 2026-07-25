@@ -1,8 +1,7 @@
 // FILE: useTerminalSurfaceController.ts
-// Purpose: Shared terminal-store controller for non-chat terminal surfaces
-//          (right-dock terminal pane + workspace page). Owns the store selector
-//          slice, the focus-request bump, and the standard create/split/tab/move/
-//          activate/close handlers that were duplicated across those surfaces.
+// Purpose: Terminal-store controller for the right-dock terminal pane. Owns the
+//          store selector slice, focus-request bump, and standard create/split/tab/
+//          move/activate/close handlers.
 // Layer: Web terminal UI hook
 // Note: ChatView is intentionally NOT a consumer — it adds split limits, placeholder
 //       thread cleanup, and split-view navigation, so it shares only the lower-level
@@ -37,7 +36,6 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     selectThreadTerminalState(state.terminalStateByThreadId, threadId),
   );
   const openTerminalThreadPage = useTerminalStateStore((s) => s.openTerminalThreadPage);
-  const applyWorkspaceLayoutPreset = useTerminalStateStore((s) => s.applyWorkspaceLayoutPreset);
   const newTerminal = useTerminalStateStore((s) => s.newTerminal);
   const newTerminalTab = useTerminalStateStore((s) => s.newTerminalTab);
   const splitTerminalRightStore = useTerminalStateStore((s) => s.splitTerminalRight);
@@ -125,7 +123,6 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     focusRequestId,
     bumpFocusRequest,
     openTerminalThreadPage,
-    applyWorkspaceLayoutPreset,
     newTerminalGroup,
     splitRight,
     splitDown,

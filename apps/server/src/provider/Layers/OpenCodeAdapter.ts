@@ -3725,7 +3725,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
         const providerText = [harnessPolicy, text].filter(Boolean).join("\n\n");
 
-        const agent =
+        const requestedAgent =
           input.modelSelection?.provider === provider
             ? input.modelSelection.options?.agent
             : undefined;
@@ -3747,10 +3747,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context.activeTurnToolCallIdleWatchdogStarted = false;
         context.activeInteractionMode = interactionMode;
         // Always pin Synara's interaction mode to OpenCode's primary agent.
-        // Otherwise a user config with default agent=plan can trap default turns in plan mode.
+        // Otherwise a user config with default agent=plan (or a stale options.agent=plan
+        // after leaving Synara plan mode) can trap default turns in plan mode.
+        const modePinnedAgent =
+          interactionMode === "plan" ? adapterConfig.planAgent : adapterConfig.defaultAgent;
         context.activeAgent =
-          agent ??
-          (input.interactionMode === "plan" ? adapterConfig.planAgent : adapterConfig.defaultAgent);
+          interactionMode !== "plan" && requestedAgent === adapterConfig.planAgent
+            ? adapterConfig.defaultAgent
+            : (requestedAgent ?? modePinnedAgent);
         context.activeVariant = variant;
         updateProviderSession(
           context,
@@ -3900,18 +3904,22 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const stopSession: OpenCodeAdapterShape["stopSession"] = Effect.fn("stopSession")(
         function* (threadId) {
-          const context = ensureAdapterSessionContext(threadId);
+          const context = sessions.get(threadId);
+          if (!context) return;
+          const wasStopped = yield* Ref.get(context.stopped);
           yield* stopOpenCodeContext(context);
           sessions.delete(threadId);
-          yield* emit(context, {
-            ...buildEventBase({ threadId }),
-            type: "session.exited",
-            payload: {
-              reason: "Session stopped.",
-              recoverable: false,
-              exitKind: "graceful",
-            },
-          });
+          if (!wasStopped) {
+            yield* emit(context, {
+              ...buildEventBase({ threadId }),
+              type: "session.exited",
+              payload: {
+                reason: "Session stopped.",
+                recoverable: false,
+                exitKind: "graceful",
+              },
+            });
+          }
         },
       );
 

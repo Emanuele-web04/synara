@@ -377,6 +377,22 @@ describe("terminalStateStore actions", () => {
     expect(sanitized[THREAD_ID]?.runningTerminalIds).toEqual([]);
   });
 
+  it("drops retired standalone workspace terminal scopes", () => {
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+
+    expect(
+      sanitizePersistedTerminalStateByThreadId({
+        ["workspace:legacy" as ThreadId]: {
+          ...terminalState,
+          terminalOpen: true,
+        },
+      }),
+    ).toEqual({});
+  });
+
   it("resets to default and clears persisted entry when closing the last terminal", () => {
     const store = useTerminalStateStore.getState();
     store.closeTerminal(THREAD_ID, "default");

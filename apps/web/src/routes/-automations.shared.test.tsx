@@ -24,6 +24,7 @@ import {
   automationAttentionCount,
   automationAttentionLabel,
   automationFastIntervalLimitMessage,
+  automationListRowIcon,
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
@@ -181,6 +182,68 @@ describe("automation shared route helpers", () => {
     expect(automationAttentionLabel(runWith({ status: "succeeded" }))).toBeNull();
     expect(automationAttentionLabel(runWith({ status: "running" }))).toBeNull();
     expect(automationAttentionLabel(runWith({ status: "skipped" }))).toBeNull();
+  });
+
+  it.each([
+    ["pending", false],
+    ["claimed", false],
+    ["running", false],
+    ["waiting-for-approval", false],
+    ["pending", true],
+    ["claimed", true],
+    ["running", true],
+    ["waiting-for-approval", true],
+  ] as const)("shows a live icon for %s runs when enabled is %s", (status, enabled) => {
+    expect(automationListRowIcon(definitionWith({ enabled }), runWith({ status })).name).toBe(
+      "loading-circle",
+    );
+  });
+
+  it.each([
+    {
+      label: "paused without a live run",
+      definition: definitionWith({ enabled: false }),
+      run: runWith({ status: "succeeded" }),
+      icon: "pause",
+    },
+    {
+      label: "successful",
+      definition: baseDefinition,
+      run: runWith({ status: "succeeded" }),
+      icon: "circle-check",
+    },
+    {
+      label: "failed",
+      definition: baseDefinition,
+      run: runWith({ status: "failed" }),
+      icon: "exclamation-circle",
+    },
+    {
+      label: "cancelled",
+      definition: baseDefinition,
+      run: runWith({ status: "cancelled" }),
+      icon: "exclamation-circle",
+    },
+    {
+      label: "interrupted",
+      definition: baseDefinition,
+      run: runWith({ status: "interrupted" }),
+      icon: "exclamation-circle",
+    },
+    {
+      label: "scheduled without a run",
+      definition: baseDefinition,
+      run: null,
+      icon: "clock",
+    },
+    {
+      label: "idle without a next run",
+      definition: definitionWith({ nextRunAt: null }),
+      run: null,
+      icon: "circle-placeholder-on",
+    },
+  ])("maps $label automation rows to $icon", ({ definition, run, icon }) => {
+    expect(automationListRowIcon(definition, run).name).toBe(icon);
   });
 
   it("counts only unread unarchived triage runs", () => {

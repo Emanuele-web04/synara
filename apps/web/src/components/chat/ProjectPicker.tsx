@@ -3,7 +3,16 @@
 //          folders while always creating chats as rows inside the shared Chats container.
 // Layer: Chat / empty-state entrypoint
 
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
@@ -27,7 +36,7 @@ import {
   ComboboxSeparator,
   ComboboxTrigger,
 } from "../ui/combobox";
-import { useWorkspaceStore } from "../../workspaceStore";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { useSpacesUiStore } from "../../spacesUiStore";
 
 interface ProjectPickerProps {
@@ -43,6 +52,11 @@ interface ProjectPickerProps {
   onResetToHome?: (() => void | Promise<void>) | undefined;
   /** Class override for the trigger button (e.g. tighter height in the composer tray). */
   triggerClassName?: string;
+  /**
+   * Replaces the default PickerTriggerButton with a custom trigger element (e.g. the inline
+   * project name in the new-chat heading). The element receives the combobox trigger props.
+   */
+  renderTrigger?: ReactElement<Record<string, unknown>>;
   /** Copy overrides for folder-tagging contexts (e.g. Studio) where picking never creates a project. */
   emptyTriggerLabel?: string;
   addActionLabel?: string;
@@ -100,6 +114,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onCreateProjectFromPath,
   onResetToHome,
   triggerClassName,
+  renderTrigger,
   emptyTriggerLabel = "Work in a project",
   addActionLabel,
   resetActionLabel = "Don't work in a project",
@@ -109,7 +124,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const spaces = useStore((state) => state.spaces);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -483,15 +498,17 @@ export const ProjectPicker = memo(function ProjectPicker({
     >
       <ComboboxTrigger
         render={
-          <PickerTriggerButton
-            data-testid={
-              isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
-            }
-            icon={<FolderClosed className="size-3.5" />}
-            label={triggerLabel}
-            hideChevron
-            {...(triggerClassName ? { className: triggerClassName } : {})}
-          />
+          renderTrigger ?? (
+            <PickerTriggerButton
+              data-testid={
+                isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
+              }
+              icon={<FolderClosed className="size-3.5" />}
+              label={triggerLabel}
+              hideChevron
+              {...(triggerClassName ? { className: triggerClassName } : {})}
+            />
+          )
         }
       />
       <ComboboxPopup align={align} side={side} className="p-0">

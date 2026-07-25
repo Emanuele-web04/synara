@@ -89,6 +89,7 @@ const make = Effect.gen(function* () {
           projectId: threadContext.value.projectId,
           envMode: threadContext.value.envMode,
           worktreePath: threadContext.value.worktreePath,
+          workingDirectory: threadContext.value.workingDirectory,
         },
         projects: [
           {
@@ -243,6 +244,7 @@ const make = Effect.gen(function* () {
           projectId: threadContext.value.projectId,
           envMode: threadContext.value.envMode,
           worktreePath: threadContext.value.worktreePath,
+          workingDirectory: threadContext.value.workingDirectory,
         },
         projects: [
           {

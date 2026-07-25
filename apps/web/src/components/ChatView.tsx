@@ -178,6 +178,7 @@ import {
   resolveGitRepoUiState,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
+  resolveThreadDetailHydration,
   shouldHandlePromptHistoryNavigationKey,
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
@@ -245,7 +246,7 @@ import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -432,6 +433,7 @@ import {
   updateInputFromForm,
 } from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
+import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
@@ -496,7 +498,6 @@ import {
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
-  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
@@ -1234,6 +1235,9 @@ export default function ChatView({
   const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
   const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const threadDetailSyncState = useStore((state) =>
+    threadId ? (state.threadDetailSyncById?.[threadId] ?? null) : null,
+  );
   const composerThreadSummaries = useStore(
     useMemo(() => createComposerThreadMentionSourcesSelector(), []),
   );
@@ -1833,9 +1837,9 @@ export default function ChatView({
     activeProjectId ? (state.instructionsByProjectId[activeProjectId] ?? "") : "",
   );
   const setProjectInstructions = useProjectInstructionsStore((state) => state.setInstructions);
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
     homeDir,
@@ -1860,12 +1864,21 @@ export default function ChatView({
     () => buildThreadBreadcrumbs(threadLineageThreads, activeThread),
     [activeThread, threadLineageThreads],
   );
-  const resolvedThreadEnvMode = isServerThread
-    ? (activeThread?.envMode ?? null)
-    : (draftThread?.envMode ?? null);
-  const resolvedThreadWorktreePath = isServerThread
-    ? (activeThread?.worktreePath ?? null)
-    : (draftThread?.worktreePath ?? null);
+  // Studio threads are always local. Their optional "Use a folder" cwd is stored separately
+  // from Git worktree metadata; the server migration repairs the legacy mixed representation.
+  const resolvedThreadEnvMode = isStudioContainer
+    ? "local"
+    : isServerThread
+      ? (activeThread?.envMode ?? null)
+      : (draftThread?.envMode ?? null);
+  const resolvedThreadWorktreePath = isStudioContainer
+    ? null
+    : isServerThread
+      ? (activeThread?.worktreePath ?? null)
+      : (draftThread?.worktreePath ?? null);
+  const resolvedThreadWorkingDirectory = isServerThread
+    ? (activeThread?.workingDirectory ?? null)
+    : (draftThread?.workingDirectory ?? null);
   const diffEnvironmentState = resolveDiffEnvironmentState({
     projectCwd: activeProject?.cwd ?? null,
     envMode: resolvedThreadEnvMode,
@@ -3087,11 +3100,27 @@ export default function ChatView({
     },
     [activeThreadId],
   );
+  // Before treating an empty timeline as a genuinely new thread, wait for the
+  // detail snapshot: a server thread whose history has not synced yet must show
+  // a loading (or failed) transcript state instead of the empty landing.
+  const threadDetailHydration = resolveThreadDetailHydration({
+    isServerThread,
+    hasTimelineEntries: timelineEntries.length > 0,
+    detailSyncState: threadDetailSyncState,
+  });
+  const handleRetryThreadDetailSync = useCallback(() => {
+    useStore.getState().clearThreadDetailSyncFailure(threadId);
+    const api = readNativeApi();
+    void api?.orchestration.subscribeThread({ threadId }).catch(() => undefined);
+  }, [threadId]);
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
   const isCenteredEmptyLanding =
-    timelineEntries.length === 0 && !activeThread?.parentThreadId && !isEditorRail;
+    timelineEntries.length === 0 &&
+    !activeThread?.parentThreadId &&
+    !isEditorRail &&
+    threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
@@ -3156,15 +3185,21 @@ export default function ChatView({
         projectCwd: activeProject.cwd,
         envMode: resolvedThreadEnvMode,
         worktreePath: resolvedThreadWorktreePath,
+        workingDirectory: resolvedThreadWorkingDirectory,
       })
     : null;
+  const threadArtifactWorkspaceRoot = isStudioContainer
+    ? threadWorkspaceCwd
+    : (activeProject?.cwd ?? null);
   const gitCwd = threadWorkspaceCwd;
-  const gitBranchSourceCwd = activeProject
-    ? resolveThreadBranchSourceCwd({
-        projectCwd: activeProject.cwd,
-        worktreePath: resolvedThreadWorktreePath,
-      })
-    : null;
+  const gitBranchSourceCwd = isStudioContainer
+    ? threadWorkspaceCwd
+    : activeProject
+      ? resolveThreadBranchSourceCwd({
+          projectCwd: activeProject.cwd,
+          worktreePath: resolvedThreadWorktreePath,
+        })
+      : null;
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
   const isMentionTrigger = composerTriggerKind === "mention";
@@ -3567,7 +3602,7 @@ export default function ChatView({
   );
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeProjectCwd = activeProject?.cwd ?? null;
-  const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
+  const activeThreadWorktreePath = isStudioContainer ? null : (activeThread?.worktreePath ?? null);
   const hasNativeUserMessages = useMemo(
     () =>
       activeThread?.messages.some(
@@ -3576,22 +3611,23 @@ export default function ChatView({
     [activeThread?.messages],
   );
   const threadTerminalRuntimeEnv = useMemo(() => {
-    if (!activeProjectCwd) return {};
+    const runtimeProjectCwd = isStudioContainer ? threadWorkspaceCwd : activeProjectCwd;
+    if (!runtimeProjectCwd) return {};
     return projectScriptRuntimeEnv({
       project: {
-        cwd: activeProjectCwd,
+        cwd: runtimeProjectCwd,
       },
       worktreePath: activeThreadWorktreePath,
     });
-  }, [activeProjectCwd, activeThreadWorktreePath]);
+  }, [activeProjectCwd, activeThreadWorktreePath, isStudioContainer, threadWorkspaceCwd]);
   const isGitRepo = resolveGitRepoUiState({
     isStudioContainer,
     queriedIsRepo: branchesQuery.data?.isRepo,
   });
-  // Studio never offers "Initialize Git": a folder picked via "Use a folder" is casual
-  // context, not a repo-to-be, so git actions appear there only when it already is one.
+  // Studio never offers "Initialize Git": its reference folder is ordinary cwd context,
+  // so Git actions appear only when that selected folder is already a repository.
   const showGitActions = isStudioContainer
-    ? Boolean(resolvedThreadWorktreePath) && isGitRepo
+    ? Boolean(resolvedThreadWorkingDirectory) && isGitRepo
     : !isContainerLandingProject || Boolean(resolvedThreadWorktreePath);
   const repoDiffTotals = useRepoDiffTotals({
     gitCwd: threadWorkspaceCwd,
@@ -4065,7 +4101,10 @@ export default function ChatView({
       },
       onTerminalMetadataChange: (
         terminalId: string,
-        metadata: { cliKind: "codex" | "claude" | "antigravity" | null; label: string },
+        metadata: {
+          cliKind: "codex" | "claude" | "antigravity" | null;
+          label: string;
+        },
       ) => {
         if (!activeThreadId) return;
         storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
@@ -4163,7 +4202,7 @@ export default function ChatView({
           threadId: activeThreadId,
           terminalId: targetTerminalId,
           project: {
-            cwd: activeProject.cwd,
+            cwd: isStudioContainer ? targetCwd : activeProject.cwd,
           },
           cwd: targetCwd,
           command: script.command,
@@ -4195,6 +4234,7 @@ export default function ChatView({
       activeThread,
       activeThreadId,
       gitCwd,
+      isStudioContainer,
       requestTerminalFocus,
       setTerminalOpen,
       setThreadError,
@@ -5265,13 +5305,15 @@ export default function ChatView({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [composerMenuOpen]);
 
-  const activeWorktreePath = activeThread?.worktreePath;
-  const envMode: DraftThreadEnvMode = isServerThread
-    ? resolveThreadEnvironmentMode({
-        envMode: activeThread?.envMode,
-        worktreePath: activeWorktreePath ?? null,
-      })
-    : (draftThread?.envMode ?? "local");
+  const activeWorktreePath = isStudioContainer ? null : activeThread?.worktreePath;
+  const envMode: DraftThreadEnvMode = isStudioContainer
+    ? "local"
+    : isServerThread
+      ? resolveThreadEnvironmentMode({
+          envMode: activeThread?.envMode,
+          worktreePath: activeWorktreePath ?? null,
+        })
+      : (draftThread?.envMode ?? "local");
   const envState = resolveThreadWorkspaceState({
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
@@ -6246,6 +6288,7 @@ export default function ChatView({
             envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
             branch: activeThread.branch ?? null,
             worktreePath: activeThread.worktreePath ?? null,
+            workingDirectory: activeThread.workingDirectory ?? null,
             associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
             associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
             associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
@@ -6749,7 +6792,7 @@ export default function ChatView({
         : trimmedPromptForSend;
       const automationRequest = await resolveComposerAutomationRequest({
         message: messageForAutomation,
-        cwd: activeProject.cwd,
+        cwd: threadWorkspaceCwd ?? activeProject.cwd,
         generateIntent: (request) => api.server.generateAutomationIntent(request),
       });
       // Drop a stale resolve: bail if the user switched threads, or cancelled/changed the
@@ -7019,9 +7062,9 @@ export default function ChatView({
       isHomeChatContainer,
       isStudioContainer,
       projects: currentStoreState.projects,
-      selectedWorkspaceRoot: isContainerLandingProject
-        ? (resolvedThreadWorktreePath ?? null)
-        : null,
+      // Studio reference folders change the thread cwd without moving the chat out of
+      // the managed Studio project. Home-chat folder selection keeps its project routing.
+      selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
       title,
       titleSeed,
     });
@@ -7042,11 +7085,20 @@ export default function ChatView({
       : firstSendTarget.target;
     let nextRuntimeModeForSend = runtimeModeForSend;
     let nextThreadEnvMode = envModeForSend;
-    let nextThreadBranch = activeThread.branch;
-    let nextThreadWorktreePath = activeThread.worktreePath;
-    let nextAssociatedWorktreePath = activeThread.associatedWorktreePath ?? null;
-    let nextAssociatedWorktreeBranch = activeThread.associatedWorktreeBranch ?? null;
-    let nextAssociatedWorktreeRef = activeThread.associatedWorktreeRef ?? null;
+    let nextThreadBranch = isStudioContainer ? null : activeThread.branch;
+    let nextThreadWorktreePath = isStudioContainer ? null : activeThread.worktreePath;
+    let nextThreadWorkingDirectory = isStudioContainer
+      ? resolvedThreadWorkingDirectory
+      : (activeThread.workingDirectory ?? null);
+    let nextAssociatedWorktreePath = isStudioContainer
+      ? null
+      : (activeThread.associatedWorktreePath ?? null);
+    let nextAssociatedWorktreeBranch = isStudioContainer
+      ? null
+      : (activeThread.associatedWorktreeBranch ?? null);
+    let nextAssociatedWorktreeRef = isStudioContainer
+      ? null
+      : (activeThread.associatedWorktreeRef ?? null);
 
     if (isFirstMessage && isContainerLandingProject && firstSendTarget.kind !== "current") {
       if (firstSendTarget.kind === "create-project") {
@@ -7112,11 +7164,13 @@ export default function ChatView({
         projectId: targetProjectIdForSend,
         envMode: "local",
         worktreePath: null,
+        workingDirectory: null,
         branch: null,
       });
       nextThreadEnvMode = "local";
       nextThreadBranch = null;
       nextThreadWorktreePath = null;
+      nextThreadWorkingDirectory = null;
       nextAssociatedWorktreePath = null;
       nextAssociatedWorktreeBranch = null;
       nextAssociatedWorktreeRef = null;
@@ -7370,6 +7424,7 @@ export default function ChatView({
             envMode: nextThreadEnvMode,
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
+            workingDirectory: nextThreadWorkingDirectory,
             associatedWorktreePath: nextAssociatedWorktreePath,
             associatedWorktreeBranch: nextAssociatedWorktreeBranch,
             associatedWorktreeRef: nextAssociatedWorktreeRef,
@@ -8336,6 +8391,7 @@ export default function ChatView({
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
+        workingDirectory: activeThread.workingDirectory ?? null,
         lastKnownPr: activeThread.lastKnownPr ?? null,
         associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
         associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
@@ -8673,31 +8729,15 @@ export default function ChatView({
   const handleResetWorkspaceToHome = useCallback(() => {
     if (isLocalDraftThread) {
       if (isStudioContainer) {
-        return (async () => {
-          const studioProjectId = await ensureStudioProject({
-            homeDir,
-            chatWorkspaceRoot,
-            studioWorkspaceRoot,
-          });
-          if (!studioProjectId) {
-            throw new Error("Unable to prepare Studio.");
-          }
-          const api = readNativeApi();
-          if (!api) {
-            throw new Error("App is still connecting. Try again in a moment.");
-          }
-          const hasStudioProjectInStore = useStore
-            .getState()
-            .projects.some((project) => project.id === studioProjectId);
-          if (!hasStudioProjectInStore) {
-            const { project, snapshot } = await waitForShellProjectById(api, studioProjectId);
-            if (!project || !snapshot) {
-              throw new Error(PROJECT_CREATE_SYNC_ERROR);
-            }
-            syncServerShellSnapshot(snapshot);
-          }
-          moveEmptyDraftToLocalProject(studioProjectId);
-        })();
+        setDraftThreadContext(threadId, {
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          lastKnownPr: null,
+        });
+        scheduleComposerFocus();
+        return;
       }
       if (!isHomeChatContainer) {
         return (async () => {
@@ -8728,6 +8768,7 @@ export default function ChatView({
       setDraftThreadContext(threadId, {
         envMode: "local",
         worktreePath: null,
+        workingDirectory: null,
         branch: null,
         lastKnownPr: null,
       });
@@ -8739,6 +8780,7 @@ export default function ChatView({
       setStoreThreadWorkspace(activeThread.id, {
         envMode: "local",
         worktreePath: null,
+        ...(isStudioContainer ? { workingDirectory: null } : {}),
       });
       const api = readNativeApi();
       if (api && !hasNativeUserMessages && !activeThread.session) {
@@ -8748,6 +8790,7 @@ export default function ChatView({
           threadId: activeThread.id,
           envMode: "local",
           worktreePath: null,
+          ...(isStudioContainer ? { workingDirectory: null } : {}),
         });
       }
     }
@@ -8771,6 +8814,39 @@ export default function ChatView({
 
   const handleSelectWorkspaceRoot = useCallback(
     (workspaceRoot: string) => {
+      if (isStudioContainer) {
+        if (isLocalDraftThread) {
+          setDraftThreadContext(threadId, {
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            workingDirectory: workspaceRoot,
+          });
+        } else if (activeThread) {
+          setStoreThreadWorkspace(activeThread.id, {
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            workingDirectory: workspaceRoot,
+          });
+          if (!hasNativeUserMessages && !activeThread.session) {
+            const api = readNativeApi();
+            if (api) {
+              void api.orchestration.dispatchCommand({
+                type: "thread.meta.update",
+                commandId: newCommandId(),
+                threadId: activeThread.id,
+                envMode: "local",
+                branch: null,
+                worktreePath: null,
+                workingDirectory: workspaceRoot,
+              });
+            }
+          }
+        }
+        scheduleComposerFocus();
+        return;
+      }
       if (isLocalDraftThread) {
         setDraftThreadContext(threadId, {
           envMode: "worktree",
@@ -8790,7 +8866,9 @@ export default function ChatView({
     },
     [
       activeThread,
+      hasNativeUserMessages,
       isLocalDraftThread,
+      isStudioContainer,
       scheduleComposerFocus,
       setDraftThreadContext,
       setStoreThreadWorkspace,
@@ -9756,6 +9834,7 @@ export default function ChatView({
             envMode: activeThread.envMode ?? "local",
             branch: activeThread.branch,
             worktreePath: activeThread.worktreePath,
+            workingDirectory: activeThread.workingDirectory ?? null,
             ...(activeThread.lastKnownPr !== undefined
               ? { lastKnownPr: activeThread.lastKnownPr }
               : {}),
@@ -9823,6 +9902,7 @@ export default function ChatView({
     onHandoffToLocal,
     handoffBusy,
     onComposerFocusRequest: scheduleComposerFocus,
+    ...(isStudioContainer ? { fixedLocalWorkspaceCwd: threadWorkspaceCwd } : {}),
     ...(canCheckoutPullRequestIntoThread
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
@@ -9843,8 +9923,12 @@ export default function ChatView({
   };
   const showEmptyLandingProjectPicker =
     isCenteredEmptyLanding && isLocalDraftThread && activeProject?.kind === "project";
+  const showContainerChatWorkspacePicker =
+    isEmptyChatLanding && (isHomeChatContainer || isStudioContainer);
   const emptyLandingProjectChip =
-    !isEmptyChatLanding && !showEmptyLandingProjectPicker && activeProjectDisplayName ? (
+    !showContainerChatWorkspacePicker &&
+    !showEmptyLandingProjectPicker &&
+    activeProjectDisplayName ? (
       <span className="inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] sm:max-w-64">
         <FolderClosed className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
@@ -9869,28 +9953,25 @@ export default function ChatView({
         COMPOSER_COLUMN_FRAME_CLASS_NAME,
       )}
     >
-      {isEmptyChatLanding ? (
+      {showContainerChatWorkspacePicker ? (
         <ProjectPicker
           align="start"
           side="top"
           triggerClassName="h-7 py-1"
-          showResetToHome={Boolean(resolvedThreadWorktreePath)}
-          selectedWorkspaceRoot={resolvedThreadWorktreePath}
+          showResetToHome={Boolean(
+            isStudioContainer ? resolvedThreadWorkingDirectory : resolvedThreadWorktreePath,
+          )}
+          selectedWorkspaceRoot={
+            isStudioContainer ? resolvedThreadWorkingDirectory : resolvedThreadWorktreePath
+          }
           onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
           onResetToHome={handleResetWorkspaceToHome}
-          // Studio folder picks only tag the chat's workspace root; they never create a
-          // Projects entry or move the draft out of the Studio container.
-          {...(isStudioContainer
+          {...(!isStudioContainer
             ? {
-                emptyTriggerLabel: "Use a folder",
-                addActionLabel: "Choose a folder",
-                resetActionLabel: "Don't use a folder",
-                searchPlaceholder: "Search folders",
-              }
-            : {
                 onSelectProject: handleSelectProjectForEmptyDraft,
                 onCreateProjectFromPath: handleCreateProjectFromPickerPath,
-              })}
+              }
+            : {})}
         />
       ) : showEmptyLandingProjectPicker ? (
         <ProjectPicker
@@ -9971,7 +10052,7 @@ export default function ChatView({
     activeThreadId: activeThread.id,
     activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     isStudioChat: isStudioContainer,
-    studioFolderPath: isStudioContainer ? resolvedThreadWorktreePath : null,
+    studioFolderPath: isStudioContainer ? resolvedThreadWorkingDirectory : null,
     showGitActions,
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
@@ -10775,9 +10856,32 @@ export default function ChatView({
                       ) : (
                         <>
                           What should we do in{" "}
-                          <span className={COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}>
-                            {activeProjectDisplayName ?? "this folder"}
-                          </span>
+                          {showEmptyLandingProjectPicker ? (
+                            <ProjectPicker
+                              align="center"
+                              side="bottom"
+                              selectionMode="project"
+                              selectedProjectId={activeProject.id}
+                              selectedWorkspaceRoot={activeProject.cwd}
+                              showResetToHome
+                              onSelectProject={handleSelectProjectForEmptyDraft}
+                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+                              onResetToHome={handleResetWorkspaceToHome}
+                              renderTrigger={
+                                <button
+                                  type="button"
+                                  data-testid="empty-landing-heading-project-trigger"
+                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                >
+                                  {activeProjectDisplayName ?? "this folder"}
+                                </button>
+                              }
+                            />
+                          ) : (
+                            <span className="text-inherit">
+                              {activeProjectDisplayName ?? "this folder"}
+                            </span>
+                          )}
                           ?
                         </>
                       )}
@@ -10841,8 +10945,17 @@ export default function ChatView({
                     resolvedTheme={resolvedTheme}
                     chatFontSizePx={settings.chatFontSizePx}
                     timestampFormat={timestampFormat}
-                    workspaceRoot={activeProject?.cwd ?? undefined}
-                    emptyStateContent={isEditorRail ? <span aria-hidden="true" /> : undefined}
+                    workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
+                    emptyStateContent={
+                      isEditorRail ? (
+                        <span aria-hidden="true" />
+                      ) : threadDetailHydration !== "ready" ? (
+                        <ThreadDetailHydrationState
+                          onRetry={handleRetryThreadDetailSync}
+                          state={threadDetailHydration}
+                        />
+                      ) : undefined
+                    }
                     emptyStateProjectName={activeProjectDisplayName}
                     terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
                     onMessagesScroll={onMessagesScroll}
@@ -10910,7 +11023,7 @@ export default function ChatView({
               <PullRequestThreadDialog
                 key={pullRequestDialogState.key}
                 open
-                cwd={activeProject?.cwd ?? null}
+                cwd={threadArtifactWorkspaceRoot}
                 initialReference={pullRequestDialogState.initialReference}
                 onOpenChange={(open) => {
                   if (!open) {
@@ -10961,7 +11074,7 @@ export default function ChatView({
             activeTaskList={activeTaskList}
             activeProposedPlan={sidebarProposedPlan}
             markdownCwd={threadWorkspaceCwd ?? undefined}
-            workspaceRoot={activeProject?.cwd ?? undefined}
+            workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
             timestampFormat={timestampFormat}
             onClose={() => {
               setPlanSidebarOpen(false);

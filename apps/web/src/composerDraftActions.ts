@@ -202,6 +202,7 @@ export const createComposerDraftStoreState =
           entryPoint: options.entryPoint ?? "chat",
           branch: options.branch ?? null,
           worktreePath,
+          workingDirectory: options.workingDirectory ?? null,
           lastKnownPr: null,
           envMode: options.envMode ?? (worktreePath ? "worktree" : "local"),
           ...(options.isTemporary ? { isTemporary: true } : {}),

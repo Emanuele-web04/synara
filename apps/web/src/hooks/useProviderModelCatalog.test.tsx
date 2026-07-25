@@ -2,7 +2,11 @@
 // Purpose: Locks the shared provider-model catalog's memoization and discovery policy.
 // Layer: Web hook tests
 
-import type { ProviderKind, ProviderModelDescriptor } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type ProviderKind,
+  type ProviderModelDescriptor,
+} from "@synara/contracts";
 import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +69,7 @@ const SETTINGS = {
   customPiModels: [],
   droidBinaryPath: "",
   grokBinaryPath: "",
+  hiddenProviders: [],
   kiloBinaryPath: "",
   openCodeBinaryPath: "",
   piAgentDir: "",
@@ -98,10 +103,20 @@ function readAgentQueryEnabled(provider: ProviderKind): boolean | undefined {
   return call ? (call[0] as QueryOptionsLike).enabled : undefined;
 }
 
+function readModelQueryEnabled(provider: ProviderKind): boolean | undefined {
+  const call = mocks.useQuery.mock.calls.find(([value]) => {
+    const queryKey = (value as QueryOptionsLike).queryKey;
+    return queryKey[1] === "models" && queryKey[2] === provider;
+  });
+  return call ? (call[0] as QueryOptionsLike).enabled : undefined;
+}
+
 beforeEach(() => {
   modelQueries.clear();
   agentQueries.clear();
-  mocks.useAppSettings.mockReset().mockReturnValue({ settings: SETTINGS });
+  mocks.useAppSettings
+    .mockReset()
+    .mockReturnValue({ settings: SETTINGS, serverSettings: DEFAULT_SERVER_SETTINGS });
   mocks.useQuery.mockReset().mockImplementation((value: QueryOptionsLike) => {
     const [, resource, provider] = value.queryKey;
     if (resource === "models") {
@@ -143,6 +158,90 @@ describe("useProviderModelCatalog", () => {
     });
     expect(readAgentQueryEnabled("claudeAgent")).toBe(true);
     expect(readAgentQueryEnabled("codex")).toBe(true);
+  });
+
+  it("does not prefetch providers hidden from picker surfaces", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: { ...SETTINGS, hiddenProviders: ["cursor"] },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+
+    readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(readModelQueryEnabled("codex")).toBe(true);
+    expect(readModelQueryEnabled("cursor")).toBe(false);
+    expect(readModelQueryEnabled("antigravity")).toBe(true);
+  });
+
+  it("keeps an enabled selected provider discoverable when it is hidden", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: { ...SETTINGS, hiddenProviders: ["cursor"] },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+
+    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: false });
+
+    expect(readModelQueryEnabled("cursor")).toBe(true);
+  });
+
+  it("does not discover a disabled provider even when it is selected", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: SETTINGS,
+      serverSettings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          cursor: {
+            ...DEFAULT_SERVER_SETTINGS.providers.cursor,
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
+
+    expect(readModelQueryEnabled("cursor")).toBe(false);
+  });
+
+  it("keeps discovering while the server settings are unavailable", () => {
+    // `serverSettings` is undefined until the settings query resolves, and stays
+    // undefined for good if it fails — the query never refetches on its own. Failing
+    // closed here would blank every provider's model list, selected one included.
+    mocks.useAppSettings.mockReturnValue({ settings: SETTINGS, serverSettings: undefined });
+
+    readCatalogRenders({ selectedProvider: "claudeAgent", discoveryEnabled: true });
+
+    expect(readModelQueryEnabled("claudeAgent")).toBe(true);
+    expect(readModelQueryEnabled("codex")).toBe(true);
+  });
+
+  it("keeps discovering the selected provider when the settings omit it", () => {
+    // A client talking to a server whose provider set it does not fully know must not
+    // lose model discovery over the unknown key — and must not throw reading it.
+    const { cursor: _cursor, ...providersWithoutCursor } = DEFAULT_SERVER_SETTINGS.providers;
+    mocks.useAppSettings.mockReturnValue({
+      settings: SETTINGS,
+      serverSettings: { ...DEFAULT_SERVER_SETTINGS, providers: providersWithoutCursor },
+    });
+
+    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: false });
+
+    expect(readModelQueryEnabled("cursor")).toBe(true);
+  });
+
+  it("restricts non-picker prefetch to the requested providers", () => {
+    readCatalogRenders({
+      selectedProvider: "codex",
+      discoveryEnabled: true,
+      prefetchProviders: ["codex", "kilo", "opencode"],
+    });
+
+    expect(readModelQueryEnabled("codex")).toBe(true);
+    expect(readModelQueryEnabled("kilo")).toBe(true);
+    expect(readModelQueryEnabled("opencode")).toBe(true);
+    expect(readModelQueryEnabled("cursor")).toBe(false);
+    expect(readModelQueryEnabled("antigravity")).toBe(false);
   });
 
   it("merges a settled runtime catalog with custom models without reporting loading", () => {

@@ -320,6 +320,21 @@ function resolveSynaraMcpToolPresentation(
         return entry.presentation;
       }
     }
+    const toolName = extractSynaraMcpToolName(normalizedCandidate);
+    const knownPresentation = toolName
+      ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
+          | SynaraMcpToolPresentation
+          | undefined)
+      : undefined;
+    if (knownPresentation) {
+      return knownPresentation;
+    }
+    // Free-text summaries (e.g. reconciler activity lines) can begin with the
+    // word "Synara" and normalize into a fake tool identifier; only
+    // identifier-shaped candidates may take an invented fallback presentation.
+    if (/\s/.test(candidate.trim())) {
+      continue;
+    }
     if (normalizedCandidate.startsWith("synara_is_handling_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
@@ -335,14 +350,10 @@ function resolveSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
       );
     }
-    const toolName = extractSynaraMcpToolName(normalizedCandidate);
     if (!toolName) {
       continue;
     }
-    const knownPresentation = SYNARA_MCP_TOOL_PRESENTATIONS[
-      toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS
-    ] as SynaraMcpToolPresentation | undefined;
-    return knownPresentation ?? fallbackSynaraMcpToolPresentation(toolName);
+    return fallbackSynaraMcpToolPresentation(toolName);
   }
   return null;
 }

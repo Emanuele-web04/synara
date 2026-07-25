@@ -44,9 +44,11 @@ import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTran
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
-import { WsTransport } from "./wsTransport";
+import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+
+export type { WsThreadStreamFailure } from "./wsTransport";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 
@@ -76,7 +78,9 @@ function createListenerRegistry<T>() {
 }
 
 function subscribeWithReplay<T>(input: {
-  readonly registry: { subscribe: (listener: (payload: T) => void) => () => unknown };
+  readonly registry: {
+    subscribe: (listener: (payload: T) => void) => () => unknown;
+  };
   readonly listener: (payload: T) => void;
   readonly latest: T | null;
 }): () => void {
@@ -121,6 +125,7 @@ const automationEventListeners = createListenerRegistry<AutomationStreamEvent>()
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
+const threadStreamFailureListeners = createListenerRegistry<WsThreadStreamFailure>();
 const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
 
@@ -137,6 +142,7 @@ function clearWsNativeApiListeners(): void {
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
+  threadStreamFailureListeners.clear();
   fallbackBrowserStateListeners.clear();
 }
 
@@ -361,6 +367,18 @@ export function onServerSettingsUpdated(
   });
 }
 
+/**
+ * Subscribe to unrecoverable per-thread stream failures (retries and reconnect
+ * exhausted). Lets thread-detail consumers surface a failed hydration state
+ * instead of rendering an empty conversation.
+ */
+export function onThreadStreamFailure(
+  listener: (failure: WsThreadStreamFailure) => void,
+): () => void {
+  const unsubscribe = threadStreamFailureListeners.subscribe(listener);
+  return () => void unsubscribe();
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) {
     if (instance.transport.getState() !== "disposed") {
@@ -408,6 +426,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
     orchestrationThreadEventListeners.emit(message.data);
+  });
+  transport.onThreadStreamFailure((failure) => {
+    threadStreamFailureListeners.emit(failure);
   });
   const api: NativeApi = {
     dialogs: {

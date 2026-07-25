@@ -35,6 +35,7 @@ interface PurgeThreadRow {
   readonly deletedAt: string | null;
   readonly envMode: string | null;
   readonly worktreePath: string | null;
+  readonly workingDirectory: string | null;
   readonly projectKind: string | null;
   readonly workspaceRoot: string | null;
 }
@@ -146,6 +147,7 @@ function threadWorkspaceCwdForCheckpointCleanup(thread: PurgeThreadRow): string 
     projectCwd,
     envMode: normalizeThreadEnvironmentMode(thread.envMode),
     worktreePath: thread.worktreePath,
+    workingDirectory: thread.workingDirectory,
   });
 }
 
@@ -446,6 +448,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           t.deleted_at AS deletedAt,
           t.env_mode AS envMode,
           t.worktree_path AS worktreePath,
+          t.working_directory AS workingDirectory,
           p.kind AS projectKind,
           p.workspace_root AS workspaceRoot
         FROM projection_threads t
@@ -575,6 +578,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           t.deleted_at AS deletedAt,
           t.env_mode AS envMode,
           t.worktree_path AS worktreePath,
+          t.working_directory AS workingDirectory,
           p.kind AS projectKind,
           p.workspace_root AS workspaceRoot
         FROM projection_threads t

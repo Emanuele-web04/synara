@@ -843,6 +843,10 @@ function applyOrchestrationEvent(
             event.payload.worktreePath !== undefined
               ? event.payload.worktreePath
               : thread.worktreePath;
+          const nextWorkingDirectory =
+            event.payload.workingDirectory !== undefined
+              ? event.payload.workingDirectory
+              : (thread.workingDirectory ?? null);
           const nextAssociatedWorktreePath =
             event.payload.associatedWorktreePath !== undefined
               ? event.payload.associatedWorktreePath
@@ -873,7 +877,9 @@ function applyOrchestrationEvent(
             (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
               ? thread.updatedAt
               : event.payload.updatedAt;
-          const cwdChanged = thread.worktreePath !== nextWorktreePath;
+          const cwdChanged =
+            thread.worktreePath !== nextWorktreePath ||
+            (thread.workingDirectory ?? null) !== nextWorkingDirectory;
 
           if (
             (event.payload.title === undefined || event.payload.title === thread.title) &&
@@ -881,6 +887,7 @@ function applyOrchestrationEvent(
             (event.payload.envMode === undefined || event.payload.envMode === thread.envMode) &&
             nextBranch === thread.branch &&
             nextWorktreePath === thread.worktreePath &&
+            nextWorkingDirectory === (thread.workingDirectory ?? null) &&
             nextAssociatedWorktreePath === (thread.associatedWorktreePath ?? null) &&
             nextAssociatedWorktreeBranch === (thread.associatedWorktreeBranch ?? null) &&
             nextAssociatedWorktreeRef === (thread.associatedWorktreeRef ?? null) &&
@@ -916,6 +923,7 @@ function applyOrchestrationEvent(
             ...(event.payload.envMode !== undefined ? { envMode: event.payload.envMode } : {}),
             branch: nextBranch,
             worktreePath: nextWorktreePath,
+            workingDirectory: nextWorkingDirectory,
             associatedWorktreePath: nextAssociatedWorktreePath,
             associatedWorktreeBranch: nextAssociatedWorktreeBranch,
             associatedWorktreeRef: nextAssociatedWorktreeRef,

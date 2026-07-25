@@ -238,7 +238,10 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
-            teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
           }).pipe(
             Layer.provide(
               mockOpenCodeServerSpawnerLayer({
@@ -278,7 +281,10 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
-            teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
           }).pipe(
             Layer.provide(
               mockOpenCodeServerSpawnerLayer({

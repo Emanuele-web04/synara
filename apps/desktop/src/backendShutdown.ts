@@ -28,6 +28,16 @@ export type WindowsBackendShutdownResult =
   | { readonly type: "exited"; readonly forced: boolean }
   | { readonly type: "timed-out"; readonly forced: boolean };
 
+export class PosixBackendShutdownTimeoutError extends Error {
+  readonly forced: boolean;
+
+  constructor(forced: boolean) {
+    super("Timed out waiting for the desktop backend to exit.");
+    this.name = "PosixBackendShutdownTimeoutError";
+    this.forced = forced;
+  }
+}
+
 export class WindowsBackendShutdownTimeoutError extends Error {
   readonly forced: boolean;
 
@@ -47,9 +57,23 @@ export function requireWindowsBackendExit(result: WindowsBackendShutdownResult):
 export async function runAfterDesktopShutdown(
   shutdown: Promise<void>,
   afterShutdown: () => void | Promise<void>,
+  options?: { readonly runAfterShutdownFailure?: boolean },
 ): Promise<void> {
-  await shutdown;
+  let shutdownFailed = false;
+  let shutdownFailure: unknown;
+  try {
+    await shutdown;
+  } catch (error) {
+    if (!options?.runAfterShutdownFailure) {
+      throw error;
+    }
+    shutdownFailed = true;
+    shutdownFailure = error;
+  }
   await afterShutdown();
+  if (shutdownFailed) {
+    throw shutdownFailure;
+  }
 }
 
 export function shouldDeferDesktopWindowClose(input: {
@@ -61,6 +85,7 @@ export function shouldDeferDesktopWindowClose(input: {
 }
 
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();
+const posixShutdownsByProcess = new WeakMap<object, Promise<void>>();
 
 function isLoopbackShutdownUrl(url: URL): boolean {
   return (
@@ -151,10 +176,131 @@ function hasExited(child: BackendShutdownProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+export function retainLiveBackendAfterShutdownFailure<T extends BackendShutdownProcess>(
+  current: T | null,
+  attempted: T,
+): T | null {
+  return current === null && !hasExited(attempted) ? attempted : current;
+}
+
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   if (typeof timer === "object" && "unref" in timer && typeof timer.unref === "function") {
     timer.unref();
   }
+}
+
+function runPosixBackendShutdown(input: {
+  readonly child: BackendShutdownProcess;
+  readonly forceKillDelayMs: number;
+  readonly timeoutMs: number;
+}): Promise<void> {
+  if (hasExited(input.child)) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let forced = false;
+    let forceTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = (): void => {
+      input.child.off("exit", onExit);
+      if (forceTimer) clearTimeout(forceTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+    };
+    const settle = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onExit = (): void => {
+      settle();
+    };
+    const forceIfRunning = (): void => {
+      if (settled || hasExited(input.child)) {
+        if (hasExited(input.child)) onExit();
+        return;
+      }
+      forced = true;
+      try {
+        input.child.kill("SIGKILL");
+      } catch {
+        // The absolute deadline below still fails closed if the process survives.
+      }
+      if (hasExited(input.child)) {
+        onExit();
+      }
+    };
+
+    input.child.once("exit", onExit);
+    try {
+      input.child.kill("SIGTERM");
+    } catch {
+      // A failed graceful signal still gets the bounded force-kill attempt.
+    }
+
+    if (hasExited(input.child)) {
+      onExit();
+      return;
+    }
+
+    if (input.forceKillDelayMs === 0) {
+      forceIfRunning();
+    } else {
+      forceTimer = setTimeout(forceIfRunning, input.forceKillDelayMs);
+      unrefTimer(forceTimer);
+    }
+
+    if (settled) return;
+
+    deadlineTimer = setTimeout(() => {
+      if (hasExited(input.child)) {
+        onExit();
+        return;
+      }
+      settle(new PosixBackendShutdownTimeoutError(forced));
+    }, input.timeoutMs);
+    unrefTimer(deadlineTimer);
+  });
+}
+
+/**
+ * Stops a macOS/Linux backend and resolves only after the OS reports child exit.
+ * A signal being sent is not proof of exit: updater handoff must fail closed or
+ * a surviving old backend can retain the database lifecycle lock.
+ */
+export function stopPosixBackendAndWait(input: {
+  readonly child: BackendShutdownProcess;
+  readonly forceKillDelayMs: number;
+  readonly timeoutMs: number;
+}): Promise<void> {
+  if (!Number.isFinite(input.forceKillDelayMs) || input.forceKillDelayMs < 0) {
+    return Promise.reject(new RangeError("forceKillDelayMs must be a non-negative number."));
+  }
+  if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
+    return Promise.reject(new RangeError("timeoutMs must be a positive number."));
+  }
+  if (input.forceKillDelayMs >= input.timeoutMs) {
+    return Promise.reject(new RangeError("forceKillDelayMs must be less than timeoutMs."));
+  }
+
+  const key = input.child as object;
+  const existing = posixShutdownsByProcess.get(key);
+  if (existing) return existing;
+
+  const shutdown = runPosixBackendShutdown(input).finally(() => {
+    if (posixShutdownsByProcess.get(key) === shutdown) {
+      posixShutdownsByProcess.delete(key);
+    }
+  });
+  posixShutdownsByProcess.set(key, shutdown);
+  return shutdown;
 }
 
 function runWindowsBackendShutdown(input: {

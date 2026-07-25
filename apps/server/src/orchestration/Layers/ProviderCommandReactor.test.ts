@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import {
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderValidationError,
@@ -57,7 +58,11 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
+import {
+  classifyProviderAttemptOutcome,
+  isSafeLegacyProviderBlocker,
+  ProviderCommandReactorLive,
+} from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import {
@@ -80,6 +85,45 @@ const asApprovalRequestId = (value: string): ApprovalRequestId =>
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+describe("legacy provider blocker recovery", () => {
+  it("keeps process lifecycle failures uncertain", () => {
+    const outcome = classifyProviderAttemptOutcome(
+      Exit.fail(
+        new ProviderAdapterProcessError({
+          provider: "claudeAgent",
+          threadId: ThreadId.makeUnsafe("thread-exit-unproven"),
+          detail: "Provider process tree did not prove exit (rootExited=false).",
+        }),
+      ),
+    );
+
+    expect(outcome._tag).toBe("uncertain");
+  });
+
+  it("accepts only failures that prove the command frame was not written", () => {
+    expect(
+      isSafeLegacyProviderBlocker(
+        "Provider process tree 66212 did not prove exit (rootExited=true, captureComplete=false; no captured descendants remain).",
+      ),
+    ).toBe(false);
+    expect(
+      isSafeLegacyProviderBlocker("Codex app-server stdin closed before the frame was written."),
+    ).toBe(true);
+    expect(
+      isSafeLegacyProviderBlocker(
+        "Provider process tree did not prove exit (rootExited=false, captureComplete=true).",
+      ),
+    ).toBe(false);
+    expect(
+      isSafeLegacyProviderBlocker(
+        "Provider process tree did not prove exit (rootExited=true, captureComplete=false; captured descendants remain).",
+      ),
+    ).toBe(false);
+    expect(isSafeLegacyProviderBlocker("Provider process tree did not prove exit.")).toBe(false);
+    expect(isSafeLegacyProviderBlocker("The provider rejected the prompt.")).toBe(false);
+  });
+});
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));

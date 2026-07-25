@@ -262,6 +262,10 @@ const makeRepository = Effect.gen(function* () {
     (input) => {
       const threadFilter =
         input.threadId === undefined ? sql`` : sql`AND d.thread_id = ${input.threadId}`;
+      const cursorFilter =
+        input.afterEventSequence === undefined
+          ? sql``
+          : sql`AND d.event_sequence > ${input.afterEventSequence}`;
       return sql<ProviderBlockingDeliveryEvidence>`
         SELECT
           d.consumer_name AS "consumerName",
@@ -292,6 +296,7 @@ const makeRepository = Effect.gen(function* () {
         WHERE d.consumer_name = ${input.consumerName}
           AND d.state IN ('dead', 'uncertain')
           ${threadFilter}
+          ${cursorFilter}
         ORDER BY d.event_sequence ASC
         LIMIT ${input.limit}
       `.pipe(

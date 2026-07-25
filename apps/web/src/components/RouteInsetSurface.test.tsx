@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { RouteInsetSurface } from "./RouteInsetSurface";
 import { Sidebar, SidebarProvider } from "./ui/sidebar";
 
-const DEFAULT_ROUTE_SURFACES = ["workspace", "kanban", "automation"] as const;
+const DEFAULT_ROUTE_SURFACES = ["settings", "kanban", "automation"] as const;
 const SIDEBAR_STATES = [
   { label: "expanded", open: true },
   { label: "collapsed", open: false },

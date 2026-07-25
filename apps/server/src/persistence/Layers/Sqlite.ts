@@ -3,8 +3,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import {
-  requireNoPendingMigrationRecovery,
+  inspectPendingMigrationRecovery,
+  reclaimOrphanedMigrationBackupPartials,
+  resumeMarkedMigration,
   runWithPreMigrationBackup,
+  type MigrationRecoveryMarker,
 } from "../MigrationBackup.ts";
 import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
 import { ServerConfig } from "../../config.ts";
@@ -50,7 +53,7 @@ const repairSqliteFilePermissions = (dbPath: string) =>
     }
   });
 
-const makeSetup = (dbPath?: string) =>
+const makeSetup = (dbPath?: string, pendingRecovery: MigrationRecoveryMarker | null = null) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -73,8 +76,13 @@ const makeSetup = (dbPath?: string) =>
       yield* sql`PRAGMA synchronous = NORMAL;`;
       yield* sql`PRAGMA busy_timeout = 5000;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
+      // A pending marker means an earlier startup was interrupted mid-migration.
+      // Resuming reuses that attempt's snapshot instead of taking a second one,
+      // so the fallback stays the last known-good database.
       const migrations = dbPath
-        ? runWithPreMigrationBackup(dbPath, runMigrations())
+        ? pendingRecovery
+          ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
+          : runWithPreMigrationBackup(dbPath, runMigrations())
         : runMigrations();
       yield* dbPath
         ? migrations.pipe(Effect.ensuring(repairSqliteFilePermissions(dbPath)))
@@ -91,10 +99,17 @@ export const makeSqlitePersistenceLive = (dbPath: string) =>
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-        yield* requireNoPendingMigrationRecovery(dbPath);
+        // Ahead of the guard on purpose: a database that fails closed below
+        // never reaches the backup path, so this is the only opportunity to
+        // reclaim partials stranded by an earlier failed startup.
+        yield* reclaimOrphanedMigrationBackupPartials(dbPath);
+        const pendingRecovery = yield* inspectPendingMigrationRecovery(dbPath);
         yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
 
-        return Layer.provideMerge(makeSetup(dbPath), makeRuntimeSqliteLayer({ filename: dbPath }));
+        return Layer.provideMerge(
+          makeSetup(dbPath, pendingRecovery),
+          makeRuntimeSqliteLayer({ filename: dbPath }),
+        );
       }),
     ),
     Layer.unwrap,

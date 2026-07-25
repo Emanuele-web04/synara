@@ -1,4 +1,4 @@
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -6,8 +6,10 @@ import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
+  MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
   migrationBackupDirectory,
   migrationRecoveryMarkerPath,
+  parseMigrationRecoveryResumeState,
 } from "@synara/shared/migrationRecovery";
 export {
   migrationBackupDirectory,
@@ -16,7 +18,11 @@ export {
 
 import { ensurePrivateDirectorySync, repairPrivateFile } from "../privatePathPermissions.ts";
 import { withDatabaseLifecycleLock } from "./DatabaseLifecycleLock.ts";
-import { migrationEntries } from "./Migrations.ts";
+import {
+  findFirstMigrationLineageDivergence,
+  LAST_SHARED_LINEAGE_MIGRATION_ID,
+  migrationEntries,
+} from "./Migrations.ts";
 
 export const MIGRATION_BACKUP_RETENTION = 5;
 export const FAILED_MIGRATION_BUNDLE_RETENTION = 3;
@@ -40,6 +46,127 @@ export class MigrationRecoveryRequiredError extends Error {
       `Migration recovery is required for ${dbPath}.${detail ? ` ${detail}` : ""} Stop every Synara process, then run: synara-restore-migration-backup ${shellQuote(dbPath)}`,
     );
     this.name = "MigrationRecoveryRequiredError";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "an unknown amount";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/**
+ * Raised instead of starting a backup that cannot possibly fit. Failing here is
+ * deliberate: migrating without a restorable snapshot risks the user's data,
+ * and half-writing one risks their disk.
+ */
+export class InsufficientMigrationBackupSpaceError extends Error {
+  readonly _tag = "InsufficientMigrationBackupSpaceError";
+
+  constructor(
+    readonly requiredBytes: number,
+    readonly availableBytes: number,
+    readonly directory: string,
+  ) {
+    super(
+      `Not enough free disk space to back up the database before upgrading it. ` +
+        `About ${formatBytes(requiredBytes)} is needed in ${directory}, but only ` +
+        `${formatBytes(availableBytes)} is free. Free up disk space and start Synara again.`,
+    );
+    this.name = "InsufficientMigrationBackupSpaceError";
+  }
+}
+
+const MIGRATION_BACKUP_FREE_SPACE_FACTOR = 2;
+
+const logicalDatabaseSizeBytes = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    readonly pageCount: number;
+    readonly pageSize: number;
+  }>`
+    SELECT
+      page_count AS "pageCount",
+      page_size AS "pageSize"
+    FROM pragma_page_count(), pragma_page_size()
+  `;
+  const pageCount = Number(rows[0]?.pageCount);
+  const pageSize = Number(rows[0]?.pageSize);
+  const logicalBytes = pageCount * pageSize;
+  return Number.isFinite(logicalBytes) && logicalBytes >= 0 ? logicalBytes : null;
+});
+
+/**
+ * Estimates the largest useful SQLite snapshot before applying a safety
+ * factor. `page_count * page_size` describes the connection's logical database
+ * and therefore includes committed pages that are still only in the WAL.
+ *
+ * If the PRAGMAs are unavailable, the main file plus the physical WAL is a
+ * conservative fallback. Failure to inspect either source is deliberately
+ * represented as `null`; an indeterminate estimate must not block a legitimate
+ * upgrade.
+ */
+export const estimateMigrationBackupRequiredBytes = (dbPath: string) =>
+  Effect.gen(function* () {
+    const logicalBytes = yield* logicalDatabaseSizeBytes.pipe(
+      Effect.matchCause({
+        onFailure: () => null,
+        onSuccess: (bytes) => bytes,
+      }),
+    );
+    return yield* Effect.promise(async () => {
+      let mainFileBytes: number;
+      try {
+        mainFileBytes = (await fs.stat(dbPath)).size;
+      } catch {
+        return null;
+      }
+
+      let snapshotBytes: number;
+      if (logicalBytes !== null) {
+        snapshotBytes = Math.max(mainFileBytes, logicalBytes);
+      } else {
+        let walBytes = 0;
+        try {
+          walBytes = (await fs.stat(`${dbPath}-wal`)).size;
+        } catch {
+          // The WAL is optional, and an unreadable fallback must not make
+          // startup less reliable than it was before the space guard existed.
+        }
+        snapshotBytes = mainFileBytes + walBytes;
+      }
+
+      const requiredBytes = snapshotBytes * MIGRATION_BACKUP_FREE_SPACE_FACTOR;
+      return Number.isFinite(requiredBytes) && requiredBytes >= 0 ? requiredBytes : null;
+    });
+  });
+
+/**
+ * Refuses to begin a snapshot the filesystem cannot hold. A `statfs` that is
+ * unavailable or racing must never block a legitimate upgrade, so an
+ * indeterminate answer is treated as "proceed".
+ */
+async function assertBackupSpaceAvailable(
+  requiredBytes: number | null,
+  backupDirectory: string,
+): Promise<void> {
+  if (requiredBytes === null) return;
+  let availableBytes: number;
+  try {
+    const filesystem = await fs.statfs(backupDirectory);
+    availableBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+  } catch {
+    return;
+  }
+  if (!Number.isFinite(requiredBytes) || !Number.isFinite(availableBytes)) return;
+  if (availableBytes < requiredBytes) {
+    throw new InsufficientMigrationBackupSpaceError(requiredBytes, availableBytes, backupDirectory);
   }
 }
 
@@ -105,12 +232,13 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
     return { sourceVersion: `v${highWaterMark}-legacy32`, targetVersion: latestMigrationId };
   }
 
-  const firstDivergedId = migrationEntries.find(
-    ([id, name]) => id <= highWaterMark && recordedNames.get(id) !== name,
-  )?.[0];
+  // Same predicate the reconciler classifies trackers with. Sharing it is what
+  // keeps "this database needs a backup" and "this database will be replayed"
+  // from ever disagreeing.
+  const firstDivergedId = findFirstMigrationLineageDivergence(recordedNames, highWaterMark)?.[0];
   if (firstDivergedId !== undefined) {
     // Shared-lineage divergence is rejected before the migrator mutates data.
-    if (firstDivergedId <= 16) {
+    if (firstDivergedId <= LAST_SHARED_LINEAGE_MIGRATION_ID) {
       return null;
     }
     return {
@@ -153,6 +281,25 @@ async function syncDirectory(directory: string): Promise<void> {
   }
 }
 
+/**
+ * Flushes a freshly written regular file to stable storage.
+ *
+ * The handle is opened read-write on purpose. Windows `FlushFileBuffers`
+ * requires `GENERIC_WRITE`, so syncing through an `O_RDONLY` handle fails there
+ * with EPERM/EACCES — which is how a full-size `.partial` snapshot was stranded
+ * on every single backup attempt.
+ */
+async function syncRegularFile(filePath: string): Promise<void> {
+  const flags =
+    process.platform === "win32" ? fsConstants.O_RDWR : fsConstants.O_RDWR | fsConstants.O_NOFOLLOW;
+  const handle = await fs.open(filePath, flags);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 async function ensurePrivateRegularFile(filePath: string) {
   await repairPrivateFile(filePath);
   const stat = await fs.lstat(filePath);
@@ -162,26 +309,123 @@ async function ensurePrivateRegularFile(filePath: string) {
   return stat;
 }
 
-async function removeStaleRegularFiles(
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return process.platform === "win32" || (left.dev === right.dev && left.ino === right.ino);
+}
+
+async function assertDirectoryIdentity(directory: string, openedStat: Stats): Promise<void> {
+  const currentStat = await fs.lstat(directory);
+  if (
+    !currentStat.isDirectory() ||
+    currentStat.isSymbolicLink() ||
+    !sameFileIdentity(openedStat, currentStat)
+  ) {
+    throw new Error(`Directory identity changed while it was open: ${directory}`);
+  }
+}
+
+/**
+ * Removes matching regular files from a directory.
+ *
+ * `olderThanMs` restricts removal to artifacts that have aged past a cutoff.
+ * Omitting it removes every match regardless of age, which is only correct for
+ * artifacts whose exclusive owner is the caller holding the lifecycle lock.
+ *
+ * The directory itself is opened with no-follow semantics and kept open for
+ * the sweep. This prevents a symlinked backup root from redirecting cleanup
+ * into another database's directory; identity checks also reject replacement
+ * of the root while cleanup is running.
+ */
+async function removeRegularFiles(
   directory: string,
   matches: (name: string) => boolean,
+  options: { readonly olderThanMs?: number } = {},
 ): Promise<void> {
-  const entries = await fs.readdir(directory, { withFileTypes: true }).catch((cause) => {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
+  const pathStat = await fs.lstat(directory).catch((cause) => {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw cause;
   });
-  const cutoff = Date.now() - STALE_RECOVERY_ARTIFACT_AGE_MS;
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && matches(entry.name))
-      .map(async (entry) => {
-        const artifactPath = path.join(directory, entry.name);
-        const stat = await fs.lstat(artifactPath);
-        if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) {
-          await fs.unlink(artifactPath);
-        }
-      }),
+  if (pathStat === null) return;
+  if (!pathStat.isDirectory() || pathStat.isSymbolicLink()) {
+    throw new Error(`Cleanup root is not a real directory: ${directory}`);
+  }
+
+  const sweep = async (openedStat: Stats) => {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    const cutoff =
+      options.olderThanMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : Date.now() - options.olderThanMs;
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && matches(entry.name))
+        .map(async (entry) => {
+          const artifactPath = path.join(directory, entry.name);
+          const stat = await fs.lstat(artifactPath).catch((cause) => {
+            if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+            throw cause;
+          });
+          if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.mtimeMs >= cutoff) return;
+          await assertDirectoryIdentity(directory, openedStat);
+          await fs.unlink(artifactPath).catch((cause) => {
+            if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+          });
+        }),
+    );
+  };
+
+  // Windows cannot portably open and fsync directory handles. The lstat checks
+  // still reject symlink roots there; on Unix, keep an O_NOFOLLOW descriptor
+  // open for the entire destructive sweep.
+  if (process.platform === "win32") {
+    await sweep(pathStat);
+    return;
+  }
+
+  const directoryHandle = await fs.open(
+    directory,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
   );
+  try {
+    const openedStat = await directoryHandle.stat();
+    if (!openedStat.isDirectory() || !sameFileIdentity(openedStat, pathStat)) {
+      throw new Error(`Cleanup root changed while it was opened: ${directory}`);
+    }
+    await sweep(openedStat);
+  } finally {
+    await directoryHandle.close();
+  }
+}
+
+const removeStaleRegularFiles = (directory: string, matches: (name: string) => boolean) =>
+  removeRegularFiles(directory, matches, { olderThanMs: STALE_RECOVERY_ARTIFACT_AGE_MS });
+
+/**
+ * Matches the temporary snapshot `createMigrationBackup` writes before renaming
+ * a finished backup into place.
+ *
+ * The leading dot is load-bearing: it is precisely why these orphans never
+ * matched the finished-backup prefix that retention pruning filters on, so a
+ * stranded partial could never be reclaimed by any existing cleanup path.
+ */
+function isMigrationBackupPartial(dbBasename: string): (name: string) => boolean {
+  const partialPrefix = `.${dbBasename}.pre-migration-`;
+  return (name) => name.startsWith(partialPrefix) && name.endsWith(".partial");
+}
+
+/**
+ * Matches the temporary marker `writeRecoveryMarkerFile` writes before renaming it
+ * over the durable recovery marker.
+ *
+ * These land next to the database rather than in the backup directory, so the
+ * backup-partial sweep never sees them. The write window is tiny, but a crash
+ * inside it strands the file permanently — in the very directory whose file churn
+ * is what users notice.
+ */
+function isMigrationRecoveryMarkerPartial(markerBasename: string): (name: string) => boolean {
+  const partialPrefix = `${markerBasename}.`;
+  return (name) =>
+    name !== markerBasename && name.startsWith(partialPrefix) && name.endsWith(".partial");
 }
 
 async function pruneFailedMigrationBundles(dbPath: string): Promise<void> {
@@ -236,7 +480,13 @@ async function pruneFailedMigrationBundles(dbPath: string): Promise<void> {
 export const pruneMigrationBackups = (dbPath: string, retention = MIGRATION_BACKUP_RETENTION) =>
   attemptPromise(async () => {
     const backupDirectory = migrationBackupDirectory(dbPath);
-    const prefix = `${path.basename(dbPath)}.pre-migration-`;
+    const basename = path.basename(dbPath);
+    const prefix = `${basename}.pre-migration-`;
+    // Orphaned partials are unreferenced by construction: the only writer holds
+    // the database lifecycle lock, and a partial that outlived its writer can
+    // never be promoted to a backup. Reclaim them unconditionally — an age
+    // cutoff here is what allowed them to accumulate without bound.
+    await removeRegularFiles(backupDirectory, isMigrationBackupPartial(basename));
     const entries = await fs.readdir(backupDirectory, { withFileTypes: true }).catch((cause) => {
       if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw cause;
@@ -269,76 +519,69 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
     const backupDirectory = migrationBackupDirectory(dbPath);
     yield* attemptPromise(() => ensurePrivateBackupDirectory(backupDirectory));
     const basename = path.basename(dbPath);
+    // Unconditional, not age-gated. Every partial found here outlived the
+    // process that wrote it, and the 24h staleness cutoff that used to guard
+    // this sweep is what let a restart loop accumulate them without bound.
     yield* attemptPromise(() =>
-      removeStaleRegularFiles(
-        backupDirectory,
-        (name) => name.startsWith(`.${basename}.pre-migration-`) && name.endsWith(".partial"),
-      ),
+      removeRegularFiles(backupDirectory, isMigrationBackupPartial(basename)),
     );
+    const requiredBytes = yield* estimateMigrationBackupRequiredBytes(dbPath);
+    yield* attemptPromise(() => assertBackupSpaceAvailable(requiredBytes, backupDirectory));
     const uniqueSuffix = `${compactTimestamp(new Date())}-${randomUUID()}`;
     const finalName = `${basename}.pre-migration-${safeVersionLabel(plan.sourceVersion)}-to-v${plan.targetVersion}-${uniqueSuffix}.sqlite`;
     const backupPath = path.join(backupDirectory, finalName);
     const temporaryPath = path.join(backupDirectory, `.${finalName}.partial`);
 
-    yield* sql`VACUUM INTO ${temporaryPath}`.pipe(
+    yield* Effect.gen(function* () {
+      yield* sql`VACUUM INTO ${temporaryPath}`;
+      yield* attemptPromise(async () => {
+        await ensurePrivateRegularFile(temporaryPath);
+        await syncRegularFile(temporaryPath);
+        await fs.rename(temporaryPath, backupPath);
+        await syncDirectory(backupDirectory);
+      });
+    }).pipe(
+      // Must span the whole critical section, not just the vacuum. A failure
+      // while syncing or renaming otherwise strands a full-size copy of the
+      // database that no cleanup path could reclaim.
       Effect.tapError(() => attemptPromise(() => fs.unlink(temporaryPath)).pipe(Effect.ignore)),
     );
-    yield* attemptPromise(async () => {
-      await ensurePrivateRegularFile(temporaryPath);
-      const flags =
-        process.platform === "win32"
-          ? fsConstants.O_RDONLY
-          : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-      const handle = await fs.open(temporaryPath, flags);
-      try {
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await fs.rename(temporaryPath, backupPath);
-      await syncDirectory(backupDirectory);
-    });
     yield* pruneMigrationBackups(dbPath);
     return { ...plan, backupPath } satisfies MigrationBackupResult;
   });
 
+/** Durably replaces the marker in one atomic rename; never leaves a partial behind. */
+async function writeRecoveryMarkerFile(markerPath: string, payload: unknown): Promise<void> {
+  const temporaryPath = `${markerPath}.${randomUUID()}.partial`;
+  try {
+    await fs.writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await ensurePrivateRegularFile(temporaryPath);
+    await syncRegularFile(temporaryPath);
+    await fs.rename(temporaryPath, markerPath);
+    await syncDirectory(path.dirname(markerPath));
+  } catch (cause) {
+    await fs.unlink(temporaryPath).catch(() => undefined);
+    throw cause;
+  }
+}
+
 const writeRecoveryMarker = (dbPath: string, backup: MigrationBackupResult) =>
   attemptPromise(async () => {
-    const markerPath = migrationRecoveryMarkerPath(dbPath);
-    const temporaryPath = `${markerPath}.${randomUUID()}.partial`;
-    const payload = {
+    await writeRecoveryMarkerFile(migrationRecoveryMarkerPath(dbPath), {
       databasePath: dbPath,
       backupPath: backup.backupPath,
       sourceVersion: backup.sourceVersion,
       targetVersion: backup.targetVersion,
       phase: "migration-in-progress",
       createdAt: new Date().toISOString(),
+      resumeAttempts: 0,
       recovery:
-        "Synara will refuse to open this database until an operator stops every Synara process and runs the explicit migration-backup restore command.",
-    };
-    try {
-      await fs.writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
-      await ensurePrivateRegularFile(temporaryPath);
-      const markerFlags =
-        process.platform === "win32"
-          ? fsConstants.O_RDONLY
-          : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-      const handle = await fs.open(temporaryPath, markerFlags);
-      try {
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await fs.rename(temporaryPath, markerPath);
-      await syncDirectory(path.dirname(markerPath));
-    } catch (cause) {
-      await fs.unlink(temporaryPath).catch(() => undefined);
-      throw cause;
-    }
+        "Synara retries an interrupted migration a bounded number of times on startup. Once that budget is spent it refuses to open this database until an operator stops every Synara process and runs the explicit migration-backup restore command.",
+    });
   });
 
 const removeRecoveryMarker = (dbPath: string) =>
@@ -387,16 +630,7 @@ const restoreSqliteMigrationBackup = (input: {
     const restoredTemporaryPath = `${input.dbPath}.${randomUUID()}.restore`;
     await fs.copyFile(input.backupPath, restoredTemporaryPath, fsConstants.COPYFILE_EXCL);
     await ensurePrivateRegularFile(restoredTemporaryPath);
-    const restoredFlags =
-      process.platform === "win32"
-        ? fsConstants.O_RDONLY
-        : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-    const restoredHandle = await fs.open(restoredTemporaryPath, restoredFlags);
-    try {
-      await restoredHandle.sync();
-    } finally {
-      await restoredHandle.close();
-    }
+    await syncRegularFile(restoredTemporaryPath);
 
     const failedSuffix = `.failed-migration-${compactTimestamp(new Date())}-${randomUUID()}`;
     const moved: Array<readonly [string, string]> = [];
@@ -466,9 +700,13 @@ async function validateSqliteMigrationBackup(backupPath: string): Promise<void> 
   }
 }
 
-type MigrationRecoveryMarker = {
+export type MigrationRecoveryMarker = {
   readonly markerPath: string;
   readonly backupPath: string;
+  /** How many times startup has already re-run the interrupted migration. */
+  readonly resumeAttempts: number;
+  /** The marker verbatim, so a resume can bump one field without losing the rest. */
+  readonly payload: Record<string, unknown>;
 };
 
 function generatedBackupNamePattern(dbPath: string): RegExp {
@@ -520,6 +758,10 @@ async function readMigrationRecoveryMarker(
   if (marker.databasePath !== dbPath || typeof marker.backupPath !== "string") {
     throw new Error(`Invalid migration recovery marker: ${markerPath}`);
   }
+  const resumeState = parseMigrationRecoveryResumeState(markerText);
+  if (resumeState === null) {
+    throw new Error(`Migration recovery marker has an unreadable resume counter: ${markerPath}`);
+  }
   const backupDirectory = path.resolve(migrationBackupDirectory(dbPath));
   const backupDirectoryStat = await fs.lstat(backupDirectory);
   if (!backupDirectoryStat.isDirectory() || backupDirectoryStat.isSymbolicLink()) {
@@ -545,27 +787,132 @@ async function readMigrationRecoveryMarker(
       `Migration recovery marker backup escapes its canonical directory: ${backupPath}`,
     );
   }
-  return { markerPath, backupPath };
+  return {
+    markerPath,
+    backupPath,
+    resumeAttempts: resumeState.attempts,
+    payload: marker as Record<string, unknown>,
+  };
 }
+
+/**
+ * Reclaims stranded pre-migration partials before startup can fail closed.
+ *
+ * A database that already needs recovery never reaches the backup path, so this
+ * must run ahead of {@link requireNoPendingMigrationRecovery}. Without it a
+ * wedged install keeps every partial its restart loop produced — the failure
+ * mode that filled hundreds of gigabytes in minutes. It only ever removes
+ * partials, never a finished backup, never a live marker, never the database.
+ *
+ * Both partial flavours are swept here: the snapshot partials in the backup
+ * directory and the marker partials beside the database. Removing them
+ * unconditionally is safe only because every caller holds the database lifecycle
+ * lock, which makes this process their sole owner.
+ */
+export const reclaimOrphanedMigrationBackupPartials = (dbPath: string) =>
+  attemptPromise(async () => {
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    await Promise.all([
+      removeRegularFiles(
+        migrationBackupDirectory(dbPath),
+        isMigrationBackupPartial(path.basename(dbPath)),
+      ),
+      removeRegularFiles(
+        path.dirname(markerPath),
+        isMigrationRecoveryMarkerPartial(path.basename(markerPath)),
+      ),
+    ]);
+  }).pipe(Effect.ignore);
 
 /** Read-only startup guard. It never restores, renames, or removes recovery files. */
 export const requireNoPendingMigrationRecovery = (dbPath: string) =>
   attemptPromise(async () => {
-    let marker: MigrationRecoveryMarker | null;
-    try {
-      marker = await readMigrationRecoveryMarker(dbPath);
-    } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      throw new MigrationRecoveryRequiredError(
-        dbPath,
-        migrationRecoveryMarkerPath(dbPath),
-        "unknown",
-        `The recovery marker could not be validated: ${detail}.`,
-      );
-    }
+    const marker = await readValidatedRecoveryMarker(dbPath);
     if (marker) {
       throw new MigrationRecoveryRequiredError(dbPath, marker.markerPath, marker.backupPath);
     }
+  });
+
+async function readValidatedRecoveryMarker(
+  dbPath: string,
+): Promise<MigrationRecoveryMarker | null> {
+  try {
+    return await readMigrationRecoveryMarker(dbPath);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new MigrationRecoveryRequiredError(
+      dbPath,
+      migrationRecoveryMarkerPath(dbPath),
+      "unknown",
+      `The recovery marker could not be validated: ${detail}.`,
+    );
+  }
+}
+
+/**
+ * Read-only startup gate that permits a bounded self-heal.
+ *
+ * Returns the pending marker when startup is still allowed to re-run the
+ * interrupted migration, `null` when nothing is pending, and fails closed with
+ * {@link MigrationRecoveryRequiredError} once the resume budget is spent or the
+ * marker cannot be validated. Like the strict guard, it never restores,
+ * renames, or removes anything.
+ */
+export const inspectPendingMigrationRecovery = (dbPath: string) =>
+  attemptPromise(async () => {
+    const marker = await readValidatedRecoveryMarker(dbPath);
+    if (marker && marker.resumeAttempts >= MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS) {
+      throw new MigrationRecoveryRequiredError(
+        dbPath,
+        marker.markerPath,
+        marker.backupPath,
+        `Startup already re-ran the interrupted migration ${marker.resumeAttempts} time(s) without success.`,
+      );
+    }
+    return marker;
+  });
+
+/**
+ * Re-runs the migration an earlier startup was interrupted during.
+ *
+ * Deliberately does *not* take a fresh backup and does *not* rewrite the
+ * marker's backup pointer: the snapshot this database must fall back to is the
+ * one captured before the first attempt. Re-snapshotting here would both point
+ * recovery at an already-broken database and copy the full file on every
+ * restart — the exact behaviour that filled disks in the field.
+ *
+ * The attempt is charged to the durable budget *before* the migration runs, so
+ * a process that dies mid-migration still consumes one attempt and the loop
+ * terminates. Only success clears the marker. Effect's SQL migrator rolls its
+ * transaction back when a migration statement fails, so treating a
+ * duplicate-looking error as success would merely hide the restore point while
+ * leaving the same migration ready to fail again on the next startup.
+ */
+export const resumeMarkedMigration = <A, E, R>(
+  dbPath: string,
+  marker: MigrationRecoveryMarker,
+  migration: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    yield* Effect.logWarning("Resuming an interrupted database migration", {
+      databasePath: dbPath,
+      backupPath: marker.backupPath,
+      previousAttempts: marker.resumeAttempts,
+      remainingAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS - marker.resumeAttempts,
+    });
+    yield* attemptPromise(() =>
+      writeRecoveryMarkerFile(marker.markerPath, {
+        ...marker.payload,
+        resumeAttempts: marker.resumeAttempts + 1,
+        lastResumeAt: new Date().toISOString(),
+      }),
+    );
+    const result = yield* migration;
+    yield* removeRecoveryMarker(dbPath);
+    yield* Effect.logInfo("Interrupted database migration completed on resume", {
+      databasePath: dbPath,
+    });
+    return result;
   });
 
 /**
