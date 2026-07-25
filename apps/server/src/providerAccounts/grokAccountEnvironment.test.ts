@@ -14,8 +14,10 @@ describe("buildGrokAccountEnvironment", () => {
     const result = buildGrokAccountEnvironment({
       provider: "grok",
       ordinal: 1,
+      surface: "agent",
       authMethod: "oauth",
       agentHome: AGENT_HOME,
+      appDataDir: "/accounts/grok/1/app/data",
     });
 
     expect(result.environment.GROK_HOME).toBe(AGENT_HOME);
@@ -28,8 +30,10 @@ describe("buildGrokAccountEnvironment", () => {
     const result = buildGrokAccountEnvironment({
       provider: "grok",
       ordinal: 2,
+      surface: "agent",
       authMethod: "apiKey",
       agentHome: AGENT_HOME,
+      appDataDir: "/accounts/grok/1/app/data",
       apiKey: "xai-managed-key",
     });
 
@@ -42,8 +46,10 @@ describe("buildGrokAccountEnvironment", () => {
     const result = buildGrokAccountEnvironment({
       provider: "grok",
       ordinal: 3,
+      surface: "agent",
       authMethod: "apiKey",
       agentHome: AGENT_HOME,
+      appDataDir: "/accounts/grok/1/app/data",
     });
 
     expect(result.environment.XAI_API_KEY).toBe(ACCOUNT_ENV_UNSET);

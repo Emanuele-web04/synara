@@ -15,6 +15,7 @@ import {
 import "@synara/shared/providerAccounts/codexAccountEnvironment";
 import {
   accountAgentHome,
+  accountAppDataDir,
   accountJsonPath,
   accountSecretPath,
   activePointerPath,
@@ -151,8 +152,10 @@ export function resolveLaunchEnvironment(input: ResolveLaunchInput): ResolvedLau
   const launchEnvironment = builder({
     provider,
     ordinal,
+    surface: "agent",
     authMethod: binding.authMethod,
     agentHome: accountAgentHome(root, provider, ordinal),
+    appDataDir: accountAppDataDir(root, provider, ordinal),
     ...(apiKey !== undefined ? { apiKey } : {}),
   });
   return { ordinal, overrides: launchEnvironment.environment };
