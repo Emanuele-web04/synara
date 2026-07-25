@@ -101,6 +101,31 @@ describe("appLaunch", () => {
       expect(result).toMatchObject({ code: "app-launch-unsupported" });
     });
 
+    // unsupported until isolation E2E proof: even a record forced onto disk
+    // with a connected app binding must never produce a managed Claude
+    // Desktop launch plan.
+    it("always refuses managed Claude Desktop launches with the capability error", async () => {
+      await import("./claudeAppLaunch");
+      await Effect.runPromise(
+        storage.writeAccount({
+          schemaVersion: 1,
+          provider: "claudeAgent",
+          ordinal: 2,
+          createdAt: "2026-07-24T00:00:00.000Z",
+          app: {
+            generation: 1,
+            state: "connected",
+            authMethod: "oauth",
+            supportLevel: "unsupported",
+          },
+        }),
+      );
+      const result = await Effect.runPromise(
+        Effect.flip(makeLaunch().planAppLaunch({ provider: "claudeAgent", explicitOrdinal: 2 })),
+      );
+      expect(result).toMatchObject({ code: "app-launch-unsupported" });
+    });
+
     it("fails closed for a managed ordinal without a connected app binding", async () => {
       const result = await Effect.runPromise(
         Effect.flip(makeLaunch().planAppLaunch({ provider: "cursor", explicitOrdinal: 7 })),

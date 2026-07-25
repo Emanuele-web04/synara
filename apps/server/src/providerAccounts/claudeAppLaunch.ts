@@ -71,7 +71,11 @@ export function buildClaudeDesktopLaunchPlan(
   } satisfies ProviderAppLaunchPlan;
 }
 
-registerProviderAppLaunchSpec("claudeAgent", () => {
+registerProviderAppLaunchSpec("claudeAgent", ({ ordinal }) => {
+  // unsupported until isolation E2E proof: only the native account 0 may
+  // open the official desktop app (the capability matrix marks every app
+  // surface unsupported).
+  if (ordinal > 0) return undefined;
   const executable = resolveClaudeDesktopExecutable();
   return executable === undefined ? undefined : { executable };
 });
