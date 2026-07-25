@@ -176,12 +176,14 @@ export function accountProviderLabel(provider: SupportedAccountProvider): string
   return PROVIDER_DISPLAY_NAMES[provider];
 }
 
-/** Numbered slot label, e.g. "Codex 3" (plan section 0). */
+/** Numbered slot label, e.g. "Codex 3"; ordinal 0 is the native account. */
 export function accountSlotLabel(
   provider: SupportedAccountProvider,
   ordinal: AccountOrdinal,
 ): string {
-  return `${accountProviderLabel(provider)} ${ordinal}`;
+  return ordinal === 0
+    ? `${accountProviderLabel(provider)} 0 (native)`
+    : `${accountProviderLabel(provider)} ${ordinal}`;
 }
 
 export const ACCOUNT_BINDING_STATE_LABELS: Record<AccountBindingState, string> = {

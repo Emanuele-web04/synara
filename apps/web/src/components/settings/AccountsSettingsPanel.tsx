@@ -6,12 +6,17 @@
 
 import type {
   AccountOrdinal,
+  ProviderAccountCapabilities,
   ProviderAccountView,
   SupportedAccountProvider,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import {
+  AccountConnectDialog,
+  type AccountConnectRequest,
+} from "~/components/AccountConnectDialog";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -25,7 +30,6 @@ import {
   accountSlotLabel,
   providerAccountsSnapshotQueryOptions,
   SUPPORTED_ACCOUNT_PROVIDERS,
-  useProviderAccountsBeginConnect,
   useProviderAccountsDisconnectBinding,
   useProviderAccountsHide,
   useProviderAccountsLaunch,
@@ -37,22 +41,23 @@ function AccountRow({
   provider,
   account,
   isActive,
-  appSupported,
+  onReconnect,
 }: {
   provider: SupportedAccountProvider;
   account: ProviderAccountView;
   isActive: boolean;
-  appSupported: boolean;
+  onReconnect: (ordinal: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const setActive = useProviderAccountsSetActive();
-  const beginConnect = useProviderAccountsBeginConnect();
   const disconnectBinding = useProviderAccountsDisconnectBinding();
   const hide = useProviderAccountsHide();
   const launch = useProviderAccountsLaunch();
 
+  const isNative = account.ordinal === 0;
   const identity = accountIdentityLabel(account.identity);
-  const agentState = account.agent ? ACCOUNT_BINDING_STATE_LABELS[account.agent.state] : null;
+  const agentState =
+    !isNative && account.agent ? ACCOUNT_BINDING_STATE_LABELS[account.agent.state] : null;
   const appState = account.app
     ? `${ACCOUNT_BINDING_STATE_LABELS[account.app.state]} · ${ACCOUNT_SUPPORT_LEVEL_LABELS[account.app.supportLevel]}`
     : null;
@@ -77,7 +82,7 @@ function AccountRow({
           {identity ? <div>{identity}</div> : null}
           {agentState ? <div>Agent: {agentState}</div> : null}
           {appState ? <div>App: {appState}</div> : null}
-          {!account.agent && !account.app ? <div>Native</div> : null}
+          {isNative ? <div>Your own {accountProviderLabel(provider)} login, unmanaged.</div> : null}
           <DisclosureRegion open={expanded}>
             <div className="flex flex-wrap gap-2 pt-2">
               {!isActive ? (
@@ -90,38 +95,9 @@ function AccountRow({
                   Make active
                 </Button>
               ) : null}
-              {account.agent ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={beginConnect.isPending}
-                  onClick={() =>
-                    beginConnect.mutate({
-                      provider,
-                      surface: "agent",
-                      authMethod: account.agent!.authMethod,
-                      ordinal: account.ordinal,
-                    })
-                  }
-                >
+              {!isNative && account.agent ? (
+                <Button size="xs" variant="outline" onClick={() => onReconnect(account.ordinal)}>
                   Reconnect agent
-                </Button>
-              ) : null}
-              {appSupported && !account.app ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={beginConnect.isPending}
-                  onClick={() =>
-                    beginConnect.mutate({
-                      provider,
-                      surface: "app",
-                      authMethod: "oauth",
-                      ordinal: account.ordinal,
-                    })
-                  }
-                >
-                  Connect app
                 </Button>
               ) : null}
               {account.app ? (
@@ -136,7 +112,7 @@ function AccountRow({
                   Open app
                 </Button>
               ) : null}
-              {account.agent || account.app ? (
+              {!isNative && account.agent ? (
                 <Button
                   size="xs"
                   variant="outline"
@@ -145,21 +121,39 @@ function AccountRow({
                     disconnectBinding.mutate({
                       provider,
                       ordinal: account.ordinal,
-                      surface: account.agent ? "agent" : "app",
+                      surface: "agent",
                     })
                   }
                 >
-                  Disconnect
+                  Disconnect agent
                 </Button>
               ) : null}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={hide.isPending}
-                onClick={() => hide.mutate({ provider, ordinal: account.ordinal })}
-              >
-                Hide
-              </Button>
+              {!isNative && account.app ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={disconnectBinding.isPending}
+                  onClick={() =>
+                    disconnectBinding.mutate({
+                      provider,
+                      ordinal: account.ordinal,
+                      surface: "app",
+                    })
+                  }
+                >
+                  Disconnect app
+                </Button>
+              ) : null}
+              {!isNative ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={hide.isPending}
+                  onClick={() => hide.mutate({ provider, ordinal: account.ordinal })}
+                >
+                  Hide
+                </Button>
+              ) : null}
             </div>
           </DisclosureRegion>
         </div>
@@ -172,14 +166,18 @@ function ProviderAccountsSection({
   provider,
   activeOrdinal,
   accounts,
-  appSupported,
+  capabilities,
+  onConnect,
 }: {
   provider: SupportedAccountProvider;
   activeOrdinal: AccountOrdinal | null;
   accounts: ReadonlyArray<ProviderAccountView>;
-  appSupported: boolean;
+  capabilities: ProviderAccountCapabilities | null;
+  onConnect: (request: AccountConnectRequest) => void;
 }) {
-  const beginConnect = useProviderAccountsBeginConnect();
+  const oauthSupported = capabilities !== null && capabilities.agent.oauth !== "unsupported";
+  const apiKeySupported = capabilities !== null && capabilities.agent.apiKey !== "unsupported";
+  const connectable = oauthSupported || apiKeySupported;
 
   return (
     <SettingsSection title={accountProviderLabel(provider)}>
@@ -188,35 +186,45 @@ function ProviderAccountsSection({
           key={account.ordinal}
           provider={provider}
           account={account}
-          isActive={account.ordinal === activeOrdinal}
-          appSupported={appSupported}
+          isActive={account.ordinal === (activeOrdinal ?? 0)}
+          onReconnect={(ordinal) =>
+            capabilities !== null
+              ? onConnect({ provider, capabilities, reconnectOrdinal: ordinal })
+              : undefined
+          }
         />
       ))}
-      <SettingsListRow
-        title={
-          <span className="flex items-center gap-2">
-            <ProviderIcon provider={provider} tone="header" className="size-3.5 shrink-0" />
-            <span>Add {accountProviderLabel(provider)} account</span>
-          </span>
-        }
-        description="Connect another account with browser sign-in."
-        actions={
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={beginConnect.isPending}
-            onClick={() => beginConnect.mutate({ provider, surface: "agent", authMethod: "oauth" })}
-          >
-            Connect
-          </Button>
-        }
-      />
+      {connectable && capabilities !== null ? (
+        <SettingsListRow
+          title={
+            <span className="flex items-center gap-2">
+              <ProviderIcon provider={provider} tone="header" className="size-3.5 shrink-0" />
+              <span>Add {accountProviderLabel(provider)} account</span>
+            </span>
+          }
+          description={
+            oauthSupported
+              ? "Connect another account with browser sign-in or an API key."
+              : "Connect another account with an API key."
+          }
+          actions={
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => onConnect({ provider, capabilities })}
+            >
+              Connect
+            </Button>
+          }
+        />
+      ) : null}
     </SettingsSection>
   );
 }
 
 export function AccountsSettingsPanel({ active }: { active: boolean }) {
   const snapshotQuery = useQuery(providerAccountsSnapshotQueryOptions({ enabled: active }));
+  const [connectRequest, setConnectRequest] = useState<AccountConnectRequest | null>(null);
 
   if (!active) {
     return null;
@@ -234,7 +242,8 @@ export function AccountsSettingsPanel({ active }: { active: boolean }) {
             provider={provider}
             activeOrdinal={entry?.activeOrdinal ?? null}
             accounts={entry?.accounts ?? []}
-            appSupported={entry ? entry.capabilities.app.supportLevel !== "unsupported" : false}
+            capabilities={entry?.capabilities ?? null}
+            onConnect={setConnectRequest}
           />
         );
       })}
@@ -243,6 +252,12 @@ export function AccountsSettingsPanel({ active }: { active: boolean }) {
           Accounts are unavailable right now. Retry from the sidebar or restart the server.
         </p>
       ) : null}
+      <AccountConnectDialog
+        request={connectRequest}
+        onOpenChange={(open) => {
+          if (!open) setConnectRequest(null);
+        }}
+      />
     </div>
   );
 }
