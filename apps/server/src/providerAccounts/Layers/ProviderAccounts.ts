@@ -15,13 +15,14 @@ import { authCapabilities } from "@synara/shared/providerAccounts/capabilities";
 import { resolveAccountRoot } from "@synara/shared/providerAccounts/accountPaths";
 import { Effect, Layer, Option, Schema } from "effect";
 
-import { ServerSecretStore } from "../../auth/Services/ServerSecretStore";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory";
 import { readAccountBindingFromRuntimePayload } from "../../provider/accountBindingPayload";
 import { makeAccountConnect } from "../accountConnect";
 import { makeAccountResolver } from "../accountResolver";
 import { makeAppLaunch } from "../appLaunch";
 import { makeAccountStorage } from "../accountStorage";
+import { makeCliIntegration } from "../cliIntegration";
+import { makeDoctorReport } from "../doctorReport";
 import {
   ProviderAccounts,
   ProviderAccountsError,
@@ -29,6 +30,9 @@ import {
 } from "../Services/ProviderAccounts";
 
 const SUPPORTED_PROVIDERS = SupportedAccountProvider.literals;
+
+// Stable placeholder timestamp for the synthesized native account 0 view.
+const NATIVE_ACCOUNT_CREATED_AT = "1970-01-01T00:00:00.000Z";
 
 const toView = (record: ProviderAccountRecord): ProviderAccountView => ({
   provider: record.provider,
@@ -69,20 +73,32 @@ const toView = (record: ProviderAccountRecord): ProviderAccountView => ({
 });
 
 export const makeProviderAccounts = Effect.gen(function* () {
-  const secretStore = yield* ServerSecretStore;
   const directory = yield* ProviderSessionDirectory;
   const storage = makeAccountStorage({
     root: resolveAccountRoot({ env: process.env }),
-    secretStore,
   });
   const connect = makeAccountConnect({ storage });
   const resolver = makeAccountResolver({ storage });
   const appLaunch = makeAppLaunch({ storage, resolver });
+  const cliIntegration = makeCliIntegration({ root: storage.root });
+  const doctor = makeDoctorReport({ storage, cliIntegration });
 
   yield* storage.ensureRoot.pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("providerAccounts.account_root_init_failed", { cause }),
     ),
+  );
+
+  // Startup recovery: in-memory connect operations do not survive restarts,
+  // so any pending login directories left behind are orphaned and removed.
+  yield* Effect.forEach(SUPPORTED_PROVIDERS, (provider) =>
+    storage
+      .cleanupPendingDirectories(provider)
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("providerAccounts.pending_cleanup_failed", { provider, cause }),
+        ),
+      ),
   );
 
   const fail = (operation: string) => (cause: unknown) =>
@@ -95,11 +111,20 @@ export const makeProviderAccounts = Effect.gen(function* () {
       cause,
     });
 
+  // The native account 0 is not stored on disk, but it is always a valid
+  // selection: synthesize a permanent view so every selector can offer it.
+  const nativeAccountView = (provider: SupportedAccountProvider): ProviderAccountView => ({
+    provider,
+    ordinal: 0,
+    createdAt: NATIVE_ACCOUNT_CREATED_AT,
+    agent: { generation: 1, state: "connected", authMethod: "oauth" },
+  });
+
   const getSnapshot: ProviderAccountsShape["getSnapshot"] = Effect.gen(function* () {
     const providers = yield* Effect.forEach(SUPPORTED_PROVIDERS, (provider) =>
       Effect.gen(function* () {
         const records = yield* storage.listAccounts(provider);
-        const visible: Array<ProviderAccountView> = [];
+        const visible: Array<ProviderAccountView> = [nativeAccountView(provider)];
         for (const record of records) {
           if (!(yield* storage.isAccountHidden(provider, record.ordinal))) {
             visible.push(toView(record));
@@ -174,33 +199,16 @@ export const makeProviderAccounts = Effect.gen(function* () {
               })),
               Effect.mapError(fail("providerAccounts.launch")),
             ),
-    getIntegrationStatus: Effect.succeed({
-      cliIntegrationEnabled: false,
-      launcherInstalled: false,
-    }),
-    updateCliIntegration: () =>
-      Effect.fail(
-        new ProviderAccountsError({
-          operation: "providerAccounts.updateCliIntegration",
-          detail: "CLI integration is not available yet.",
-        }),
-      ),
-    getDoctorReport: Effect.gen(function* () {
-      const version = yield* storage.readVersion;
-      return {
-        generatedAt: new Date().toISOString(),
-        checks: [
-          {
-            id: "account-root",
-            label: "Account root",
-            status: version === null ? ("warning" as const) : ("ok" as const),
-            ...(version === null
-              ? { detail: "Account root is not initialized yet." }
-              : { detail: `Schema version ${version}.` }),
-          },
-        ],
-      };
-    }).pipe(Effect.mapError(fail("providerAccounts.getDoctorReport"))),
+    getIntegrationStatus: cliIntegration.getStatus.pipe(
+      Effect.mapError(fail("providerAccounts.getIntegrationStatus")),
+    ),
+    updateCliIntegration: (input) =>
+      cliIntegration
+        .update(input.enabled)
+        .pipe(Effect.mapError(fail("providerAccounts.updateCliIntegration"))),
+    getDoctorReport: doctor.generate.pipe(
+      Effect.mapError(fail("providerAccounts.getDoctorReport")),
+    ),
     getThreadBinding: (input) =>
       Effect.gen(function* () {
         const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));

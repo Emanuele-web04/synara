@@ -10,26 +10,8 @@ import type { ProviderAccountRecord } from "@synara/contracts";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ServerSecretStoreShape } from "../auth/Services/ServerSecretStore";
 import { makeAccountResolver, ProviderAccountResolutionError } from "./accountResolver";
 import { makeAccountStorage, type AccountStorageShape } from "./accountStorage";
-
-function makeInMemorySecretStore(): ServerSecretStoreShape {
-  const secrets = new Map<string, Uint8Array>();
-  return {
-    get: (name) => Effect.succeed(secrets.get(name) ?? null),
-    set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
-    getOrCreateRandom: (name) =>
-      Effect.sync(() => {
-        const existing = secrets.get(name);
-        if (existing) return existing;
-        const generated = new Uint8Array([1]);
-        secrets.set(name, generated);
-        return generated;
-      }),
-    remove: (name) => Effect.sync(() => void secrets.delete(name)),
-  };
-}
 
 const codexAccount = (input: {
   readonly ordinal: number;
@@ -92,7 +74,7 @@ describe("accountResolver", () => {
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "synara-resolver-"));
-    storage = makeAccountStorage({ root, secretStore: makeInMemorySecretStore() });
+    storage = makeAccountStorage({ root });
     resolver = makeAccountResolver({ storage });
     await Effect.runPromise(storage.ensureRoot);
   });
@@ -240,14 +222,14 @@ describe("accountResolver", () => {
     expect(resolved.supportLevel).toBe("supported");
   });
 
-  it("resolves the Cursor app OAuth binding as beta without injecting a key", async () => {
+  it("resolves the Cursor app OAuth binding as unsupported without injecting a key", async () => {
     await Effect.runPromise(storage.writeAccount(cursorAccount({ ordinal: 1, app: true })));
 
     const resolved = await Effect.runPromise(
       resolver.resolveAccountLaunch({ provider: "cursor", surface: "app", explicitOrdinal: 1 }),
     );
     expect(resolved.environment.CURSOR_API_KEY).toBe("");
-    expect(resolved.supportLevel).toBe("beta");
+    expect(resolved.supportLevel).toBe("unsupported");
   });
 
   it("resolves managed Grok accounts through the registered Grok builder", async () => {

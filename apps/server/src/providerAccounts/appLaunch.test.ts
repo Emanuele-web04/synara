@@ -10,7 +10,6 @@ import type { ProviderAccountRecord, ProviderAppLaunchPlan } from "@synara/contr
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ServerSecretStoreShape } from "../auth/Services/ServerSecretStore";
 import { registerAccountEnvironmentBuilder } from "@synara/shared/providerAccounts/accountEnvironment";
 import { makeAccountResolver } from "./accountResolver";
 import {
@@ -19,23 +18,6 @@ import {
   type AccountStorageShape,
 } from "./accountStorage";
 import { makeAppLaunch, registerProviderAppLaunchSpec, type AppProcessSpawner } from "./appLaunch";
-
-function makeInMemorySecretStore(): ServerSecretStoreShape {
-  const secrets = new Map<string, Uint8Array>();
-  return {
-    get: (name) => Effect.succeed(secrets.get(name) ?? null),
-    set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
-    getOrCreateRandom: (name) =>
-      Effect.sync(() => {
-        const existing = secrets.get(name);
-        if (existing) return existing;
-        const generated = new Uint8Array([1, 2, 3]);
-        secrets.set(name, generated);
-        return generated;
-      }),
-    remove: (name) => Effect.sync(() => void secrets.delete(name)),
-  };
-}
 
 const connectedAppRecord = (ordinal: number): ProviderAccountRecord => ({
   schemaVersion: 1,
@@ -57,7 +39,7 @@ describe("appLaunch", () => {
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "synara-app-launch-"));
-    storage = makeAccountStorage({ root, secretStore: makeInMemorySecretStore() });
+    storage = makeAccountStorage({ root });
     await Effect.runPromise(storage.ensureRoot);
     registerProviderAppLaunchSpec("cursor", ({ appDataDir }) => ({
       executable: "/opt/apps/cursor",
@@ -102,7 +84,7 @@ describe("appLaunch", () => {
       );
       expect(plan.ordinal).toBe(3);
       expect(plan.appGeneration).toBe(2);
-      expect(plan.supportLevel).toBe("beta");
+      expect(plan.supportLevel).toBe("unsupported");
       expect(plan.expectedAppVersion).toBe("1.4.2");
       expect(plan.environment).toEqual({ SYNARA_TEST_SURFACE: "app" });
       expect(plan.args).toEqual([
