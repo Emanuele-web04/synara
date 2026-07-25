@@ -399,19 +399,16 @@ export default function BranchToolbar({
 
   const canHandoffToWorktree = Boolean(
     !usesFixedLocalWorkspace &&
-      hasServerThread &&
-      envLocked &&
-      !activeWorktreePath &&
-      effectiveEnvMode === "local",
+    hasServerThread &&
+    envLocked &&
+    !activeWorktreePath &&
+    effectiveEnvMode === "local",
   );
   const canHandoffToLocal = Boolean(
     !usesFixedLocalWorkspace && hasServerThread && activeWorktreePath,
   );
   const canSwitchToWorktree = Boolean(
-    !usesFixedLocalWorkspace &&
-      !envLocked &&
-      !activeWorktreePath &&
-      effectiveEnvMode === "local",
+    !usesFixedLocalWorkspace && !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
   );
   const canSwitchToLocal = Boolean(
     !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",

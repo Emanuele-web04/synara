@@ -3620,12 +3620,7 @@ export default function ChatView({
       },
       worktreePath: activeThreadWorktreePath,
     });
-  }, [
-    activeProjectCwd,
-    activeThreadWorktreePath,
-    isStudioContainer,
-    threadWorkspaceCwd,
-  ]);
+  }, [activeProjectCwd, activeThreadWorktreePath, isStudioContainer, threadWorkspaceCwd]);
   const isGitRepo = resolveGitRepoUiState({
     isStudioContainer,
     queriedIsRepo: branchesQuery.data?.isRepo,

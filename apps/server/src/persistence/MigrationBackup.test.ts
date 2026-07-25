@@ -9,14 +9,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS } from "@synara/shared/migrationRecovery";
+
 import {
   MIGRATION_BACKUP_RETENTION,
   MigrationRecoveryRequiredError,
   createMigrationBackup,
+  estimateMigrationBackupRequiredBytes,
+  inspectPendingMigrationRecovery,
   migrationBackupDirectory,
   migrationRecoveryMarkerPath,
+  reclaimOrphanedMigrationBackupPartials,
   requireNoPendingMigrationRecovery,
   restoreMarkedMigrationBackup,
+  resumeMarkedMigration,
   runWithPreMigrationBackup,
 } from "./MigrationBackup.ts";
 import { migrationEntries, runMigrations } from "./Migrations.ts";
@@ -47,6 +53,15 @@ async function backupPaths(dbPath: string): Promise<Array<string>> {
     throw cause;
   });
   return names.filter((name) => name.endsWith(".sqlite")).map((name) => path.join(directory, name));
+}
+
+/** Ages a marker to the state where startup has stopped retrying and fails closed. */
+async function exhaustResumeBudget(markerPath: string): Promise<void> {
+  const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+  await fs.writeFile(
+    markerPath,
+    `${JSON.stringify({ ...marker, resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS })}\n`,
+  );
 }
 
 describe("migration backups", () => {
@@ -82,6 +97,41 @@ describe("migration backups", () => {
     } finally {
       backup.close();
     }
+  });
+
+  it("sizes backup space from logical pages that are still only in the WAL", async () => {
+    const dbPath = await makeDbPath();
+
+    const sizing = await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`PRAGMA journal_mode = WAL`;
+        yield* sql`PRAGMA wal_autocheckpoint = 0`;
+        yield* sql`CREATE TABLE sizing_probe(value BLOB NOT NULL)`;
+        yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
+        const mainFileBytes = (yield* Effect.promise(() => fs.stat(dbPath))).size;
+
+        yield* sql`INSERT INTO sizing_probe(value) VALUES (randomblob(${4 * 1024 * 1024}))`;
+        const [pages] = yield* sql<{
+          readonly pageCount: number;
+          readonly pageSize: number;
+        }>`
+          SELECT
+            page_count AS "pageCount",
+            page_size AS "pageSize"
+          FROM pragma_page_count(), pragma_page_size()
+        `;
+        const logicalBytes = Number(pages?.pageCount) * Number(pages?.pageSize);
+        const requiredBytes = yield* estimateMigrationBackupRequiredBytes(dbPath);
+        const walBytes = (yield* Effect.promise(() => fs.stat(`${dbPath}-wal`))).size;
+        return { logicalBytes, mainFileBytes, requiredBytes, walBytes };
+      }),
+    );
+
+    expect(sizing.walBytes).toBeGreaterThan(sizing.mainFileBytes);
+    expect(sizing.logicalBytes).toBeGreaterThan(sizing.mainFileBytes);
+    expect(sizing.requiredBytes).toBe(sizing.logicalBytes * 2);
   });
 
   it("fails closed without mutating marked files, then restores only when explicitly requested", async () => {
@@ -136,6 +186,10 @@ describe("migration backups", () => {
     } finally {
       failedDatabaseText.close();
     }
+    // Failing closed is what startup does *after* the bounded self-heal is
+    // spent; that terminal state is what the rest of this test asserts on.
+    await exhaustResumeBudget(markerPath);
+    const blockedMarkerText = await fs.readFile(markerPath, "utf8");
     const databaseStatBeforeStartup = await fs.stat(dbPath);
     const markerStatBeforeStartup = await fs.stat(markerPath);
 
@@ -147,7 +201,7 @@ describe("migration backups", () => {
       ),
     ).rejects.toThrow(MigrationRecoveryRequiredError);
 
-    expect(await fs.readFile(markerPath, "utf8")).toBe(markerText);
+    expect(await fs.readFile(markerPath, "utf8")).toBe(blockedMarkerText);
     expect((await fs.stat(dbPath)).size).toBe(databaseStatBeforeStartup.size);
     expect((await fs.stat(dbPath)).mtimeMs).toBe(databaseStatBeforeStartup.mtimeMs);
     expect((await fs.stat(markerPath)).mtimeMs).toBe(markerStatBeforeStartup.mtimeMs);
@@ -253,7 +307,7 @@ describe("migration backups", () => {
     );
   });
 
-  it("removes only stale migration partials and restore copies", async () => {
+  it("removes every migration partial regardless of age, and only stale restore copies", async () => {
     const dbPath = await makeDbPath();
     const backupDirectory = migrationBackupDirectory(dbPath);
     await fs.mkdir(backupDirectory, { recursive: true });
@@ -286,8 +340,12 @@ describe("migration backups", () => {
       ),
     ).rejects.toThrow("leave recovery artifacts");
 
+    // Age is deliberately not a factor for partials. Only the lock holder can
+    // write one, so a partial observed at startup always outlived its writer —
+    // and an age cutoff here is what let a restart loop accumulate hundreds of
+    // gigabytes of unreclaimable snapshots.
     await expect(fs.stat(stalePartial)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(recentPartial)).resolves.toBeDefined();
+    await expect(fs.stat(recentPartial)).rejects.toMatchObject({ code: "ENOENT" });
 
     const staleRestore = `${dbPath}.00000000-0000-0000-0000-000000000000.restore`;
     const recentRestore = `${dbPath}.11111111-1111-1111-1111-111111111111.restore`;
@@ -299,6 +357,309 @@ describe("migration backups", () => {
 
     await expect(fs.stat(staleRestore)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(recentRestore)).resolves.toBeDefined();
+  });
+
+  it("reclaims stranded partials at startup even while failing closed on recovery", async () => {
+    // Regression: a database needing recovery fails closed before it can ever
+    // reach the backup path, so nothing reclaimed the partials each restart
+    // left behind. A crash-looping desktop shell turned that into hundreds of
+    // gigabytes of unreferenced snapshots in minutes.
+    const dbPath = await makeDbPath();
+    const backupDirectory = migrationBackupDirectory(dbPath);
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* sql`CREATE TABLE wedge_probe(value TEXT NOT NULL)`;
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("wedge the database")));
+      }),
+    ).catch(() => undefined);
+
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
+    // Spend the resume budget so startup is past self-healing and back to
+    // failing closed, which is the state this reclaim has to survive.
+    await exhaustResumeBudget(markerPath);
+
+    const partials = Array.from(
+      { length: 4 },
+      (_unused, index) =>
+        `.${path.basename(dbPath)}.pre-migration-restart-loop-${index}.sqlite.partial`,
+    );
+    await Promise.all(
+      partials.map((name) => fs.writeFile(path.join(backupDirectory, name), "stranded snapshot")),
+    );
+
+    await expect(
+      Effect.runPromise(
+        Layer.build(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))).pipe(
+          Effect.scoped,
+        ),
+      ),
+    ).rejects.toThrow(MigrationRecoveryRequiredError);
+
+    const remaining = await fs.readdir(backupDirectory);
+    expect(remaining.filter((name) => name.endsWith(".partial"))).toEqual([]);
+
+    // Reclaiming must never cost the user their restore point.
+    expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
+    const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as { backupPath: string };
+    await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
+  });
+
+  it("resumes an interrupted migration on the next startup without taking a second backup", async () => {
+    // Regression: 0.6.0 wrote this marker and then refused to open the database
+    // forever, with no in-app path back out. Startup must be able to finish the
+    // migration it was interrupted during.
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* sql`CREATE TABLE resume_probe(value TEXT NOT NULL)`;
+        yield* sql`INSERT INTO resume_probe(value) VALUES ('survives-resume')`;
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
+      }),
+    ).catch(() => undefined);
+
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const backupsBefore = await backupPaths(dbPath);
+    expect(backupsBefore).toHaveLength(1);
+    expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
+
+    await Effect.runPromise(
+      Layer.build(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))).pipe(
+        Effect.scoped,
+      ),
+    );
+
+    // Success is what clears the marker; nothing else is allowed to.
+    await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    // Re-snapshotting here would both point recovery at the broken database and
+    // copy the whole file on every restart.
+    expect(await backupPaths(dbPath)).toEqual(backupsBefore);
+
+    const healed = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(healed.prepare("SELECT value FROM resume_probe").get()).toMatchObject({
+        value: "survives-resume",
+      });
+      expect(
+        healed.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get(),
+      ).toMatchObject({ id: Math.max(...migrationEntries.map(([id]) => id)) });
+    } finally {
+      healed.close();
+    }
+  });
+
+  it("stops resuming and demands an operator restore once the budget is spent", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
+      }),
+    ).catch(() => undefined);
+
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).resolves.toMatchObject(
+      {
+        resumeAttempts: 0,
+      },
+    );
+
+    await exhaustResumeBudget(markerPath);
+
+    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).rejects.toThrow(
+      MigrationRecoveryRequiredError,
+    );
+    // The snapshot the operator restores from must still be intact.
+    const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as { backupPath: string };
+    await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
+  });
+
+  it("charges a resume attempt even when the retry dies mid-migration", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
+      }),
+    ).catch(() => undefined);
+
+    const marker = await Effect.runPromise(inspectPendingMigrationRecovery(dbPath));
+    expect(marker).not.toBeNull();
+    await Effect.runPromise(
+      resumeMarkedMigration(dbPath, marker!, Effect.fail(new Error("died again"))),
+    ).catch(() => undefined);
+
+    // Charged up front: a process killed mid-migration must not get a free retry,
+    // or a deterministic failure loops forever.
+    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).resolves.toMatchObject(
+      {
+        resumeAttempts: 1,
+      },
+    );
+  });
+
+  it("retains the marker when a resumed migration has a duplicate-looking failure", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
+      }),
+    ).catch(() => undefined);
+
+    const marker = await Effect.runPromise(inspectPendingMigrationRecovery(dbPath));
+    expect(marker).not.toBeNull();
+    await expect(
+      Effect.runPromise(
+        resumeMarkedMigration(
+          dbPath,
+          marker!,
+          Effect.fail(new Error("duplicate column name: fingerprint_version")),
+        ),
+      ),
+    ).rejects.toThrow("duplicate column name");
+
+    const chargedMarker = JSON.parse(
+      await fs.readFile(migrationRecoveryMarkerPath(dbPath), "utf8"),
+    ) as {
+      readonly resumeAttempts: number;
+      readonly backupPath: string;
+    };
+    expect(chargedMarker.resumeAttempts).toBe(1);
+    await expect(fs.stat(chargedMarker.backupPath)).resolves.toBeDefined();
+    await expect(Effect.runPromise(requireNoPendingMigrationRecovery(dbPath))).rejects.toThrow(
+      MigrationRecoveryRequiredError,
+    );
+  });
+
+  it("reclaims no files through a symlinked backup-directory root", async () => {
+    if (process.platform === "win32") return;
+
+    const dbPath = await makeDbPath();
+    const otherDbPath = await makeDbPath();
+    const backupDirectory = migrationBackupDirectory(dbPath);
+    const otherBackupDirectory = migrationBackupDirectory(otherDbPath);
+    await fs.mkdir(otherBackupDirectory, { recursive: true });
+    await fs.symlink(otherBackupDirectory, backupDirectory, "dir");
+
+    const foreignPartial = path.join(
+      otherBackupDirectory,
+      `.${path.basename(dbPath)}.pre-migration-foreign.sqlite.partial`,
+    );
+    await fs.writeFile(foreignPartial, "belongs to another database");
+
+    await Effect.runPromise(reclaimOrphanedMigrationBackupPartials(dbPath));
+
+    expect((await fs.lstat(backupDirectory)).isSymbolicLink()).toBe(true);
+    await expect(fs.readFile(foreignPartial, "utf8")).resolves.toBe("belongs to another database");
+  });
+
+  it("reclaims stranded marker partials without touching a live marker", async () => {
+    const dbPath = await makeDbPath();
+    await fs.writeFile(dbPath, "");
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const strandedMarkerPartial = `${markerPath}.${randomUUID()}.partial`;
+    const strandedBackupPartial = path.join(
+      migrationBackupDirectory(dbPath),
+      `.${path.basename(dbPath)}.pre-migration-20260101T000000Z-v0.6.0.${randomUUID()}.partial`,
+    );
+    await fs.mkdir(migrationBackupDirectory(dbPath), { recursive: true });
+    await fs.writeFile(strandedMarkerPartial, "half-written");
+    await fs.writeFile(strandedBackupPartial, "half-written");
+    await fs.writeFile(markerPath, "{}");
+
+    await Effect.runPromise(reclaimOrphanedMigrationBackupPartials(dbPath));
+
+    await expect(fs.stat(strandedMarkerPartial)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(strandedBackupPartial)).rejects.toMatchObject({ code: "ENOENT" });
+    // The marker itself is the recovery authority; the sweep must never take it.
+    await expect(fs.stat(markerPath)).resolves.toBeDefined();
+    await expect(fs.stat(dbPath)).resolves.toBeDefined();
+  });
+
+  it("retains the marker when the first migration has a duplicate-looking failure", async () => {
+    const dbPath = await makeDbPath();
+
+    await expect(
+      runWithDatabase(
+        dbPath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations({ toMigrationInclusive: 52 });
+          yield* sql`CREATE TABLE reapply_probe(value TEXT NOT NULL)`;
+          yield* runWithPreMigrationBackup(
+            dbPath,
+            Effect.fail(new Error("duplicate column name: fingerprint_version")),
+          );
+        }),
+      ),
+    ).rejects.toThrow("duplicate column name");
+
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    await expect(fs.stat(markerPath)).resolves.toBeDefined();
+    const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
+      readonly backupPath: string;
+      readonly resumeAttempts: number;
+    };
+    expect(marker.resumeAttempts).toBe(0);
+    await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
+    await expect(Effect.runPromise(requireNoPendingMigrationRecovery(dbPath))).rejects.toThrow(
+      MigrationRecoveryRequiredError,
+    );
+  });
+
+  it("clears the marker after the real migrator completes an idempotent replay", async () => {
+    const dbPath = await makeDbPath();
+    const latestId = Math.max(...migrationEntries.map(([id]) => id));
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        yield* sql`CREATE TABLE replay_recovery_probe(value TEXT NOT NULL)`;
+        yield* sql`INSERT INTO replay_recovery_probe(value) VALUES ('preserved')`;
+
+        // Reproduce the tracker state left by lineage reconciliation after the
+        // released migration-54 renumbering. The schema already contains this
+        // range, so every replayed migration must be genuinely idempotent.
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 54`;
+        const replayed = yield* runWithPreMigrationBackup(dbPath, runMigrations());
+        expect(replayed[0]?.[0]).toBe(54);
+        expect(replayed.at(-1)?.[0]).toBe(latestId);
+      }),
+    );
+
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await backupPaths(dbPath)).toHaveLength(1);
+
+    const database = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT value FROM replay_recovery_probe").get()).toMatchObject({
+        value: "preserved",
+      });
+      expect(
+        database.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get(),
+      ).toMatchObject({ id: latestId });
+    } finally {
+      database.close();
+    }
   });
 
   it("backs up an imported divergent lineage before reconciliation", async () => {

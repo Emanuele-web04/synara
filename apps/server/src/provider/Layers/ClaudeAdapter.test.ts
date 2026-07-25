@@ -4295,70 +4295,73 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("retains command discovery ownership when query construction throws after spawn", () => {
-    let spawnCalls = 0;
-    let createCalls = 0;
-    let teardownCalls = 0;
-    const ownedProcess = {
-      pid: 73_315,
-      exitCode: null,
-      signalCode: null,
-      once: () => undefined,
-      removeListener: () => undefined,
-    } as unknown as ClaudeOwnedProcess;
-    const layer = makeClaudeAdapterLive({
-      spawnClaudeCodeProcess: () => {
-        spawnCalls += 1;
-        return ownedProcess;
-      },
-      teardownProcessTree: async () => {
-        teardownCalls += 1;
-        if (teardownCalls < 3) {
-          throw new Error("rootExited=false; discovery construction process remains");
+  it.effect(
+    "retains command discovery ownership when query construction throws after spawn",
+    () => {
+      let spawnCalls = 0;
+      let createCalls = 0;
+      let teardownCalls = 0;
+      const ownedProcess = {
+        pid: 73_315,
+        exitCode: null,
+        signalCode: null,
+        once: () => undefined,
+        removeListener: () => undefined,
+      } as unknown as ClaudeOwnedProcess;
+      const layer = makeClaudeAdapterLive({
+        spawnClaudeCodeProcess: () => {
+          spawnCalls += 1;
+          return ownedProcess;
+        },
+        teardownProcessTree: async () => {
+          teardownCalls += 1;
+          if (teardownCalls < 3) {
+            throw new Error("rootExited=false; discovery construction process remains");
+          }
+          return { escalated: true, signalErrors: [] };
+        },
+        createQuery: (input) => {
+          createCalls += 1;
+          input.options.spawnClaudeCodeProcess?.({
+            command: "claude",
+            args: [],
+            env: {},
+            signal: new AbortController().signal,
+          });
+          throw new Error("simulated discovery construction failure after spawn");
+        },
+      }).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const listCommands = adapter.listCommands;
+        if (!listCommands) {
+          assert.fail("Expected Claude adapter to support command discovery.");
         }
-        return { escalated: true, signalErrors: [] };
-      },
-      createQuery: (input) => {
-        createCalls += 1;
-        input.options.spawnClaudeCodeProcess?.({
-          command: "claude",
-          args: [],
-          env: {},
-          signal: new AbortController().signal,
-        });
-        throw new Error("simulated discovery construction failure after spawn");
-      },
-    }).pipe(
-      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
-      Layer.provideMerge(NodeServices.layer),
-    );
+        const input = {
+          provider: "claudeAgent" as const,
+          cwd: "/tmp/project",
+          forceReload: true,
+        };
 
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const listCommands = adapter.listCommands;
-      if (!listCommands) {
-        assert.fail("Expected Claude adapter to support command discovery.");
-      }
-      const input = {
-        provider: "claudeAgent" as const,
-        cwd: "/tmp/project",
-        forceReload: true,
-      };
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(listCommands(input))));
+        assert.equal(createCalls, 1);
+        assert.equal(spawnCalls, 1);
+        assert.equal(teardownCalls, 1);
 
-      assert.isTrue(Exit.isFailure(yield* Effect.exit(listCommands(input))));
-      assert.equal(createCalls, 1);
-      assert.equal(spawnCalls, 1);
-      assert.equal(teardownCalls, 1);
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(listCommands(input))));
+        assert.equal(createCalls, 1);
+        assert.equal(spawnCalls, 1);
+        assert.equal(teardownCalls, 2);
 
-      assert.isTrue(Exit.isFailure(yield* Effect.exit(listCommands(input))));
-      assert.equal(createCalls, 1);
-      assert.equal(spawnCalls, 1);
-      assert.equal(teardownCalls, 2);
-
-      yield* adapter.stopAll();
-      assert.equal(teardownCalls, 3);
-    }).pipe(Effect.provide(layer));
-  });
+        yield* adapter.stopAll();
+        assert.equal(teardownCalls, 3);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {
     // The SDK consumes user messages via `for await (... of prompt)`.

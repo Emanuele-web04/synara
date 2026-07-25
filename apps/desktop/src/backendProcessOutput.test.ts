@@ -24,9 +24,7 @@ describe("captureBackendProcessOutput", () => {
     stderr.write("DatabaseLifecycleLockedError:");
 
     expect(Buffer.concat(forwardedStdout).toString("utf8")).toBe("Server listening");
-    expect(Buffer.concat(forwardedStderr).toString("utf8")).toBe(
-      "DatabaseLifecycleLockedError:",
-    );
+    expect(Buffer.concat(forwardedStderr).toString("utf8")).toBe("DatabaseLifecycleLockedError:");
     expect(Buffer.concat(detected).toString("utf8")).toBe(
       "Server listeningDatabaseLifecycleLockedError:",
     );

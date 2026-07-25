@@ -1,12 +1,21 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { tableExists } from "./schemaHelpers.ts";
+
 /** Consolidate approvals and user input under one kind-scoped settlement authority. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  // The consolidation consumes projection_pending_approvals, so its absence is
+  // the post-state marker. Replaying the rebuild would rename a freshly created
+  // staging table over the live projection_pending_interactions table and lose
+  // every user-input interaction recorded since the consolidation.
+  if (!(yield* tableExists(sql, "projection_pending_approvals"))) {
+    return;
+  }
   yield* sql`DROP TABLE IF EXISTS projection_pending_interactions_v62`;
   yield* sql`
-    CREATE TABLE projection_pending_interactions_v62 (
+    CREATE TABLE IF NOT EXISTS projection_pending_interactions_v62 (
       interaction_kind TEXT NOT NULL,
       request_id TEXT NOT NULL,
       thread_id TEXT NOT NULL,
@@ -55,11 +64,11 @@ export default Effect.gen(function* () {
     RENAME TO projection_pending_interactions
   `;
   yield* sql`
-    CREATE INDEX idx_projection_pending_interactions_thread_kind_status
+    CREATE INDEX IF NOT EXISTS idx_projection_pending_interactions_thread_kind_status
     ON projection_pending_interactions(thread_id, interaction_kind, status)
   `;
   yield* sql`
-    CREATE INDEX idx_projection_pending_interactions_request_id
+    CREATE INDEX IF NOT EXISTS idx_projection_pending_interactions_request_id
     ON projection_pending_interactions(request_id)
   `;
   yield* sql`

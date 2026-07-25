@@ -1279,6 +1279,7 @@ export function useAppSettings() {
 
   return {
     settings,
+    serverSettings: serverSettingsQuery.data,
     updateSettings,
     resetSettings,
     defaults,

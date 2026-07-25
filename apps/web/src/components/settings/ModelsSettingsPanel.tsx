@@ -46,6 +46,8 @@ type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
 
+const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "kilo", "opencode"] as const;
+
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
   readonly value: string;
@@ -119,6 +121,7 @@ export function ModelsSettingsPanel({
     discoveryEnabled: active,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: gitWritingModelHintByProvider,
+    prefetchProviders: GIT_WRITING_DISCOVERY_PROVIDERS,
   });
   const gitTextGenerationModelOptions = useMemo(
     () =>

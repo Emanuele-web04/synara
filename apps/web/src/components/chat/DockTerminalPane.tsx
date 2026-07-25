@@ -16,10 +16,7 @@ import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceControll
 import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import { useStore } from "~/store";
-import {
-  createProjectSelector,
-  createThreadWorkspaceMetadataSelector,
-} from "~/storeSelectors";
+import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
 import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
 
 export function DockTerminalPane(props: {
@@ -31,10 +28,7 @@ export function DockTerminalPane(props: {
 }) {
   const scopeId = dockTerminalThreadId(props.hostThreadId);
   const threadWorkspace = useStore(
-    useMemo(
-      () => createThreadWorkspaceMetadataSelector(props.hostThreadId),
-      [props.hostThreadId],
-    ),
+    useMemo(() => createThreadWorkspaceMetadataSelector(props.hostThreadId), [props.hostThreadId]),
   );
   const project = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),

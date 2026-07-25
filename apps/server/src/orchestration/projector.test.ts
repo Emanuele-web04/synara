@@ -167,6 +167,7 @@ describe("orchestration projector", () => {
         envMode: "local",
         branch: null,
         worktreePath: null,
+        workingDirectory: null,
         associatedWorktreePath: null,
         associatedWorktreeBranch: null,
         associatedWorktreeRef: null,

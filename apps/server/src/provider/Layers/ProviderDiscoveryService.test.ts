@@ -12,6 +12,7 @@ import * as path from "node:path";
 import type {
   ProviderComposerCapabilities,
   ProviderKind,
+  ProviderListModelsResult,
   ProviderListSkillsResult,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -98,6 +99,31 @@ const runListSkills = (input: {
   }).pipe(Effect.provide(testLayer));
   return Effect.runPromise(
     program as unknown as Effect.Effect<ProviderListSkillsResult, never, never>,
+  );
+};
+
+const runListModels = (input: {
+  adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>;
+  enabled: boolean;
+}) => {
+  const baseLayer = Layer.mergeAll(
+    makeConfigLayer(),
+    ServerSettingsService.layerTest({
+      providers: {
+        cursor: {
+          enabled: input.enabled,
+        },
+      },
+    }),
+    makeRegistryLayer(input.adapter),
+  ).pipe(Layer.provideMerge(NodeServices.layer));
+  const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+  const program = Effect.gen(function* () {
+    const discovery = yield* ProviderDiscoveryService;
+    return yield* discovery.listModels({ provider: "cursor" });
+  }).pipe(Effect.provide(testLayer));
+  return Effect.runPromise(
+    program as unknown as Effect.Effect<ProviderListModelsResult, never, never>,
   );
 };
 
@@ -199,5 +225,51 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 
     expect(capabilities.supportsSkillDiscovery).toBe(true);
     expect(capabilities.supportsSkillMentions).toBe(true);
+  });
+});
+
+describe("ProviderDiscoveryService.listModels", () => {
+  it("does not invoke the adapter for a disabled provider", async () => {
+    let adapterCalls = 0;
+    const result = await runListModels({
+      adapter: {
+        listModels: () => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [{ slug: "cursor-model", name: "Cursor Model" }],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      },
+      enabled: false,
+    });
+
+    expect(result).toEqual({
+      models: [],
+      source: "disabled",
+      cached: false,
+    });
+    expect(adapterCalls).toBe(0);
+  });
+
+  it("dispatches model discovery for an enabled provider", async () => {
+    let adapterCalls = 0;
+    const result = await runListModels({
+      adapter: {
+        listModels: () => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [{ slug: "cursor-model", name: "Cursor Model" }],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      },
+      enabled: true,
+    });
+
+    expect(result.models).toEqual([{ slug: "cursor-model", name: "Cursor Model" }]);
+    expect(adapterCalls).toBe(1);
   });
 });

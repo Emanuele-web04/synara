@@ -1605,7 +1605,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 failedCommandDiscoveryProcessOwners.delete(owner);
               }),
             ),
-        ),
+          ),
         { discard: true },
       );
     const teardownCommandDiscoveryProcess = (owner: ClaudeProcessOwner) =>

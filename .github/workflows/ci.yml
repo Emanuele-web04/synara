@@ -126,6 +126,28 @@ jobs:
       - name: Test Windows desktop backend shutdown
         run: bun run --cwd apps/desktop test src/backendShutdown.windows.integration.test.ts
 
+  # Released (id, name) migration pairs are recorded in every user's
+  # effect_sql_migrations table, so renumbering or renaming one corrupts existing
+  # installs. This job needs the release tags, hence the unshallow checkout; the
+  # guard itself is dependency-free and skips with a warning if tags are missing.
+  migration_lineage:
+    name: Migration Lineage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Verify released migration lineage
+        run: node scripts/check-migration-lineage.ts
+
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04

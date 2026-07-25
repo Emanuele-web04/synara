@@ -1,12 +1,18 @@
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { migrationEntries, runMigrations } from "./Migrations.ts";
+import {
+  MIGRATION_LINEAGE_ALIASES,
+  migrationEntries,
+  planMigrationLineageAliasRepairs,
+  runMigrations,
+} from "./Migrations.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
+import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -281,10 +287,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [83, "AutomationHeartbeatEligibility"],
         [84, "AutomationNotificationPolicy"],
         [85, "AutomationSettings"],
+        [86, "NormalizeStudioThreadWorkspaces"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-32), [
+      assert.deepStrictEqual(tracker.slice(-33), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -317,6 +324,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 83, name: "AutomationHeartbeatEligibility" },
         { migration_id: 84, name: "AutomationNotificationPolicy" },
         { migration_id: 85, name: "AutomationSettings" },
+        { migration_id: 86, name: "NormalizeStudioThreadWorkspaces" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -394,6 +402,7 @@ agentGatewayRetentionLegacyLayer(
           [83, "AutomationHeartbeatEligibility"],
           [84, "AutomationNotificationPolicy"],
           [85, "AutomationSettings"],
+          [86, "NormalizeStudioThreadWorkspaces"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -474,11 +483,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [83, "AutomationHeartbeatEligibility"],
         [84, "AutomationNotificationPolicy"],
         [85, "AutomationSettings"],
+        [86, "NormalizeStudioThreadWorkspaces"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-16).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-17).map((row) => [row.migration_id, row.name]),
         [
           [70, "AgentGatewayOperations"],
           [71, "ProjectionThreadsGatewayProvenance"],
@@ -496,6 +506,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [83, "AutomationHeartbeatEligibility"],
           [84, "AutomationNotificationPolicy"],
           [85, "AutomationSettings"],
+          [86, "NormalizeStudioThreadWorkspaces"],
         ],
       );
 
@@ -571,11 +582,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [83, "AutomationHeartbeatEligibility"],
         [84, "AutomationNotificationPolicy"],
         [85, "AutomationSettings"],
+        [86, "NormalizeStudioThreadWorkspaces"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-12).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-13).map((row) => [row.migration_id, row.name]),
         [
           [74, "ExternalMcpIntegrations"],
           [75, "ExternalMcpActiveCapacity"],
@@ -589,6 +601,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [83, "AutomationHeartbeatEligibility"],
           [84, "AutomationNotificationPolicy"],
           [85, "AutomationSettings"],
+          [86, "NormalizeStudioThreadWorkspaces"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -744,6 +757,155 @@ managedAttachmentsIdempotencyLayer("managed attachment migration idempotency", (
       yield* runMigrations();
       const executed = yield* runMigrations();
       assert.lengthOf(executed, 0);
+    }),
+  );
+});
+
+const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
+// `migrationEntries` is `as const`, so an inferred Map keys on the literal id union and rejects
+// the plain `number` ids these helpers are looked up with. Widen the key type once, here.
+const canonicalNamesById = new Map<number, string>(
+  migrationEntries.map(([id, name]) => [id, name] as const),
+);
+
+const canonicalTrackerThrough = (throughId: number) =>
+  new Map<number, string>(
+    migrationEntries.filter(([id]) => id <= throughId).map(([id, name]) => [id, name] as const),
+  );
+
+const trackerCreatedAtById = (sql: SqlClient.SqlClient) =>
+  sql<{ readonly migration_id: number; readonly created_at: string }>`
+    SELECT migration_id, created_at FROM effect_sql_migrations ORDER BY migration_id ASC
+  `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.migration_id, row.created_at]))));
+
+describe("migration lineage aliases", () => {
+  it("keeps every declared alias consistent with the current lineage", () => {
+    for (const alias of MIGRATION_LINEAGE_ALIASES) {
+      // The migration must still live at `currentId` under the historical name,
+      // otherwise the alias silently stops repairing the databases it names.
+      assert.strictEqual(
+        canonicalNamesById.get(alias.currentId),
+        alias.historicalName,
+        `alias for ${alias.historicalName} no longer resolves to migration ${alias.currentId}`,
+      );
+      // The historical slot must still be a real divergence, and must still be
+      // occupied — the repair renames the row to whatever lives there now.
+      assert.isDefined(canonicalNamesById.get(alias.historicalId));
+      assert.notStrictEqual(canonicalNamesById.get(alias.historicalId), alias.historicalName);
+    }
+  });
+
+  it("repairs a released v0.5.5 tracker in place", () => {
+    const recorded = canonicalTrackerThrough(53);
+    recorded.set(54, "ProjectPullRequestPins");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "rename", migrationId: 54, name: "DurableProviderCommandDelivery" },
+    ]);
+  });
+
+  it("declines when the tracker also diverges outside the alias", () => {
+    const recorded = canonicalTrackerThrough(53);
+    recorded.set(54, "ProjectPullRequestPins");
+    // Development builds between v0.5.5 and v0.6.0 also claimed migration 55.
+    recorded.set(55, "AgentGatewayOperations");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), []);
+  });
+
+  it("declines for a healthy tracker and for a foreign lineage", () => {
+    assert.deepStrictEqual(
+      planMigrationLineageAliasRepairs(canonicalTrackerThrough(latestMigrationId)),
+      [],
+    );
+
+    const foreign = canonicalTrackerThrough(16);
+    for (let id = 17; id <= 60; id++) foreign.set(id, `ForeignMigration${id}`);
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(foreign), []);
+  });
+});
+
+const releasedV055Layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+releasedV055Layer("released v0.5.5 database", (it) => {
+  it.effect("reconciles the renumbered pins migration without replaying the lineage", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      // Reproduce a database written by v0.5.5: canonical rows 1-53, then the
+      // pins migration recorded under the ID that release shipped it at.
+      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* ProjectPullRequestPinsMigration;
+      yield* sql`
+        INSERT INTO project_pull_request_pins (project_id, repository_key, pull_request_number)
+        VALUES ('project-v055', 'owner/repo', 7)
+      `;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (54, 'ProjectPullRequestPins')
+      `;
+
+      const createdAtBefore = yield* trackerCreatedAtById(sql);
+      const executed = yield* runMigrations();
+
+      // Migration 54 is never replayed: its tracker row was renamed in place.
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        migrationEntries.map(([id]) => id).filter((id) => id >= 55),
+      );
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+
+      // Every pre-existing row survived as a row — a metadata fix-up, not a
+      // delete-and-replay. `created_at` would change if rows were re-inserted.
+      const createdAtAfter = yield* trackerCreatedAtById(sql);
+      for (const [id, createdAt] of createdAtBefore) {
+        assert.strictEqual(createdAtAfter.get(id), createdAt, `migration ${id} row was recreated`);
+      }
+
+      // The pins migration re-runs at 69 and must be a no-op over real data.
+      const pins = yield* sql<{ readonly projectId: string; readonly number: number }>`
+        SELECT project_id AS "projectId", pull_request_number AS "number"
+        FROM project_pull_request_pins
+      `;
+      assert.deepStrictEqual(pins, [{ projectId: "project-v055", number: 7 }]);
+    }),
+  );
+});
+
+const divergedBeyondAliasLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+divergedBeyondAliasLayer("tracker that diverges beyond a known alias", (it) => {
+  it.effect("still truncates and replays from the first divergence", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      // A development build between v0.5.5 and v0.6.0: migration 54 matches the
+      // alias but 55 was claimed by an unrelated migration, so this is not a
+      // v0.5.5 database and must keep taking the existing replay path.
+      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* ProjectPullRequestPinsMigration;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (54, 'ProjectPullRequestPins'), (55, 'AgentGatewayOperations')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        migrationEntries.map(([id]) => id).filter((id) => id >= 54),
+      );
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
     }),
   );
 });

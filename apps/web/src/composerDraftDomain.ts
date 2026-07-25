@@ -203,7 +203,10 @@ interface DraftThreadMutationOptions {
   workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   createdAt?: string;
-  envMode?: DraftThreadEnvMode;
+  // Explicitly `| undefined`: callers forward a `ThreadWorkspacePatch`, whose `envMode` is
+  // optional in the same way, and under `exactOptionalPropertyTypes` a bare `?:` would reject
+  // that spread even though the value sets are identical ("local" | "worktree").
+  envMode?: DraftThreadEnvMode | undefined;
   runtimeMode?: RuntimeMode;
   interactionMode?: ProviderInteractionMode;
   entryPoint?: ThreadPrimarySurface;

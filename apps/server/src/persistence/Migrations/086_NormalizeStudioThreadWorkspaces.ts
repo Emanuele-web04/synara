@@ -4,14 +4,20 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { columnExists } from "./schemaHelpers.ts";
+
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`
-    ALTER TABLE projection_threads
-    ADD COLUMN working_directory TEXT
-  `;
+  if (!(yield* columnExists(sql, "projection_threads", "working_directory"))) {
+    yield* sql`
+      ALTER TABLE projection_threads
+      ADD COLUMN working_directory TEXT
+    `;
+  }
 
+  // Naturally re-runnable: a normalized Studio thread no longer matches the
+  // predicate, and COALESCE keeps an already-adopted working directory.
   yield* sql`
     UPDATE projection_threads
     SET working_directory = COALESCE(working_directory, worktree_path),
