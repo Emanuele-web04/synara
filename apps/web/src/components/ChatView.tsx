@@ -498,7 +498,6 @@ import {
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
-  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
@@ -10872,17 +10871,14 @@ export default function ChatView({
                                 <button
                                   type="button"
                                   data-testid="empty-landing-heading-project-trigger"
-                                  className={cn(
-                                    COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-                                    "cursor-pointer rounded-sm underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none",
-                                  )}
+                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
                                 >
                                   {activeProjectDisplayName ?? "this folder"}
                                 </button>
                               }
                             />
                           ) : (
-                            <span className={COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}>
+                            <span className="text-inherit">
                               {activeProjectDisplayName ?? "this folder"}
                             </span>
                           )}
