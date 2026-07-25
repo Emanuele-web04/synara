@@ -16,6 +16,7 @@ import { secretName } from "@synara/shared/providerAccounts/accountIds";
 import {
   accountDir,
   accountJsonPath,
+  accountSecretPath,
   accountsDir,
   activePointerDir,
   activePointerPath,
@@ -23,6 +24,7 @@ import {
   launcherDiagnosticsDir,
   pendingDir,
   pendingPath,
+  secretsDir,
   versionFilePath,
 } from "@synara/shared/providerAccounts/accountPaths";
 import { Data, Effect, Schema } from "effect";
@@ -30,7 +32,6 @@ import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../atomicWrite";
 import { ensurePrivateDirectorySync, PRIVATE_DIRECTORY_MODE } from "../privatePathPermissions";
-import type { ServerSecretStoreShape } from "../auth/Services/ServerSecretStore";
 
 export const ACCOUNT_ROOT_SCHEMA_VERSION = "1";
 
@@ -66,13 +67,12 @@ async function readFileIfExists(filePath: string): Promise<string | null> {
 
 export interface AccountStorageInput {
   readonly root: string;
-  readonly secretStore: ServerSecretStoreShape;
 }
 
 export type AccountStorageShape = ReturnType<typeof makeAccountStorage>;
 
 export function makeAccountStorage(input: AccountStorageInput) {
-  const { root, secretStore } = input;
+  const { root } = input;
   // Serializes ordinal allocation and pointer writes within this process; the
   // filesystem layout keeps cross-process writers safe via atomic renames.
   const providerLocks = new Map<SupportedAccountProvider, Semaphore.Semaphore>();
@@ -101,6 +101,7 @@ export function makeAccountStorage(input: AccountStorageInput) {
           path.join(root, "accounts"),
           path.join(root, "pending"),
           path.join(root, "locks"),
+          secretsDir(root),
           appLeasesDir(root),
           launcherDiagnosticsDir(root),
         ]) {
@@ -127,16 +128,28 @@ export function makeAccountStorage(input: AccountStorageInput) {
     async () => (await readFileIfExists(versionFilePath(root)))?.trim() ?? null,
   );
 
+  // A missing pointer means the native account zero; an existing but invalid
+  // pointer fails closed so a corrupted file can never silently route work to
+  // the native credentials (review finding 6).
   const readActiveOrdinal = (provider: SupportedAccountProvider) =>
     tryFs(
       "accountStorage.readActiveOrdinal",
       `Failed to read active pointer for '${provider}'.`,
-      async () => {
-        const contents = await readFileIfExists(activePointerPath(root, provider));
-        if (contents === null) return null;
-        const ordinal = Number(contents.trim());
-        return Number.isSafeInteger(ordinal) && ordinal >= 0 ? ordinal : null;
-      },
+      () => readFileIfExists(activePointerPath(root, provider)),
+    ).pipe(
+      Effect.flatMap((contents) => {
+        if (contents === null) return Effect.succeed(null);
+        const trimmed = contents.trim();
+        const ordinal = /^(0|[1-9][0-9]*)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+        return Number.isSafeInteger(ordinal) && ordinal >= 0
+          ? Effect.succeed(ordinal)
+          : Effect.fail(
+              new ProviderAccountStorageError({
+                operation: "accountStorage.readActiveOrdinal",
+                detail: `Active pointer for '${provider}' is corrupted. Repair it from Synara → Settings → Accounts, or delete ${activePointerPath(root, provider)} to reset to the native account.`,
+              }),
+            );
+      }),
     );
 
   const writeActiveOrdinal = (provider: SupportedAccountProvider, ordinal: number) =>
@@ -240,6 +253,45 @@ export function makeAccountStorage(input: AccountStorageInput) {
       Effect.map((ordinals) => (ordinals.length === 0 ? 1 : Math.max(...ordinals) + 1)),
     );
 
+  // Reserves the next ordinal by atomically creating its account directory
+  // (mkdir without recursive fails with EEXIST if another writer won the
+  // race). Cross-process safe: the directory itself is the reservation.
+  const reserveOrdinalDirectory = (provider: SupportedAccountProvider) =>
+    ensureRoot.pipe(
+      Effect.andThen(
+        tryFs(
+          "accountStorage.reserveOrdinalDirectory",
+          `Failed to reserve an account directory for '${provider}'.`,
+          async () => {
+            ensurePrivateDirectorySync(accountsDir(root, provider));
+            for (let attempt = 0; attempt < 50; attempt += 1) {
+              const entries = await fs.readdir(accountsDir(root, provider));
+              const ordinals = entries
+                .filter((name) => /^[1-9][0-9]*$/.test(name))
+                .map((name) => Number(name));
+              const candidate = ordinals.length === 0 ? 1 : Math.max(...ordinals) + 1;
+              try {
+                await fs.mkdir(accountDir(root, provider, candidate), {
+                  mode: PRIVATE_DIRECTORY_MODE,
+                });
+                return candidate;
+              } catch (cause) {
+                if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
+              }
+            }
+            throw new Error(`Could not reserve an ordinal for '${provider}' after 50 attempts.`);
+          },
+        ),
+      ),
+    );
+
+  const releaseOrdinalDirectory = (provider: SupportedAccountProvider, ordinal: number) =>
+    tryFs(
+      "accountStorage.releaseOrdinalDirectory",
+      `Failed to release reserved account directory for '${provider}' ordinal ${ordinal}.`,
+      () => fs.rm(accountDir(root, provider, ordinal), { recursive: true, force: true }),
+    );
+
   const createPendingDirectory = (provider: SupportedAccountProvider, operationId: string) =>
     ensureRoot.pipe(
       Effect.andThen(
@@ -256,22 +308,25 @@ export function makeAccountStorage(input: AccountStorageInput) {
     );
 
   // Allocates the ordinal only at finalization so failed or cancelled logins
-  // never consume account numbers (plan section 10).
+  // never consume account numbers (plan section 10). The ordinal directory is
+  // reserved atomically, then the pending contents move into it.
   const finalizePendingDirectory = (provider: SupportedAccountProvider, operationId: string) =>
     withProviderLock(
       provider,
-      nextOrdinal(provider).pipe(
+      reserveOrdinalDirectory(provider).pipe(
         Effect.flatMap((ordinal) =>
           tryFs(
             "accountStorage.finalizePendingDirectory",
             `Failed to finalize pending directory for '${provider}' operation '${operationId}'.`,
             async () => {
               const target = accountDir(root, provider, ordinal);
-              ensurePrivateDirectorySync(path.dirname(target));
+              await fs.rm(target, { recursive: true, force: true });
               await fs.rename(pendingPath(root, provider, operationId), target);
               await fs.chmod(target, PRIVATE_DIRECTORY_MODE).catch(() => undefined);
               return ordinal;
             },
+          ).pipe(
+            Effect.tapError(() => releaseOrdinalDirectory(provider, ordinal).pipe(Effect.ignore)),
           ),
         ),
       ),
@@ -291,43 +346,67 @@ export function makeAccountStorage(input: AccountStorageInput) {
       () => fs.rm(pendingDir(root, provider), { recursive: true, force: true }),
     );
 
-  const secretStoreError = (operation: string, name: string) =>
-    storageError(operation, `Secret store operation failed for '${name}'.`);
+  const listPendingOperations = (provider: SupportedAccountProvider) =>
+    tryFs(
+      "accountStorage.listPendingOperations",
+      `Failed to list pending directories for '${provider}'.`,
+      async () => {
+        try {
+          const entries = await fs.readdir(pendingDir(root, provider), { withFileTypes: true });
+          return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+        } catch (cause) {
+          if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
+          throw cause;
+        }
+      },
+    );
 
+  // Secrets live in the account root (0600 files) so the standalone launcher
+  // can resolve managed API keys without a running server.
   const readSecret = (
     provider: SupportedAccountProvider,
     ordinal: number,
     surface: AccountSurface,
-  ) => {
-    const name = secretName(provider, ordinal, surface);
-    return secretStore.get(name).pipe(
-      Effect.map((bytes) => (bytes === null ? null : new TextDecoder().decode(bytes))),
-      Effect.mapError(secretStoreError("accountStorage.readSecret", name)),
+  ) =>
+    tryFs(
+      "accountStorage.readSecret",
+      `Failed to read secret '${secretName(provider, ordinal, surface)}'.`,
+      () => readFileIfExists(accountSecretPath(root, provider, ordinal, surface)),
     );
-  };
 
   const writeSecret = (
     provider: SupportedAccountProvider,
     ordinal: number,
     surface: AccountSurface,
     value: string,
-  ) => {
-    const name = secretName(provider, ordinal, surface);
-    return secretStore
-      .set(name, new TextEncoder().encode(value))
-      .pipe(Effect.mapError(secretStoreError("accountStorage.writeSecret", name)));
-  };
+  ) =>
+    ensureRoot.pipe(
+      Effect.andThen(
+        writeFileStringAtomically({
+          filePath: accountSecretPath(root, provider, ordinal, surface),
+          contents: value,
+          mode: 0o600,
+        }).pipe(
+          Effect.mapError(
+            storageError(
+              "accountStorage.writeSecret",
+              `Failed to write secret '${secretName(provider, ordinal, surface)}'.`,
+            ),
+          ),
+        ),
+      ),
+    );
 
   const deleteSecret = (
     provider: SupportedAccountProvider,
     ordinal: number,
     surface: AccountSurface,
-  ) => {
-    const name = secretName(provider, ordinal, surface);
-    return secretStore
-      .remove(name)
-      .pipe(Effect.mapError(secretStoreError("accountStorage.deleteSecret", name)));
-  };
+  ) =>
+    tryFs(
+      "accountStorage.deleteSecret",
+      `Failed to delete secret '${secretName(provider, ordinal, surface)}'.`,
+      () => fs.rm(accountSecretPath(root, provider, ordinal, surface), { force: true }),
+    );
 
   const appLeasePath = (provider: SupportedAccountProvider, ordinal: number) =>
     path.join(appLeasesDir(root), `${provider}-${ordinal}.json`);
@@ -410,10 +489,13 @@ export function makeAccountStorage(input: AccountStorageInput) {
     listOrdinals,
     listAccounts,
     nextOrdinal,
+    reserveOrdinalDirectory,
+    releaseOrdinalDirectory,
     createPendingDirectory,
     finalizePendingDirectory,
     cancelPendingDirectory,
     cleanupPendingDirectories,
+    listPendingOperations,
     readSecret,
     writeSecret,
     deleteSecret,

@@ -2,38 +2,20 @@
 // Purpose: Focused tests for filesystem account storage.
 // Layer: Server unit tests
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ProviderAccountRecord } from "@synara/contracts";
+import { accountSecretPath, activePointerPath } from "@synara/shared/providerAccounts/accountPaths";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ServerSecretStoreShape } from "../auth/Services/ServerSecretStore";
 import {
   ACCOUNT_ROOT_SCHEMA_VERSION,
   makeAccountStorage,
   type AccountStorageShape,
 } from "./accountStorage";
-
-function makeInMemorySecretStore(): ServerSecretStoreShape & { readonly names: () => string[] } {
-  const secrets = new Map<string, Uint8Array>();
-  return {
-    get: (name) => Effect.succeed(secrets.get(name) ?? null),
-    set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
-    getOrCreateRandom: (name) =>
-      Effect.sync(() => {
-        const existing = secrets.get(name);
-        if (existing) return existing;
-        const generated = new Uint8Array([1, 2, 3]);
-        secrets.set(name, generated);
-        return generated;
-      }),
-    remove: (name) => Effect.sync(() => void secrets.delete(name)),
-    names: () => [...secrets.keys()],
-  };
-}
 
 const record = (ordinal: number): ProviderAccountRecord => ({
   schemaVersion: 1,
@@ -46,12 +28,10 @@ const record = (ordinal: number): ProviderAccountRecord => ({
 describe("accountStorage", () => {
   let root: string;
   let storage: AccountStorageShape;
-  let secretStore: ReturnType<typeof makeInMemorySecretStore>;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "synara-accounts-"));
-    secretStore = makeInMemorySecretStore();
-    storage = makeAccountStorage({ root, secretStore });
+    storage = makeAccountStorage({ root });
   });
 
   afterEach(() => {
@@ -75,6 +55,13 @@ describe("accountStorage", () => {
     await expect(Effect.runPromise(storage.readActiveOrdinal("grok"))).resolves.toBeNull();
   });
 
+  it("fails closed on a corrupted active pointer", async () => {
+    await Effect.runPromise(storage.ensureRoot);
+    writeFileSync(activePointerPath(root, "codex"), "garbage\n");
+    const failure = await Effect.runPromise(Effect.flip(storage.readActiveOrdinal("codex")));
+    expect(failure.detail).toMatch(/corrupted/);
+  });
+
   it("allocates ordinals from scanned account directories", async () => {
     await Effect.runPromise(storage.ensureRoot);
     await expect(Effect.runPromise(storage.nextOrdinal("codex"))).resolves.toBe(1);
@@ -82,6 +69,16 @@ describe("accountStorage", () => {
     await Effect.runPromise(storage.writeAccount(record(3)));
     await expect(Effect.runPromise(storage.listOrdinals("codex"))).resolves.toEqual([1, 3]);
     await expect(Effect.runPromise(storage.nextOrdinal("codex"))).resolves.toBe(4);
+  });
+
+  it("reserves distinct ordinals under concurrency", async () => {
+    await Effect.runPromise(storage.ensureRoot);
+    const ordinals = await Promise.all([
+      Effect.runPromise(storage.reserveOrdinalDirectory("codex")),
+      Effect.runPromise(storage.reserveOrdinalDirectory("codex")),
+      Effect.runPromise(storage.reserveOrdinalDirectory("codex")),
+    ]);
+    expect([...ordinals].sort()).toEqual([1, 2, 3]);
   });
 
   it("finalizes pending directories into allocated ordinals", async () => {
@@ -99,9 +96,21 @@ describe("accountStorage", () => {
     await expect(Effect.runPromise(storage.nextOrdinal("codex"))).resolves.toBe(1);
   });
 
-  it("stores account secrets under the account secret name", async () => {
+  it("lists and cleans orphaned pending directories", async () => {
+    await Effect.runPromise(storage.ensureRoot);
+    await Effect.runPromise(storage.createPendingDirectory("codex", "op-3"));
+    await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([
+      "op-3",
+    ]);
+    await Effect.runPromise(storage.cleanupPendingDirectories("codex"));
+    await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+  });
+
+  it("stores account secrets as private files in the account root", async () => {
     await Effect.runPromise(storage.writeSecret("codex", 2, "agent", "sk-test"));
-    expect(secretStore.names()).toEqual(["provider-account-codex-2-agent"]);
+    const secretFile = accountSecretPath(root, "codex", 2, "agent");
+    expect(existsSync(secretFile)).toBe(true);
+    expect(readFileSync(secretFile, "utf8")).toBe("sk-test");
     await expect(Effect.runPromise(storage.readSecret("codex", 2, "agent"))).resolves.toBe(
       "sk-test",
     );
