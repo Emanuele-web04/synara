@@ -19,8 +19,10 @@ import type {
   ProviderAccountsSnapshot,
   ProviderAccountsThreadBinding,
   ProviderAccountsUpdateCliIntegrationInput,
+  ProviderAppLaunchPlan,
   ResolveAccountLaunchInput,
   ResolvedAccountLaunch,
+  SupportedAccountProvider,
 } from "@synara/contracts";
 import { Data, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -71,6 +73,15 @@ export interface ProviderAccountsShape {
   readonly resolveLaunch: (
     input: ResolveAccountLaunchInput,
   ) => Effect.Effect<ResolvedAccountLaunch, ProviderAccountsError>;
+
+  /**
+   * Server-private desktop app launch plan: the plan environment can contain
+   * credentials and must never be sent over public RPC surfaces.
+   */
+  readonly planAppLaunch: (input: {
+    readonly provider: SupportedAccountProvider;
+    readonly explicitOrdinal?: number;
+  }) => Effect.Effect<ProviderAppLaunchPlan, ProviderAccountsError>;
 }
 
 export class ProviderAccounts extends ServiceMap.Service<ProviderAccounts, ProviderAccountsShape>()(
