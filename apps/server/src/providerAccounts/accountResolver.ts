@@ -4,10 +4,9 @@
 // Exports: makeAccountResolver, ProviderAccountResolutionError.
 
 import "@synara/shared/providerAccounts/codexAccountEnvironment";
-
-import "./claudeAccountEnvironment";
-import "./cursorAccountEnvironment";
-import "./grokAccountEnvironment";
+import "@synara/shared/providerAccounts/claudeAccountEnvironment";
+import "@synara/shared/providerAccounts/cursorAccountEnvironment";
+import "@synara/shared/providerAccounts/grokAccountEnvironment";
 
 import { type ResolveAccountLaunchInput, type ResolvedAccountLaunch } from "@synara/contracts";
 import { supportLevelFor } from "@synara/shared/providerAccounts/capabilities";

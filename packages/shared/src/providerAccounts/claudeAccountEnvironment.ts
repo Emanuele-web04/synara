@@ -1,6 +1,6 @@
 // FILE: claudeAccountEnvironment.ts
 // Purpose: Claude managed-account environment builder (plan section 8.2).
-// Layer: Server service internals
+// Layer: Cross-package pure utility
 // Exports: buildClaudeAccountEnvironment (also self-registers for "claudeAgent").
 
 import {
@@ -8,7 +8,7 @@ import {
   registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
-} from "@synara/shared/providerAccounts/accountEnvironment";
+} from "./accountEnvironment";
 
 // Inherited auth overrides that would leak the native account (or reroute
 // requests through Bedrock/Vertex/custom gateways) into a managed launch.

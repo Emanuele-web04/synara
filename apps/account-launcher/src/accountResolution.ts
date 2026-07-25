@@ -13,6 +13,9 @@ import {
   resolveAccountEnvironmentBuilder,
 } from "@synara/shared/providerAccounts/accountEnvironment";
 import "@synara/shared/providerAccounts/codexAccountEnvironment";
+import "@synara/shared/providerAccounts/claudeAccountEnvironment";
+import "@synara/shared/providerAccounts/cursorAccountEnvironment";
+import "@synara/shared/providerAccounts/grokAccountEnvironment";
 import {
   accountAgentHome,
   accountAppDataDir,
@@ -42,11 +45,19 @@ function readFileIfExists(filePath: string): string | null {
   }
 }
 
+// A missing pointer means the native account zero; an existing but invalid
+// pointer fails closed so a corrupted file can never silently route work to
+// the native credentials.
 function readActiveOrdinal(root: string, provider: SupportedAccountProvider): number | null {
   const contents = readFileIfExists(activePointerPath(root, provider));
   if (contents === null) return null;
-  const ordinal = Number(contents.trim());
-  return Number.isSafeInteger(ordinal) && ordinal >= 0 ? ordinal : null;
+  const trimmed = contents.trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(trimmed)) {
+    throw new AccountLaunchError(
+      `Active pointer for '${provider}' is corrupted (${activePointerPath(root, provider)}). Repair it from Synara \u2192 Settings \u2192 Accounts, or delete the file to reset to the native account.`,
+    );
+  }
+  return Number(trimmed);
 }
 
 // Minimal structural validation of the private account record; the launcher

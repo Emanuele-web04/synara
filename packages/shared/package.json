@@ -224,6 +224,18 @@
       "types": "./src/providerAccounts/codexAccountEnvironment.ts",
       "import": "./src/providerAccounts/codexAccountEnvironment.ts"
     },
+    "./providerAccounts/claudeAccountEnvironment": {
+      "types": "./src/providerAccounts/claudeAccountEnvironment.ts",
+      "import": "./src/providerAccounts/claudeAccountEnvironment.ts"
+    },
+    "./providerAccounts/cursorAccountEnvironment": {
+      "types": "./src/providerAccounts/cursorAccountEnvironment.ts",
+      "import": "./src/providerAccounts/cursorAccountEnvironment.ts"
+    },
+    "./providerAccounts/grokAccountEnvironment": {
+      "types": "./src/providerAccounts/grokAccountEnvironment.ts",
+      "import": "./src/providerAccounts/grokAccountEnvironment.ts"
+    },
     "./migrationRecovery": {
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"

@@ -1,10 +1,10 @@
 // FILE: claudeAccountEnvironment.test.ts
 // Purpose: Focused tests for the Claude managed-account environment builder.
-// Layer: Server unit tests
+// Layer: Cross-package pure utility tests
 
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_ENV_UNSET } from "@synara/shared/providerAccounts/accountEnvironment";
+import { ACCOUNT_ENV_UNSET } from "./accountEnvironment";
 import { buildClaudeAccountEnvironment } from "./claudeAccountEnvironment";
 
 describe("buildClaudeAccountEnvironment", () => {

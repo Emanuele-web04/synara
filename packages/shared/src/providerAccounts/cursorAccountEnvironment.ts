@@ -1,6 +1,6 @@
 // FILE: cursorAccountEnvironment.ts
 // Purpose: Cursor managed-account environment builder (plan section 8.3).
-// Layer: Server service internals
+// Layer: Cross-package pure utility
 // Exports: buildCursorAccountEnvironment (also self-registers for "cursor").
 
 import {
@@ -8,7 +8,7 @@ import {
   registerAccountEnvironmentBuilder,
   type AccountEnvironmentBuildInput,
   type AccountLaunchEnvironment,
-} from "@synara/shared/providerAccounts/accountEnvironment";
+} from "./accountEnvironment";
 
 // Inherited auth overrides that would leak the native account into a managed
 // launch. Stripped before account-specific values are applied. Cursor managed
