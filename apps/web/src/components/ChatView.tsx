@@ -8619,6 +8619,7 @@ export default function ChatView({
         modelOptions={selectedProviderModelOptions}
         prompt={prompt}
         onPromptChange={setPromptFromTraits}
+        useAdvancedEffortSlider={settings.enableAdvancedEffortSlider}
         open={isTraitsPickerOpen}
         onOpenChange={handleTraitsPickerOpenChange}
         onSelectionCommitted={scheduleComposerFocus}
@@ -8646,6 +8647,7 @@ export default function ChatView({
       modelOptions={selectedProviderModelOptions}
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
+      useAdvancedEffortSlider={settings.enableAdvancedEffortSlider}
       onProviderModelChange={onProviderModelSelect}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}

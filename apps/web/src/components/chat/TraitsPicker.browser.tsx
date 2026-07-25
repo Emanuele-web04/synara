@@ -328,7 +328,11 @@ describe("TraitsPicker (Claude)", () => {
 
 // ── Codex TraitsPicker tests ──────────────────────────────────────────
 
-async function mountCodexPicker(props: { model?: string; options?: CodexModelOptions }) {
+async function mountCodexPicker(props: {
+  model?: string;
+  options?: CodexModelOptions;
+  useAdvancedEffortSlider?: boolean;
+}) {
   const threadId = ThreadId.makeUnsafe("thread-codex-traits");
   const model = props.model ?? DEFAULT_MODEL_BY_PROVIDER.codex;
   const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
@@ -376,6 +380,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
       prompt=""
       modelOptions={props.options}
       onPromptChange={() => {}}
+      useAdvancedEffortSlider={props.useAdvancedEffortSlider}
     />,
     { container: host },
   );
@@ -442,6 +447,22 @@ describe("TraitsPicker (Codex)", () => {
       expect(text).toContain("Medium");
       expect(text).toContain("High");
       expect(text).toContain("Extra High");
+    });
+  });
+
+  it("renders the direct effort slider only when enabled", async () => {
+    await using _ = await mountCodexPicker({
+      options: { reasoningEffort: "medium", fastMode: false },
+      useAdvancedEffortSlider: true,
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      expect(
+        document.body.querySelector('input[type="range"][aria-label="Effort: Medium"]'),
+      ).not.toBeNull();
+      expect(document.body.querySelector('[role="menuitemradio"]')).toBeNull();
     });
   });
 

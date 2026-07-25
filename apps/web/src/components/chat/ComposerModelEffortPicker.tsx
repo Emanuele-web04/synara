@@ -64,6 +64,7 @@ type ComposerModelEffortPickerProps = {
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  useAdvancedEffortSlider?: boolean;
 
   // Shared menu control.
   open?: boolean;
@@ -244,6 +245,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
             modelOptions={props.modelOptions}
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
+            useAdvancedEffortSlider={props.useAdvancedEffortSlider}
             onSelectionComplete={handleAfterTraitsSelection}
           />
         ) : null}
