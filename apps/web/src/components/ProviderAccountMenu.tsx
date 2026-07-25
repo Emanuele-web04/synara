@@ -18,6 +18,7 @@ import {
   MenuTrigger,
 } from "~/components/ui/menu";
 import {
+  accountIdentitySuffix,
   accountProviderLabel,
   accountSlotLabel,
   providerAccountsSnapshotQueryOptions,
@@ -37,8 +38,11 @@ export function ProviderAccountMenu({
   const setActive = useProviderAccountsSetActive();
   const providers = snapshotQuery.data?.providers ?? [];
 
-  const openAccountsSettings = () =>
-    void navigate({ to: "/settings", search: { section: "accounts" } });
+  const openAccountsSettings = (connect?: string) =>
+    void navigate({
+      to: "/settings",
+      search: connect !== undefined ? { section: "accounts", connect } : { section: "accounts" },
+    });
 
   return (
     <Menu modal={false}>
@@ -74,23 +78,35 @@ export function ProviderAccountMenu({
                       setActive.mutate({ provider, ordinal: value });
                     }}
                   >
-                    {visibleAccounts.map((account) => (
-                      <MenuRadioItem key={account.ordinal} value={account.ordinal}>
-                        {accountSlotLabel(provider, account.ordinal)}
-                      </MenuRadioItem>
-                    ))}
+                    {visibleAccounts.map((account) => {
+                      const suffix = accountIdentitySuffix(account);
+                      return (
+                        <MenuRadioItem key={account.ordinal} value={account.ordinal}>
+                          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                            <span className="truncate">
+                              {accountSlotLabel(provider, account.ordinal)}
+                            </span>
+                            {suffix !== null ? (
+                              <span className="truncate text-muted-foreground text-xs">
+                                {suffix}
+                              </span>
+                            ) : null}
+                          </span>
+                        </MenuRadioItem>
+                      );
+                    })}
                   </MenuRadioGroup>
                 ) : (
                   <MenuItem disabled>No accounts connected</MenuItem>
                 )}
                 <MenuSeparator />
-                <MenuItem onClick={openAccountsSettings}>Add account</MenuItem>
+                <MenuItem onClick={() => openAccountsSettings(provider)}>Add account</MenuItem>
               </MenuSubPopup>
             </MenuSub>
           );
         })}
         <MenuSeparator />
-        <MenuItem onClick={openAccountsSettings}>Manage accounts</MenuItem>
+        <MenuItem onClick={() => openAccountsSettings()}>Manage accounts</MenuItem>
         <MenuItem onClick={() => void navigate({ to: "/settings", search: { section: "usage" } })}>
           Usage
         </MenuItem>
