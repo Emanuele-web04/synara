@@ -200,6 +200,22 @@
       "types": "./src/cli.ts",
       "import": "./src/cli.ts"
     },
+    "./providerAccounts/accountIds": {
+      "types": "./src/providerAccounts/accountIds.ts",
+      "import": "./src/providerAccounts/accountIds.ts"
+    },
+    "./providerAccounts/accountPaths": {
+      "types": "./src/providerAccounts/accountPaths.ts",
+      "import": "./src/providerAccounts/accountPaths.ts"
+    },
+    "./providerAccounts/capabilities": {
+      "types": "./src/providerAccounts/capabilities.ts",
+      "import": "./src/providerAccounts/capabilities.ts"
+    },
+    "./providerAccounts/launcherProtocol": {
+      "types": "./src/providerAccounts/launcherProtocol.ts",
+      "import": "./src/providerAccounts/launcherProtocol.ts"
+    },
     "./migrationRecovery": {
       "types": "./src/migrationRecovery.ts",
       "import": "./src/migrationRecovery.ts"
