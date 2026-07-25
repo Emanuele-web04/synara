@@ -322,6 +322,7 @@ export function makeAccountStorage(input: AccountStorageInput) {
               const target = accountDir(root, provider, ordinal);
               await fs.rm(target, { recursive: true, force: true });
               await fs.rename(pendingPath(root, provider, operationId), target);
+              await fs.rm(path.join(target, "operation.json"), { force: true });
               await fs.chmod(target, PRIVATE_DIRECTORY_MODE).catch(() => undefined);
               return ordinal;
             },
@@ -330,6 +331,35 @@ export function makeAccountStorage(input: AccountStorageInput) {
           ),
         ),
       ),
+    );
+
+  // Non-secret connect operation metadata persisted alongside the pending
+  // login directory so interrupted operations survive a server restart.
+  const pendingOperationJsonPath = (provider: SupportedAccountProvider, operationId: string) =>
+    path.join(pendingPath(root, provider, operationId), "operation.json");
+
+  const writePendingOperation = (
+    provider: SupportedAccountProvider,
+    operationId: string,
+    contents: string,
+  ) =>
+    writeFileStringAtomically({
+      filePath: pendingOperationJsonPath(provider, operationId),
+      contents,
+    }).pipe(
+      Effect.mapError(
+        storageError(
+          "accountStorage.writePendingOperation",
+          `Failed to write pending operation metadata for '${provider}' operation '${operationId}'.`,
+        ),
+      ),
+    );
+
+  const readPendingOperation = (provider: SupportedAccountProvider, operationId: string) =>
+    tryFs(
+      "accountStorage.readPendingOperation",
+      `Failed to read pending operation metadata for '${provider}' operation '${operationId}'.`,
+      () => readFileIfExists(pendingOperationJsonPath(provider, operationId)),
     );
 
   const cancelPendingDirectory = (provider: SupportedAccountProvider, operationId: string) =>
@@ -493,6 +523,8 @@ export function makeAccountStorage(input: AccountStorageInput) {
     releaseOrdinalDirectory,
     createPendingDirectory,
     finalizePendingDirectory,
+    writePendingOperation,
+    readPendingOperation,
     cancelPendingDirectory,
     cleanupPendingDirectories,
     listPendingOperations,

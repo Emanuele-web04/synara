@@ -6,13 +6,13 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
-import type {
-  AccountSurface,
-  AgentAuthMethod,
-  ProviderAccountsBeginConnectInput,
-  ProviderAccountsConnectStatus,
-  ProviderAccountRecord,
+import {
   SupportedAccountProvider,
+  type AccountSurface,
+  type AgentAuthMethod,
+  type ProviderAccountsBeginConnectInput,
+  type ProviderAccountsConnectStatus,
+  type ProviderAccountRecord,
 } from "@synara/contracts";
 import { isConnectSupported, supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
 import { accountAgentHome, pendingPath } from "@synara/shared/providerAccounts/accountPaths";
@@ -337,6 +337,19 @@ export function makeAccountConnect(input: AccountConnectInput) {
       let profileHome: string;
       if (connectInput.ordinal === undefined) {
         yield* storage.createPendingDirectory(provider, operation.operationId);
+        // Persist non-secret metadata so a restart can surface the interrupted
+        // operation as a truthful terminal state instead of "unknown".
+        yield* storage.writePendingOperation(
+          provider,
+          operation.operationId,
+          JSON.stringify({
+            operationId: operation.operationId,
+            provider,
+            surface,
+            authMethod,
+            startedAt: now(),
+          }),
+        );
         profileHome = path.join(
           pendingPath(storage.root, provider, operation.operationId),
           "agent",
@@ -440,8 +453,48 @@ export function makeAccountConnect(input: AccountConnectInput) {
       }
     });
 
+  // Startup recovery: pending directories left behind by a previous process
+  // are interrupted OAuth connects. Register each as a failed operation so
+  // status queries return a truthful terminal state, then remove the
+  // directories so no ordinal or disk state leaks.
+  const recoverInterruptedOperations = Effect.gen(function* () {
+    for (const provider of SupportedAccountProvider.literals) {
+      const pendingIds = yield* storage
+        .listPendingOperations(provider)
+        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+      for (const operationId of pendingIds) {
+        const raw = yield* storage
+          .readPendingOperation(provider, operationId)
+          .pipe(Effect.orElseSucceed(() => null));
+        let surface: AccountSurface = "agent";
+        let authMethod: AgentAuthMethod = "oauth";
+        if (raw !== null) {
+          try {
+            const parsed = JSON.parse(raw) as { surface?: AccountSurface; authMethod?: AgentAuthMethod };
+            if (parsed.surface === "agent" || parsed.surface === "app") surface = parsed.surface;
+            if (parsed.authMethod === "oauth" || parsed.authMethod === "apiKey") {
+              authMethod = parsed.authMethod;
+            }
+          } catch {
+            // Corrupted metadata still yields a terminal failed status.
+          }
+        }
+        operations.set(operationId, {
+          operationId,
+          provider,
+          surface,
+          authMethod,
+          state: "failed",
+          error: "The connect operation was interrupted by a server restart. Start a new connect.",
+        });
+      }
+      yield* storage.cleanupPendingDirectories(provider);
+    }
+  });
+
   return {
     beginConnect,
+    recoverInterruptedOperations,
     getConnectStatus,
     cancelConnect,
     setActive,

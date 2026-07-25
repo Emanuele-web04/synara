@@ -89,16 +89,12 @@ export const makeProviderAccounts = Effect.gen(function* () {
     ),
   );
 
-  // Startup recovery: in-memory connect operations do not survive restarts,
-  // so any pending login directories left behind are orphaned and removed.
-  yield* Effect.forEach(SUPPORTED_PROVIDERS, (provider) =>
-    storage
-      .cleanupPendingDirectories(provider)
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("providerAccounts.pending_cleanup_failed", { provider, cause }),
-        ),
-      ),
+  // Startup recovery: pending login directories left behind by a previous
+  // process are surfaced as failed operations, then removed.
+  yield* connect.recoverInterruptedOperations.pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("providerAccounts.pending_cleanup_failed", { cause }),
+    ),
   );
 
   const fail = (operation: string) => (cause: unknown) =>

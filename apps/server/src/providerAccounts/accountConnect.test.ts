@@ -2,7 +2,7 @@
 // Purpose: Focused tests for the account connect/disconnect lifecycle.
 // Layer: Server unit tests
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -188,6 +188,54 @@ describe("accountConnect", () => {
     expect(record?.agent?.state).toBe("needs-auth");
     expect(record?.agent?.generation).toBe(2);
     await expect(Effect.runPromise(storage.readSecret("cursor", 1, "agent"))).resolves.toBeNull();
+  });
+
+  it("persists non-secret operation metadata into the pending directory", async () => {
+    const { operationId } = await Effect.runPromise(
+      connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    const raw = await Effect.runPromise(storage.readPendingOperation("codex", operationId));
+    expect(raw).not.toBeNull();
+    const metadata = JSON.parse(raw!) as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      operationId,
+      provider: "codex",
+      surface: "agent",
+      authMethod: "oauth",
+    });
+    expect(JSON.stringify(metadata)).not.toContain("apiKey");
+  });
+
+  it("does not leak operation.json into the finalized account directory", async () => {
+    const { operationId } = await Effect.runPromise(
+      connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    resolveLogin!({ ok: true });
+    await waitFor(() => Effect.runSync(connect.getConnectStatus(operationId)).state === "succeeded");
+    const leaked = await Effect.runPromise(
+      storage.readPendingOperation("codex", operationId).pipe(
+        Effect.orElseSucceed(() => null),
+      ),
+    );
+    expect(leaked).toBeNull();
+    expect(
+      existsSync(join(root, "accounts", "codex", "1", "operation.json")),
+    ).toBe(false);
+  });
+
+  it("recovers an interrupted OAuth connect as terminal after a restart", async () => {
+    const { operationId } = await Effect.runPromise(
+      connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    // Simulate a server restart: a fresh service over the same root.
+    const restarted = makeAccountConnect({ storage: makeAccountStorage({ root }) });
+    await Effect.runPromise(restarted.recoverInterruptedOperations);
+    const status = await Effect.runPromise(restarted.getConnectStatus(operationId));
+    expect(status.state).toBe("failed");
+    expect(status.error).toMatch(/interrupted by a server restart/);
+    expect(status.provider).toBe("codex");
+    await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+    await expect(Effect.runPromise(storage.listOrdinals("codex"))).resolves.toEqual([]);
   });
 
   it("protects the native account 0 from disconnect and hide", async () => {
