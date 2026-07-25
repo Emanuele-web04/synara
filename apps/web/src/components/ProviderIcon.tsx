@@ -96,12 +96,15 @@ export type ProviderIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
 
 export function ProviderIcon({
   provider,
-  fallback = null,
-  tone = "default",
+  fallback: fallbackProp,
+  tone: toneProp,
   className,
-  "aria-hidden": ariaHidden = true,
+  "aria-hidden": ariaHiddenProp,
   ...svgProps
 }: ProviderIconProps) {
+  const fallback = fallbackProp ?? null;
+  const tone = toneProp ?? "default";
+  const ariaHidden = ariaHiddenProp ?? true;
   if (provider === null || provider === undefined) {
     return fallback;
   }

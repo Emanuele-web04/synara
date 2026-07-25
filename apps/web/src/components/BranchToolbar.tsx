@@ -74,8 +74,8 @@ const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
 function ContinueInMenuItem({
   icon,
   label,
-  selected = false,
-  disabled = false,
+  selected: selectedProp,
+  disabled: disabledProp,
   onSelect,
 }: {
   icon: ReactNode;
@@ -84,6 +84,8 @@ function ContinueInMenuItem({
   disabled?: boolean;
   onSelect?: () => void;
 }) {
+  const selected = selectedProp ?? false;
+  const disabled = disabledProp ?? false;
   return (
     <MenuItem disabled={disabled} {...(onSelect ? { onClick: onSelect } : {})}>
       {icon}
@@ -133,8 +135,9 @@ export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
   className,
-  hideLabel = false,
+  hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
+  const hideLabel = hideLabelProp ?? false;
   return (
     <div
       className={cn(
@@ -223,13 +226,16 @@ export default function BranchToolbar({
   envLocked,
   onHandoffToWorktree,
   onHandoffToLocal,
-  handoffBusy = false,
+  handoffBusy: handoffBusyProp,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
-  variant = "toolbar",
-  showBranchSelector = true,
+  variant: variantProp,
+  showBranchSelector: showBranchSelectorProp,
   fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
+  const handoffBusy = handoffBusyProp ?? false;
+  const variant = variantProp ?? "toolbar";
+  const showBranchSelector = showBranchSelectorProp ?? true;
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));

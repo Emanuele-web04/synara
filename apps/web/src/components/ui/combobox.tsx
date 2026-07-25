@@ -57,8 +57,8 @@ function ComboboxChipsInput({
 function ComboboxInput({
   className,
   inputClassName,
-  showTrigger = true,
-  showClear = false,
+  showTrigger: showTriggerProp,
+  showClear: showClearProp,
   startAddon,
   size,
   ...props
@@ -70,6 +70,8 @@ function ComboboxInput({
   size?: "sm" | "default" | "lg" | number;
   ref?: React.Ref<HTMLInputElement>;
 }) {
+  const showTrigger = showTriggerProp ?? true;
+  const showClear = showClearProp ?? false;
   const sizeValue = (size ?? "default") as "sm" | "default" | "lg" | number;
 
   return (
@@ -139,10 +141,10 @@ function ComboboxTrigger({ className, children, ...props }: ComboboxPrimitive.Tr
 function ComboboxPopup({
   className,
   children,
-  side = "bottom",
-  sideOffset = 4,
+  side: sideProp,
+  sideOffset: sideOffsetProp,
   alignOffset,
-  align = "start",
+  align: alignProp,
   anchor: anchorProp,
   ...props
 }: ComboboxPrimitive.Popup.Props & {
@@ -152,6 +154,9 @@ function ComboboxPopup({
   side?: ComboboxPrimitive.Positioner.Props["side"];
   anchor?: ComboboxPrimitive.Positioner.Props["anchor"];
 }) {
+  const side = sideProp ?? "bottom";
+  const sideOffset = sideOffsetProp ?? 4;
+  const align = alignProp ?? "start";
   const { chipsRef } = React.useContext(ComboboxContext);
   const anchor = anchorProp ?? chipsRef;
 
@@ -189,11 +194,12 @@ function ComboboxPopup({
 function ComboboxItem({
   className,
   children,
-  hideIndicator = false,
+  hideIndicator: hideIndicatorProp,
   ...props
 }: ComboboxPrimitive.Item.Props & {
   hideIndicator?: boolean;
 }) {
+  const hideIndicator = hideIndicatorProp ?? false;
   return (
     <ComboboxPrimitive.Item
       className={cn(

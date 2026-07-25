@@ -15,6 +15,26 @@ import {
   type ProviderRuntimeEventRepositoryShape,
 } from "../Services/ProviderRuntimeEvents.ts";
 
+/**
+ * How far the consumer cursor may advance between journal retention scans.
+ *
+ * Retention keeps every event of an open turn plus a trailing diagnostic tail,
+ * so while a turn streams there is nothing new to delete, yet the scan has no
+ * lower bound and re-probes the whole retained backlog on every single event —
+ * quadratic in the length of a turn (measured: 1.38 ms/event at 8k events,
+ * 3.07 ms/event at 16k events, ~25 s cumulative).
+ *
+ * Scanning once per interval instead makes that cost linear-ish while changing
+ * nothing about what is retained: skipping a scan can only delay a delete, and
+ * every event that settles a turn forces a scan immediately, so the backlog of
+ * a finished turn is still released as soon as it becomes deletable. The bound
+ * on extra retained rows is one interval's worth of accepted events.
+ *
+ * Deliberately matched to PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED: roughly one
+ * scan per tail-length of accepted events falling out of the diagnostic tail.
+ */
+const PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED;
+
 const ProviderRuntimeEventJson = Schema.fromJsonString(ProviderRuntimeEvent);
 const encodeEvent = Schema.encodeEffect(ProviderRuntimeEventJson);
 const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEventJson);
@@ -292,10 +312,17 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  // Highest cursor position whose retention scan has already run. Process-local
+  // on purpose: it is a "do not rescan yet" hint, never a durability record. A
+  // restart resets it to 0, which makes the next cursor advance scan — the safe
+  // direction, since the only effect of losing it is pruning sooner.
+  let lastRetentionScanSequence = 0;
+
   const advanceConsumerCursor: ProviderRuntimeEventRepositoryShape["advanceConsumerCursor"] = (
     input,
-  ) =>
-    sql
+  ) => {
+    let retentionScanSequence: number | null = null;
+    return sql
       .withTransaction(
         Effect.gen(function* () {
           const consumerRows = yield* sql<{ readonly lastAckedSequence: number }>`
@@ -377,6 +404,20 @@ const make = Effect.gen(function* () {
             `;
           }
 
+          // Nothing below the cursor can become deletable while a turn only
+          // grows, so the scan is worth running when a turn just settled (its
+          // whole backlog is releasable now) or when enough events have piled up
+          // since the last scan. See the interval constant for why this is safe.
+          const settlesOpenTurns = isTerminalTurnEvent || isThreadTerminalEvent;
+          if (
+            !settlesOpenTurns &&
+            input.eventSequence - lastRetentionScanSequence <
+              PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL
+          ) {
+            return true;
+          }
+          retentionScanSequence = input.eventSequence;
+
           // Pending rows are above the cursor. Accepted rows for an open turn
           // remain replayable until its terminal output is accepted; all other
           // accepted history is bounded to a diagnostic tail.
@@ -401,7 +442,22 @@ const make = Effect.gen(function* () {
           return true;
         }),
       )
-      .pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")));
+      .pipe(
+        // Only a committed scan may move the hint forward; a rolled back
+        // transaction leaves it where it was so the next advance rescans.
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (retentionScanSequence !== null) {
+              lastRetentionScanSequence = Math.max(
+                lastRetentionScanSequence,
+                retentionScanSequence,
+              );
+            }
+          }),
+        ),
+        Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")),
+      );
+  };
 
   return {
     append,

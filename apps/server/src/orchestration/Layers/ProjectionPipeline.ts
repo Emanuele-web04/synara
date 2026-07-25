@@ -918,6 +918,73 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       }
     });
 
+  /**
+   * Streaming assistant deltas arrive one command per token chunk. Reading the
+   * whole accumulated text back and concatenating it in JS made each delta pay
+   * O(message length) in driver round-trips, schema decoding and JS string
+   * building on top of the write.
+   *
+   * Appending in SQLite (`text = text || ?`) removes that read half only. SQLite
+   * still rewrites the accumulated row and its overflow chain on every UPDATE,
+   * so the storage work stays O(message length) per delta either way — this is
+   * a constant-factor win (measured ~14%: 0.549 -> 0.473 ms/delta at 400 KB),
+   * not a change in complexity. Removing the quadratic needs offset-addressed,
+   * idempotent delta rows, which is a schema change.
+   *
+   * The append keeps the exact
+   * column semantics of the read-modify-write upsert below:
+   *  - `turn_id`   : `resolveStableMessageTurnId` (existing wins, else incoming)
+   *  - optional JSON/enum columns: payload value when present, else untouched
+   *  - `sequence`  : first writer wins
+   *  - `created_at`: untouched (an existing row always carries one)
+   *  - `role`/`source`/`is_streaming`/`updated_at`: replaced from the payload
+   *
+   * Returns false when the message row does not exist yet, so the caller falls
+   * back to the insert path. Callers must already hold a transaction (every
+   * projector pass runs inside one), which is what makes the miss-then-insert
+   * sequence safe.
+   *
+   * TODO(persistence): this belongs on ProjectionThreadMessageRepository as an
+   * `appendStreamingText` operation; it is inlined here only because this pass
+   * may not edit the repository module.
+   */
+  const appendStreamingThreadMessageText = (
+    event: Extract<OrchestrationEvent, { readonly type: "thread.message-sent" }>,
+  ) =>
+    sql<{ readonly messageId: string }>`
+      UPDATE projection_thread_messages
+      SET
+        turn_id = COALESCE(turn_id, ${event.payload.turnId ?? null}),
+        role = ${event.payload.role},
+        text = text || ${event.payload.text},
+        attachments_json = COALESCE(
+          ${event.payload.attachments !== undefined ? JSON.stringify([...event.payload.attachments]) : null},
+          attachments_json
+        ),
+        skills_json = COALESCE(
+          ${event.payload.skills !== undefined ? JSON.stringify([...event.payload.skills]) : null},
+          skills_json
+        ),
+        mentions_json = COALESCE(
+          ${event.payload.mentions !== undefined ? JSON.stringify([...event.payload.mentions]) : null},
+          mentions_json
+        ),
+        dispatch_mode = COALESCE(${event.payload.dispatchMode ?? null}, dispatch_mode),
+        dispatch_origin = COALESCE(${event.payload.dispatchOrigin ?? null}, dispatch_origin),
+        is_streaming = 1,
+        source = ${event.payload.source},
+        sequence = COALESCE(sequence, ${event.sequence}),
+        updated_at = ${event.payload.updatedAt}
+      WHERE thread_id = ${event.payload.threadId}
+        AND message_id = ${event.payload.messageId}
+      RETURNING message_id AS "messageId"
+    `.pipe(
+      Effect.map((rows) => rows.length > 0),
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionPipeline.appendStreamingThreadMessageText:query"),
+      ),
+    );
+
   const applyThreadMessagesProjection: ProjectorDefinition["apply"] = (
     event,
     attachmentSideEffects,
@@ -925,6 +992,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.message-sent": {
+          // Hot path: append onto an existing streaming message without reading
+          // the accumulated text back out of SQLite.
+          if (event.payload.streaming && (yield* appendStreamingThreadMessageText(event))) {
+            return;
+          }
           const existingMessage = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
@@ -1869,12 +1941,33 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           ),
         );
 
+  // A phase whose projectors all rejected the event still has to keep its cursor
+  // moving, because the snapshot sequence exposed to clients is the minimum of
+  // the phase cursors (see ProjectionSnapshotQuery.computeSnapshotSequence) and
+  // a lagging cursor would make clients replay push events they already have.
+  // The write is one idempotent upsert, so it does not need — and must not pay
+  // for — an explicit transaction: SQLite already commits a lone statement
+  // atomically. The deferred phase rejects every assistant delta, so this is the
+  // difference between one transaction per streamed token and one statement.
+  const advancePhaseCursorOnly = (event: OrchestrationEvent, phaseCursor: ProjectorName) =>
+    projectionStateRepository.upsert({
+      projector: phaseCursor,
+      lastAppliedSequence: event.sequence,
+      updatedAt: event.occurredAt,
+    });
+
   const runProjectorsForEvent = (
     selectedProjectors: ReadonlyArray<ProjectorDefinition>,
     event: OrchestrationEvent,
     phaseCursor?: ProjectorName,
   ) =>
     Effect.gen(function* () {
+      if (selectedProjectors.length === 0) {
+        if (phaseCursor !== undefined) {
+          yield* advancePhaseCursorOnly(event, phaseCursor);
+        }
+        return;
+      }
       const attachmentSideEffects = yield* sql.withTransaction(
         runProjectorsForEventCore(selectedProjectors, event, phaseCursor),
       );

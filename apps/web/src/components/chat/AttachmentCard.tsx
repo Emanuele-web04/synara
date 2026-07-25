@@ -65,9 +65,10 @@ type AttachmentCardProps = AttachmentCardOwnProps &
 
 export const AttachmentCard = forwardRef<HTMLSpanElement, AttachmentCardProps>(
   function AttachmentCard(
-    { icon, title, subtitle, size = "md", onRemove, removeLabel, className, ...rest },
+    { icon, title, subtitle, size: sizeProp, onRemove, removeLabel, className, ...rest },
     ref,
   ) {
+    const size = sizeProp ?? "md";
     const styles = ATTACHMENT_CARD_SIZE_STYLES[size];
     return (
       <span

@@ -25,10 +25,12 @@ export function ComposerStackedPanel({
   children,
   className,
   ref,
-  attachedToPrevious = false,
-  passthroughSideMargins = false,
+  attachedToPrevious: attachedToPreviousProp,
+  passthroughSideMargins: passthroughSideMarginsProp,
   ...rest
 }: ComposerStackedPanelProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
+  const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   return (
     <ComposerStackedHeaderFrame
       ref={ref}

@@ -21,7 +21,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Effect, Option, Stream } from "effect";
 
 import type { AutomationServiceError } from "../Errors.ts";
 
@@ -60,6 +60,15 @@ export interface AutomationServiceShape {
     readonly title?: string;
     readonly summary?: string;
   }) => Effect.Effect<AutomationRun, AutomationServiceError>;
+  /**
+   * The automation run that dispatched the caller's active turn, when there is one.
+   * Standalone runs execute in a per-run thread, so this is their only claim to their
+   * own automation; ownership by source/target thread never matches for them.
+   */
+  readonly resolveCallerRun: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly callerTurnId: TurnId | null;
+  }) => Effect.Effect<Option.Option<AutomationRun>, AutomationServiceError>;
   readonly runNow: (
     input: AutomationRunNowInput,
   ) => Effect.Effect<AutomationRunNowResult, AutomationServiceError>;

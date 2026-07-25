@@ -56,6 +56,69 @@ describe("fixPath", () => {
     expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
+  it("skips the probe when a parent process marked the environment hydrated", () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "/opt/homebrew/bin:/usr/bin",
+      SYNARA_PATH_HYDRATED: "1",
+    };
+    const readPath = vi.fn(() => "/should/not/run");
+    const readLaunchctlPath = vi.fn(() => "/should/not/run");
+
+    fixPath({
+      env,
+      platform: "darwin",
+      readPath,
+      readLaunchctlPath,
+    });
+
+    expect(readPath).not.toHaveBeenCalled();
+    expect(readLaunchctlPath).not.toHaveBeenCalled();
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+  });
+
+  // A populated PATH is not evidence of hydration: every process inherits one.
+  it("still probes when PATH is populated but the hydration marker is absent", () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "/usr/bin:/bin",
+    };
+    const readPath = vi.fn(() => "/opt/homebrew/bin");
+
+    fixPath({ env, platform: "darwin", readPath });
+
+    expect(readPath).toHaveBeenCalledTimes(1);
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/bin");
+  });
+
+  it("still probes when the marker is set to an unexpected value", () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "/usr/bin",
+      SYNARA_PATH_HYDRATED: "0",
+    };
+    const readPath = vi.fn(() => "/opt/homebrew/bin");
+
+    fixPath({ env, platform: "linux", readPath });
+
+    expect(readPath).toHaveBeenCalledTimes(1);
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+  });
+
+  it("still probes when the marker is present but PATH is empty", () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "",
+      SYNARA_PATH_HYDRATED: "1",
+    };
+    const readPath = vi.fn(() => "/opt/homebrew/bin");
+
+    fixPath({ env, platform: "linux", readPath });
+
+    expect(readPath).toHaveBeenCalledTimes(1);
+    expect(env.PATH).toBe("/opt/homebrew/bin");
+  });
+
   it("does nothing on unsupported platforms", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "C:/Program Files/Git/bin/bash.exe",

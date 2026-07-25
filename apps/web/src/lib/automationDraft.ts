@@ -15,8 +15,15 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 
 import type { ChatAutomationExecutionScope } from "./automationIntent";
+
+// Heartbeat runs inside a thread the user already owns, so its checkout is the user's
+// concern. Every other mode opens its own thread and may create its own worktree.
+function automationOpensItsOwnCheckout(mode: AutomationMode): boolean {
+  return !automationRequiresTargetThread(mode);
+}
 
 export type AutomationCreationDraftSource = "slash" | "mention" | "dialog" | "generated";
 
@@ -106,7 +113,7 @@ export function buildAutomationDraftWarnings(input: {
   }
   if (
     input.worktreeMode === "local" ||
-    (input.mode === "standalone" && input.worktreeMode === "auto")
+    (automationOpensItsOwnCheckout(input.mode) && input.worktreeMode === "auto")
   ) {
     warnings.push({
       id: "local-checkout",
@@ -120,7 +127,7 @@ export function buildAutomationDraftWarnings(input: {
     });
   }
   if (
-    input.mode === "standalone" &&
+    automationOpensItsOwnCheckout(input.mode) &&
     (input.worktreeMode === "worktree" || input.worktreeMode === "auto")
   ) {
     warnings.push({
@@ -174,8 +181,9 @@ export function automationApprovalGaps(input: {
   const acknowledged = new Set(input.acknowledgedRisks);
   const approvalIds = new Set<AutomationDraftWarningId>();
   const maxIterations = maxIterationsForFastIntervalApproval(input);
-  // Definite run blockers: full-access and a standalone local checkout. Heartbeats reuse
-  // their target thread, so local-checkout consent is needed for updates but not dispatch.
+  // Definite run blockers: full-access and a local checkout the automation opens itself.
+  // Heartbeats reuse their target thread, so local-checkout consent is needed for updates
+  // but not dispatch.
   const runBlockingIds = new Set<AutomationDraftWarningId>();
   if (input.runtimeMode === "full-access" && !acknowledged.has("full-access")) {
     approvalIds.add("full-access");
@@ -183,7 +191,7 @@ export function automationApprovalGaps(input: {
   }
   if (input.worktreeMode === "local" && !acknowledged.has("local-checkout")) {
     approvalIds.add("local-checkout");
-    if (input.mode === "standalone") {
+    if (automationOpensItsOwnCheckout(input.mode)) {
       runBlockingIds.add("local-checkout");
     }
   }
@@ -199,7 +207,7 @@ export function automationApprovalGaps(input: {
   }
   if (
     approvalIds.size > 0 &&
-    input.mode === "standalone" &&
+    automationOpensItsOwnCheckout(input.mode) &&
     input.worktreeMode === "auto" &&
     !acknowledged.has("local-checkout")
   ) {

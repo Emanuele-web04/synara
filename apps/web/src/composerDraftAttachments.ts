@@ -26,7 +26,14 @@ import {
 } from "./lib/composerImageSource";
 
 const composerAttachmentPersistenceQueueByThreadId = new Map<string, Promise<void>>();
+// Tracks the newest in-flight sync per (slot, thread) so a superseded verification knows not to
+// commit. Entries are retired by `syncPersistedAttachmentsForSlot` once the newest sync settles.
 const composerAttachmentSyncGenerationByKey = new Map<string, number>();
+
+/** Test-only leak probe: number of (slot, thread) sync generations still tracked. */
+export function pendingComposerAttachmentSyncGenerationCount(): number {
+  return composerAttachmentSyncGenerationByKey.size;
+}
 
 function enqueueComposerAttachmentPersistence<Result>(
   threadId: ThreadId,
@@ -527,7 +534,7 @@ export function syncPersistedAttachmentsForSlot(
   }
   // Verification stays serialized per thread (across both slots) so overlapping
   // verifications cannot roll back each other's committed state.
-  return enqueueComposerAttachmentPersistence(threadId, () =>
+  const verification = enqueueComposerAttachmentPersistence(threadId, () =>
     verifyPersistedAttachmentsForSlot(
       threadId,
       attachments,
@@ -538,6 +545,15 @@ export function syncPersistedAttachmentsForSlot(
       flushPersistStorage,
     ),
   );
+  // Mirror the persistence-queue cleanup above: the generation counter only exists so a newer
+  // sync can invalidate an in-flight one. Once the newest sync for this key has settled there is
+  // nothing left to invalidate, so drop the entry instead of leaking one per (slot, thread)
+  // forever. The guard keeps an older sync's cleanup from erasing a newer generation.
+  return verification.finally(() => {
+    if (composerAttachmentSyncGenerationByKey.get(generationKey) === generation) {
+      composerAttachmentSyncGenerationByKey.delete(generationKey);
+    }
+  });
 }
 
 function hydreatePersistedComposerImageAttachment(

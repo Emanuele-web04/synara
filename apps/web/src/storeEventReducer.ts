@@ -2,7 +2,11 @@
 // Purpose: Reduces ordered orchestration domain events into normalized client state.
 // Exports: Normal and hot-path event batch reducers.
 
-import { type OrchestrationEvent, type OrchestrationPendingInteraction } from "@synara/contracts";
+import {
+  type OrchestrationEvent,
+  type OrchestrationPendingInteraction,
+  type ThreadId,
+} from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
   addPinnedMessage,
@@ -22,6 +26,7 @@ import {
   MAX_THREAD_MESSAGES,
   arraysShallowEqual,
   asActivityRecord,
+  createThreadActivityAccumulator,
   deepEqualJson,
   normalizeActivities,
   normalizeChatMessage,
@@ -124,8 +129,11 @@ function markInteractionResponding(
   return changed ? next : thread.pendingInteractions;
 }
 
+/** Pure reconciliation over the pending-interaction list alone: batch callers thread the
+ *  accumulated list through directly instead of cloning the whole `Thread` per event. */
 function reconcilePendingInteractionsFromActivity(
-  thread: Thread,
+  threadId: ThreadId,
+  pendingInteractions: Thread["pendingInteractions"],
   event: ThreadActivityAppendedEvent,
 ): Thread["pendingInteractions"] {
   const activity = event.payload.activity;
@@ -140,18 +148,18 @@ function reconcilePendingInteractionsFromActivity(
         ? ("userInput" as const)
         : null;
   if (interactionKind === null) {
-    return thread.pendingInteractions;
+    return pendingInteractions;
   }
   const payload = asActivityRecord(activity.payload);
   const requestId = payload?.requestId;
   if (typeof requestId !== "string" || requestId.length === 0) {
-    return thread.pendingInteractions;
+    return pendingInteractions;
   }
   const lifecycleGeneration =
     typeof payload?.lifecycleGeneration === "string" && payload.lifecycleGeneration.length > 0
       ? payload.lifecycleGeneration
       : null;
-  const existing = thread.pendingInteractions ?? [];
+  const existing = pendingInteractions ?? [];
   const matchesIdentity = (interaction: OrchestrationPendingInteraction) =>
     interaction.interactionKind === interactionKind &&
     interaction.requestId === requestId &&
@@ -159,7 +167,7 @@ function reconcilePendingInteractionsFromActivity(
 
   if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
     const next = existing.filter((interaction) => !matchesIdentity(interaction));
-    return next.length === existing.length ? thread.pendingInteractions : next;
+    return next.length === existing.length ? pendingInteractions : next;
   }
 
   if (
@@ -168,7 +176,7 @@ function reconcilePendingInteractionsFromActivity(
   ) {
     const responseCommandId = payload?.responseCommandId;
     if (typeof responseCommandId !== "string" || responseCommandId.length === 0) {
-      return thread.pendingInteractions;
+      return pendingInteractions;
     }
     const settlementStatus: OrchestrationPendingInteraction["status"] =
       payload?.settlementStatus === "retryable" ? "retryable" : "uncertain";
@@ -184,7 +192,7 @@ function reconcilePendingInteractionsFromActivity(
       changed = true;
       return { ...interaction, status: settlementStatus, resolvedAt: null };
     });
-    return changed ? next : thread.pendingInteractions;
+    return changed ? next : pendingInteractions;
   }
 
   const exactIndex = existing.findIndex(
@@ -199,12 +207,12 @@ function reconcilePendingInteractionsFromActivity(
       current.status === "confirmed" ||
       current.status === "uncertain")
   ) {
-    return thread.pendingInteractions;
+    return pendingInteractions;
   }
   const pending: OrchestrationPendingInteraction = {
     interactionKind,
     requestId: requestId as OrchestrationPendingInteraction["requestId"],
-    threadId: thread.id,
+    threadId,
     turnId: activity.turnId,
     lifecycleGeneration,
     status: "pending",
@@ -642,6 +650,10 @@ function mergeStreamingMessage(
 
 function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
   const payload = event.payload;
+  // Single scan: the previous implementation ran `find` and `findIndex` with the same predicate
+  // over the (up to MAX_THREAD_MESSAGES) message list for every streaming delta.
+  const existingIndex = thread.messages.findIndex((message) => message.id === payload.messageId);
+  const existingMessage = existingIndex >= 0 ? thread.messages[existingIndex] : undefined;
   const incomingMessage = normalizeChatMessage(
     {
       id: payload.messageId,
@@ -658,21 +670,15 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       createdAt: payload.createdAt,
       updatedAt: payload.updatedAt,
     },
-    thread.messages.find((message) => message.id === payload.messageId),
+    existingMessage,
   );
-  const existingIndex = thread.messages.findIndex((message) => message.id === payload.messageId);
   let messages = thread.messages;
 
-  if (existingIndex >= 0) {
-    const existingMessage = thread.messages[existingIndex];
-    if (!existingMessage) {
-      return thread;
-    }
+  if (existingMessage) {
     const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage);
     if (mergedMessage !== null) {
-      messages = thread.messages.map((message, index) =>
-        index === existingIndex ? mergedMessage : message,
-      );
+      // Only the affected slot is replaced; every other message stays reference-identical.
+      messages = thread.messages.with(existingIndex, mergedMessage);
     }
   } else {
     messages = [...thread.messages, incomingMessage].slice(-MAX_THREAD_MESSAGES);
@@ -816,12 +822,12 @@ function applyOrchestrationEvent(
     }
 
     case "project.deleted": {
-      return removeDeletedProjectFromClientState(state, event.payload.projectId);
+      return removeDeletedProjectFromClientState(state, event.payload.projectId, event.sequence);
     }
 
     case "thread.deleted":
       // Deletion is terminal for both active sidebar rows and archived settings rows.
-      return removeDeletedThreadFromClientState(state, event.payload.threadId);
+      return removeDeletedThreadFromClientState(state, event.payload.threadId, event.sequence);
 
     case "thread.meta-updated":
       return applyThreadUpdate(
@@ -1337,7 +1343,11 @@ function applyOrchestrationEvent(
             [...thread.activities, sequencedActivity],
             thread.activities,
           );
-          const pendingInteractions = reconcilePendingInteractionsFromActivity(thread, event);
+          const pendingInteractions = reconcilePendingInteractionsFromActivity(
+            thread.id,
+            thread.pendingInteractions,
+            event,
+          );
           if (
             nextActivities === thread.activities &&
             pendingInteractions === thread.pendingInteractions
@@ -1599,7 +1609,9 @@ function applyThreadActivityEventBatch(
     state,
     firstEvent.payload.threadId,
     (thread) => {
-      let nextActivities = thread.activities;
+      // One accumulator for the whole batch: appending N activities used to re-normalize the
+      // full activity list N times (O(batch x activities)); it is now O(batch) amortised.
+      const activityAccumulator = createThreadActivityAccumulator(thread.activities);
       let nextPendingInteractions = thread.pendingInteractions;
       let updatedAt = thread.updatedAt ?? thread.createdAt;
       for (const event of events) {
@@ -1607,25 +1619,20 @@ function applyThreadActivityEventBatch(
           event.payload.activity,
           event.sequence,
         );
-        const normalizedActivities = normalizeActivities(
-          [...nextActivities, sequencedActivity],
-          nextActivities,
-        );
+        const activitiesChanged = activityAccumulator.append(sequencedActivity);
         const reconciledPendingInteractions = reconcilePendingInteractionsFromActivity(
-          nextPendingInteractions === undefined
-            ? thread
-            : { ...thread, pendingInteractions: nextPendingInteractions },
+          thread.id,
+          nextPendingInteractions,
           event,
         );
         const changed =
-          normalizedActivities !== nextActivities ||
-          reconciledPendingInteractions !== nextPendingInteractions;
-        nextActivities = normalizedActivities;
+          activitiesChanged || reconciledPendingInteractions !== nextPendingInteractions;
         nextPendingInteractions = reconciledPendingInteractions;
         if (changed && sequencedActivity.createdAt > updatedAt) {
           updatedAt = sequencedActivity.createdAt;
         }
       }
+      const nextActivities = activityAccumulator.result();
       if (
         nextActivities === thread.activities &&
         nextPendingInteractions === thread.pendingInteractions

@@ -21,15 +21,15 @@ interface ProposedPlanActionsProps {
   iconClassName?: string;
 }
 
-// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const ProposedPlanActions = memo(function ProposedPlanActions({
   planMarkdown,
   workspaceRoot,
-  variant = "outline",
+  variant: variantProp,
   className,
   buttonClassName,
   iconClassName,
 }: ProposedPlanActionsProps) {
+  const variant = variantProp ?? "outline";
   const [isDownloading, setIsDownloading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const filename = useMemo(() => buildProposedPlanMarkdownFilename(planMarkdown), [planMarkdown]);
@@ -161,7 +161,7 @@ function PlanActionButton({
   onClick,
   variant,
   className,
-  busy = false,
+  busy: busyProp,
   children,
 }: {
   label: string;
@@ -171,6 +171,7 @@ function PlanActionButton({
   busy?: boolean;
   children: ReactNode;
 }) {
+  const busy = busyProp ?? false;
   return (
     <IconButton
       label={label}

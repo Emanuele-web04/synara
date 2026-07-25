@@ -34,12 +34,13 @@ function SheetBackdrop({ className, ...props }: SheetPrimitive.Backdrop.Props) {
 function SheetViewport({
   className,
   side,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: SheetPrimitive.Viewport.Props & {
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <SheetPrimitive.Viewport
       className={cn(
@@ -60,10 +61,10 @@ function SheetViewport({
 function SheetPopup({
   className,
   children,
-  showCloseButton = true,
-  keepMounted = false,
-  side = "right",
-  variant = "default",
+  showCloseButton: showCloseButtonProp,
+  keepMounted: keepMountedProp,
+  side: sideProp,
+  variant: variantProp,
   ...props
 }: SheetPrimitive.Popup.Props & {
   showCloseButton?: boolean;
@@ -71,6 +72,10 @@ function SheetPopup({
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
 }) {
+  const showCloseButton = showCloseButtonProp ?? true;
+  const keepMounted = keepMountedProp ?? false;
+  const side = sideProp ?? "right";
+  const variant = variantProp ?? "default";
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetBackdrop />
@@ -124,11 +129,12 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
 
 function SheetFooter({
   className,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: React.ComponentProps<"div"> & {
   variant?: "default" | "bare";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <div
       className={cn(
@@ -166,9 +172,10 @@ function SheetDescription({ className, ...props }: SheetPrimitive.Description.Pr
 
 function SheetPanel({
   className,
-  scrollFade = true,
+  scrollFade: scrollFadeProp,
   ...props
 }: React.ComponentProps<"div"> & { scrollFade?: boolean }) {
+  const scrollFade = scrollFadeProp ?? true;
   return (
     <ScrollArea scrollFade={scrollFade}>
       <div

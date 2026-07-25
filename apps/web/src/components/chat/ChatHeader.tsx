@@ -498,8 +498,8 @@ export function ChatHeader({
   activeProjectName,
   threadBreadcrumbs,
   className,
-  hideSidebarControls = false,
-  hideHandoffControls = false,
+  hideSidebarControls: hideSidebarControlsProp,
+  hideHandoffControls: hideHandoffControlsProp,
   isGitRepo,
   openInTarget,
   activeProjectScripts,
@@ -515,16 +515,16 @@ export function ChatHeader({
   handoffBadgeTargetProvider,
   gitCwd,
   diffTotals,
-  showGitActions = true,
-  showDiffToggle = true,
+  showGitActions: showGitActionsProp,
+  showDiffToggle: showDiffToggleProp,
   diffOpen,
-  diffDisabledReason = null,
-  surfaceMode = "single",
-  isSidechat = false,
-  environment = null,
-  chatLayoutAction = null,
-  changeThreadAction = null,
-  editorChatControls = null,
+  diffDisabledReason: diffDisabledReasonProp,
+  surfaceMode: surfaceModeProp,
+  isSidechat: isSidechatProp,
+  environment: environmentProp,
+  chatLayoutAction: chatLayoutActionProp,
+  changeThreadAction: changeThreadActionProp,
+  editorChatControls: editorChatControlsProp,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -536,6 +536,17 @@ export function ChatHeader({
   onRenameThread,
   onCloseThreadPane,
 }: ChatHeaderProps) {
+  const hideSidebarControls = hideSidebarControlsProp ?? false;
+  const hideHandoffControls = hideHandoffControlsProp ?? false;
+  const showGitActions = showGitActionsProp ?? true;
+  const showDiffToggle = showDiffToggleProp ?? true;
+  const diffDisabledReason = diffDisabledReasonProp ?? null;
+  const surfaceMode = surfaceModeProp ?? "single";
+  const isSidechat = isSidechatProp ?? false;
+  const environment = environmentProp ?? null;
+  const chatLayoutAction = chatLayoutActionProp ?? null;
+  const changeThreadAction = changeThreadActionProp ?? null;
+  const editorChatControls = editorChatControlsProp ?? null;
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);

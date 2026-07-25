@@ -75,13 +75,14 @@ function DisclosureSection({
   label,
   count,
   children,
-  defaultOpen = true,
+  defaultOpen: defaultOpenProp,
 }: {
   label: string;
   count?: number;
   children: ReactNode;
   defaultOpen?: boolean;
 }) {
+  const defaultOpen = defaultOpenProp ?? true;
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>

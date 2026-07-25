@@ -285,8 +285,9 @@ export function WorkflowRunCard({
   onPause,
   onResume,
   onDismiss,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: WorkflowRunCardProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   // Default view lists every phase's agents (grouped); a pill click narrows to
   // one phase, clicking it again returns to the full list.

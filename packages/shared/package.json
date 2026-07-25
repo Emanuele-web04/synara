@@ -136,6 +136,14 @@
       "types": "./src/agentMentions.ts",
       "import": "./src/agentMentions.ts"
     },
+    "./automationCompletionPolicy": {
+      "types": "./src/automationCompletionPolicy.ts",
+      "import": "./src/automationCompletionPolicy.ts"
+    },
+    "./automationMode": {
+      "types": "./src/automationMode.ts",
+      "import": "./src/automationMode.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"

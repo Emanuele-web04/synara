@@ -57,14 +57,14 @@ interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement>
 }
 
 /** Full-width rail for panels stacked flush above the composer input. */
-// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const ComposerStackedHeaderFrame = memo(function ComposerStackedHeaderFrame({
   children,
   className,
   ref,
-  passthroughSideMargins = false,
+  passthroughSideMargins: passthroughSideMarginsProp,
   ...rest
 }: ComposerStackedHeaderFrameProps) {
+  const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   useComposerColumnFrameContext("ComposerStackedHeaderFrame");
 
   const frameClassName = cn(COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME, className);

@@ -25,9 +25,11 @@ export type SidebarLeadingIconProps = HTMLAttributes<HTMLSpanElement> & {
 // the surrounding row intentionally dims its icon.
 export const SidebarLeadingIcon = forwardRef<HTMLSpanElement, SidebarLeadingIconProps>(
   function SidebarLeadingIcon(
-    { size = "md", tone = "text-muted-foreground/79", className, children, ...props },
+    { size: sizeProp, tone: toneProp, className, children, ...props },
     ref,
   ) {
+    const size = sizeProp ?? "md";
+    const tone = toneProp ?? "text-muted-foreground/79";
     return (
       <span
         {...props}

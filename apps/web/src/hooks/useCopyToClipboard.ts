@@ -77,7 +77,7 @@ export async function copyTextToClipboard(value: string): Promise<void> {
 }
 
 export function useCopyToClipboard<TContext = void>({
-  timeout = 2000,
+  timeout: timeoutProp,
   onCopy,
   onError,
 }: {
@@ -85,6 +85,7 @@ export function useCopyToClipboard<TContext = void>({
   onCopy?: (ctx: TContext) => void;
   onError?: (error: Error, ctx: TContext) => void;
 } = {}): { copyToClipboard: (value: string, ctx: TContext) => void; isCopied: boolean } {
+  const timeout = timeoutProp ?? 2000;
   const [isCopied, setIsCopied] = React.useState(false);
   const timeoutIdRef = React.useRef<NodeJS.Timeout | null>(null);
   const onCopyRef = React.useRef(onCopy);
@@ -99,7 +100,6 @@ export function useCopyToClipboard<TContext = void>({
     timeoutRef.current = timeout;
   }, [onCopy, onError, timeout]);
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const copyToClipboard = React.useCallback((value: string, ctx: TContext): void => {
     void copyTextToClipboard(value).then(
       () => {

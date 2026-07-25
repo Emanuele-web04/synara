@@ -9,6 +9,7 @@ import {
   type OrchestrationShellSnapshot,
   type ThreadId,
 } from "@synara/contracts";
+import { automationContinuationThreadId } from "@synara/shared/automationMode";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 
@@ -74,12 +75,11 @@ function listRetentionProtectedThreadIds(
     Effect.map((result) => {
       const protectedThreadIds = new Set<ThreadId>();
       for (const definition of result.definitions) {
-        if (
-          definition.enabled &&
-          definition.mode === "heartbeat" &&
-          definition.targetThreadId !== null
-        ) {
-          protectedThreadIds.add(definition.targetThreadId);
+        // Any thread an enabled automation still continues, whether the user chose it
+        // (heartbeat) or the automation created it for itself (dedicated).
+        const continuationThreadId = automationContinuationThreadId(definition);
+        if (definition.enabled && continuationThreadId !== null) {
+          protectedThreadIds.add(continuationThreadId);
         }
       }
       return protectedThreadIds;

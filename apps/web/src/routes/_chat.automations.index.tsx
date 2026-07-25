@@ -73,7 +73,7 @@ function AutomationListRow({
   detail,
   meta,
   onDelete,
-  dimmed = false,
+  dimmed: dimmedProp,
 }: {
   readonly onClick: () => void;
   readonly leading: ReactNode;
@@ -83,6 +83,7 @@ function AutomationListRow({
   readonly onDelete?: () => void;
   readonly dimmed?: boolean;
 }) {
+  const dimmed = dimmedProp ?? false;
   return (
     // A div with role="button" (not a real <button>) so inline controls like the hover delete
     // can be nested buttons; the keydown guard lets those controls handle their own events

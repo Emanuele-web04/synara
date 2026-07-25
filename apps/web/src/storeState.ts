@@ -41,8 +41,15 @@ export interface AppState {
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
   threadDetailSyncById?: Record<ThreadId, ThreadDetailSyncState>;
-  deletedProjectIdsById?: Record<Project["id"], true>;
-  deletedThreadIdsById?: Record<ThreadId, true>;
+  /**
+   * Deletion tombstones, keyed by id, valued by the snapshot sequence at (or after) which the
+   * deletion is guaranteed to be visible server-side. They stop a snapshot generated before the
+   * delete from resurrecting the row; `syncServerShellSnapshot` / `syncServerReadModel` retire an
+   * entry once an authoritative snapshot at or after that sequence no longer lists the id, so the
+   * maps cannot grow for the lifetime of the tab.
+   */
+  deletedProjectIdsById?: Record<Project["id"], number>;
+  deletedThreadIdsById?: Record<ThreadId, number>;
 }
 
 // These references are shared by selectors and projection writes. Keep them stable

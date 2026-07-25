@@ -103,23 +103,32 @@ function getNavigatorPlatform(): string {
 }
 
 export const ProjectPicker = memo(function ProjectPicker({
-  align = "start",
-  side = "bottom",
-  selectionMode = "workspace-root",
-  showResetToHome = false,
-  selectedProjectId = null,
-  selectedWorkspaceRoot = null,
+  align: alignProp,
+  side: sideProp,
+  selectionMode: selectionModeProp,
+  showResetToHome: showResetToHomeProp,
+  selectedProjectId: selectedProjectIdProp,
+  selectedWorkspaceRoot: selectedWorkspaceRootProp,
   onSelectProject,
   onSelectWorkspaceRoot,
   onCreateProjectFromPath,
   onResetToHome,
   triggerClassName,
   renderTrigger,
-  emptyTriggerLabel = "Work in a project",
+  emptyTriggerLabel: emptyTriggerLabelProp,
   addActionLabel,
-  resetActionLabel = "Don't work in a project",
-  searchPlaceholder = "Search projects",
+  resetActionLabel: resetActionLabelProp,
+  searchPlaceholder: searchPlaceholderProp,
 }: ProjectPickerProps) {
+  const align = alignProp ?? "start";
+  const side = sideProp ?? "bottom";
+  const selectionMode = selectionModeProp ?? "workspace-root";
+  const showResetToHome = showResetToHomeProp ?? false;
+  const selectedProjectId = selectedProjectIdProp ?? null;
+  const selectedWorkspaceRoot = selectedWorkspaceRootProp ?? null;
+  const emptyTriggerLabel = emptyTriggerLabelProp ?? "Work in a project";
+  const resetActionLabel = resetActionLabelProp ?? "Don't work in a project";
+  const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));

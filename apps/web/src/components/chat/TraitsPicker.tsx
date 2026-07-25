@@ -282,10 +282,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   runtimeAgents,
   prompt,
   onPromptChange,
-  includeFastMode = true,
+  includeFastMode: includeFastModeProp,
   modelOptions,
   onSelectionComplete,
 }: TraitsMenuContentProps) {
+  const includeFastMode = includeFastModeProp ?? true;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const {
     caps,
@@ -497,13 +498,13 @@ export const TraitsPicker = memo(function TraitsPicker({
   runtimeAgents,
   prompt,
   onPromptChange,
-  includeFastMode = true,
+  includeFastMode: includeFastModeProp,
   modelOptions,
   open,
   onOpenChange,
   onSelectionCommitted,
   shortcutLabel,
-  hideLabel = false,
+  hideLabel: hideLabelProp,
 }: TraitsMenuContentProps & {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -513,6 +514,8 @@ export const TraitsPicker = memo(function TraitsPicker({
   // summary moves to title/sr-only.
   hideLabel?: boolean;
 }) {
+  const includeFastMode = includeFastModeProp ?? true;
+  const hideLabel = hideLabelProp ?? false;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const selectionCommitTimerRef = useRef<number | null>(null);
   const isMenuOpen = open ?? uncontrolledMenuOpen;

@@ -94,11 +94,13 @@ function SelectButton({ className, size, variant, render, children, ...props }: 
 
 function SelectTrigger({
   className,
-  size = "default",
-  variant = "default",
+  size: sizeProp,
+  variant: variantProp,
   children,
   ...props
 }: SelectPrimitive.Trigger.Props & VariantProps<typeof selectTriggerVariants>) {
+  const size = sizeProp === undefined ? "default" : sizeProp;
+  const variant = variantProp === undefined ? "default" : variantProp;
   return (
     <SelectPrimitive.Trigger
       className={cn(selectTriggerVariants({ size, variant }), className)}
@@ -127,11 +129,11 @@ function SelectPopup({
   className,
   shellClassName,
   children,
-  side = "bottom",
-  sideOffset = 4,
-  align = "start",
-  alignOffset = 0,
-  alignItemWithTrigger = true,
+  side: sideProp,
+  sideOffset: sideOffsetProp,
+  align: alignProp,
+  alignOffset: alignOffsetProp,
+  alignItemWithTrigger: alignItemWithTriggerProp,
   anchor,
   surface,
   ...props
@@ -146,6 +148,11 @@ function SelectPopup({
   /** Size/shell classes applied to the composer picker viewport wrapper. */
   shellClassName?: string;
 }) {
+  const side = sideProp ?? "bottom";
+  const sideOffset = sideOffsetProp ?? 4;
+  const align = alignProp ?? "start";
+  const alignOffset = alignOffsetProp ?? 0;
+  const alignItemWithTrigger = alignItemWithTriggerProp ?? true;
   const viewportClassName = cn(
     COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
     surface === "settings"
@@ -224,11 +231,12 @@ function SelectPopup({
 function SelectItem({
   className,
   children,
-  hideIndicator = false,
+  hideIndicator: hideIndicatorProp,
   ...props
 }: SelectPrimitive.Item.Props & {
   hideIndicator?: boolean;
 }) {
+  const hideIndicator = hideIndicatorProp ?? false;
   const popupSurface = React.useContext(SelectPopupSurfaceContext);
   const optionBaseClassName =
     popupSurface === "settings"

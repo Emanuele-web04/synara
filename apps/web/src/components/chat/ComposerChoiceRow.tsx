@@ -47,12 +47,15 @@ export function ComposerChoiceRow({
   shortcut,
   label,
   description,
-  selected = false,
-  tone = "neutral",
-  disabled = false,
+  selected: selectedProp,
+  tone: toneProp,
+  disabled: disabledProp,
   trailing,
   onSelect,
 }: ComposerChoiceRowProps) {
+  const selected = selectedProp ?? false;
+  const tone = toneProp ?? "neutral";
+  const disabled = disabledProp ?? false;
   return (
     <button
       type="button"

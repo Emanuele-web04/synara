@@ -22,15 +22,16 @@ export interface RepoDiffTotals {
 export function useRepoDiffTotals({
   gitCwd,
   isGitRepo,
-  refetchInterval = false,
+  refetchInterval: refetchIntervalProp,
 }: {
   gitCwd: string | null;
   isGitRepo: boolean;
   refetchInterval?: number | false;
 }): RepoDiffTotals {
+  const refetchInterval = refetchIntervalProp ?? false;
   // Match the Diff panel source selector so every surface shows the selected scope.
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
-  const { data: selectedRepoDiff = null } = useQuery(
+  const { data: selectedRepoDiffData } = useQuery(
     gitWorkingTreeDiffQueryOptions({
       cwd: gitCwd,
       scope: repoDiffScope,
@@ -38,6 +39,7 @@ export function useRepoDiffTotals({
       refetchInterval,
     }),
   );
+  const selectedRepoDiff = selectedRepoDiffData ?? null;
   // Patch parsing can be noticeable on large diffs; only redo it when the patch text changes.
   const totals = summarizePatchTotals(selectedRepoDiff?.patch);
   const additions = totals?.additions ?? 0;

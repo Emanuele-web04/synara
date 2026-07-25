@@ -1,6 +1,7 @@
 import { OrchestrationProposedPlanId, ThreadId } from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { pendingComposerAttachmentSyncGenerationCount } from "./composerDraftAttachments";
 import {
   captureComposerPromptHistorySavedDraft,
   COMPOSER_DRAFT_STORAGE_KEY,
@@ -828,6 +829,40 @@ describe("composerDraftStore syncPersistedAttachments", () => {
         .getState()
         .draftsByThreadId[threadId]?.persistedAttachments.map((attachment) => attachment.id),
     ).toEqual([firstImage.id, secondImage.id]);
+  });
+
+  it("retires the sync generation entry once the newest sync for a slot settles", async () => {
+    const image = makeImage({
+      id: "appsnap-sync-generation",
+      previewUrl: "blob:appsnap-sync-generation",
+      name: "appsnap-sync-generation.png",
+    });
+    const attachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+    };
+    const store = useComposerDraftStore.getState();
+    store.addImages(threadId, [image]);
+
+    const before = pendingComposerAttachmentSyncGenerationCount();
+    const firstSync = store.syncPersistedAttachments(threadId, [attachment]);
+    const secondSync = store.syncPersistedAttachments(threadId, [attachment]);
+
+    // Overlapping syncs share one (slot, thread) key, so only one entry is tracked at a time.
+    expect(pendingComposerAttachmentSyncGenerationCount()).toBe(before + 1);
+
+    await Promise.all([firstSync, secondSync]);
+
+    // Nothing is left to invalidate once the newest sync settled, so the key must be released.
+    expect(pendingComposerAttachmentSyncGenerationCount()).toBe(before);
+    expect(
+      useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.persistedAttachments.map((persisted) => persisted.id),
+    ).toEqual([image.id]);
   });
 
   it("treats malformed persisted draft storage as empty", async () => {

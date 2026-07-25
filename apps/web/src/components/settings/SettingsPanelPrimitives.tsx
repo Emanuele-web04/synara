@@ -37,11 +37,13 @@ export function SettingsSection({ title, children }: { title: string; children: 
 
 /** Frosted select dropdown panel with settings `rounded-lg` chrome. */
 export function SettingsSelectPopup({
-  align = "end",
-  alignItemWithTrigger = false,
+  align: alignProp,
+  alignItemWithTrigger: alignItemWithTriggerProp,
   shellClassName,
   ...props
 }: Omit<ComponentProps<typeof SelectPopup>, "surface">) {
+  const align = alignProp ?? "end";
+  const alignItemWithTrigger = alignItemWithTriggerProp ?? false;
   return (
     <SelectPopup
       align={align}
@@ -67,7 +69,7 @@ export function SettingsListRow({
   title,
   description,
   actions,
-  align = "center",
+  align: alignProp,
   onContextMenu,
 }: {
   title: ReactNode;
@@ -76,6 +78,7 @@ export function SettingsListRow({
   align?: "center" | "start";
   onContextMenu?: ComponentProps<"div">["onContextMenu"];
 }) {
+  const align = alignProp ?? "center";
   return (
     <div
       className={SETTINGS_CARD_ROW_CLASS_NAME}

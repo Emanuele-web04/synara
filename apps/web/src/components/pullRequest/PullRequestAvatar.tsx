@@ -24,13 +24,14 @@ function initialFor(actor: PullRequestActor | null): string {
 
 export function PullRequestAvatar({
   actor,
-  size = "sm",
+  size: sizeProp,
   className,
 }: {
   actor: PullRequestActor | null;
   size?: keyof typeof SIZE_CLASS_NAME;
   className?: string;
 }) {
+  const size = sizeProp ?? "sm";
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const sizeClassName = SIZE_CLASS_NAME[size];
   // Only render an image URL that GitHub explicitly attached to this actor. `login` can also

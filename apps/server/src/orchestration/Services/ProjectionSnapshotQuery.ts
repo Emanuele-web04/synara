@@ -75,6 +75,20 @@ export interface ProjectionFullThreadDiffContext {
 }
 
 /**
+ * Narrow projection row backing managed-worktree retention.
+ *
+ * Soft-deleted threads are intentionally included: thread retention soft-deletes
+ * and never purges, yet the worktree those threads own still sits on disk and must
+ * stay eligible for snapshot + reclaim.
+ */
+export interface ProjectionManagedWorktreeThread {
+  readonly id: ThreadId;
+  readonly archivedAt: string | null;
+  readonly worktreePath: string | null;
+  readonly associatedWorktreePath: string | null;
+}
+
+/**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
@@ -117,6 +131,16 @@ export interface ProjectionSnapshotQueryShape {
     readonly updatedBefore: string;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  /**
+   * Read only the columns managed-worktree retention needs, for every thread that
+   * records a worktree path. Avoids hydrating the full read model on a background
+   * prune, while still exposing soft-deleted threads so their worktrees are reclaimed.
+   */
+  readonly listManagedWorktreeThreads: () => Effect.Effect<
+    ReadonlyArray<ProjectionManagedWorktreeThread>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the latest orchestration shell snapshot.

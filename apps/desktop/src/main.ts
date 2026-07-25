@@ -56,6 +56,7 @@ import {
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
+import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { RotatingFileSink } from "@synara/shared/logging";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
@@ -117,6 +118,11 @@ import {
 } from "./backendSupervisionPolicy";
 import { captureBackendProcessOutput } from "./backendProcessOutput";
 import { syncShellEnvironment } from "./syncShellEnvironment";
+import {
+  RENDERER_MAX_AUTOMATIC_RELOADS,
+  RendererCrashPolicy,
+  type RendererCrashResponse,
+} from "./rendererCrashRecovery";
 import {
   type DownloadProgressSample,
   getAutoUpdateDisabledReason,
@@ -209,7 +215,16 @@ import {
 // baseline, so a replacement during startup cannot silently become "normal."
 const startupBundleIdentity = captureStartupBundleIdentity();
 
-syncShellEnvironment();
+// Deliberately still on the pre-`whenReady()` path, despite costing ~1s of cold start.
+// The reads a few lines below decide where this install's data lives, and two of them
+// depend on what this probe brings in: `resolveUserDataPath()` takes the Electron profile
+// directory from XDG_CONFIG_HOME on Linux, which the login-shell probe captures, and
+// `BASE_DIR` prefers SYNARA_HOME, which the Windows registry read hydrates whenever the
+// user set it persistently. Resolving either against an unhydrated environment would
+// silently relocate an existing user's profile and data directory.
+// (The probe also carries PATH, SSH_AUTH_SOCK and HOMEBREW_* for later provider spawns.
+// APPDATA on Windows is inherited from the process env, not hydrated here.)
+const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
@@ -288,6 +303,10 @@ let backendInitialWindowOpenInFlight: Promise<void> | null = null;
 let backendLifecycleDialogInFlight: Promise<void> | null = null;
 let backendListeningDetector: ServerListeningDetector | null = null;
 const backendSupervision = new BackendSupervisionPolicy();
+// Survives window recreation on purpose: a renderer that keeps dying must not refill
+// its reload budget just because the crash produced a new window.
+const rendererCrashPolicy = new RendererCrashPolicy();
+let rendererCrashDialogInFlight: Promise<void> | null = null;
 let lastBackendFailureDetail: string | null = null;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -2914,7 +2933,7 @@ function backendNodeArgs(): string[] {
 
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...resolveBrowserUsePipeBackendEnv(
       process.env,
       browserUsePipeServer ? SYNARA_BROWSER_USE_PIPE_PATH : null,
@@ -2929,6 +2948,11 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
   };
+  // The backend runs the same login-shell probe at startup and does not begin listening
+  // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.
+  // Written explicitly in both directions: an inherited marker must never suppress a
+  // probe when our own hydration failed and the child's PATH is the raw launch one.
+  return applyShellEnvironmentHydrationMarker(env, shellEnvironmentSync.pathHydrated);
 }
 
 function scheduleBackendRestart(reason: string): void {
@@ -3790,6 +3814,7 @@ function createWindow(): BrowserWindow {
   });
   browserManager.setWindow(window);
   attachDesktopZoomFactorSync(window);
+  attachRendererCrashRecovery(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();
@@ -3896,6 +3921,129 @@ function createWindow(): BrowserWindow {
   });
 
   return window;
+}
+
+/**
+ * Renderer crashes used to be entirely invisible to the main process: no listener, no
+ * log line, no telemetry, and no way back — a renderer OOM kill just left the user
+ * staring at a blank window. Recovery is deliberately narrow: only reasons the renderer
+ * can actually come back from reload, and only a few times, because a deterministic
+ * crash reloading forever is worse than one blank window.
+ */
+function attachRendererCrashRecovery(window: BrowserWindow): void {
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearReloadTimer = (): void => {
+    if (reloadTimer === null) return;
+    clearTimeout(reloadTimer);
+    reloadTimer = null;
+  };
+
+  window.webContents.on("render-process-gone", (_event, details) => {
+    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
+    writeDesktopLogHeader(`renderer process gone ${description}`);
+    safeConsoleError(`[desktop] renderer process gone (${description})`);
+
+    const response = rendererCrashPolicy.respondToCrash({
+      reason: details.reason,
+      quitting: isQuitting,
+      nowMs: Date.now(),
+    });
+
+    switch (response.kind) {
+      case "ignore":
+        return;
+      case "reload":
+        writeDesktopLogHeader(
+          `renderer reload scheduled attempt=${response.attempt}/${RENDERER_MAX_AUTOMATIC_RELOADS} delayMs=${response.delayMs}`,
+        );
+        clearReloadTimer();
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          if (isQuitting || window.isDestroyed()) return;
+          window.webContents.reload();
+        }, response.delayMs);
+        return;
+      case "prompt":
+        writeDesktopLogHeader(
+          `renderer recovery prompt cause=${response.cause} crashes=${response.crashes}`,
+        );
+        presentRendererCrashRecovery(window, details.reason, response);
+        return;
+    }
+  });
+
+  // A hung renderer is not a crash — Chromium keeps the process alive — so it never
+  // reaches the listener above. Logging both edges makes a freeze that the user
+  // reports as "the app died" distinguishable from an actual crash in the same log.
+  window.webContents.on("unresponsive", () => {
+    writeDesktopLogHeader("renderer unresponsive");
+  });
+  window.webContents.on("responsive", () => {
+    writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.on("closed", clearReloadTimer);
+}
+
+/**
+ * Replaces the blank window with a blocking, actionable one once automatic recovery
+ * stops (or was never allowed for this crash reason).
+ */
+function presentRendererCrashRecovery(
+  window: BrowserWindow,
+  reason: string,
+  response: Extract<RendererCrashResponse, { kind: "prompt" }>,
+): void {
+  if (isQuitting || rendererCrashDialogInFlight) return;
+
+  const message =
+    response.cause === "reload-budget-exhausted"
+      ? `Synara's window crashed ${response.crashes} times in a row.`
+      : "Synara's window stopped unexpectedly.";
+  const detail = [
+    `The window's renderer process exited (${reason}).`,
+    response.cause === "reload-budget-exhausted"
+      ? "Synara paused automatic reloads so a repeating crash can't keep reloading in the background."
+      : "This exit reason repeats on reload, so Synara did not retry automatically.",
+    `Log file:\n${Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)}`,
+  ].join("\n\n");
+
+  const task = (async () => {
+    for (;;) {
+      const result = await dialog.showMessageBox({
+        type: "error",
+        title: "Synara's window stopped",
+        message,
+        detail,
+        buttons: ["Reload", "Open logs", "Quit"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+
+      if (result.response === 1) {
+        await openDesktopLogDirectory();
+        continue;
+      }
+
+      if (result.response === 0) {
+        // A user-driven reload is a fresh start, not a continuation of the streak.
+        rendererCrashPolicy.reset();
+        if (!window.isDestroyed()) {
+          window.webContents.reload();
+        }
+        return;
+      }
+
+      requestGracefulAppQuit("renderer crashed");
+      return;
+    }
+  })().finally(() => {
+    if (rendererCrashDialogInFlight === task) {
+      rendererCrashDialogInFlight = null;
+    }
+  });
+  rendererCrashDialogInFlight = task;
 }
 
 function configureMediaPermissions(): void {
@@ -4129,6 +4277,23 @@ if (hasSingleInstanceLock) {
       handleFatalStartupError("whenReady", error);
     });
 }
+
+// GPU, utility, and pepper process failures never reach the window's renderer listener,
+// so without this they are invisible too. Chromium respawns these itself — the value is
+// the log line that explains a sudden loss of GPU acceleration or a dead audio/network
+// service. Clean exits are routine teardown, so they stay out of the log.
+app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit") return;
+  const attributes = [
+    `type=${details.type}`,
+    `reason=${details.reason}`,
+    `exitCode=${details.exitCode}`,
+    ...(details.serviceName ? [`service=${details.serviceName}`] : []),
+    ...(details.name ? [`name=${sanitizeLogValue(details.name)}`] : []),
+  ].join(" ");
+  writeDesktopLogHeader(`child process gone ${attributes}`);
+  safeConsoleError(`[desktop] child process gone (${attributes})`);
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

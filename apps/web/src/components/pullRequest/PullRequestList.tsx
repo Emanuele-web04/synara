@@ -18,7 +18,7 @@ export const PullRequestList = function PullRequestList({
   selectedProjectId,
   selectedRepo,
   selectedNumber,
-  showProjectTitle = false,
+  showProjectTitle: showProjectTitleProp,
   onSelect,
   onTogglePinned,
 }: {
@@ -31,6 +31,7 @@ export const PullRequestList = function PullRequestList({
   onSelect: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
+  const showProjectTitle = showProjectTitleProp ?? false;
   const renderEntry = (entry: PullRequestListEntry) => (
     <PullRequestRow
       key={pullRequestListEntryKey(entry)}

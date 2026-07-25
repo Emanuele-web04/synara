@@ -20,6 +20,47 @@ function trimNonEmpty(value: string | null | undefined): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Marks an environment whose PATH was already resolved from the user's real
+ * environment (login shell, launchctl, or the Windows registry) by a parent process.
+ *
+ * Probing a login shell costs ~1s because `-ilc` sources the user's full interactive
+ * rc (nvm, pyenv, conda, oh-my-zsh, direnv). The desktop shell pays that once before
+ * it spawns the backend, and the backend inherits the result — so without this marker
+ * the same probe is serialized a second time before the server ever starts listening.
+ */
+export const SHELL_ENVIRONMENT_HYDRATED_ENV_NAME = "SYNARA_PATH_HYDRATED";
+export const SHELL_ENVIRONMENT_HYDRATED_ENV_VALUE = "1";
+
+/**
+ * A populated PATH proves nothing on its own — every process inherits one, including
+ * the truncated `/usr/bin:/bin` a GUI launch starts with. Only an explicit marker from
+ * a process that actually ran the probe may suppress it.
+ */
+export function isShellEnvironmentHydrated(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME] === SHELL_ENVIRONMENT_HYDRATED_ENV_VALUE &&
+    trimNonEmpty(env.PATH) !== undefined
+  );
+}
+
+/**
+ * Stamps (or clears) the hydration marker on an environment handed to a child process.
+ * Always written explicitly: an inherited marker from an unrelated parent must never
+ * suppress a probe this process did not actually perform.
+ */
+export function applyShellEnvironmentHydrationMarker(
+  env: NodeJS.ProcessEnv,
+  hydrated: boolean,
+): NodeJS.ProcessEnv {
+  if (hydrated) {
+    env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME] = SHELL_ENVIRONMENT_HYDRATED_ENV_VALUE;
+  } else {
+    delete env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME];
+  }
+  return env;
+}
+
 function readUserLoginShell(): string | undefined {
   try {
     return trimNonEmpty(OS.userInfo().shell);

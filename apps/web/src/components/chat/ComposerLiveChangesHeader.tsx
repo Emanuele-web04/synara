@@ -34,8 +34,9 @@ export function ComposerLiveChangesHeader({
   additions,
   deletions,
   onReview,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: ComposerLiveChangesHeaderProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   if (fileCount === 0) {
     return null;
   }

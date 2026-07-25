@@ -128,7 +128,7 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
 function ThreadToastVisibleAutoDismiss({
   toastId,
   dismissAfterVisibleMs,
-  paused = false,
+  paused: pausedProp,
 }: {
   toastId: ToastId;
   dismissAfterVisibleMs: number | undefined;
@@ -136,6 +136,7 @@ function ThreadToastVisibleAutoDismiss({
   // toast can't auto-dismiss out from under an action the user just triggered.
   paused?: boolean;
 }) {
+  const paused = pausedProp ?? false;
   useEffect(() => {
     if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) return;
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -266,7 +267,7 @@ function ToastActions({
 }
 
 function ToastCloseButton({
-  compact = false,
+  compact: compactProp,
   onDismiss,
   onClose,
 }: {
@@ -274,6 +275,7 @@ function ToastCloseButton({
   onDismiss: () => void;
   onClose?: (() => void) | undefined;
 }) {
+  const compact = compactProp ?? false;
   return (
     <button
       type="button"
@@ -447,7 +449,8 @@ function ToastSurface({
   );
 }
 
-function ToastProvider({ children, position = "top-center", ...props }: ToastProviderProps) {
+function ToastProvider({ children, position: positionProp, ...props }: ToastProviderProps) {
+  const position = positionProp ?? "top-center";
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
       {children}
@@ -456,7 +459,8 @@ function ToastProvider({ children, position = "top-center", ...props }: ToastPro
   );
 }
 
-function Toasts({ position = "top-center" }: { position: ToastPosition }) {
+function Toasts({ position: positionProp }: { position: ToastPosition }) {
+  const position = positionProp ?? "top-center";
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const visibleThreadIds = useVisibleThreadIdsFromRoute();
   const isTop = position.startsWith("top");

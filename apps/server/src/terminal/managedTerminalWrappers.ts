@@ -14,6 +14,7 @@ import {
   type ManagedTerminalCliKind,
 } from "@synara/shared/terminalThreads";
 
+import { envPathKeyFor, resolveExecutable } from "../executableLookup.ts";
 import {
   ensurePrivateDirectorySync,
   PRIVATE_EXECUTABLE_FILE_MODE,
@@ -31,61 +32,6 @@ export interface ManagedTerminalWrapperState {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
-}
-
-function envPathKeyFor(env: NodeJS.ProcessEnv): "PATH" | "Path" | "path" {
-  if ("PATH" in env) return "PATH";
-  if ("Path" in env) return "Path";
-  return "path";
-}
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stats = fs.statSync(filePath);
-    if (!stats.isFile()) {
-      return false;
-    }
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function executableCandidates(commandName: string): string[] {
-  if (process.platform !== "win32") {
-    return [commandName];
-  }
-
-  const pathExt = process.env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT"];
-  const lowerCommandName = commandName.toLowerCase();
-  const hasExtension = pathExt.some((extension) =>
-    lowerCommandName.endsWith(extension.toLowerCase()),
-  );
-  return hasExtension ? [commandName] : pathExt.map((extension) => `${commandName}${extension}`);
-}
-
-function resolveExecutableOnPath(commandName: string, env: NodeJS.ProcessEnv): string | null {
-  const envPathKey = envPathKeyFor(env);
-  const envPath = env[envPathKey]?.trim();
-  if (!envPath) {
-    return null;
-  }
-
-  for (const entry of envPath.split(path.delimiter)) {
-    const directory = entry.trim();
-    if (!directory) {
-      continue;
-    }
-    for (const candidateName of executableCandidates(commandName)) {
-      const candidatePath = path.join(directory, candidateName);
-      if (isExecutableFile(candidatePath)) {
-        return candidatePath;
-      }
-    }
-  }
-
-  return null;
 }
 
 function buildHookOscSequence(eventType: TerminalAgentHookEventType): string {
@@ -388,7 +334,7 @@ export function prepareManagedTerminalWrappers(options: {
   const targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>> = {};
   for (const cliKind of ["codex", "claude"] as const) {
     const commandName = managedTerminalCommandNameForCliKind(cliKind);
-    const targetPath = resolveExecutableOnPath(commandName, options.baseEnv);
+    const targetPath = resolveExecutable(commandName, { env: options.baseEnv });
     if (!targetPath) {
       continue;
     }

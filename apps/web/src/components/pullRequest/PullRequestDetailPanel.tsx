@@ -129,15 +129,17 @@ function DetailSkeleton() {
 
 export function PullRequestDetailPanel({
   input,
-  initialTab = "summary",
+  initialTab: initialTabProp,
   onClose,
-  pollingEnabled = true,
+  pollingEnabled: pollingEnabledProp,
 }: {
   input: PullRequestDetailInput;
   initialTab?: DetailTab;
   onClose?: () => void;
   pollingEnabled?: boolean;
 }) {
+  const initialTab = initialTabProp ?? "summary";
+  const pollingEnabled = pollingEnabledProp ?? true;
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();

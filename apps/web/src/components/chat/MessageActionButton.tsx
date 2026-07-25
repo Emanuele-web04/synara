@@ -25,9 +25,11 @@ type MessageActionButtonProps = Omit<
 
 export const MessageActionButton = forwardRef<HTMLButtonElement, MessageActionButtonProps>(
   function MessageActionButton(
-    { children, className, label, tooltip, tooltipSide = "top", type = "button", ...props },
+    { children, className, label, tooltip, tooltipSide: tooltipSideProp, type: typeProp, ...props },
     ref,
   ) {
+    const tooltipSide = tooltipSideProp ?? "top";
+    const type = typeProp ?? "button";
     return (
       <IconButton
         {...props}

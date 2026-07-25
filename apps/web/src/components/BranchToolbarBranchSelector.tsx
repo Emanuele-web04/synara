@@ -375,8 +375,9 @@ export function BranchToolbarBranchSelector({
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
-  variant = "toolbar",
+  variant: variantProp,
 }: BranchToolbarBranchSelectorProps) {
+  const variant = variantProp ?? "toolbar";
   const isPanel = variant === "panel";
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);

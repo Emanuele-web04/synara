@@ -18,12 +18,13 @@ function resolveProjectFaviconUrl(cwd: string): string {
 export function ProjectSidebarIcon({
   cwd,
   expanded,
-  glyphClassName = "size-4",
+  glyphClassName: glyphClassNameProp,
 }: {
   cwd: string;
   expanded: boolean;
   glyphClassName?: string;
 }) {
+  const glyphClassName = glyphClassNameProp ?? "size-4";
   const faviconSrc = resolveProjectFaviconUrl(cwd);
   // Keyed by src: a cwd change derives back to the cache-seeded default in the
   // same render, so the probe effect never needs a synchronous setState.

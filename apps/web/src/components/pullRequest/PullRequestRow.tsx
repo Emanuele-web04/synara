@@ -45,7 +45,7 @@ function TruncatedTitle({ title, number }: { title: string; number: number }) {
 export const PullRequestRow = function PullRequestRow({
   entry,
   selected,
-  showProjectTitle = false,
+  showProjectTitle: showProjectTitleProp,
   onClick,
   onTogglePinned,
 }: {
@@ -56,6 +56,7 @@ export const PullRequestRow = function PullRequestRow({
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
+  const showProjectTitle = showProjectTitleProp ?? false;
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =

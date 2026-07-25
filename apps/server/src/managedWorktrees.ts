@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { OrchestrationThread, ServerManagedWorktree } from "@synara/contracts";
+import type { ServerManagedWorktree } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
@@ -11,6 +11,22 @@ import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/Proj
 
 const MANAGED_WORKTREE_SCAN_DEPTH = 6;
 export const MANAGED_WORKTREE_RETENTION_COUNT = 15;
+
+/**
+ * The only thread state managed-worktree retention reads. Structural on purpose so
+ * both the narrow projection row and a full `OrchestrationThread` satisfy it, and so
+ * the prune path never pulls a whole read model into memory just to look at four
+ * columns.
+ */
+export interface ManagedWorktreeThreadRef {
+  readonly id: string;
+  // Widened with `| undefined` so both the narrow reader's normalized rows and a
+  // full `OrchestrationThread` (whose optional columns are `?: T | null` under
+  // `exactOptionalPropertyTypes`) structurally satisfy this ref.
+  readonly archivedAt?: string | null | undefined;
+  readonly worktreePath?: string | null | undefined;
+  readonly associatedWorktreePath?: string | null | undefined;
+}
 
 async function findLinkedWorktreeRoots(root: string, current = root, depth = 0): Promise<string[]> {
   if (depth > MANAGED_WORKTREE_SCAN_DEPTH) return [];
@@ -88,8 +104,8 @@ export function listManagedWorktrees(input: {
   );
 }
 
-function threadManagedWorktreePath(thread: OrchestrationThread): string | null {
-  return thread.associatedWorktreePath ?? thread.worktreePath;
+function threadManagedWorktreePath(thread: ManagedWorktreeThreadRef): string | null {
+  return thread.associatedWorktreePath ?? thread.worktreePath ?? null;
 }
 
 // The scanned inventory is realpath-canonical, while recorded thread paths may
@@ -97,7 +113,7 @@ function threadManagedWorktreePath(thread: OrchestrationThread): string | null {
 // Canonicalize the thread side too, or retention silently never matches
 // anything on symlinked layouts. Missing paths fall back to plain resolution.
 function canonicalizeThreadWorktreePaths(
-  threads: ReadonlyArray<OrchestrationThread>,
+  threads: ReadonlyArray<ManagedWorktreeThreadRef>,
 ): Effect.Effect<ReadonlyMap<string, string>, Error> {
   return Effect.tryPromise({
     try: async () => {
@@ -120,13 +136,13 @@ function canonicalizeThreadWorktreePaths(
 export function pruneArchivedManagedWorktrees(input: {
   readonly worktreesDir: string;
   readonly snapshotsDir: string;
-  readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly threads: ReadonlyArray<ManagedWorktreeThreadRef>;
   readonly git: GitCoreShape;
 }): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
   return Effect.gen(function* () {
     const inventory = yield* listManagedWorktrees(input);
     const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(input.threads);
-    const canonicalThreadPath = (thread: OrchestrationThread): string | null => {
+    const canonicalThreadPath = (thread: ManagedWorktreeThreadRef): string | null => {
       const recordedPath = threadManagedWorktreePath(thread);
       return recordedPath === null ? null : (canonicalByRecordedPath.get(recordedPath) ?? null);
     };
@@ -147,7 +163,7 @@ export function pruneArchivedManagedWorktrees(input: {
           : { thread, entry: null };
       })
       .filter(
-        (value): value is { thread: OrchestrationThread; entry: ServerManagedWorktree } =>
+        (value): value is { thread: ManagedWorktreeThreadRef; entry: ServerManagedWorktree } =>
           value.entry !== null && !activePaths.has(value.entry.path),
       )
       .sort((left, right) =>
@@ -230,11 +246,13 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
   readonly git: GitCoreShape;
 }): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
   return Effect.gen(function* () {
-    const snapshot = yield* input.snapshotQuery.getSnapshot();
+    // Deliberately not the shell snapshot: it hides soft-deleted threads, and a
+    // retention-deleted thread still owns a worktree that must be reclaimed.
+    const threads = yield* input.snapshotQuery.listManagedWorktreeThreads();
     return yield* pruneArchivedManagedWorktrees({
       worktreesDir: input.worktreesDir,
       snapshotsDir: path.join(input.homeDir, "worktree-snapshots"),
-      threads: snapshot.threads,
+      threads,
       git: input.git,
     });
   });

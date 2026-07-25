@@ -326,10 +326,12 @@ function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
 export default function GitActionsControl({
   gitCwd,
   activeThreadId,
-  hideQuickActionLabel = false,
-  variant = "header",
+  hideQuickActionLabel: hideQuickActionLabelProp,
+  variant: variantProp,
   onRegisterCommitAndPushTrigger,
 }: GitActionsControlProps) {
+  const hideQuickActionLabel = hideQuickActionLabelProp ?? false;
+  const variant = variantProp ?? "header";
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
@@ -374,18 +376,20 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const { data: branchList = null, isSuccess: branchListReady } = useQuery(
+  const { data: branchListData, isSuccess: branchListReady } = useQuery(
     gitBranchesQueryOptions(gitCwd),
   );
+  const branchList = branchListData ?? null;
   // Default to true while loading so we don't flash init controls.
   const isRepo = branchList?.isRepo ?? true;
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
   // Only poll status after branch discovery confirms a repo — avoids non-repo
   // cwds feeding a permanent "Refreshing git status..." invalidation loop.
-  const { data: gitStatus = null, error: gitStatusError } = useQuery(
+  const { data: gitStatusData, error: gitStatusError } = useQuery(
     gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true),
   );
+  const gitStatus = gitStatusData ?? null;
   const liveThreadBranchUpdate = useMemo(
     () =>
       resolveLiveThreadBranchUpdate({
@@ -672,15 +676,18 @@ export default function GitActionsControl({
     async function runGitActionWithToast({
       action,
       commitMessage,
-      forcePushOnlyProgress = false,
+      forcePushOnlyProgress: forcePushOnlyProgressProp,
       onConfirmed,
-      skipDefaultBranchPrompt = false,
+      skipDefaultBranchPrompt: skipDefaultBranchPromptProp,
       statusOverride,
-      featureBranch = false,
+      featureBranch: featureBranchProp,
       isDefaultBranchOverride,
       progressToastId,
       filePaths,
     }: RunGitActionWithToastInput) {
+      const forcePushOnlyProgress = forcePushOnlyProgressProp ?? false;
+      const skipDefaultBranchPrompt = skipDefaultBranchPromptProp ?? false;
+      const featureBranch = featureBranchProp ?? false;
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.branch ?? null;
       const actionIsDefaultBranch =

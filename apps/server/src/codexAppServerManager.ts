@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -51,6 +51,7 @@ import type { AgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
+import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -265,6 +266,14 @@ export interface CodexThreadSnapshot {
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
+/**
+ * How long a successful `codex --version` verdict stays valid. Session start and
+ * resume both gate on it, so without memoization every one of those paths spawned a
+ * fresh Codex process. Failures are never cached, so installing or upgrading Codex
+ * takes effect immediately.
+ */
+const CODEX_VERSION_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -3312,32 +3321,129 @@ function isMissingExecutableSpawnError(error: Error): boolean {
   );
 }
 
-async function assertSupportedCodexCliVersion(input: {
+interface CodexVersionCommandResult {
+  readonly error?: Error;
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Run `codex --version` asynchronously.
+ *
+ * This intentionally mirrors `spawnSync`'s result shape (`error` / `status` /
+ * `stdout` / `stderr`) so the version-gate semantics below stay byte-for-byte
+ * identical, but without blocking the event loop: a synchronous spawn froze the
+ * WebSocket fanout, PTY drains, and every provider's stdio for the duration of the
+ * probe (measured ~80-97 ms, up to the 4 s timeout when the binary hangs).
+ */
+function runCodexVersionCommand(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): Promise<CodexVersionCommandResult> {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
+    cwd: input.cwd,
+    env: input.env,
+  });
+
+  return new Promise<CodexVersionCommandResult>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(prepared.command, prepared.args, {
+        cwd: input.cwd,
+        env: input.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: prepared.shell,
+        windowsHide: prepared.windowsHide,
+        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+      });
+    } catch (error) {
+      resolve({
+        error: error instanceof Error ? error : new Error(String(error)),
+        status: null,
+        stdout: "",
+        stderr: "",
+      });
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: CodexVersionCommandResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+    // Bound captured output the same way spawnSync's maxBuffer did; `codex
+    // --version` prints a single line, so truncation only affects pathological
+    // output and never the parsed version.
+    const append = (buffer: string, chunk: string) =>
+      buffer.length >= CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES
+        ? buffer
+        : (buffer + chunk).slice(0, CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES);
+
+    timer = setTimeout(() => {
+      // SIGKILL (rather than spawnSync's SIGTERM) because the promise settles here
+      // regardless: a binary that ignores SIGTERM would otherwise linger forever.
+      child.kill("SIGKILL");
+      finish({
+        error: new Error(
+          `Codex CLI version check timed out after ${CODEX_VERSION_CHECK_TIMEOUT_MS}ms.`,
+        ),
+        status: null,
+        stdout,
+        stderr,
+      });
+    }, CODEX_VERSION_CHECK_TIMEOUT_MS);
+    timer.unref?.();
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout = append(stdout, chunk);
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = append(stderr, chunk);
+    });
+    child.on("error", (error) => {
+      finish({ error, status: null, stdout, stderr });
+    });
+    child.on("close", (code, signal) => {
+      finish({ status: code ?? (signal ? -1 : 0), stdout, stderr });
+    });
+  });
+}
+
+/** What the probe observed about the file it actually ran, so a later swap can be detected. */
+interface CodexCliBinaryFingerprint {
+  readonly path: string;
+  readonly identity: string;
+}
+
+async function runCodexCliVersionGate(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
-}): Promise<void> {
-  // Prefer an explicit cwd check before spawning. A missing working directory
-  // produces ENOENT that is otherwise misreported as a missing Codex binary.
-  assertCodexWorkingDirectoryExists(input.cwd);
-
+}): Promise<CodexCliBinaryFingerprint | null> {
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
+  // Resolved against the env the spawn below uses, never `process.env`. On macOS and Linux
+  // `buildCodexProcessEnv` can replace PATH with the login shell's, so resolving through the
+  // process environment could fingerprint a different `codex` than the one being probed — or
+  // none at all — and the staleness check would then be watching the wrong file.
+  const resolvedPath = resolveExecutable(input.binaryPath, { env });
+  const identity = resolvedPath ? executableIdentity(resolvedPath) : null;
+  const result = await runCodexVersionCommand({
+    binaryPath: input.binaryPath,
     cwd: input.cwd,
     env,
-  });
-  const result = spawnSync(prepared.command, prepared.args, {
-    cwd: input.cwd,
-    env,
-    encoding: "utf8",
-    shell: prepared.shell,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-    windowsHide: prepared.windowsHide,
-    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 
   if (result.error) {
@@ -3351,8 +3457,7 @@ async function assertSupportedCodexCliVersion(input: {
     );
   }
 
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
+  const { stdout, stderr } = result;
   if (result.status !== 0) {
     const detail = stderr.trim() || stdout.trim() || `Command exited with code ${result.status}.`;
     throw new Error(`Codex CLI version check failed. ${detail}`);
@@ -3362,7 +3467,105 @@ async function assertSupportedCodexCliVersion(input: {
   if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
     throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
   }
+
+  return resolvedPath && identity ? { path: resolvedPath, identity } : null;
 }
+
+interface CodexCliVersionGateEntry {
+  promise: Promise<void>;
+  /** 0 until the probe resolves successfully; failed verdicts are never reused. */
+  expiresAt: number;
+  /**
+   * The file the successful probe ran, or null when it could not be located.
+   *
+   * The path alone does not identify a binary: `npm i -g @openai/codex`, a downgrade or a local
+   * rebuild all leave the path untouched, so a purely path-keyed cache would keep serving the
+   * pre-upgrade verdict for the rest of the TTL — long enough to swallow a downgrade below the
+   * supported floor. Re-stat'ing this exact file on a cache hit costs one syscall and needs no
+   * environment, which is why the fingerprint lives on the entry instead of in the key.
+   */
+  fingerprint: CodexCliBinaryFingerprint | null;
+}
+
+const codexCliVersionGates = new Map<string, CodexCliVersionGateEntry>();
+
+function codexCliVersionGateKey(binaryPath: string, homePath: string | undefined): string {
+  // The installed version depends only on which binary runs and which CODEX_HOME
+  // shapes its environment — never on the caller's cwd. JSON encoding keeps the
+  // components unambiguous, since a path may contain any separator we'd pick.
+  return JSON.stringify([binaryPath, homePath ?? ""]);
+}
+
+/** True when the file behind a cached verdict is no longer the one that was probed. */
+function isCodexCliVersionGateStale(entry: CodexCliVersionGateEntry): boolean {
+  if (!entry.fingerprint) {
+    // Nothing was located at probe time, so there is nothing to compare against. The probe is
+    // what reports that failure, and failures are never cached, so no stale pass can hide here.
+    return false;
+  }
+  return executableIdentity(entry.fingerprint.path) !== entry.fingerprint.identity;
+}
+
+async function assertSupportedCodexCliVersion(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly homePath?: string;
+}): Promise<void> {
+  // Prefer an explicit cwd check before spawning. A missing working directory
+  // produces ENOENT that is otherwise misreported as a missing Codex binary. This
+  // is per-call state, so it must run even when the version verdict is cached.
+  assertCodexWorkingDirectoryExists(input.cwd);
+
+  const key = codexCliVersionGateKey(input.binaryPath, input.homePath);
+  const now = Date.now();
+  const existing = codexCliVersionGates.get(key);
+  if (existing) {
+    // expiresAt === 0 means the probe is still in flight: concurrent session
+    // starts share it instead of each spawning their own Codex process.
+    if (existing.expiresAt === 0) {
+      await existing.promise;
+      return;
+    }
+    if (existing.expiresAt > now && !isCodexCliVersionGateStale(existing)) {
+      await existing.promise;
+      return;
+    }
+    codexCliVersionGates.delete(key);
+  }
+
+  for (const [otherKey, entry] of codexCliVersionGates) {
+    if (entry.expiresAt !== 0 && entry.expiresAt <= now) {
+      codexCliVersionGates.delete(otherKey);
+    }
+  }
+
+  const entry: CodexCliVersionGateEntry = {
+    promise: Promise.resolve(),
+    expiresAt: 0,
+    fingerprint: null,
+  };
+  entry.promise = runCodexCliVersionGate(input).then(
+    (fingerprint) => {
+      entry.fingerprint = fingerprint;
+      entry.expiresAt = Date.now() + CODEX_VERSION_CHECK_CACHE_TTL_MS;
+    },
+    (error: unknown) => {
+      // Never cache a failure: the user may install or upgrade Codex at any time.
+      if (codexCliVersionGates.get(key) === entry) {
+        codexCliVersionGates.delete(key);
+      }
+      throw error;
+    },
+  );
+  codexCliVersionGates.set(key, entry);
+  await entry.promise;
+}
+
+export const __codexCliVersionGateTesting = {
+  assertSupportedCodexCliVersion,
+  reset: () => codexCliVersionGates.clear(),
+  cacheTtlMs: CODEX_VERSION_CHECK_CACHE_TTL_MS,
+};
 
 function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {

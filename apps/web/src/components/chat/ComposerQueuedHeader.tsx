@@ -71,8 +71,9 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
   onRemove,
   onEdit,
   cwd,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: ComposerQueuedHeaderProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   if (queuedTurns.length === 0) {
     return null;
   }

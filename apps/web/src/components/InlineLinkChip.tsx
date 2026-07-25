@@ -22,7 +22,12 @@ export interface InlineLinkChipProps {
   readonly className?: string | undefined;
 }
 
-export function InlineLinkChip({ url, interactive = false, className }: InlineLinkChipProps) {
+export function InlineLinkChip({
+  url,
+  interactive: interactiveProp,
+  className,
+}: InlineLinkChipProps) {
+  const interactive = interactiveProp ?? false;
   const { label } = describeLinkChip(url);
   const chipClassName = className ?? COMPOSER_INLINE_LINK_CHIP_CLASS_NAME;
 

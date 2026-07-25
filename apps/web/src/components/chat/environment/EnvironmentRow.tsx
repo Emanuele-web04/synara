@@ -89,13 +89,14 @@ export function EnvironmentLabeledSection({
  */
 export function EnvironmentCollapsibleSection({
   label,
-  defaultOpen = true,
+  defaultOpen: defaultOpenProp,
   children,
 }: {
   label: ReactNode;
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const defaultOpen = defaultOpenProp ?? true;
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col">
@@ -131,7 +132,7 @@ export function EnvironmentRowBody({
   icon,
   label,
   trailing,
-  compact = false,
+  compact: compactProp,
 }: {
   icon: ReactNode;
   label: ReactNode;
@@ -139,6 +140,7 @@ export function EnvironmentRowBody({
   /** Skip the 16px icon gutter — for cramped dock/diff header pickers. */
   compact?: boolean;
 }) {
+  const compact = compactProp ?? false;
   return (
     <>
       {compact ? (

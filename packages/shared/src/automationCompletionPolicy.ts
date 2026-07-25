@@ -1,13 +1,16 @@
 // FILE: automationCompletionPolicy.ts
-// Purpose: Centralizes UI rules for heartbeat stop clauses and their saved policy shape.
-// Layer: Web lib
-// Exports: stop-policy builders, extractors, and mode/review helpers.
+// Purpose: Single source for translating a stop clause to the saved completion policy shape.
+// Layer: Shared runtime utility (web composer + server agent gateway)
+// Exports: stop-clause builders and extractors.
 // Depends on: automation contracts shared with the native API.
+//
+// Completion policies are deliberately independent of AutomationMode: a stop clause
+// describes when an automation retires, while the mode describes where its runs
+// execute. Every mode supports "ai-evaluated".
 
 import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   type AutomationCompletionPolicy,
-  type AutomationMode,
 } from "@synara/contracts";
 
 export function completionPolicyFromStopWhen(stopWhen: string): AutomationCompletionPolicy {
@@ -23,18 +26,4 @@ export function completionPolicyFromStopWhen(stopWhen: string): AutomationComple
 
 export function stopWhenFromCompletionPolicy(policy: AutomationCompletionPolicy): string {
   return policy.type === "ai-evaluated" ? policy.stopWhen : "";
-}
-
-export function modeForCompletionPolicy(
-  mode: AutomationMode,
-  policy: AutomationCompletionPolicy,
-): AutomationMode {
-  return policy.type === "ai-evaluated" ? "heartbeat" : mode;
-}
-
-export function requiresCompletionPolicyReview(
-  mode: AutomationMode,
-  policy: AutomationCompletionPolicy,
-): boolean {
-  return policy.type === "ai-evaluated" && mode !== "heartbeat";
 }

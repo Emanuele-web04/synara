@@ -1721,4 +1721,141 @@ describe("orchestration projector", () => {
       "accepted-first-assistant",
     ]);
   });
+
+  it("accumulates streaming deltas in place without reordering the transcript", async () => {
+    const createdAt = "2026-07-20T09:00:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-stream",
+          occurredAt: createdAt,
+          commandId: "cmd-create-stream",
+          payload: {
+            threadId: "thread-stream",
+            projectId: "project-1",
+            title: "Streaming",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const messageEvent = (input: {
+      readonly sequence: number;
+      readonly messageId: string;
+      readonly role: "user" | "assistant";
+      readonly text: string;
+      readonly streaming: boolean;
+      readonly turnId: string | null;
+    }) =>
+      makeEvent({
+        sequence: input.sequence,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-stream",
+        occurredAt: createdAt,
+        commandId: `cmd-${input.sequence}`,
+        payload: {
+          threadId: "thread-stream",
+          messageId: input.messageId,
+          role: input.role,
+          text: input.text,
+          turnId: input.turnId,
+          streaming: input.streaming,
+          source: "native",
+          createdAt,
+          updatedAt: `2026-07-20T09:00:${String(input.sequence).padStart(2, "0")}.000Z`,
+        },
+      });
+
+    const deltas = ["Hel", "lo, ", "wor", "ld"];
+    const events = [
+      messageEvent({
+        sequence: 2,
+        messageId: "user-1",
+        role: "user",
+        text: "hi",
+        streaming: false,
+        turnId: "turn-1",
+      }),
+      ...deltas.map((delta, index) =>
+        messageEvent({
+          sequence: 3 + index,
+          messageId: "assistant-1",
+          role: "assistant",
+          text: delta,
+          streaming: true,
+          // First delta arrives without a turn binding; later deltas must not
+          // rebind an already-bound message.
+          turnId: index === 0 ? null : index === 3 ? "turn-other" : "turn-1",
+        }),
+      ),
+      messageEvent({
+        sequence: 7,
+        messageId: "user-2",
+        role: "user",
+        text: "next",
+        streaming: false,
+        turnId: "turn-2",
+      }),
+      // A late delta for an earlier message must update it in place.
+      messageEvent({
+        sequence: 8,
+        messageId: "assistant-1",
+        role: "assistant",
+        text: "!",
+        streaming: true,
+        turnId: "turn-1",
+      }),
+    ];
+
+    const state = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then((current) => Effect.runPromise(projectEvent(current, event))),
+      Promise.resolve(afterCreate),
+    );
+
+    const thread = state.threads[0];
+    expect(thread?.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "user-2",
+    ]);
+    const assistant = thread?.messages[1];
+    expect(assistant?.text).toBe(`${deltas.join("")}!`);
+    expect(assistant?.streaming).toBe(true);
+    expect(assistant?.turnId).toBe("turn-1");
+    expect(thread?.messages[2]?.text).toBe("next");
+
+    // The non-streaming finalization replaces the accumulated text.
+    const finalized = await Effect.runPromise(
+      projectEvent(
+        state,
+        messageEvent({
+          sequence: 9,
+          messageId: "assistant-1",
+          role: "assistant",
+          text: "Hello, world!",
+          streaming: false,
+          turnId: "turn-1",
+        }),
+      ),
+    );
+    expect(finalized.threads[0]?.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "user-2",
+    ]);
+    expect(finalized.threads[0]?.messages[1]?.text).toBe("Hello, world!");
+    expect(finalized.threads[0]?.messages[1]?.streaming).toBe(false);
+  });
 });

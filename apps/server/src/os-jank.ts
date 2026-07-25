@@ -5,6 +5,7 @@
 import * as OS from "node:os";
 import { Effect, Path } from "effect";
 import {
+  isShellEnvironmentHydrated,
   listLoginShellCandidates,
   mergePathEntries,
   readPathFromLaunchctl,
@@ -29,6 +30,13 @@ export function fixPath(
   if (platform !== "darwin" && platform !== "linux") return;
 
   const env = options.env ?? process.env;
+
+  // Startup blocks here: the server does not begin listening until the probe returns,
+  // and `-ilc` sources the user's whole interactive rc (~1s). When the desktop shell
+  // already ran it and handed us the resulting PATH, repeating it buys nothing and
+  // doubles cold start. The marker — not merely a populated PATH — is what proves it.
+  if (isShellEnvironmentHydrated(env)) return;
+
   const logWarning = options.logWarning ?? logPathHydrationWarning;
   const readPath = options.readPath ?? readPathFromLoginShell;
 

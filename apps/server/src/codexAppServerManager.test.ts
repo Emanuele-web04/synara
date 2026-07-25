@@ -24,6 +24,7 @@ import {
   buildCodexInitializeParams,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+  __codexCliVersionGateTesting,
   CodexAppServerManager,
   classifyCodexStderrLine,
   isRecoverableThreadResumeError,
@@ -664,6 +665,188 @@ describe("classifyCodexStderrLine", () => {
     expect(classifyCodexStderrLine(line)).toEqual({
       message: "Tool call failed because the same argument was sent twice (yield_time_ms).",
     });
+  });
+});
+
+describe("codex CLI version gate", () => {
+  it("memoizes the version probe per binary and shares concurrent probes", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 9.9.9\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 9.9.9"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      // Concurrent session starts must share one in-flight probe.
+      await Promise.all([
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ]);
+      expect(probeCount()).toBe(1);
+
+      // A later start/resume reuses the cached verdict instead of spawning again.
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      expect(probeCount()).toBe(1);
+
+      // The per-call working-directory precondition is never served from the cache.
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: path.join(dir, "missing"),
+          homePath,
+        }),
+      ).rejects.toThrow(formatMissingCodexWorkingDirectoryError(path.join(dir, "missing")));
+      expect(probeCount()).toBe(1);
+
+      // An expired verdict re-probes.
+      reset();
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-probes when the binary behind an unchanged path is replaced", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-swap-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    // The trailing filler keeps the two revisions different in size, so the swap is detected
+    // even on a filesystem whose timestamps are too coarse to separate two writes this close.
+    const writeBinary = (version: string, filler: string) => {
+      writeFileSync(
+        binaryPath,
+        isWindows
+          ? `@echo off\r\nrem ${filler}\r\necho codex-cli ${version}\r\n`
+          : `#!/bin/sh\n# ${filler}\necho "codex-cli ${version}"\n`,
+        { mode: 0o755 },
+      );
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      writeBinary("9.9.9", "original");
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+
+      // An in-place downgrade must not keep riding the cached pass for the rest of the TTL.
+      writeBinary("0.1.0", "replaced-in-place-by-a-downgrade");
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-probes when a PATH-resolved codex is replaced behind the same bare name", async () => {
+    // The production default is the bare name `codex`, so the fingerprint is only useful if it
+    // survives PATH resolution. It is taken from the same env object handed to the spawn a few
+    // lines later, which is what keeps it pointed at the binary actually being probed even when
+    // that env carries a login-shell PATH the process itself never had.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-path-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex");
+    const writeBinary = (version: string, filler: string) => {
+      writeFileSync(
+        binaryPath,
+        isWindows
+          ? `@echo off\r\nrem ${filler}\r\necho codex-cli ${version}\r\n`
+          : `#!/bin/sh\n# ${filler}\necho "codex-cli ${version}"\n`,
+        { mode: 0o755 },
+      );
+    };
+    // Prepended, so this copy wins over any real codex on the machine.
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      writeBinary("9.9.9", "original");
+      await assertSupportedCodexCliVersion({ binaryPath: "codex", cwd: dir, homePath });
+
+      writeBinary("0.1.0", "replaced-in-place-by-a-downgrade");
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath: "codex", cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unsupported codex version without caching the failure", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-old-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.1.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.1.0"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+      // Failures are re-probed so installing or upgrading Codex takes effect at once.
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -77,11 +77,15 @@ export const AutomationWorktreeMode = Schema.Literals(["auto", "local", "worktre
 export type AutomationWorktreeMode = typeof AutomationWorktreeMode.Type;
 
 /**
- * Automation execution model.
+ * Automation execution model. It selects *where* runs execute; it never restricts
+ * which stop conditions an automation may use.
  * - `standalone`: every run creates a fresh thread + turn (project task on a schedule).
  * - `heartbeat`: every run continues an existing target thread (a self-resuming loop).
+ * - `dedicated`: the first run creates a thread the automation owns, and every later
+ *   run continues that same thread — one growing conversation instead of one thread
+ *   per run, without ever writing into somebody else's thread.
  */
-export const AutomationMode = Schema.Literals(["standalone", "heartbeat"]);
+export const AutomationMode = Schema.Literals(["standalone", "heartbeat", "dedicated"]);
 export type AutomationMode = typeof AutomationMode.Type;
 
 export const AutomationProposalState = Schema.Literals(["pending", "accepted", "dismissed"]);
@@ -215,7 +219,11 @@ export const AutomationDefinition = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   mode: AutomationMode,
-  /** Heartbeat target thread continued on each wake. Null for standalone automations. */
+  /**
+   * Thread continued on each wake: the user-chosen target for heartbeat, or the
+   * automation's own thread for dedicated (server-assigned after its first run).
+   * Always null for standalone automations.
+   */
   targetThreadId: Schema.NullOr(ThreadId),
   /** Suggested agent-created automations require an explicit user resolution. */
   proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)).pipe(
@@ -225,7 +233,7 @@ export const AutomationDefinition = Schema.Struct({
   notificationPolicy: Schema.optional(AutomationNotificationPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_NOTIFICATION_POLICY),
   ),
-  /** Minimum quiet period after the target thread's last completed turn. */
+  /** Minimum quiet period after the continued thread's last completed turn. */
   heartbeatCooldownSeconds: Schema.optional(NonNegativeInt).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS),
   ),
@@ -233,7 +241,7 @@ export const AutomationDefinition = Schema.Struct({
   maxIterations: Schema.NullOr(PositiveInt),
   /** When true, a failed run disables the automation (stops a runaway loop). */
   stopOnError: Schema.Boolean,
-  /** Heartbeat-only natural language stop condition. Standalone runs ignore it for now. */
+  /** Natural language stop condition, evaluated in every mode. */
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),

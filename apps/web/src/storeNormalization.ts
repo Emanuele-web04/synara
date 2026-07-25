@@ -1011,6 +1011,98 @@ export function normalizeActivities(
   return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
 }
 
+type ThreadActivity = Thread["activities"][number];
+
+/**
+ * Incremental equivalent of repeatedly calling
+ * `normalizeActivities([...previous, activity], previous)` while folding a batch of
+ * `thread.activity-appended` events into one thread write.
+ *
+ * `normalizeActivities` re-dedupes, re-maps and re-caps the whole list for every activity, which
+ * is O(events x activities) inside a batch. The accumulator keeps an id index instead, so each
+ * append is O(1) amortised while staying observationally identical:
+ * - unseen ids append at the end, known ids merge in place via `preferRicherActivity`,
+ * - the cap is applied after every append (not just once at the end), so retention of pending
+ *   approval/user-input requests is decided at exactly the same points,
+ * - `result()` returns `previous` by reference when the batch changed nothing, and `append()`
+ *   reports per-activity change so callers can reproduce the old `updatedAt` bumping rule.
+ */
+export interface ThreadActivityAccumulator {
+  /** Appends one already-sequenced activity. Returns true when the accumulated list changed. */
+  readonly append: (activity: ThreadActivity) => boolean;
+  /** Accumulated activities, reference-identical to `previous` when nothing changed. */
+  readonly result: () => Thread["activities"];
+}
+
+export function createThreadActivityAccumulator(
+  previous: Thread["activities"],
+): ThreadActivityAccumulator {
+  const deduped = dedupeActivitiesById(previous);
+  // `dedupeActivitiesById` only returns a new array when it actually removed a duplicate, so a
+  // different reference here means the first `append()` must report a change even if that append
+  // is itself a no-op (matching `normalizeActivities`, which dedupes `previous` on every call).
+  let pendingDedupeChange = deduped !== previous;
+  let working: ThreadActivity[] = deduped;
+  let owned = pendingDedupeChange;
+  let indexById: Map<string, number> | undefined;
+
+  const ensureIndexById = (): Map<string, number> => {
+    if (!indexById) {
+      const nextIndexById = new Map<string, number>();
+      for (let index = 0; index < working.length; index += 1) {
+        nextIndexById.set(working[index]!.id, index);
+      }
+      indexById = nextIndexById;
+    }
+    return indexById;
+  };
+
+  const ensureOwned = (): void => {
+    if (!owned) {
+      working = [...working];
+      owned = true;
+    }
+  };
+
+  return {
+    append: (activity) => {
+      const activityIndexById = ensureIndexById();
+      const existingIndex = activityIndexById.get(activity.id);
+      let changed = false;
+      if (existingIndex === undefined) {
+        ensureOwned();
+        working.push(activity);
+        activityIndexById.set(activity.id, working.length - 1);
+        changed = true;
+      } else {
+        const existing = working[existingIndex]!;
+        const preferred = preferRicherActivity(existing, activity);
+        if (preferred !== existing) {
+          ensureOwned();
+          working[existingIndex] = preferred;
+          changed = true;
+        }
+      }
+      if (working.length > MAX_THREAD_ACTIVITIES) {
+        const capped = capThreadActivities(working);
+        // `capThreadActivities` only filters, so an unchanged length means unchanged contents.
+        if (capped.length !== working.length) {
+          working = capped;
+          owned = true;
+          indexById = undefined;
+          changed = true;
+        }
+      }
+      if (pendingDedupeChange) {
+        pendingDedupeChange = false;
+        return true;
+      }
+      return changed;
+    },
+    result: () => (arraysShallowEqual(previous, working) ? previous : working),
+  };
+}
+
 export function withOrchestrationEventSequence(
   activity: OrchestrationThreadActivity,
   sequence: number,

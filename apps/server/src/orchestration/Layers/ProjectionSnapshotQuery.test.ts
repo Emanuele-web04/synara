@@ -2073,4 +2073,203 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(candidates, [ThreadId.makeUnsafe("thread-stale-running")]);
     }),
   );
+
+  it.effect("excludes soft-deleted thread bodies from the full snapshot", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-soft-delete', 'Soft delete', '/tmp/soft-delete',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES
+          (
+            'thread-live', 'project-soft-delete', 'Live',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-24T00:00:01.000Z', '2026-07-24T00:00:01.000Z', NULL
+          ),
+          (
+            'thread-soft-deleted', 'project-soft-delete', 'Retention deleted',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-24T00:00:02.000Z', '2026-07-24T00:00:09.000Z',
+            '2026-07-24T00:00:09.000Z'
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
+        ) VALUES
+          (
+            'message-live', 'thread-live', NULL, 'user', 'visible', 0,
+            '2026-07-24T00:00:03.000Z', '2026-07-24T00:00:03.000Z'
+          ),
+          (
+            'message-deleted', 'thread-soft-deleted', NULL, 'user', 'hidden', 0,
+            '2026-07-24T00:00:04.000Z', '2026-07-24T00:00:04.000Z'
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        ) VALUES
+          (
+            'activity-live', 'thread-live', NULL, 'info', 'runtime.note',
+            'visible', '{}', 1, '2026-07-24T00:00:05.000Z'
+          ),
+          (
+            'activity-deleted', 'thread-soft-deleted', NULL, 'info', 'runtime.note',
+            'hidden', '{}', 2, '2026-07-24T00:00:06.000Z'
+          )
+      `;
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      // Soft-deleted threads still appear as rows: only their bodies are dropped, so
+      // nothing that reconciles tombstones client-side changes behavior.
+      const live = snapshot.threads.find((thread) => thread.id === asThreadId("thread-live"));
+      const deleted = snapshot.threads.find(
+        (thread) => thread.id === asThreadId("thread-soft-deleted"),
+      );
+      assert.deepEqual(
+        live?.messages.map((message) => message.id),
+        [asMessageId("message-live")],
+      );
+      assert.deepEqual(
+        live?.activities.map((activity) => activity.summary),
+        ["visible"],
+      );
+      assert.isDefined(deleted);
+      assert.deepEqual(deleted?.messages, []);
+      assert.deepEqual(deleted?.activities, []);
+    }),
+  );
+
+  it.effect("keeps soft-deleted thread activities visible to the command read model", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-deleted-command', 'Deleted command', '/tmp/deleted-command',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-deleted-command', 'project-deleted-command', 'Deleted command',
+          '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+          '2026-07-24T00:00:01.000Z', '2026-07-24T00:00:09.000Z',
+          '2026-07-24T00:00:09.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        ) VALUES (
+          'revert-started-deleted', 'thread-deleted-command', NULL, 'info',
+          'checkpoint.revert.started', 'Checkpoint revert started', '{}', 10,
+          '2026-07-24T00:00:02.000Z'
+        )
+      `;
+
+      // Decider idempotency depends on deleted threads keeping their lifecycle rows.
+      const commandModel = yield* snapshotQuery.getCommandReadModel();
+      const thread = commandModel.threads.find(
+        (candidate) => candidate.id === asThreadId("thread-deleted-command"),
+      );
+      assert.deepEqual(
+        thread?.activities.map((activity) => activity.kind),
+        ["checkpoint.revert.started"],
+      );
+    }),
+  );
+
+  it.effect("lists managed worktree threads including soft-deleted owners", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-worktrees', 'Worktrees', '/tmp/worktrees',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-24T00:00:00.000Z', '2026-07-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          associated_worktree_path, latest_turn_id, created_at, updated_at,
+          archived_at, deleted_at
+        ) VALUES
+          (
+            'thread-worktree-active', 'project-worktrees', 'Active',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, '/tmp/wt/active',
+            NULL, NULL, '2026-07-24T00:00:01.000Z', '2026-07-24T00:00:01.000Z',
+            NULL, NULL
+          ),
+          (
+            'thread-worktree-deleted', 'project-worktrees', 'Retention deleted',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, '/tmp/wt/deleted',
+            '/tmp/wt/deleted-assoc', NULL, '2026-07-24T00:00:02.000Z',
+            '2026-07-24T00:00:09.000Z', '2026-07-24T00:00:08.000Z',
+            '2026-07-24T00:00:09.000Z'
+          ),
+          (
+            'thread-no-worktree', 'project-worktrees', 'No worktree',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL,
+            NULL, NULL, '2026-07-24T00:00:03.000Z', '2026-07-24T00:00:03.000Z',
+            NULL, NULL
+          )
+      `;
+
+      const threads = yield* snapshotQuery.listManagedWorktreeThreads();
+      assert.deepEqual(threads, [
+        {
+          id: asThreadId("thread-worktree-active"),
+          archivedAt: null,
+          worktreePath: "/tmp/wt/active",
+          associatedWorktreePath: null,
+        },
+        {
+          id: asThreadId("thread-worktree-deleted"),
+          archivedAt: "2026-07-24T00:00:08.000Z",
+          worktreePath: "/tmp/wt/deleted",
+          associatedWorktreePath: "/tmp/wt/deleted-assoc",
+        },
+      ]);
+    }),
+  );
 });

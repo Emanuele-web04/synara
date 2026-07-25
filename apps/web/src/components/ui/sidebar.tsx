@@ -101,7 +101,7 @@ function useSidebar() {
 }
 
 function SidebarProvider({
-  defaultOpen = true,
+  defaultOpen: defaultOpenProp,
   open: openProp,
   onOpenChange: setOpenProp,
   className,
@@ -113,6 +113,7 @@ function SidebarProvider({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
+  const defaultOpen = defaultOpenProp ?? true;
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
 
@@ -120,7 +121,6 @@ function SidebarProvider({
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const setOpen = React.useCallback(
     async (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value;
@@ -214,7 +214,7 @@ function resolveSidebarResizable(
 function SidebarInstanceProvider({
   side,
   resizable,
-  collapsible = "offcanvas",
+  collapsible: collapsibleProp,
   children,
 }: {
   side: "left" | "right";
@@ -222,6 +222,7 @@ function SidebarInstanceProvider({
   collapsible?: "offcanvas" | "icon" | "none";
   children: React.ReactNode;
 }) {
+  const collapsible = collapsibleProp ?? "offcanvas";
   const { isMobile } = useSidebar();
   const resolvedResizable = React.useMemo(
     () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
@@ -237,14 +238,14 @@ function SidebarInstanceProvider({
 }
 
 function Sidebar({
-  side = "left",
-  variant = "sidebar",
-  collapsible = "offcanvas",
-  resizable = false,
+  side: sideProp,
+  variant: variantProp,
+  collapsible: collapsibleProp,
+  resizable: resizableProp,
   className,
   gapClassName,
   innerClassName,
-  transparentSurface = false,
+  transparentSurface: transparentSurfaceProp,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
@@ -256,6 +257,11 @@ function Sidebar({
   innerClassName?: string;
   transparentSurface?: boolean;
 }) {
+  const side = sideProp ?? "left";
+  const variant = variantProp ?? "sidebar";
+  const collapsible = collapsibleProp ?? "offcanvas";
+  const resizable = resizableProp ?? false;
+  const transparentSurface = transparentSurfaceProp ?? false;
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
     () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
@@ -423,7 +429,7 @@ function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptio
 }
 
 function SidebarRail({
-  placement = "sidebar-shell",
+  placement: placementProp,
   className,
   onClick,
   onPointerCancel,
@@ -435,6 +441,7 @@ function SidebarRail({
   /** `content-seam` sits on the chat column edge above the card; `sidebar-shell` stays on the sidebar container. */
   placement?: "sidebar-shell" | "content-seam";
 }) {
+  const placement = placementProp ?? "sidebar-shell";
   const { open, toggleSidebar } = useSidebar();
   const sidebarInstance = React.useContext(SidebarInstanceContext);
   const side = sidebarInstance?.side ?? "left";
@@ -906,9 +913,9 @@ const sidebarMenuButtonVariants = cva(
 );
 
 function SidebarMenuButton({
-  isActive = false,
-  variant = "default",
-  size = "default",
+  isActive: isActiveProp,
+  variant: variantProp,
+  size: sizeProp,
   tooltip,
   className,
   render,
@@ -917,6 +924,12 @@ function SidebarMenuButton({
   isActive?: boolean;
   tooltip?: string | React.ComponentProps<typeof TooltipPopup>;
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
+  const isActive = isActiveProp ?? false;
+  // `variant`/`size` come from cva's VariantProps, whose types admit an explicit
+  // `null` (meaning "use the cva defaultVariants"). Only `undefined` may fall back
+  // here, so `??` would not preserve behavior.
+  const variant = variantProp === undefined ? "default" : variantProp;
+  const size = sizeProp === undefined ? "default" : sizeProp;
   const { isMobile, state } = useSidebar();
 
   const defaultProps = {
@@ -960,12 +973,13 @@ function SidebarMenuButton({
 
 function SidebarMenuAction({
   className,
-  showOnHover = false,
+  showOnHover: showOnHoverProp,
   render,
   ...props
 }: useRender.ComponentProps<"button"> & {
   showOnHover?: boolean;
 }) {
+  const showOnHover = showOnHoverProp ?? false;
   const defaultProps = {
     className: cn(
       "sidebar-icon-button absolute top-1.5 right-1 flex aspect-square w-5 cursor-pointer p-0 text-sidebar-foreground outline-hidden ring-ring/60 transition-transform [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0",
@@ -1011,11 +1025,12 @@ function SidebarMenuBadge({ className, ...props }: React.ComponentProps<"div">) 
 
 function SidebarMenuSkeleton({
   className,
-  showIcon = false,
+  showIcon: showIconProp,
   ...props
 }: React.ComponentProps<"div"> & {
   showIcon?: boolean;
 }) {
+  const showIcon = showIconProp ?? false;
   // Random width between 50 to 90%, chosen once per mount so the bar doesn't
   // jitter on re-renders (lazy state init keeps the impure call out of render).
   const [width] = React.useState(() => `${Math.floor(Math.random() * 40) + 50}%`);
@@ -1068,8 +1083,8 @@ function SidebarMenuSubItem({ className, ...props }: React.ComponentProps<"li">)
 }
 
 function SidebarMenuSubButton({
-  size = "md",
-  isActive = false,
+  size: sizeProp,
+  isActive: isActiveProp,
   className,
   render,
   ...props
@@ -1077,6 +1092,8 @@ function SidebarMenuSubButton({
   size?: "sm" | "md";
   isActive?: boolean;
 }) {
+  const size = sizeProp ?? "md";
+  const isActive = isActiveProp ?? false;
   const defaultProps = {
     className: cn(
       "-translate-x-px flex h-7 min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg px-2 text-sidebar-foreground outline-hidden ring-ring/60 hover:bg-[var(--sidebar-accent)] focus-visible:ring-1 active:bg-[var(--sidebar-accent-active)] active:text-[var(--sidebar-accent-foreground)] disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0",

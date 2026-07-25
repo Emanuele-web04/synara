@@ -6,12 +6,12 @@ import {
   ArchiveIcon,
   BookIcon,
   ChatBubbleIcon,
+  CircleQuestionIcon,
   ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
-  InfoIcon,
   KanbanIcon,
   KeyboardIcon,
   type LucideIcon,
@@ -160,7 +160,7 @@ import {
   automationAttentionCount,
   automationQueryKey,
   formatCadence,
-  groupHeartbeatAutomationsByTargetThread,
+  groupAutomationsByContinuedThread,
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
@@ -890,7 +890,12 @@ function SidebarHelpMenu({
 }) {
   return (
     <Menu>
-      <SidebarIconButton render={<MenuTrigger />} icon={InfoIcon} label="Help" tooltip="Help" />
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={CircleQuestionIcon}
+        label="Help"
+        tooltip="Help"
+      />
       <ComposerPickerMenuPopup
         align="end"
         side="top"
@@ -986,8 +991,8 @@ function SidebarPrimaryAction({
   onClick,
   onMouseEnter,
   onFocus,
-  active = false,
-  disabled = false,
+  active: activeProp,
+  disabled: disabledProp,
   shortcutLabel,
   badge,
 }: {
@@ -1002,6 +1007,10 @@ function SidebarPrimaryAction({
   shortcutLabel?: string | null;
   badge?: SidebarActionBadge | null;
 }) {
+  // Defaults live in the body, not the destructuring pattern: an AssignmentPattern in
+  // the parameter list makes React Compiler bail out on the whole component.
+  const active = activeProp ?? false;
+  const disabled = disabledProp ?? false;
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
 
   return (
@@ -1051,13 +1060,15 @@ function SidebarPrimaryAction({
 
 function SortableProjectItem({
   projectId,
-  disabled = false,
+  disabled: disabledProp,
   children,
 }: {
   projectId: ProjectId;
   disabled?: boolean;
   children: (handleProps: SortableProjectHandleProps) => React.ReactNode;
 }) {
+  // Default resolved in the body — see SidebarPrimaryAction.
+  const disabled = disabledProp ?? false;
   const {
     attributes,
     listeners,
@@ -1320,7 +1331,7 @@ export default function Sidebar() {
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
-    () => groupHeartbeatAutomationsByTargetThread(automationListQuery.data?.definitions ?? []),
+    () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
   const { settings: appSettings, updateSettings } = useAppSettings();
@@ -1422,14 +1433,39 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
-  const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
+  // Query defaults are applied after destructuring: a default inside the destructuring
+  // pattern makes React Compiler bail out on the whole Sidebar component.
+  const keybindingsQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
-  const { data: serverCwd = null } = useQuery({
+  const keybindings = keybindingsQuery.data ?? EMPTY_KEYBINDINGS;
+  const serverCwdQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.cwd ?? null,
   });
+  const serverCwd = serverCwdQuery.data ?? null;
+  // Declared next to `keybindings` (rather than further down) because the project-row render
+  // helpers above read these labels. A const declared after the closure that captures it
+  // widens its inferred mutable range and makes React Compiler drop the memoization of every
+  // hook that depends on it. See Sidebar.compiler.test.ts.
+  const newThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.new") ??
+    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
+  const newChatShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.newChat") ??
+    shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
+  const searchShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.search") ??
+    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const importThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
+    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
+  const addProjectShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
+    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
+  const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
@@ -2298,7 +2334,13 @@ export default function Sidebar() {
         setIsAddingProject(false);
       };
 
-      try {
+      // The flow lives in a nested function that the `try` below merely awaits: React
+      // Compiler's BuildHIR cannot lower a `throw` or a value block (`?.`, `??`, ternary,
+      // conditional spread) that sits directly inside a try block, and a single one of them
+      // makes the entire Sidebar bail out of compilation — silently, since `panicThreshold`
+      // is unset. Nested function bodies are lowered separately and are unaffected, and the
+      // catch below still sees every rejection. See Sidebar.compiler.test.ts.
+      const runAddProject = async () => {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
         const existingRecovery = await recoverExistingAddProjectTarget({
           existingProjectId: existing?.id,
@@ -2364,7 +2406,10 @@ export default function Sidebar() {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
         finishAddingProject();
-        return;
+      };
+
+      try {
+        await runAddProject();
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
@@ -3188,7 +3233,9 @@ export default function Sidebar() {
       );
       if (!confirmed) return;
 
-      try {
+      // Nested function so the `try` body stays free of value blocks — see the comment on
+      // `runAddProject` above for why React Compiler requires this shape.
+      const runRemoveProject = async () => {
         // `project.delete` refuses non-empty folders, so `Remove` clears threads first.
         const deletionResult = await deleteProjectThreads(projectId, {
           confirmMessage: null,
@@ -3222,6 +3269,10 @@ export default function Sidebar() {
               ? `Deleted ${deletionResult.deletedCount} ${pluralize(deletionResult.deletedCount, "thread")} and removed the project.`
               : "Project removed.",
         });
+      };
+
+      try {
+        await runRemoveProject();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
         console.error("Failed to remove project", { projectId, error });
@@ -5086,23 +5137,6 @@ export default function Sidebar() {
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
-  const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.new") ??
-    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
-  const newChatShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.newChat") ??
-    shortcutLabelForCommand(keybindings, "chat.newLocal");
-  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
-  const searchShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.search") ??
-    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
-  const importThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
-    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
-  const addProjectShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
-    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
-  const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
     () =>
       projects.map((project) => ({

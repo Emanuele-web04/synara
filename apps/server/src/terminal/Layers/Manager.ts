@@ -432,6 +432,30 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
+/**
+ * Upper bound on how much is held back while waiting for a control-sequence terminator.
+ *
+ * String sequences (OSC/DCS/PM/APC) only end on BEL/ST, so a truncated program, a
+ * crashed TUI, or `cat` on a binary can leave one open forever. Without a bound the
+ * carryover buffer grows without limit, every flush rescans it from the start
+ * (quadratic), and nothing ever reaches scrollback — the terminal silently freezes.
+ * Real emulators abandon an over-long sequence and resume, so we do the same.
+ *
+ * The bound counts what `.length` counts — UTF-16 code units, not bytes — so an
+ * all-ASCII payload is capped at exactly 64 KiB while a non-ASCII one can be a few
+ * times that on the wire. That imprecision is deliberate: this is a runaway guard,
+ * and it only has to sit far above legitimate traffic. It is generous for the same
+ * reason, since inline-image protocols (sixel DCS, iTerm2 OSC 1337) do send large
+ * payloads. Payloads above it are abandoned for scrollback only: live output is
+ * streamed as raw PTY bytes and is never sanitized, so the visible terminal is
+ * unaffected. Scrollback itself is capped at 1 MB, so a payload this large could not
+ * survive there anyway.
+ */
+const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 65_536;
+
+/** ESC + backslash: the 7-bit String Terminator that closes an OSC/DCS/PM/APC sequence. */
+const STRING_TERMINATOR = "\u001b\\";
+
 function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
@@ -451,18 +475,37 @@ function sanitizeTerminalHistoryChunk(
     visibleText += value;
   };
 
+  /**
+   * Stop parsing at an incomplete control sequence and carry it into the next
+   * chunk — unless the carryover exceeds the safety bound, in which case the
+   * sequence is abandoned: the buffered bytes are emitted (terminated by ST so a
+   * replayed transcript cannot wedge the client parser) and the parser resets.
+   */
+  const suspend = (start: number) => {
+    const pending = input.slice(start);
+    if (pending.length > MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
+      return {
+        visibleText: `${visibleText}${pending}${STRING_TERMINATOR}`,
+        pendingControlSequence: "",
+        titleSignals,
+        hookEvents,
+      };
+    }
+    return {
+      visibleText,
+      pendingControlSequence: pending,
+      titleSignals,
+      hookEvents,
+    };
+  };
+
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
 
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
 
       if (nextCodePoint === 0x5b) {
@@ -480,12 +523,7 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return {
-            visibleText,
-            pendingControlSequence: input.slice(index),
-            titleSignals,
-            hookEvents,
-          };
+          return suspend(index);
         }
         continue;
       }
@@ -498,12 +536,7 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return {
-            visibleText,
-            pendingControlSequence: input.slice(index),
-            titleSignals,
-            hookEvents,
-          };
+          return suspend(index);
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
@@ -526,12 +559,7 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
       const sequence = input.slice(index, escapeSequenceEndIndex);
       if (sequence !== "\u001b7" && sequence !== "\u001b8") {
@@ -556,12 +584,7 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
       continue;
     }
@@ -569,12 +592,7 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
@@ -601,6 +619,11 @@ function sanitizeTerminalHistoryChunk(
 
   return { visibleText, pendingControlSequence: "", titleSignals, hookEvents };
 }
+
+export const __terminalHistorySanitizeTesting = {
+  sanitizeTerminalHistoryChunk,
+  maxPendingControlSequenceLength: MAX_PENDING_CONTROL_SEQUENCE_LENGTH,
+};
 
 function legacySafeThreadId(threadId: string): string {
   return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -1149,6 +1172,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     await Promise.all(
       threadSessions.map((session) => this.flushPersistQueue(session.threadId, session.terminalId)),
     );
+    for (const session of threadSessions) {
+      this.releasePersistedHistoryCache(session.threadId, session.terminalId);
+    }
 
     if (deleteHistory) {
       await this.deleteAllHistoryForThread(threadId);
@@ -1787,7 +1813,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         session.terminalId,
         session.history.toString(),
       ).finally(() => {
-        this.persistedHistoryByKey.delete(key);
+        this.releasePersistedHistoryCache(session.threadId, session.terminalId);
       });
       this.clearKillEscalationTimer(session.process);
     }
@@ -2195,9 +2221,24 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     this.updateSubprocessPollingState();
     await this.flushPersistQueue(threadId, terminalId);
+    this.releasePersistedHistoryCache(threadId, terminalId);
     if (deleteHistory) {
       await this.deleteHistory(threadId, terminalId);
     }
+  }
+
+  /**
+   * Drop the write-dedup entry for a session that is no longer resident.
+   *
+   * `persistedHistoryByKey` only exists to skip a redundant rewrite of identical
+   * history, and the final persist re-populates it *after* the session was removed.
+   * Without this release every closed-but-not-deleted session (archiving keeps its
+   * history on disk) would pin up to `historyByteLimit` of scrollback in memory for
+   * the lifetime of the process. Dropping the entry costs at most one redundant file
+   * write later; `readHistory` re-populates it when the terminal is reopened.
+   */
+  private releasePersistedHistoryCache(threadId: string, terminalId: string): void {
+    this.persistedHistoryByKey.delete(toSessionKey(threadId, terminalId));
   }
 
   private sessionsForThread(threadId: string): TerminalSessionState[] {

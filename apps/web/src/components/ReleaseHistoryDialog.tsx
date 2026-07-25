@@ -38,9 +38,11 @@ export interface ReleaseHistoryDialogProps {
 export default function ReleaseHistoryDialog({
   open,
   onOpenChange,
-  entries = WHATS_NEW_ENTRIES,
-  defaultExpandedVersion = null,
+  entries: entriesProp,
+  defaultExpandedVersion: defaultExpandedVersionProp,
 }: ReleaseHistoryDialogProps) {
+  const entries = entriesProp ?? WHATS_NEW_ENTRIES;
+  const defaultExpandedVersion = defaultExpandedVersionProp ?? null;
   // Sort at render time so the source of truth (`entries.ts`) stays free of
   // ordering rules — authors can prepend, append, or reorder entries freely.
   const sorted = sortEntriesByVersionDesc(entries);

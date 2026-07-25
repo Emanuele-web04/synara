@@ -34,7 +34,7 @@ export function OpenInPicker({
   keybindings: keybindingsProp,
   availableEditors: availableEditorsProp,
   openInTarget,
-  labelMode = "responsive",
+  labelMode: labelModeProp,
   defaultEditor,
 }: {
   // Editor config is optional: callers that already hold it (e.g. the chat
@@ -54,6 +54,7 @@ export function OpenInPicker({
   // to the OS viewer (e.g. Preview) while still listing installed editors.
   defaultEditor?: EditorId;
 }) {
+  const labelMode = labelModeProp ?? "responsive";
   // Only subscribe to the config query when the caller did not supply config.
   const needsConfig = keybindingsProp === undefined || availableEditorsProp === undefined;
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: needsConfig });

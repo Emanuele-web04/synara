@@ -14,7 +14,11 @@ import {
   type AutomationWorktreeMode,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Effect, Schema } from "effect";
+import {
+  automationContinuesThread,
+  automationRequiresTargetThread,
+} from "@synara/shared/automationMode";
+import { Effect, Option, Schema } from "effect";
 
 import type { AutomationServiceShape } from "../automation/Services/AutomationService.ts";
 import { automationMemoryForEnvelope } from "../automation/runEnvelope.ts";
@@ -213,9 +217,10 @@ function readWorktreeMode(args: Record<string, unknown>): AutomationWorktreeMode
 }
 
 function readMode(args: Record<string, unknown>): AutomationDefinition["mode"] {
+  // The default stays "heartbeat" for callers written before modes existed.
   const raw = readStringArg(args, "mode") ?? "heartbeat";
-  if (raw !== "heartbeat" && raw !== "standalone") {
-    throw new ToolInputError('Argument "mode" must be "heartbeat" or "standalone".');
+  if (raw !== "heartbeat" && raw !== "standalone" && raw !== "dedicated") {
+    throw new ToolInputError('Argument "mode" must be "heartbeat", "standalone", or "dedicated".');
   }
   return raw;
 }
@@ -258,9 +263,19 @@ export function makeAgentGatewayAutomationTools(
   const assertCallerMayManageAutomation = (
     caller: OrchestrationThreadShell,
     definition: AutomationDefinition,
+    context: { readonly callerThreadId: string; readonly callerTurnId: string | null },
   ) =>
     Effect.gen(function* () {
       if (definition.sourceThreadId === caller.id) return;
+      // A standalone run executes in a per-run thread that matches neither source nor
+      // target, so without this branch an automation could never retire itself.
+      const callerRun = yield* automationService
+        .resolveCallerRun({
+          callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+          callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      if (Option.isSome(callerRun) && callerRun.value.automationId === definition.id) return;
       if (definition.targetThreadId) {
         const target = yield* requireThreadShell(definition.targetThreadId);
         yield* assertCallerMayDriveThread(caller, target);
@@ -268,7 +283,7 @@ export function makeAgentGatewayAutomationTools(
       }
       return yield* Effect.fail(
         new ToolInputError(
-          `Automation "${definition.id}" was not created by your thread and has no target thread you can authorize against.`,
+          `Automation "${definition.id}" was not created by your thread, is not the automation that dispatched your current turn, and has no target thread you can authorize against.`,
         ),
       );
     });
@@ -278,31 +293,48 @@ export function makeAgentGatewayAutomationTools(
     requiresActiveTurn: true,
     definition: {
       name: "synara_create_automation",
-      description: `Create a heartbeat or standalone Synara automation. ${AUTOMATION_AUTHORING_GUIDANCE} Existing calls remain compatible: omitting mode/schedule creates a heartbeat on your thread using everyMinutes (default 5). Prefer suggested:true unless the user explicitly requested creation.`,
+      description: `Create a heartbeat, standalone, or dedicated Synara automation. ${AUTOMATION_AUTHORING_GUIDANCE} Existing calls remain compatible: omitting mode/schedule creates a heartbeat on your thread using everyMinutes (default 5). Prefer suggested:true unless the user explicitly requested creation.`,
       inputSchema: {
         type: "object",
         properties: {
           name: { type: "string", description: AUTOMATION_NAME_AUTHORING_GUIDANCE },
           prompt: { type: "string", description: AUTOMATION_PROMPT_AUTHORING_GUIDANCE },
-          mode: { type: "string", enum: ["heartbeat", "standalone"] },
+          mode: {
+            type: "string",
+            enum: ["heartbeat", "standalone", "dedicated"],
+            description:
+              'Where runs execute. "heartbeat" appends turns to an existing thread and waits for it to be idle — use it to drive that thread forward. "standalone" opens a fresh thread per run. "dedicated" opens one thread the automation owns and reuses it for every run, so the runs build on each other without ever writing into someone else\'s thread.',
+          },
           schedule: SCHEDULE_INPUT_SCHEMA,
           everyMinutes: {
             type: "number",
             description: "Legacy interval shorthand. Cannot be combined with schedule.",
           },
-          targetThreadId: { type: "string", description: "Heartbeat target; defaults to caller." },
-          projectId: { type: "string", description: "Standalone project; defaults to caller's." },
+          targetThreadId: {
+            type: "string",
+            description:
+              "Thread a heartbeat automation continues; defaults to the caller. Rejected for the other modes, which create their own thread.",
+          },
+          projectId: {
+            type: "string",
+            description:
+              "Project for a standalone or dedicated automation; defaults to the caller's.",
+          },
           worktreeMode: { type: "string", enum: ["auto", "local", "worktree"] },
           notificationPolicy: {
             type: "string",
             enum: ["all", "failed-runs-only"],
           },
-          completionPolicy: COMPLETION_POLICY_INPUT_SCHEMA,
+          completionPolicy: {
+            ...COMPLETION_POLICY_INPUT_SCHEMA,
+            description:
+              'Declarative retirement rule, available in every mode. "ai-evaluated" checks stopWhen against each successful run and disables the automation when it matches, so the stop condition does not depend on the run remembering to cancel itself. Defaults to {"type":"none"}.',
+          },
           heartbeatCooldownSeconds: {
             type: "number",
             minimum: 0,
             description:
-              "Idle seconds required on the target thread (excluding this automation's own runs) before a heartbeat run may start. Defaults to min(60, schedule spacing).",
+              "Idle seconds required on the continued thread (excluding this automation's own runs) before a heartbeat or dedicated run may start. Defaults to min(60, schedule spacing).",
           },
           maxIterations: { type: "number", minimum: 1 },
           fastInterval: {
@@ -357,17 +389,14 @@ export function makeAgentGatewayAutomationTools(
         const explicitMaxIterations = readNullablePositiveInteger(args, "maxIterations");
         const maxIterations =
           explicitMaxIterations ??
+          // A run that keeps appending to one thread is a loop, so it gets a default cap;
+          // a fresh thread per run is a recurring task and stays unbounded.
           (fastSchedule
             ? DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS
-            : mode === "heartbeat"
+            : automationContinuesThread(mode)
               ? HEARTBEAT_DEFAULT_MAX_ITERATIONS
               : null);
         const completionPolicy = decodeCompletionPolicy(args) ?? { type: "none" as const };
-        if (mode === "standalone" && completionPolicy.type !== "none") {
-          throw new ToolInputError(
-            'Argument "completionPolicy" is only available for heartbeat automations.',
-          );
-        }
         const notificationPolicy = readNotificationPolicy(args) ?? "all";
         const suggested = readBooleanArg(args, "suggested") ?? false;
         // A cooldown longer than the schedule spacing would silently degrade the
@@ -391,10 +420,12 @@ export function makeAgentGatewayAutomationTools(
         let targetThreadId: ThreadId | null;
         let worktreeMode: AutomationWorktreeMode;
         let executionThread: OrchestrationThreadShell;
-        if (mode === "heartbeat") {
+        // Only heartbeat takes an existing thread. Standalone and dedicated both open their
+        // own, so both configure a project and a worktree mode.
+        if (automationRequiresTargetThread(mode)) {
           if (args.projectId !== undefined || args.worktreeMode !== undefined) {
             throw new ToolInputError(
-              'Arguments "projectId" and "worktreeMode" are standalone-only.',
+              'Arguments "projectId" and "worktreeMode" cannot be combined with mode "heartbeat".',
             );
           }
           const targetId = readStringArg(args, "targetThreadId") ?? context.callerThreadId;
@@ -412,7 +443,9 @@ export function makeAgentGatewayAutomationTools(
           }
           const requestedProjectId = readStringArg(args, "projectId");
           if (requestedProjectId !== undefined && requestedProjectId !== caller.projectId) {
-            throw new ToolInputError("Standalone automations must belong to the caller's project.");
+            throw new ToolInputError(
+              `Automations with mode "${mode}" must belong to the caller's project.`,
+            );
           }
           projectId = ProjectId.makeUnsafe(requestedProjectId ?? caller.projectId);
           targetThreadId = null;
@@ -551,10 +584,14 @@ export function makeAgentGatewayAutomationTools(
         const automationId = readStringArg(args, "automationId", { required: true })!;
         const caller = yield* requireThreadShell(context.callerThreadId);
         const { definition } = yield* requireAutomationDefinition(automationId);
-        const projectScopedStandaloneRead =
-          definition.mode === "standalone" && definition.projectId === caller.projectId;
-        if (!projectScopedStandaloneRead) {
-          yield* assertCallerMayManageAutomation(caller, definition);
+        // Automations that run in their own threads are project resources, so any caller in
+        // the project may read one. Heartbeat automations write into somebody's thread and
+        // stay restricted to callers authorized for that thread.
+        const projectScopedRead =
+          !automationRequiresTargetThread(definition.mode) &&
+          definition.projectId === caller.projectId;
+        if (!projectScopedRead) {
+          yield* assertCallerMayManageAutomation(caller, definition, context);
         }
         const runLimit = Math.min(
           AUTOMATION_VIEW_MAX_RUNS,
@@ -593,7 +630,11 @@ export function makeAgentGatewayAutomationTools(
           enabled: { type: "boolean" },
           maxIterations: { type: ["number", "null"], minimum: 1 },
           notificationPolicy: { type: "string", enum: ["all", "failed-runs-only"] },
-          completionPolicy: COMPLETION_POLICY_INPUT_SCHEMA,
+          completionPolicy: {
+            ...COMPLETION_POLICY_INPUT_SCHEMA,
+            description:
+              'Declarative retirement rule, available in every mode. "ai-evaluated" checks stopWhen against each successful run and disables the automation when it matches, so the stop condition does not depend on the run remembering to cancel itself. Defaults to {"type":"none"}.',
+          },
           fastInterval: { type: "boolean" },
         },
         required: [
@@ -615,7 +656,7 @@ export function makeAgentGatewayAutomationTools(
         const automationId = readStringArg(args, "automationId", { required: true })!;
         const caller = yield* requireThreadShell(context.callerThreadId);
         const { definition } = yield* requireAutomationDefinition(automationId);
-        yield* assertCallerMayManageAutomation(caller, definition);
+        yield* assertCallerMayManageAutomation(caller, definition, context);
         if (definition.proposalState === "pending") {
           throw new ToolInputError(
             "Pending proposals must be accepted or dismissed by the user before they can be updated.",
@@ -626,11 +667,6 @@ export function makeAgentGatewayAutomationTools(
           throw new ToolInputError('Missing required argument "schedule".');
         }
         const completionPolicy = decodeCompletionPolicy(args, true)!;
-        if (definition.mode === "standalone" && completionPolicy.type !== "none") {
-          throw new ToolInputError(
-            'Argument "completionPolicy" must be {"type":"none"} for standalone automations.',
-          );
-        }
         const enabled = readBooleanArg(args, "enabled");
         if (enabled === undefined) {
           throw new ToolInputError('Missing required argument "enabled".');
@@ -678,7 +714,7 @@ export function makeAgentGatewayAutomationTools(
     definition: {
       name: "synara_cancel_automation",
       description:
-        'Stop a Synara automation. mode "disable" (default) pauses it and keeps history; "delete" archives it.',
+        'Stop a Synara automation. mode "disable" (default) pauses it and keeps history; "delete" archives it. An automation-dispatched run may always stop its own automation, whatever its mode. Prefer a completionPolicy stop clause for conditions known when the automation is created.',
       inputSchema: {
         type: "object",
         properties: {
@@ -700,7 +736,7 @@ export function makeAgentGatewayAutomationTools(
         const id = AutomationId.makeUnsafe(automationId);
         const caller = yield* requireThreadShell(context.callerThreadId);
         const { definition } = yield* requireAutomationDefinition(automationId);
-        yield* assertCallerMayManageAutomation(caller, definition);
+        yield* assertCallerMayManageAutomation(caller, definition, context);
         if (modeArg === "delete") {
           yield* automationService
             .delete({ id })

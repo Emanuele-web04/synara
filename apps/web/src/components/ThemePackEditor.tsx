@@ -50,9 +50,11 @@ const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 export function ThemePackEditor({
   variant,
-  isActive = false,
-  mode = "system",
+  isActive: isActiveProp,
+  mode: modeProp,
 }: ThemePackEditorProps) {
+  const isActive = isActiveProp ?? false;
+  const mode = modeProp ?? "system";
   const {
     darkTheme,
     lightTheme,
@@ -68,7 +70,6 @@ export function ThemePackEditor({
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const codeThemes = useMemo(() => {
     const options = getAvailableCodeThemes(variant);
     return options.map((option) => ({
@@ -475,7 +476,7 @@ function FontInput({
   value,
   placeholder,
   ariaLabel,
-  mono = false,
+  mono: monoProp,
   onChange,
 }: {
   value: string;
@@ -484,6 +485,7 @@ function FontInput({
   mono?: boolean;
   onChange: (next: string) => void;
 }) {
+  const mono = monoProp ?? false;
   const [draft, setDraft] = useState<string | null>(null);
   return (
     <Input

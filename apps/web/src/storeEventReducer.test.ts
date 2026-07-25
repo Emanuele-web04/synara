@@ -333,7 +333,9 @@ describe("store event reducer", () => {
     );
 
     expect(next.projects).toEqual([]);
-    expect(next.deletedProjectIdsById?.[ProjectId.makeUnsafe("project-live")]).toBe(true);
+    expect(next.deletedProjectIdsById?.[ProjectId.makeUnsafe("project-live")]).toEqual(
+      expect.any(Number),
+    );
   });
 
   it("settles a running latest turn immediately when session stop is requested", () => {
@@ -1824,7 +1826,7 @@ describe("store event reducer", () => {
     expect(next.threadIds).not.toContain(threadId);
     expect(next.threadShellById?.[threadId]).toBeUndefined();
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
-    expect(next.deletedThreadIdsById?.[threadId]).toBe(true);
+    expect(next.deletedThreadIdsById?.[threadId]).toEqual(expect.any(Number));
 
     const afterStaleSnapshot = syncServerShellSnapshot(
       next,
@@ -1980,5 +1982,68 @@ describe("store event reducer", () => {
     expect(next.messageByThreadId).toBe(state.messageByThreadId);
     expect(next.activityByThreadId).toBe(state.activityByThreadId);
     expect(next.sidebarThreadSummaryById).toBe(state.sidebarThreadSummaryById);
+  });
+
+  it("touches only the streamed message slot and its id list stays reference-stable", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const olderIds = Array.from({ length: 5 }, (_, index) =>
+      MessageId.makeUnsafe(`message-${index}`),
+    );
+    const streamingId = MessageId.makeUnsafe("message-streaming");
+    const initialState = makeState(
+      makeThread({
+        messages: [
+          ...olderIds.map((id, index) => ({
+            id,
+            role: "user" as const,
+            text: `prompt ${index}`,
+            turnId: null,
+            createdAt: "2026-02-27T00:01:00.000Z",
+            streaming: false,
+            source: "native" as const,
+          })),
+          {
+            id: streamingId,
+            role: "assistant" as const,
+            text: "Hello",
+            turnId: null,
+            createdAt: "2026-02-27T00:01:00.000Z",
+            streaming: true,
+            source: "native" as const,
+          },
+        ],
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.message-sent", {
+        threadId,
+        messageId: streamingId,
+        role: "assistant",
+        text: " world",
+        turnId: null,
+        streaming: true,
+        createdAt: "2026-02-27T00:01:00.000Z",
+        updatedAt: "2026-02-27T00:01:01.000Z",
+        attachments: [],
+        source: "native",
+      }),
+    ]);
+
+    expect(threadsOf(next)[0]?.messages.at(-1)?.text).toBe("Hello world");
+    // Only the streamed message is rewritten; every untouched message keeps its identity so
+    // memoized message rows do not re-render on each delta.
+    for (const id of olderIds) {
+      expect(next.messageByThreadId?.[threadId]?.[id]).toBe(
+        initialState.messageByThreadId?.[threadId]?.[id],
+      );
+    }
+    expect(next.messageByThreadId?.[threadId]?.[streamingId]).not.toBe(
+      initialState.messageByThreadId?.[threadId]?.[streamingId],
+    );
+    // The id order is unchanged by an in-place update, so the id list must not be rebuilt.
+    expect(next.messageIdsByThreadId?.[threadId]).toBe(
+      initialState.messageIdsByThreadId?.[threadId],
+    );
   });
 });

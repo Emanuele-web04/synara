@@ -365,17 +365,21 @@ interface DiffPanelProps {
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({
-  mode = "inline",
+  mode: modeProp,
   threadId: controlledThreadId,
   panelState,
   onUpdatePanelState,
   onClosePanel,
-  liveRefreshEnabled = true,
-  queriesEnabled = true,
-  hideHeader = false,
+  liveRefreshEnabled: liveRefreshEnabledProp,
+  queriesEnabled: queriesEnabledProp,
+  hideHeader: hideHeaderProp,
   onRenderableFilesChange,
   onEditorDiffOptionsChange,
 }: DiffPanelProps) {
+  const mode = modeProp ?? "inline";
+  const liveRefreshEnabled = liveRefreshEnabledProp ?? true;
+  const queriesEnabled = queriesEnabledProp ?? true;
+  const hideHeader = hideHeaderProp ?? false;
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();

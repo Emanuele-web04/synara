@@ -20,8 +20,9 @@ export const ReviewChangesButton = function ReviewChangesButton({
   onClick,
   className,
   style,
-  label = "Review",
+  label: labelProp,
 }: ReviewChangesButtonProps) {
+  const label = labelProp ?? "Review";
   return (
     <button
       type="button"

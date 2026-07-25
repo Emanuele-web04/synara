@@ -1,6 +1,6 @@
 import {
   type OrchestrationProject,
-  type OrchestrationReadModel,
+  type OrchestrationProjectShell,
   type ProjectId,
   type PullRequestDetail,
   type PullRequestInvolvement,
@@ -69,10 +69,23 @@ export interface PullRequestServiceDependencies {
   readonly homeDir: string;
   readonly github: GitHubCliShape;
   readonly pins: ProjectPullRequestPinsShape;
-  readonly getSnapshot: () => Effect.Effect<OrchestrationReadModel, unknown>;
+  /**
+   * Live (non-soft-deleted) projects. Deliberately not the full read model: the PR
+   * service only ever reads `snapshot.projects`, and hydrating every thread body for a
+   * five-minute review-count poll blocked the whole SQLite connection for seconds.
+   */
+  readonly listProjects: () => Effect.Effect<ReadonlyArray<OrchestrationProject>, unknown>;
   readonly resolveRepositories: (
     project: OrchestrationProject,
   ) => Effect.Effect<GitHubRepositoryInventory, unknown>;
+}
+
+/**
+ * The shell snapshot already excludes soft-deleted projects, so the field it omits is
+ * known to be null. Restoring it keeps the shared PR helpers on one project type.
+ */
+export function liveProjectFromShell(shell: OrchestrationProjectShell): OrchestrationProject {
+  return { ...shell, deletedAt: null };
 }
 
 /** Exact gh error shape for a PR number that is known not to exist. Generic 404/auth failures are
@@ -249,9 +262,9 @@ export const makePullRequestService = (
     };
 
     const findProject = (projectId: ProjectId) =>
-      dependencies.getSnapshot().pipe(
-        Effect.flatMap((snapshot) => {
-          const project = snapshot.projects.find(
+      dependencies.listProjects().pipe(
+        Effect.flatMap((allProjects) => {
+          const project = allProjects.find(
             (candidate) =>
               candidate.id === projectId &&
               candidate.kind === "project" &&
@@ -299,8 +312,7 @@ export const makePullRequestService = (
       Effect.gen(function* () {
         const forceRefresh = input.forceRefresh === true;
         const involvement = input.involvement ?? "all";
-        const snapshot = yield* dependencies.getSnapshot();
-        const projects = snapshot.projects.filter(
+        const projects = (yield* dependencies.listProjects()).filter(
           (project) =>
             project.deletedAt === null &&
             project.kind === "project" &&
@@ -501,8 +513,7 @@ export const makePullRequestService = (
 
     const reviewRequestCount: PullRequestServiceShape["reviewRequestCount"] = (input) =>
       Effect.gen(function* () {
-        const snapshot = yield* dependencies.getSnapshot();
-        const projects = snapshot.projects.filter(
+        const projects = (yield* dependencies.listProjects()).filter(
           (project) =>
             project.deletedAt === null &&
             project.kind === "project" &&
@@ -578,7 +589,10 @@ export const PullRequestServiceLive = Layer.effect(
       homeDir: config.homeDir,
       github,
       pins,
-      getSnapshot: () => projection.getSnapshot(),
+      listProjects: () =>
+        projection
+          .getShellSnapshot()
+          .pipe(Effect.map((snapshot) => snapshot.projects.map(liveProjectFromShell))),
       resolveRepositories: (project) => resolveGitHubRepositories(git, project.workspaceRoot),
     });
   }),

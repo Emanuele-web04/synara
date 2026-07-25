@@ -65,6 +65,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
   type ProjectionGeneratedImageActivityRecord,
+  type ProjectionManagedWorktreeThread,
   type ProjectionSnapshotCounts,
   type ProjectionSnapshotSequence,
   type ProjectionThreadCheckpointContext,
@@ -115,6 +116,18 @@ const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFiel
     modelSelection: ModelSelectionJsonUnknown,
   }),
 );
+/**
+ * Narrow projection row for managed-worktree retention. Deliberately keeps
+ * soft-deleted threads visible: retention-deleted threads still own on-disk
+ * worktrees that must be snapshotted and reclaimed. Fields are picked from
+ * `ProjectionThread` so decoding stays identical to the full thread reader.
+ */
+const ProjectionManagedWorktreeThreadRowSchema = Schema.Struct({
+  threadId: ProjectionThread.fields.threadId,
+  archivedAt: ProjectionThread.fields.archivedAt,
+  worktreePath: ProjectionThread.fields.worktreePath,
+  associatedWorktreePath: ProjectionThread.fields.associatedWorktreePath,
+});
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -722,6 +735,18 @@ function computeSnapshotSequence(
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // Thread retention soft-deletes and never purges (see ThreadDeletionReactor), so the
+  // projection tables keep every row of every deleted thread forever. `getSnapshot` is the
+  // only reader that hydrates message/activity bodies for the whole database at once, and
+  // every consumer of its read model drops soft-deleted threads before use. Ranking those
+  // rows was therefore ~95% pure waste on a mature database.
+  //
+  // Filtering by thread removes whole `PARTITION BY thread_id` partitions, so the
+  // ROW_NUMBER() ranks of the threads that survive are bit-for-bit unchanged.
+  const liveThreadScope = sql`
+    thread_id IN (SELECT thread_id FROM projection_threads WHERE deleted_at IS NULL)
+  `;
+
   const listSpaceRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionSpace,
@@ -861,6 +886,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listManagedWorktreeThreadRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionManagedWorktreeThreadRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          archived_at AS "archivedAt",
+          worktree_path AS "worktreePath",
+          associated_worktree_path AS "associatedWorktreePath"
+        FROM projection_threads
+        WHERE worktree_path IS NOT NULL
+           OR associated_worktree_path IS NOT NULL
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
   const listStaleInFlightThreadIdRows = SqlSchema.findAll({
     Request: StaleInFlightThreadLookupInput,
     Result: ProjectionThreadIdLookupRowSchema,
@@ -924,6 +966,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 message_id DESC
             ) AS message_rank
           FROM projection_thread_messages
+          WHERE ${liveThreadScope}
         )
         WHERE message_rank <= ${MAX_THREAD_MESSAGES}
         ORDER BY
@@ -981,6 +1024,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 activity_id DESC
             ) AS activity_rank
           FROM projection_thread_activities
+          WHERE ${liveThreadScope}
         ) AS ranked
         WHERE activity_rank <= ${MAX_THREAD_ACTIVITIES}
           OR (
@@ -2205,6 +2249,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.threadId)),
     );
 
+  const listManagedWorktreeThreads: ProjectionSnapshotQueryShape["listManagedWorktreeThreads"] =
+    () =>
+      listManagedWorktreeThreadRows(undefined).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listManagedWorktreeThreads:query",
+            "ProjectionSnapshotQuery.listManagedWorktreeThreads:decodeRows",
+          ),
+        ),
+        Effect.map((rows) =>
+          rows.map(
+            // Normalize absent columns to `null` so the published row shape stays
+            // strict (`string | null`) rather than leaking `undefined` outward.
+            (row): ProjectionManagedWorktreeThread => ({
+              id: row.threadId,
+              archivedAt: row.archivedAt ?? null,
+              worktreePath: row.worktreePath ?? null,
+              associatedWorktreePath: row.associatedWorktreePath ?? null,
+            }),
+          ),
+        ),
+      );
+
   const getCounts: ProjectionSnapshotQueryShape["getCounts"] = () =>
     readProjectionCounts(undefined).pipe(
       Effect.mapError(
@@ -2722,6 +2789,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getSnapshotSequence,
     listStaleInFlightThreadIds,
+    listManagedWorktreeThreads,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
     getSpaceShellById,

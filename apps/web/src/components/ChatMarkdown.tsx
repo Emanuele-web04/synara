@@ -1039,7 +1039,6 @@ function ChatMarkdown({
   const smoothedText = useSmoothStreamedText(text, isStreaming);
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const normalizedText = useMemo(
     () => (isUserVariant ? smoothedText : protectLiteralMarkdownDollars(smoothedText)),
     [isUserVariant, smoothedText],

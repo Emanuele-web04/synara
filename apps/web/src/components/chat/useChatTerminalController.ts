@@ -12,7 +12,8 @@ import {
 } from "../../lib/terminalCloseConfirmation";
 import { readNativeApi } from "../../nativeApi";
 import { shouldAutoDeleteTerminalThreadOnLastClose } from "../ChatView.logic";
-import { disposeAndCloseTerminalSession, randomTerminalId } from "../terminal/terminalSession";
+import { randomTerminalId } from "../terminal/terminalIds";
+import { disposeAndCloseTerminalSession } from "../terminal/terminalSession";
 
 type AutoDeleteCandidateThread = Pick<
   Thread,
