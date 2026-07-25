@@ -8,6 +8,7 @@ import type {
   ProviderAccountsLaunchInput,
   ProviderAccountsSetActiveInput,
   ProviderAccountsSnapshot,
+  ProviderAccountView,
   SupportedAccountProvider,
   ThreadId,
 } from "@synara/contracts";
@@ -16,7 +17,18 @@ import {
   SupportedAccountProvider as SupportedAccountProviderSchema,
 } from "@synara/contracts";
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toastManager } from "~/components/ui/toast";
 import { ensureNativeApi } from "~/nativeApi";
+
+function accountMutationErrorToast(title: string) {
+  return (error: unknown) => {
+    toastManager.add({
+      type: "error",
+      title,
+      description: error instanceof Error ? error.message : undefined,
+    });
+  };
+}
 
 export const providerAccountsQueryKeys = {
   all: ["provider-accounts"] as const,
@@ -125,6 +137,7 @@ export function useProviderAccountsSetActive() {
     mutationFn: (input: ProviderAccountsSetActiveInput) =>
       ensureNativeApi().providerAccounts.setActive(input),
     onSuccess: () => void invalidate(),
+    onError: accountMutationErrorToast("Couldn't switch account"),
   });
 }
 
@@ -134,6 +147,7 @@ export function useProviderAccountsDisconnectBinding() {
     mutationFn: (input: ProviderAccountsDisconnectBindingInput) =>
       ensureNativeApi().providerAccounts.disconnectBinding(input),
     onSuccess: () => void invalidate(),
+    onError: accountMutationErrorToast("Couldn't disconnect account"),
   });
 }
 
@@ -143,6 +157,7 @@ export function useProviderAccountsHide() {
     mutationFn: (input: ProviderAccountsHideInput) =>
       ensureNativeApi().providerAccounts.hide(input),
     onSuccess: () => void invalidate(),
+    onError: accountMutationErrorToast("Couldn't hide account"),
   });
 }
 
@@ -150,6 +165,7 @@ export function useProviderAccountsLaunch() {
   return useMutation({
     mutationFn: (input: ProviderAccountsLaunchInput) =>
       ensureNativeApi().providerAccounts.launch(input),
+    onError: accountMutationErrorToast("Couldn't launch"),
   });
 }
 
@@ -159,6 +175,7 @@ export function useProviderAccountsUpdateCliIntegration() {
     mutationFn: (input: { enabled: boolean }) =>
       ensureNativeApi().providerAccounts.updateCliIntegration(input),
     onSuccess: () => void invalidate(),
+    onError: accountMutationErrorToast("Couldn't update CLI integration"),
   });
 }
 
@@ -171,14 +188,32 @@ export function accountProviderLabel(provider: SupportedAccountProvider): string
   return PROVIDER_DISPLAY_NAMES[provider];
 }
 
-/** Numbered slot label, e.g. "Codex 3"; ordinal 0 is the native account. */
+/** Numbered slot label, e.g. "Codex 3"; ordinal 0 is your own unmanaged login. */
 export function accountSlotLabel(
   provider: SupportedAccountProvider,
   ordinal: AccountOrdinal,
 ): string {
   return ordinal === 0
-    ? `${accountProviderLabel(provider)} 0 (native)`
+    ? `${accountProviderLabel(provider)} 0 (your login)`
     : `${accountProviderLabel(provider)} ${ordinal}`;
+}
+
+/** Where to create an API key for each provider, linked from the connect dialog. */
+export const ACCOUNT_PROVIDER_API_KEY_DOCS: Record<SupportedAccountProvider, string> = {
+  codex: "https://platform.openai.com/api-keys",
+  claudeAgent: "https://console.anthropic.com/settings/keys",
+  cursor: "https://cursor.com/settings",
+  grok: "https://console.x.ai",
+};
+
+/** Short identity suffix distinguishing managed accounts, e.g. "API key ending -123" or "OAuth". */
+export function accountIdentitySuffix(account: ProviderAccountView): string | null {
+  if (account.ordinal === 0) return null;
+  const identity = accountIdentityLabel(account.identity);
+  if (identity !== null) return identity;
+  if (account.agent?.authMethod === "apiKey") return "API key";
+  if (account.agent?.authMethod === "oauth") return "OAuth";
+  return null;
 }
 
 export const ACCOUNT_BINDING_STATE_LABELS: Record<AccountBindingState, string> = {
