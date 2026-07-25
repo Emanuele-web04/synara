@@ -211,16 +211,14 @@ describe("accountConnect", () => {
       connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
     );
     resolveLogin!({ ok: true });
-    await waitFor(() => Effect.runSync(connect.getConnectStatus(operationId)).state === "succeeded");
+    await waitFor(
+      () => Effect.runSync(connect.getConnectStatus(operationId)).state === "succeeded",
+    );
     const leaked = await Effect.runPromise(
-      storage.readPendingOperation("codex", operationId).pipe(
-        Effect.orElseSucceed(() => null),
-      ),
+      storage.readPendingOperation("codex", operationId).pipe(Effect.orElseSucceed(() => null)),
     );
     expect(leaked).toBeNull();
-    expect(
-      existsSync(join(root, "accounts", "codex", "1", "operation.json")),
-    ).toBe(false);
+    expect(existsSync(join(root, "accounts", "codex", "1", "operation.json"))).toBe(false);
   });
 
   it("recovers an interrupted OAuth connect as terminal after a restart", async () => {

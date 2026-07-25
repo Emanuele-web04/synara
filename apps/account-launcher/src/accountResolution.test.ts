@@ -135,6 +135,38 @@ describe("resolveLaunchEnvironment", () => {
     expect(launch.overrides.GROK_HOME).toContain(path.join("accounts", "grok", "1"));
   });
 
+  it("produces disjoint homes and keys for two accounts of the same provider", () => {
+    for (const ordinal of [1, 2]) {
+      writeAccount(ordinal, { state: "connected", authMethod: "apiKey", generation: 1 });
+      const secretPath = accountSecretPath(root, "codex", ordinal, "agent");
+      fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+      fs.writeFileSync(secretPath, `sk-acct-${ordinal}`);
+    }
+    const one = resolveLaunchEnvironment({ root, provider: "codex", explicitOrdinal: 1, env: {} });
+    const two = resolveLaunchEnvironment({ root, provider: "codex", explicitOrdinal: 2, env: {} });
+    expect(one.overrides.CODEX_HOME).not.toBe(two.overrides.CODEX_HOME);
+    expect(one.overrides.OPENAI_API_KEY).toBe("sk-acct-1");
+    expect(two.overrides.OPENAI_API_KEY).toBe("sk-acct-2");
+
+    const childEnv = buildChildEnvironment(
+      {
+        OPENAI_API_KEY: "native-key",
+        OPENAI_BASE_URL: "https://native.example.com",
+        CODEX_HOME: "/native/home",
+        SYNARA_ACCOUNT_OVERRIDE: "codex:1",
+        SYNARA_LAUNCHER_SHIM: "codex",
+        UNRELATED: "kept",
+      },
+      two.overrides,
+    );
+    expect(childEnv.OPENAI_API_KEY).toBe("sk-acct-2");
+    expect(childEnv.CODEX_HOME).toBe(two.overrides.CODEX_HOME);
+    expect(childEnv.OPENAI_BASE_URL).toBeUndefined();
+    expect(childEnv.SYNARA_ACCOUNT_OVERRIDE).toBeUndefined();
+    expect(childEnv.SYNARA_LAUNCHER_SHIM).toBeUndefined();
+    expect(childEnv.UNRELATED).toBe("kept");
+  });
+
   it("fails closed on a corrupted active pointer", () => {
     const pointer = activePointerPath(root, "codex");
     fs.mkdirSync(path.dirname(pointer), { recursive: true });

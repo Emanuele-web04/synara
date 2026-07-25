@@ -14,20 +14,13 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  buildChildEnvironment,
-  resolveLaunchEnvironment,
-} from "../../../account-launcher/src/accountResolution";
 import { makeAccountConnect, type AccountConnectShape } from "./accountConnect";
 import { makeAccountResolver } from "./accountResolver";
 import { makeAccountStorage, type AccountStorageShape } from "./accountStorage";
 import { makeCliIntegration } from "./cliIntegration";
 import type { OAuthLoginOutcome, OAuthLoginRunner } from "./oauthLogin";
 
-const LAUNCHER_ENTRY = resolve(
-  import.meta.dirname,
-  "../../../account-launcher/src/launcher.ts",
-);
+const LAUNCHER_ENTRY = resolve(import.meta.dirname, "../../../account-launcher/src/launcher.ts");
 
 const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
   const start = Date.now();
@@ -151,7 +144,7 @@ describe("provider accounts end to end", () => {
     expect(failure.detail).toMatch(/agent binding is 'needs-auth'/);
   });
 
-  it("isolates launcher environments per account and strips conflicting inherited vars", async () => {
+  it("isolates resolved environments per account: disjoint homes and keys", async () => {
     await Effect.runPromise(
       connect.beginConnect({ kind: "agent-api-key", provider: "codex", apiKey: "sk-acct-1" }),
     );
@@ -159,47 +152,19 @@ describe("provider accounts end to end", () => {
       connect.beginConnect({ kind: "agent-api-key", provider: "codex", apiKey: "sk-acct-2" }),
     );
 
-    const launchOne = resolveLaunchEnvironment({
-      root,
-      provider: "codex",
-      explicitOrdinal: 1,
-      env: {},
-    });
-    const launchTwo = resolveLaunchEnvironment({
-      root,
-      provider: "codex",
-      explicitOrdinal: 2,
-      env: {},
-    });
-    expect(launchOne.overrides.CODEX_HOME).not.toBe(launchTwo.overrides.CODEX_HOME);
-    expect(launchOne.overrides.OPENAI_API_KEY).toBe("sk-acct-1");
-    expect(launchTwo.overrides.OPENAI_API_KEY).toBe("sk-acct-2");
-
-    const childEnv = buildChildEnvironment(
-      {
-        OPENAI_API_KEY: "native-key",
-        OPENAI_BASE_URL: "https://native.example.com",
-        CODEX_HOME: "/native/home",
-        SYNARA_ACCOUNT_OVERRIDE: "codex:1",
-        SYNARA_LAUNCHER_SHIM: "codex",
-        UNRELATED: "kept",
-      },
-      launchTwo.overrides,
-    );
-    expect(childEnv.OPENAI_API_KEY).toBe("sk-acct-2");
-    expect(childEnv.CODEX_HOME).toBe(join(root, "accounts", "codex", "2", "agent", "home"));
-    expect(childEnv.OPENAI_BASE_URL).toBeUndefined();
-    expect(childEnv.SYNARA_ACCOUNT_OVERRIDE).toBeUndefined();
-    expect(childEnv.SYNARA_LAUNCHER_SHIM).toBeUndefined();
-    expect(childEnv.UNRELATED).toBe("kept");
-
-    // The server-side resolver produces the same isolation.
     const resolver = makeAccountResolver({ storage });
-    const resolved = await Effect.runPromise(
+    const launchOne = await Effect.runPromise(
       resolver.resolveAccountLaunch({ provider: "codex", surface: "agent", explicitOrdinal: 1 }),
     );
-    expect(resolved.environment.CODEX_HOME).toBe(launchOne.overrides.CODEX_HOME);
-    expect(resolved.environment.OPENAI_API_KEY).toBe("sk-acct-1");
+    const launchTwo = await Effect.runPromise(
+      resolver.resolveAccountLaunch({ provider: "codex", surface: "agent", explicitOrdinal: 2 }),
+    );
+    expect(launchOne.environment.CODEX_HOME).toBe(
+      join(root, "accounts", "codex", "1", "agent", "home"),
+    );
+    expect(launchOne.environment.CODEX_HOME).not.toBe(launchTwo.environment.CODEX_HOME);
+    expect(launchOne.environment.OPENAI_API_KEY).toBe("sk-acct-1");
+    expect(launchTwo.environment.OPENAI_API_KEY).toBe("sk-acct-2");
   });
 
   it("spawns the fake provider binary through the real shim with the managed environment", async () => {
@@ -227,8 +192,13 @@ describe("provider accounts end to end", () => {
     // The shim runs `bun <launcher entry>`, so bun's directory must stay on PATH.
     const bunPath = spawnSync("which", ["bun"], { encoding: "utf8" }).stdout.trim();
     expect(bunPath.length).toBeGreaterThan(0);
-    const childPath = [cliIntegration.shimDir, fakeBinDir, dirname(bunPath), "/usr/bin", "/bin"]
-      .join(delimiter);
+    const childPath = [
+      cliIntegration.shimDir,
+      fakeBinDir,
+      dirname(bunPath),
+      "/usr/bin",
+      "/bin",
+    ].join(delimiter);
 
     const result = spawnSync(join(cliIntegration.shimDir, "codex"), [], {
       encoding: "utf8",
@@ -276,7 +246,9 @@ describe("provider accounts end to end", () => {
     const keys = Array.from({ length: 6 }, (_, index) => `sk-concurrent-${index}`);
     const operationIds = await Promise.all(
       keys.map((apiKey) =>
-        Effect.runPromise(connect.beginConnect({ kind: "agent-api-key", provider: "codex", apiKey })),
+        Effect.runPromise(
+          connect.beginConnect({ kind: "agent-api-key", provider: "codex", apiKey }),
+        ),
       ),
     );
     const statuses = await Promise.all(

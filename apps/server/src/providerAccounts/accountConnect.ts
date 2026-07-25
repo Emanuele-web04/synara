@@ -470,7 +470,10 @@ export function makeAccountConnect(input: AccountConnectInput) {
         let authMethod: AgentAuthMethod = "oauth";
         if (raw !== null) {
           try {
-            const parsed = JSON.parse(raw) as { surface?: AccountSurface; authMethod?: AgentAuthMethod };
+            const parsed = JSON.parse(raw) as {
+              surface?: AccountSurface;
+              authMethod?: AgentAuthMethod;
+            };
             if (parsed.surface === "agent" || parsed.surface === "app") surface = parsed.surface;
             if (parsed.authMethod === "oauth" || parsed.authMethod === "apiKey") {
               authMethod = parsed.authMethod;

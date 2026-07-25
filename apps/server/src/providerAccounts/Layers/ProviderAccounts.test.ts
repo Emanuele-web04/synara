@@ -44,9 +44,7 @@ describe("ProviderAccounts live service", () => {
 
   const makeService = () =>
     Effect.runPromise(
-      makeProviderAccounts.pipe(
-        Effect.provideService(ProviderSessionDirectory, stubDirectory),
-      ),
+      makeProviderAccounts.pipe(Effect.provideService(ProviderSessionDirectory, stubDirectory)),
     );
 
   it("synthesizes the native account zero for every provider in the snapshot", async () => {
