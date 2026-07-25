@@ -5,7 +5,7 @@ import type {
   SupportedAccountProvider,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   AccountConnectDialog,
@@ -31,7 +31,14 @@ import {
   useProviderAccountsSetActive,
   useProviderAccountsUpdateCliIntegration,
 } from "~/lib/providerAccountsReactQuery";
+import { toastManager } from "~/components/ui/toast";
+import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { ensureNativeApi } from "~/nativeApi";
 import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
+
+async function confirmDestructiveAccountAction(message: string): Promise<boolean> {
+  return ensureNativeApi().dialogs.confirm(message);
+}
 
 function AccountRow({
   provider,
@@ -53,6 +60,7 @@ function AccountRow({
   const launch = useProviderAccountsLaunch();
 
   const isNative = account.ordinal === 0;
+  const slotLabel = accountSlotLabel(provider, account.ordinal);
   const identity = accountIdentityLabel(account.identity);
   const agentState =
     !isNative && account.agent ? ACCOUNT_BINDING_STATE_LABELS[account.agent.state] : null;
@@ -60,20 +68,30 @@ function AccountRow({
     ? `${ACCOUNT_BINDING_STATE_LABELS[account.app.state]} · ${ACCOUNT_SUPPORT_LEVEL_LABELS[account.app.supportLevel]}`
     : null;
 
+  const hasActions =
+    !isActive || (!isNative && account.agent !== undefined) || (account.app && appLaunchSupported);
+
   return (
     <SettingsListRow
       align="start"
       title={
-        <button
-          type="button"
-          className="flex items-center gap-1.5"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          <span>{accountSlotLabel(provider, account.ordinal)}</span>
-          {isActive ? <Badge variant="secondary">Active</Badge> : null}
-          <DisclosureChevron open={expanded} />
-        </button>
+        hasActions ? (
+          <button
+            type="button"
+            className="flex items-center gap-1.5"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            <span>{slotLabel}</span>
+            {isActive ? <Badge variant="secondary">Active</Badge> : null}
+            <DisclosureChevron open={expanded} />
+          </button>
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <span>{slotLabel}</span>
+            {isActive ? <Badge variant="secondary">Active</Badge> : null}
+          </span>
+        )
       }
       description={
         <div className="space-y-0.5">
@@ -115,13 +133,18 @@ function AccountRow({
                   size="xs"
                   variant="outline"
                   disabled={disconnectBinding.isPending}
-                  onClick={() =>
-                    disconnectBinding.mutate({
-                      provider,
-                      ordinal: account.ordinal,
-                      surface: "agent",
-                    })
-                  }
+                  onClick={() => {
+                    void confirmDestructiveAccountAction(
+                      `Disconnect the agent for ${slotLabel}? Its stored credential is deleted.`,
+                    ).then((confirmed) => {
+                      if (!confirmed) return;
+                      disconnectBinding.mutate({
+                        provider,
+                        ordinal: account.ordinal,
+                        surface: "agent",
+                      });
+                    });
+                  }}
                 >
                   Disconnect agent
                 </Button>
@@ -131,13 +154,18 @@ function AccountRow({
                   size="xs"
                   variant="outline"
                   disabled={disconnectBinding.isPending}
-                  onClick={() =>
-                    disconnectBinding.mutate({
-                      provider,
-                      ordinal: account.ordinal,
-                      surface: "app",
-                    })
-                  }
+                  onClick={() => {
+                    void confirmDestructiveAccountAction(
+                      `Disconnect the app for ${slotLabel}? Its stored credential is deleted.`,
+                    ).then((confirmed) => {
+                      if (!confirmed) return;
+                      disconnectBinding.mutate({
+                        provider,
+                        ordinal: account.ordinal,
+                        surface: "app",
+                      });
+                    });
+                  }}
                 >
                   Disconnect app
                 </Button>
@@ -147,12 +175,24 @@ function AccountRow({
                   size="xs"
                   variant="outline"
                   disabled={hide.isPending}
-                  onClick={() => hide.mutate({ provider, ordinal: account.ordinal })}
+                  onClick={() => {
+                    void confirmDestructiveAccountAction(
+                      `Hide ${slotLabel}? It disappears from menus, but its credentials stay on this machine.`,
+                    ).then((confirmed) => {
+                      if (!confirmed) return;
+                      hide.mutate({ provider, ordinal: account.ordinal });
+                    });
+                  }}
                 >
                   Hide
                 </Button>
               ) : null}
             </div>
+            {!isNative ? (
+              <div className="pt-1 text-muted-foreground text-xs">
+                Hide removes the account from menus without deleting its credentials.
+              </div>
+            ) : null}
           </DisclosureRegion>
         </div>
       }
@@ -173,6 +213,7 @@ function ProviderAccountsSection({
   capabilities: ProviderAccountCapabilities | null;
   onConnect: (request: AccountConnectRequest) => void;
 }) {
+  const currentActiveOrdinal = activeOrdinal ?? 0;
   const oauthSupported = capabilities !== null && capabilities.agent.oauth !== "unsupported";
   const apiKeySupported = capabilities !== null && capabilities.agent.apiKey !== "unsupported";
   const connectable = oauthSupported || apiKeySupported;
@@ -192,7 +233,12 @@ function ProviderAccountsSection({
           appLaunchSupported={appLaunchSupported}
           onReconnect={(ordinal) =>
             capabilities !== null
-              ? onConnect({ provider, capabilities, reconnectOrdinal: ordinal })
+              ? onConnect({
+                  provider,
+                  capabilities,
+                  reconnectOrdinal: ordinal,
+                  currentActiveOrdinal,
+                })
               : undefined
           }
         />
@@ -214,7 +260,7 @@ function ProviderAccountsSection({
             <Button
               size="xs"
               variant="outline"
-              onClick={() => onConnect({ provider, capabilities })}
+              onClick={() => onConnect({ provider, capabilities, currentActiveOrdinal })}
             >
               Connect
             </Button>
@@ -231,10 +277,16 @@ function CliIntegrationSection() {
   const status = statusQuery.data ?? null;
   const unavailable = status?.platformSupported === false;
 
+  const pathHintNeeded =
+    status?.launcherInstalled === true &&
+    status.shimDirOnPath === false &&
+    status.shimDir !== undefined;
+  const pathCommand = pathHintNeeded ? `export PATH="${status.shimDir}:$PATH"` : null;
+
   const description = unavailable
-    ? "Launcher unavailable on Windows."
+    ? "Terminal launcher isn't supported on Windows yet. Managed accounts still work inside Synara sessions."
     : status?.launcherInstalled
-      ? status.shimDirOnPath === false && status.shimDir !== undefined
+      ? pathHintNeeded
         ? `Shims installed. Add ${status.shimDir} to the front of your PATH so terminal launches use the active managed account.`
         : "Provider shims are installed and terminal launches use the active managed account."
       : "Install provider shims so terminal launches use the active managed account.";
@@ -243,7 +295,31 @@ function CliIntegrationSection() {
     <SettingsSection title="CLI integration">
       <SettingsListRow
         title="Terminal launcher"
-        description={description}
+        description={
+          pathCommand !== null ? (
+            <div className="space-y-1.5">
+              <div>{description}</div>
+              <div className="flex items-center gap-2">
+                <code className="truncate font-mono text-xs">{pathCommand}</code>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => {
+                    void copyTextToClipboard(pathCommand).then(
+                      () => toastManager.add({ type: "success", title: "Copied PATH command" }),
+                      () =>
+                        toastManager.add({ type: "error", title: "Couldn't copy PATH command" }),
+                    );
+                  }}
+                >
+                  Copy
+                </Button>
+              </div>
+            </div>
+          ) : (
+            description
+          )
+        }
         actions={
           unavailable || status === null ? null : (
             <Button
@@ -261,18 +337,48 @@ function CliIntegrationSection() {
   );
 }
 
-export function AccountsSettingsPanel({ active }: { active: boolean }) {
+export function AccountsSettingsPanel({
+  active,
+  connectProvider,
+}: {
+  active: boolean;
+  /** Provider whose connect dialog opens automatically (deep link from "Add account"). */
+  connectProvider?: string | null;
+}) {
   const snapshotQuery = useQuery(providerAccountsSnapshotQueryOptions({ enabled: active }));
   const [connectRequest, setConnectRequest] = useState<AccountConnectRequest | null>(null);
+  const [consumedConnectProvider, setConsumedConnectProvider] = useState<string | null>(null);
+
+  const providers = snapshotQuery.data?.providers ?? [];
+  const requestedEntry =
+    active && typeof connectProvider === "string" && connectProvider !== consumedConnectProvider
+      ? (providers.find((candidate) => candidate.provider === connectProvider) ?? null)
+      : null;
+
+  useEffect(() => {
+    if (requestedEntry === null || requestedEntry.capabilities === null) return;
+    setConsumedConnectProvider(requestedEntry.provider);
+    setConnectRequest({
+      provider: requestedEntry.provider,
+      capabilities: requestedEntry.capabilities,
+      currentActiveOrdinal: requestedEntry.activeOrdinal ?? 0,
+    });
+  }, [requestedEntry]);
 
   if (!active) {
     return null;
   }
 
-  const providers = snapshotQuery.data?.providers ?? [];
-
   return (
     <div className="space-y-6">
+      {snapshotQuery.isError ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
+          <span>Couldn't load accounts. Check that the server is running, then retry.</span>
+          <Button size="xs" variant="outline" onClick={() => void snapshotQuery.refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
       {SUPPORTED_ACCOUNT_PROVIDERS.map((provider) => {
         const entry = providers.find((candidate) => candidate.provider === provider) ?? null;
         return (
@@ -287,11 +393,6 @@ export function AccountsSettingsPanel({ active }: { active: boolean }) {
         );
       })}
       <CliIntegrationSection />
-      {snapshotQuery.isError ? (
-        <p className="text-sm text-muted-foreground">
-          Accounts are unavailable right now. Retry from the sidebar or restart the server.
-        </p>
-      ) : null}
       <AccountConnectDialog
         request={connectRequest}
         onOpenChange={(open) => {

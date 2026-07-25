@@ -1080,7 +1080,12 @@ function SettingsRouteView() {
                   updateSettings={updateSettings}
                   resetEpoch={resetEpoch}
                 />
-                <AccountsSettingsPanel active={activeSection === "accounts"} />
+                <AccountsSettingsPanel
+                  active={activeSection === "accounts"}
+                  connectProvider={
+                    typeof routeSearch.connect === "string" ? routeSearch.connect : null
+                  }
+                />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
