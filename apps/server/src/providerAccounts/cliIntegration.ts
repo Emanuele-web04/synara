@@ -95,12 +95,20 @@ export function makeCliIntegration(input: CliIntegrationInput) {
       } catch {
         launcherVersion = undefined;
       }
+      let launcherEntryExists = true;
+      try {
+        await fs.access(launcherEntry);
+      } catch {
+        launcherEntryExists = false;
+      }
       return {
         cliIntegrationEnabled: allInstalled,
         launcherInstalled: allInstalled,
         ...(launcherVersion !== undefined && launcherVersion.length > 0 ? { launcherVersion } : {}),
         shimDir,
         shimDirOnPath: isShimDirOnPath(),
+        launcherEntryExists,
+        platformSupported: platform !== "win32",
       } satisfies ProviderAccountsIntegrationStatus;
     },
   );
@@ -151,5 +159,38 @@ export function makeCliIntegration(input: CliIntegrationInput) {
 
   const update = (enabled: boolean) => (enabled ? install : uninstall);
 
-  return { shimDir, launcherEntry, getStatus, install, uninstall, update, isShimDirOnPath };
+  // Shims must shadow the real provider binaries: any shim whose command
+  // resolves to another PATH directory first is reported so the doctor can
+  // flag it.
+  const listShadowedShims = tryFs(
+    "cliIntegration.listShadowedShims",
+    "Failed to inspect shim PATH precedence.",
+    async () => {
+      const searchDirs = (env.PATH ?? "").split(path.delimiter).filter((dir) => dir.length > 0);
+      const shadowed: Array<string> = [];
+      for (const name of shimNames) {
+        for (const dir of searchDirs) {
+          try {
+            await fs.access(path.join(dir, name), fs.constants.X_OK);
+          } catch {
+            continue;
+          }
+          if (path.resolve(dir) !== path.resolve(shimDir)) shadowed.push(name);
+          break;
+        }
+      }
+      return shadowed;
+    },
+  );
+
+  return {
+    shimDir,
+    launcherEntry,
+    getStatus,
+    install,
+    uninstall,
+    update,
+    isShimDirOnPath,
+    listShadowedShims,
+  };
 }

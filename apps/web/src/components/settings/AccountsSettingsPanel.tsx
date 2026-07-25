@@ -28,12 +28,14 @@ import {
   accountIdentityLabel,
   accountProviderLabel,
   accountSlotLabel,
+  providerAccountsIntegrationStatusQueryOptions,
   providerAccountsSnapshotQueryOptions,
   SUPPORTED_ACCOUNT_PROVIDERS,
   useProviderAccountsDisconnectBinding,
   useProviderAccountsHide,
   useProviderAccountsLaunch,
   useProviderAccountsSetActive,
+  useProviderAccountsUpdateCliIntegration,
 } from "~/lib/providerAccountsReactQuery";
 import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
 
@@ -222,6 +224,42 @@ function ProviderAccountsSection({
   );
 }
 
+function CliIntegrationSection() {
+  const statusQuery = useQuery(providerAccountsIntegrationStatusQueryOptions());
+  const update = useProviderAccountsUpdateCliIntegration();
+  const status = statusQuery.data ?? null;
+  const unavailable = status?.platformSupported === false;
+
+  const description = unavailable
+    ? "Launcher unavailable on Windows."
+    : status?.launcherInstalled
+      ? status.shimDirOnPath === false && status.shimDir !== undefined
+        ? `Shims installed. Add ${status.shimDir} to the front of your PATH so terminal launches use the active managed account.`
+        : "Provider shims are installed and terminal launches use the active managed account."
+      : "Install provider shims so terminal launches use the active managed account.";
+
+  return (
+    <SettingsSection title="CLI integration">
+      <SettingsListRow
+        title="Terminal launcher"
+        description={description}
+        actions={
+          unavailable || status === null ? null : (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={update.isPending}
+              onClick={() => update.mutate({ enabled: !status.launcherInstalled })}
+            >
+              {status.launcherInstalled ? "Uninstall" : "Install"}
+            </Button>
+          )
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function AccountsSettingsPanel({ active }: { active: boolean }) {
   const snapshotQuery = useQuery(providerAccountsSnapshotQueryOptions({ enabled: active }));
   const [connectRequest, setConnectRequest] = useState<AccountConnectRequest | null>(null);
@@ -247,6 +285,7 @@ export function AccountsSettingsPanel({ active }: { active: boolean }) {
           />
         );
       })}
+      <CliIntegrationSection />
       {snapshotQuery.isError ? (
         <p className="text-sm text-muted-foreground">
           Accounts are unavailable right now. Retry from the sidebar or restart the server.

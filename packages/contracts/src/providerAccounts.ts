@@ -311,6 +311,8 @@ export const ProviderAccountsIntegrationStatus = Schema.Struct({
   launcherVersion: Schema.optional(TrimmedNonEmptyString),
   shimDir: Schema.optional(TrimmedNonEmptyString),
   shimDirOnPath: Schema.optional(Schema.Boolean),
+  launcherEntryExists: Schema.optional(Schema.Boolean),
+  platformSupported: Schema.optional(Schema.Boolean),
 });
 export type ProviderAccountsIntegrationStatus = typeof ProviderAccountsIntegrationStatus.Type;
 

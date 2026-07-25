@@ -178,31 +178,48 @@ export function makeDoctorReport(input: DoctorReportInput) {
       ),
     );
 
-  const launcherCheck = cliIntegration.getStatus.pipe(
-    Effect.map((status) => {
-      if (!status.launcherInstalled) {
-        return check(
-          "cli-integration",
-          "CLI integration",
-          "warning",
-          "Provider shims are not installed. Enable CLI integration in Settings to launch managed accounts from a terminal.",
-        );
-      }
-      if (status.shimDirOnPath !== true) {
-        return check(
-          "cli-integration",
-          "CLI integration",
-          "warning",
-          `Shims are installed but ${status.shimDir ?? "the shim directory"} is not on PATH.`,
-        );
-      }
+  const launcherCheck = Effect.gen(function* () {
+    const status = yield* cliIntegration.getStatus;
+    if (!status.launcherInstalled) {
       return check(
         "cli-integration",
         "CLI integration",
-        "ok",
-        `Shims installed${status.launcherVersion !== undefined ? ` (launcher ${status.launcherVersion})` : ""} and on PATH.`,
+        "warning",
+        "Provider shims are not installed. Enable CLI integration in Settings to launch managed accounts from a terminal.",
       );
-    }),
+    }
+    if (status.launcherEntryExists === false) {
+      return check(
+        "cli-integration",
+        "CLI integration",
+        "error",
+        `The launcher entry point is missing (${cliIntegration.launcherEntry}). Reinstall CLI integration.`,
+      );
+    }
+    if (status.shimDirOnPath !== true) {
+      return check(
+        "cli-integration",
+        "CLI integration",
+        "warning",
+        `Shims are installed but ${status.shimDir ?? "the shim directory"} is not on PATH.`,
+      );
+    }
+    const shadowed = yield* cliIntegration.listShadowedShims;
+    if (shadowed.length > 0) {
+      return check(
+        "cli-integration",
+        "CLI integration",
+        "warning",
+        `Shim(s) ${shadowed.join(", ")} resolve to another PATH entry before ${status.shimDir ?? "the shim directory"}. Move it earlier on PATH.`,
+      );
+    }
+    return check(
+      "cli-integration",
+      "CLI integration",
+      "ok",
+      `Shims installed${status.launcherVersion !== undefined ? ` (launcher ${status.launcherVersion})` : ""} and on PATH.`,
+    );
+  }).pipe(
     Effect.orElseSucceed(() =>
       check("cli-integration", "CLI integration", "error", "Failed to inspect CLI integration."),
     ),
