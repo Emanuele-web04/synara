@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -29,6 +30,11 @@ import { writeFileStringAtomically } from "../atomicWrite";
 import { ensurePrivateDirectorySync, PRIVATE_DIRECTORY_MODE } from "../privatePathPermissions";
 
 export const ACCOUNT_ROOT_SCHEMA_VERSION = "1";
+
+// Journal marker for the pending → ordinal move. It is written into the
+// reserved ordinal directory before any content moves and removed only after
+// the move completes, so a directory that still carries it is incomplete.
+export const FINALIZE_MARKER_FILE = "finalize.json";
 
 export class ProviderAccountStorageError extends Data.TaggedError("ProviderAccountStorageError")<{
   readonly operation: string;
@@ -303,8 +309,14 @@ export function makeAccountStorage(input: AccountStorageInput) {
     );
 
   // Allocates the ordinal only at finalization so failed or cancelled logins
-  // never consume account numbers. The ordinal directory is
-  // reserved atomically, then the pending contents move into it.
+  // never consume account numbers. The ordinal directory is reserved
+  // atomically and stays in place while the pending contents move into it
+  // entry by entry: every rename targets a non-existent path, which is atomic
+  // on both POSIX and Windows (directory replacement via rename is
+  // POSIX-only), and the reserved directory is never deleted mid-flight, so
+  // no concurrent writer can claim the same ordinal. A journal marker written
+  // before the first move and removed after the last one lets restart
+  // recovery detect a crash mid-move (see recoverIncompleteFinalizations).
   const finalizePendingDirectory = (provider: SupportedAccountProvider, operationId: string) =>
     withProviderLock(
       provider,
@@ -314,24 +326,120 @@ export function makeAccountStorage(input: AccountStorageInput) {
             "accountStorage.finalizePendingDirectory",
             `Failed to finalize pending directory for '${provider}' operation '${operationId}'.`,
             async () => {
+              const pending = pendingPath(root, provider, operationId);
               const target = accountDir(root, provider, ordinal);
-              // POSIX rename atomically replaces the freshly reserved empty
-              // directory: there is no delete-then-rename window in which a
-              // crash could strand an empty consumed ordinal.
-              await fs.rename(pendingPath(root, provider, operationId), target);
-              // Post-rename cleanup is best effort; the account is already in
-              // place, so a failure here must not trigger the rollback (which
-              // would delete real credentials).
-              await fs
-                .rm(path.join(target, "operation.json"), { force: true })
-                .catch(() => undefined);
+              const marker = path.join(target, FINALIZE_MARKER_FILE);
+              try {
+                await fs.writeFile(
+                  marker,
+                  JSON.stringify({
+                    operationId,
+                    pid: process.pid,
+                    startedAt: new Date().toISOString(),
+                  }),
+                  { mode: 0o600 },
+                );
+              } catch (cause) {
+                // Nothing moved yet: the reservation is safe to drop.
+                await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
+                throw cause;
+              }
+              const moved: string[] = [];
+              try {
+                for (const entry of await fs.readdir(pending)) {
+                  if (entry === "operation.json") continue;
+                  await fs.rename(path.join(pending, entry), path.join(target, entry));
+                  moved.push(entry);
+                }
+              } catch (cause) {
+                // Undo: return moved entries to the pending directory so the
+                // login's credentials are preserved, then drop the
+                // reservation. If the undo itself fails, the marker lets
+                // restart recovery remove the incomplete directory.
+                let restored = true;
+                for (const entry of moved) {
+                  try {
+                    await fs.rename(path.join(target, entry), path.join(pending, entry));
+                  } catch {
+                    restored = false;
+                  }
+                }
+                if (restored) {
+                  await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
+                }
+                throw cause;
+              }
+              await fs.rm(pending, { recursive: true, force: true }).catch(() => undefined);
+              // Commit point: without the marker the directory is a complete
+              // account slot. Cleanup is best effort; the credentials are
+              // already in place, so a failure here must not roll back.
+              await fs.rm(marker, { force: true }).catch(() => undefined);
               await fs.chmod(target, PRIVATE_DIRECTORY_MODE).catch(() => undefined);
               return ordinal;
             },
-          ).pipe(
-            Effect.tapError(() => releaseOrdinalDirectory(provider, ordinal).pipe(Effect.ignore)),
           ),
         ),
+      ),
+    );
+
+  const isPidAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Startup recovery for finalizations interrupted by a crash: an ordinal
+  // directory that still carries the finalize marker never completed its
+  // move. If the account record exists the move finished and only the marker
+  // cleanup was lost; otherwise the directory is incomplete, was never
+  // referenced by any record, and is removed so the ordinal can be reused.
+  // Directories whose marker names a live sibling process are in-flight and
+  // left alone.
+  const recoverIncompleteFinalizations = (provider: SupportedAccountProvider) =>
+    withProviderLock(
+      provider,
+      tryFs(
+        "accountStorage.recoverIncompleteFinalizations",
+        `Failed to recover incomplete finalizations for '${provider}'.`,
+        async () => {
+          let entries: Dirent[];
+          try {
+            entries = await fs.readdir(accountsDir(root, provider), { withFileTypes: true });
+          } catch (cause) {
+            if ((cause as NodeJS.ErrnoException).code === "ENOENT") return;
+            throw cause;
+          }
+          for (const entry of entries) {
+            if (!entry.isDirectory() || !/^[1-9][0-9]*$/.test(entry.name)) continue;
+            const dir = path.join(accountsDir(root, provider), entry.name);
+            const marker = await readFileIfExists(path.join(dir, FINALIZE_MARKER_FILE));
+            if (marker === null) continue;
+            let ownerPid: number | undefined;
+            try {
+              const parsed = JSON.parse(marker) as { pid?: number };
+              if (
+                typeof parsed.pid === "number" &&
+                Number.isInteger(parsed.pid) &&
+                parsed.pid > 0
+              ) {
+                ownerPid = parsed.pid;
+              }
+            } catch {
+              // A corrupted marker still means the finalize never committed.
+            }
+            if (ownerPid !== undefined && ownerPid !== process.pid && isPidAlive(ownerPid)) {
+              continue;
+            }
+            if ((await readFileIfExists(path.join(dir, "account.json"))) !== null) {
+              await fs.rm(path.join(dir, FINALIZE_MARKER_FILE), { force: true });
+            } else {
+              await fs.rm(dir, { recursive: true, force: true });
+            }
+          }
+        },
       ),
     );
 
@@ -525,6 +633,7 @@ export function makeAccountStorage(input: AccountStorageInput) {
     releaseOrdinalDirectory,
     createPendingDirectory,
     finalizePendingDirectory,
+    recoverIncompleteFinalizations,
     writePendingOperation,
     readPendingOperation,
     cancelPendingDirectory,
