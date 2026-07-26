@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,8 +49,10 @@ describe("accountConnect", () => {
   let connect: AccountConnectShape;
   let resolveLogin: ((outcome: OAuthLoginOutcome) => void) | null;
   let cancelled: boolean;
+  let profileHomes: string[];
 
   const fakeOauthRunner: OAuthLoginRunner = (request) => {
+    profileHomes.push(request.profileHome);
     const done = new Promise<OAuthLoginOutcome>((resolve) => {
       resolveLogin = resolve;
     });
@@ -63,6 +74,7 @@ describe("accountConnect", () => {
     });
     resolveLogin = null;
     cancelled = false;
+    profileHomes = [];
     await Effect.runPromise(storage.ensureRoot);
   });
 
@@ -239,6 +251,103 @@ describe("accountConnect", () => {
     expect(status.provider).toBe("codex");
     await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
     await expect(Effect.runPromise(storage.listOrdinals("codex"))).resolves.toEqual([]);
+  });
+
+  describe("OAuth reconnect staging", () => {
+    const liveAuthPath = () => join(root, "accounts", "codex", "1", "agent", "home", "auth.json");
+
+    const finishLogin = (credentials: string) => {
+      const home = profileHomes.at(-1)!;
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, "auth.json"), credentials);
+      resolveLogin!({ ok: true });
+    };
+
+    const connectFirstAccount = async () => {
+      const { operationId } = await Effect.runPromise(
+        connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+      );
+      finishLogin("old-credentials");
+      await waitFor(
+        () => Effect.runSync(connect.getConnectStatus(operationId)).state === "succeeded",
+      );
+    };
+
+    const beginReconnect = async () => {
+      const { operationId } = await Effect.runPromise(
+        connect.beginConnect({ kind: "agent-oauth", provider: "codex", ordinal: 1 }),
+      );
+      return operationId;
+    };
+
+    it("runs the login in a pending directory, never the live home", async () => {
+      await connectFirstAccount();
+      await beginReconnect();
+      const reconnectHome = profileHomes.at(-1)!;
+      expect(reconnectHome).toContain(join(root, "pending", "codex"));
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
+    });
+
+    it("swaps staged credentials into the live home only on success", async () => {
+      await connectFirstAccount();
+      const before = await Effect.runPromise(storage.readAccount("codex", 1));
+      const operationId = await beginReconnect();
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
+      finishLogin("new-credentials");
+      await waitFor(
+        () => Effect.runSync(connect.getConnectStatus(operationId)).state === "succeeded",
+      );
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("new-credentials");
+      const after = await Effect.runPromise(storage.readAccount("codex", 1));
+      expect(after?.agent?.generation).toBe((before?.agent?.generation ?? 0) + 1);
+      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+      await expect(Effect.runPromise(storage.listOrdinals("codex"))).resolves.toEqual([1]);
+    });
+
+    it("leaves live credentials untouched when the reconnect login fails", async () => {
+      await connectFirstAccount();
+      const operationId = await beginReconnect();
+      resolveLogin!({ ok: false, error: "login timed out" });
+      await waitFor(() => Effect.runSync(connect.getConnectStatus(operationId)).state === "failed");
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
+      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+    });
+
+    it("leaves live credentials untouched when the reconnect is cancelled", async () => {
+      await connectFirstAccount();
+      const operationId = await beginReconnect();
+      const status = await Effect.runPromise(connect.cancelConnect(operationId));
+      expect(status.state).toBe("cancelled");
+      expect(cancelled).toBe(true);
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
+      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+    });
+
+    it("recovers an interrupted reconnect after a restart without touching live credentials", async () => {
+      await connectFirstAccount();
+      const operationId = await beginReconnect();
+      // Simulate a server restart: a fresh service over the same root.
+      const restarted = makeAccountConnect({ storage: makeAccountStorage({ root }) });
+      await Effect.runPromise(restarted.recoverInterruptedOperations);
+      const status = await Effect.runPromise(restarted.getConnectStatus(operationId));
+      expect(status.state).toBe("failed");
+      expect(status.error).toMatch(/interrupted by a server restart/);
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
+      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+    });
+
+    it("repairs a reconnect swap that died mid-commit on the next startup", async () => {
+      await connectFirstAccount();
+      const liveHome = join(root, "accounts", "codex", "1", "agent", "home");
+      const backup = join(root, "accounts", "codex", "1", "agent", "home.reconnect-backup");
+      // Simulate a crash between parking the live home and installing the
+      // staged one: only the backup remains.
+      renameSync(liveHome, backup);
+      const restarted = makeAccountConnect({ storage: makeAccountStorage({ root }) });
+      await Effect.runPromise(restarted.recoverInterruptedOperations);
+      expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
+      expect(existsSync(backup)).toBe(false);
+    });
   });
 
   it("protects the native account 0 from disconnect and hide", async () => {
