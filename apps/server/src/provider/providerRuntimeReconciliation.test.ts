@@ -84,6 +84,7 @@ function liveSession(input: {
   readonly status: ProviderSession["status"];
   readonly activeTurnId?: TurnId;
   readonly provider?: ProviderSession["provider"];
+  readonly lastError?: string;
 }): ProviderSession {
   return {
     provider: input.provider ?? "codex",
@@ -91,6 +92,7 @@ function liveSession(input: {
     runtimeMode: "full-access",
     threadId: THREAD_ID,
     ...(input.activeTurnId !== undefined ? { activeTurnId: input.activeTurnId } : {}),
+    ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
     createdAt: "2026-07-23T19:00:00.000Z",
     updatedAt: "2026-07-23T20:00:25.000Z",
   };
@@ -152,21 +154,28 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
-  it("trusts a terminal live status over stale active-turn metadata", () => {
+  it("trusts a terminal live error over stale active-turn metadata", () => {
     expect(
       planProviderRuntimeReconciliation({
         threads: [threadShell()],
         bindings: [binding()],
-        liveSessions: [liveSession({ status: "error", activeTurnId: OLD_TURN_ID })],
+        liveSessions: [
+          liveSession({
+            status: "error",
+            activeTurnId: OLD_TURN_ID,
+            lastError: "Provider process exited.",
+          }),
+        ],
         pumpHealth: [],
         nowMs: NOW,
         staleAfterMs: 10_000,
       }),
     ).toEqual([
       expect.objectContaining({
-        action: "settle-interrupted",
+        action: "settle-error",
         projectedTurnId: OLD_TURN_ID,
         runtimeTurnId: null,
+        errorMessage: "Provider process exited.",
       }),
     ]);
   });
@@ -244,6 +253,241 @@ describe("planProviderRuntimeReconciliation", () => {
     expect(fresh).toEqual([]);
     expect(childWithoutBinding).toEqual([]);
     expect(settledWithoutSession).toEqual([]);
+  });
+
+  it("does not recover a queued startup that has no concrete in-flight turn", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: "2026-07-23T20:00:05.000Z",
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
+  it("aligns a queued startup when the live provider has acquired a turn", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: "2026-07-23T20:00:05.000Z",
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(LIVE_TURN_ID)],
+      liveSessions: [liveSession({ status: "running", activeTurnId: LIVE_TURN_ID })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "align-running-turn",
+        projectedTurnId: null,
+        runtimeTurnId: LIVE_TURN_ID,
+      }),
+    ]);
+  });
+
+  it("retains a running latest turn when its starting session update was partial", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+  });
+
+  it("settles a running latest turn projected under an idle session", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "idle",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+  });
+
+  it.each(["ready", "interrupted", "stopped", "error"] as const)(
+    "settles a stale running turn without reopening its %s session",
+    (status) => {
+      const terminalSession = {
+        ...threadShell().session!,
+        status,
+        activeTurnId: null,
+      };
+      const plans = planProviderRuntimeReconciliation({
+        threads: [
+          threadShell({
+            session: terminalSession,
+          }),
+        ],
+        bindings: [binding(null)],
+        liveSessions: [liveSession({ status: "ready" })],
+        pumpHealth: [],
+        nowMs: NOW,
+        staleAfterMs: 10_000,
+      });
+
+      expect(plans).toEqual([
+        expect.objectContaining({
+          action: "settle-terminal-projection",
+          projectedTurnId: OLD_TURN_ID,
+          runtimeTurnId: null,
+          terminalSession,
+        }),
+      ]);
+    },
+  );
+
+  it("does not let stale readiness complete a turn after a live provider error", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "ready",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [
+        liveSession({
+          status: "error",
+          lastError: "Provider stream failed.",
+        }),
+      ],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+  });
+
+  it("does not attribute a live provider error to a different projected turn", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell()],
+      bindings: [binding(LIVE_TURN_ID)],
+      liveSessions: [
+        liveSession({
+          status: "error",
+          activeTurnId: LIVE_TURN_ID,
+          lastError: "Newer provider turn failed.",
+        }),
+      ],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+    expect(plans[0]?.reason).toContain(LIVE_TURN_ID);
+  });
+
+  it("prefers a recovered live session over a stale durable binding error", () => {
+    const terminalSession = {
+      ...threadShell().session!,
+      status: "ready" as const,
+      activeTurnId: null,
+    };
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell({ session: terminalSession })],
+      bindings: [
+        {
+          ...binding(null),
+          status: "error",
+          runtimePayload: {
+            activeTurnId: null,
+            lastError: "Previous provider failure.",
+          },
+        },
+      ],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-terminal-projection",
+        projectedTurnId: OLD_TURN_ID,
+        terminalSession,
+      }),
+    ]);
   });
 
   it("records degraded pump evidence in the reconciliation reason", () => {

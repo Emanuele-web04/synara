@@ -34,18 +34,14 @@ export interface ProviderRuntimeReconcilerLiveOptions {
   readonly candidateLimit?: number;
 }
 
-function reconciliationKey(
-  plan: ProviderRuntimeReconciliationPlan,
-  observationSequence: number,
-): string {
-  return [
-    "provider-runtime-reconcile",
-    observationSequence,
+function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
+  return `provider-runtime-reconcile:${JSON.stringify([
+    plan.provider,
     plan.action,
     plan.threadId,
-    plan.projectedTurnId ?? "none",
-    plan.runtimeTurnId ?? "none",
-  ].join(":");
+    plan.projectedTurnId,
+    plan.runtimeTurnId,
+  ])}`;
 }
 
 const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
@@ -75,12 +71,16 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       plan: ProviderRuntimeReconciliationPlan,
       runtimeMode: RuntimeMode,
       now: string,
-      observationSequence: number,
     ) {
-      const key = reconciliationKey(plan, observationSequence);
+      const key = reconciliationKey(plan);
+      // Command ids identify attempts because timestamps can legitimately
+      // change between retries. The activity id identifies the semantic repair,
+      // allowing projectors to suppress a repeated visible recovery while a
+      // failed or lagging session update remains safe to retry.
+      const attemptKey = `${key}:${crypto.randomUUID()}`;
       yield* orchestrationEngine.dispatch({
         type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe(`${key}:activity`),
+        commandId: CommandId.makeUnsafe(`${attemptKey}:activity`),
         threadId: plan.threadId,
         activity: {
           id: EventId.makeUnsafe(`${key}:activity`),
@@ -104,16 +104,45 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       });
       yield* orchestrationEngine.dispatch({
         type: "thread.session.set",
-        commandId: CommandId.makeUnsafe(`${key}:session`),
+        commandId: CommandId.makeUnsafe(`${attemptKey}:session`),
         threadId: plan.threadId,
         session: {
           threadId: plan.threadId,
-          status: plan.action === "align-running-turn" ? "running" : "interrupted",
-          providerName: plan.provider,
-          runtimeMode,
-          activeTurnId: plan.action === "align-running-turn" ? plan.runtimeTurnId : null,
-          lastError: null,
-          updatedAt: now,
+          status:
+            plan.action === "align-running-turn"
+              ? "running"
+              : plan.action === "settle-error"
+                ? "error"
+                : plan.action === "settle-terminal-projection"
+                  ? plan.terminalSession.status
+                  : "interrupted",
+          providerName:
+            plan.action === "settle-terminal-projection"
+              ? plan.terminalSession.providerName
+              : plan.provider,
+          runtimeMode:
+            plan.action === "settle-terminal-projection"
+              ? plan.terminalSession.runtimeMode
+              : runtimeMode,
+          activeTurnId:
+            plan.action === "align-running-turn"
+              ? plan.runtimeTurnId
+              : plan.action === "settle-error"
+                ? plan.projectedTurnId
+                : plan.action === "settle-terminal-projection" &&
+                    plan.terminalSession.status === "error"
+                  ? plan.terminalSession.activeTurnId
+                  : null,
+          lastError:
+            plan.action === "settle-error"
+              ? plan.errorMessage
+              : plan.action === "settle-terminal-projection"
+                ? plan.terminalSession.lastError
+                : null,
+          updatedAt:
+            plan.action === "settle-terminal-projection"
+              ? plan.terminalSession.updatedAt
+              : now,
         },
         createdAt: now,
       });
@@ -121,20 +150,18 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
 
     const reconcileNow = Effect.gen(function* () {
       const nowMs = Date.now();
-      const [candidateThreadIds, snapshotSequence, bindings, liveSessions, pumpHealth] =
-        yield* Effect.all(
-          [
-            projectionSnapshotQuery.listStaleInFlightThreadIds({
-              updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
-              limit: candidateLimit,
-            }),
-            projectionSnapshotQuery.getSnapshotSequence(),
-            directory.listBindings(),
-            providerService.listSessions(),
-            providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
-          ],
-          { concurrency: 5 },
-        );
+      const [candidateThreadIds, bindings, liveSessions, pumpHealth] = yield* Effect.all(
+        [
+          projectionSnapshotQuery.listStaleInFlightThreadIds({
+            updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
+            limit: candidateLimit,
+          }),
+          directory.listBindings(),
+          providerService.listSessions(),
+          providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
+        ],
+        { concurrency: 5 },
+      );
       if (candidateThreadIds.length === 0) return;
       const threads = (yield* Effect.forEach(
         candidateThreadIds,
@@ -162,12 +189,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         (plan) => {
           const thread = threadById.get(plan.threadId);
           if (!thread) return Effect.void;
-          return applyPlan(
-            plan,
-            thread.session?.runtimeMode ?? thread.runtimeMode,
-            now,
-            snapshotSequence.snapshotSequence,
-          ).pipe(
+          return applyPlan(plan, thread.session?.runtimeMode ?? thread.runtimeMode, now).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("provider.runtime_reconciliation.plan_failed", {
                 threadId: plan.threadId,

@@ -25,9 +25,18 @@ export default mergeConfig(
         provider: playwright(),
         instances: [{ browser: "chromium" }],
         headless: true,
+        api: {
+          // Vitest's default 63315 falls inside common Windows/Hyper-V
+          // excluded-port ranges. Keep the local browser harness on IPv4 and
+          // allow CI or developers to override the fallback port.
+          host: process.env.VITEST_BROWSER_API_HOST ?? "127.0.0.1",
+          port: Number(process.env.VITEST_BROWSER_API_PORT ?? 51_100),
+        },
       },
-      testTimeout: 30_000,
-      hookTimeout: 30_000,
+      // The full desktop route graph can take more than 30 seconds to compile
+      // on a cold Windows cache before an individual browser test can proceed.
+      testTimeout: 90_000,
+      hookTimeout: 90_000,
     },
   }),
 );

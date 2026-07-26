@@ -59,6 +59,13 @@ const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
+let getThreadDetailSnapshotRequestCount = 0;
+let delayNextThreadDetailSnapshotResponse = false;
+let pendingThreadDetailSnapshotResponse: {
+  readonly client: EffectRpcWebSocketClient;
+  readonly requestId: string;
+  readonly result: unknown;
+} | null = null;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -167,6 +174,19 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot) {
+    getThreadDetailSnapshotRequestCount += 1;
+    const request = body as { readonly threadId?: ThreadId } | null;
+    const thread = request?.threadId
+      ? findThreadDetailFromFixtureSnapshot(request.threadId)
+      : null;
+    return thread
+      ? {
+          snapshotSequence: fixture.snapshot.snapshotSequence,
+          thread,
+        }
+      : null;
   }
   if (tag === ORCHESTRATION_WS_METHODS.replayEvents) {
     const request = body as { readonly fromSequenceExclusive?: unknown } | null;
@@ -281,7 +301,20 @@ const worker = setupWorker(
         });
         return;
       }
-      sendEffectRpcExit(client, request.id, resolveWsRpc(method, requestBody));
+      const result = resolveWsRpc(method, requestBody);
+      if (
+        method === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot &&
+        delayNextThreadDetailSnapshotResponse
+      ) {
+        delayNextThreadDetailSnapshotResponse = false;
+        pendingThreadDetailSnapshotResponse = {
+          client,
+          requestId: request.id,
+          result,
+        };
+        return;
+      }
+      sendEffectRpcExit(client, request.id, result);
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
@@ -317,7 +350,9 @@ async function mountApp(options?: {
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
       },
-      { timeout: 20_000, interval: 16 },
+      // The first Chromium/MSW mount can spend more than 40 seconds compiling
+      // the full desktop route graph on a cold Windows dev cache.
+      { timeout: 60_000, interval: 16 },
     );
   } catch (cause) {
     await screen.unmount();
@@ -362,6 +397,15 @@ function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
       thread: getThreadDetailFromFixtureSnapshot(threadId),
     },
   });
+}
+
+function sendPendingThreadDetailSnapshotResponse() {
+  const pending = pendingThreadDetailSnapshotResponse;
+  if (pending === null) {
+    throw new Error("No delayed thread-detail snapshot response is pending");
+  }
+  pendingThreadDetailSnapshotResponse = null;
+  sendEffectRpcExit(pending.client, pending.requestId, pending.result);
 }
 
 function sendShellEventPush(event: OrchestrationShellStreamEvent) {
@@ -428,6 +472,9 @@ describe("EventRouter scoped orchestration sync", () => {
     subscribeThreadRequests = [];
     replayEvents = [];
     replayRequestCursors = [];
+    getThreadDetailSnapshotRequestCount = 0;
+    delayNextThreadDetailSnapshotResponse = false;
+    pendingThreadDetailSnapshotResponse = null;
   });
 
   afterEach(() => {
@@ -742,6 +789,414 @@ describe("EventRouter scoped orchestration sync", () => {
       await mounted.cleanup();
     }
   });
+
+  it("does not poll a converged terminal thread projection", async () => {
+    const mounted = await mountApp();
+
+    try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 5_200));
+      expect(getThreadDetailSnapshotRequestCount).toBe(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("runs one terminal reconciliation when the final assistant event is absent", async () => {
+    const turnId = TurnId.makeUnsafe("turn-terminal-fence");
+    const finalMessageId = MessageId.makeUnsafe("msg-terminal-fence-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 3,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Recovered after the terminal fence.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-terminal-fence-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.messages.some((message) => message.id === finalMessageId)).toBe(false);
+      });
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Recovered after the terminal fence.",
+          );
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("reconciles a missed completion from the authoritative thread projection", async () => {
+    const turnId = TurnId.makeUnsafe("turn-missed-completion");
+    const progressMessageId = MessageId.makeUnsafe("msg-missed-completion-progress");
+    const finalMessageId = MessageId.makeUnsafe("msg-missed-completion-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+
+    const mounted = await mountApp();
+
+    try {
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-missed-completion-progress"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: progressMessageId,
+          role: "assistant",
+          text: "Cloning repository…",
+          turnId,
+          source: "native",
+          streaming: true,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.messages.find((message) => message.id === progressMessageId)?.text).toBe(
+          "Cloning repository…",
+        );
+      });
+
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 4,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: progressMessageId,
+                  role: "assistant",
+                  text: "Cloning repository… done.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: "2026-03-04T12:00:05.000Z",
+                  updatedAt: "2026-03-04T12:00:08.000Z",
+                },
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Repository cloned successfully.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      // Deliver only the terminal session transition, not the final message.
+      // The reducer now considers the session and turn terminal, but the stale
+      // streaming message must keep projection repair eligible until the
+      // authoritative detail snapshot closes it.
+      sendThreadEventPush({
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-missed-completion-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+        expect(
+          thread?.messages.find((message) => message.id === progressMessageId)?.streaming,
+        ).toBe(true);
+      });
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(thread?.latestTurn?.state).toBe("completed");
+          expect(thread?.session?.orchestrationStatus).toBe("ready");
+          expect(thread?.session?.activeTurnId).toBeUndefined();
+          expect(
+            thread?.messages.filter((message) => message.id === progressMessageId),
+          ).toHaveLength(1);
+          expect(
+            thread?.messages.find((message) => message.id === progressMessageId)?.streaming,
+          ).toBe(false);
+          expect(thread?.messages.filter((message) => message.id === finalMessageId)).toHaveLength(
+            1,
+          );
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Repository cloned successfully.",
+          );
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("does not apply a delayed projection snapshot behind the live thread cursor", async () => {
+    const turnId = TurnId.makeUnsafe("turn-delayed-projection");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+
+    const mounted = await mountApp();
+
+    try {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-delayed-projection-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+      });
+
+      sendPendingThreadDetailSnapshotResponse();
+      // Let the RPC continuation run before asserting that the older snapshot
+      // did not roll back the just-applied stream event.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+
+      expect(pendingThreadDetailSnapshotResponse).toBeNull();
+      const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+      expect(thread?.latestTurn?.state).toBe("completed");
+      expect(thread?.latestTurn?.completedAt).toBe(completedAt);
+      expect(thread?.session?.orchestrationStatus).toBe("ready");
+      expect(thread?.session?.activeTurnId).toBeUndefined();
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
 
   it("flushes only the first assistant chunk immediately for a message", async () => {
     const mounted = await mountApp();
