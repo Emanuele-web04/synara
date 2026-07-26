@@ -7,7 +7,12 @@
 import { EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { deriveWorkLogEntries, type WorkLogEntry, type WorkLogSubagent } from "../../session-logic";
+import {
+  deriveWorkLogEntries,
+  omitRoutedSubagentWorkEntries,
+  type WorkLogEntry,
+  type WorkLogSubagent,
+} from "../../session-logic";
 import type { Thread } from "../../types";
 import { enrichSubagentWorkEntries } from "../ChatView.logic";
 import { localSubagentThreadId } from "../ChatView.selectors";
@@ -545,11 +550,9 @@ describe("deriveComposerSubagentStripItems", () => {
       },
     ];
 
-    // Timeline entries omit the routed activity; the strip source must not.
-    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
-    const stripEntries = deriveWorkLogEntries(activities, undefined, {
-      includeRoutedSubagentActivities: true,
-    });
+    // The transcript omits the routed activity; the strip source must not.
+    const stripEntries = deriveWorkLogEntries(activities, undefined);
+    expect(omitRoutedSubagentWorkEntries(stripEntries)).toEqual([]);
 
     const subagentThread: Thread = {
       id: localSubagentThreadId(parentThreadId, "toolu_x"),

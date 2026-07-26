@@ -6,6 +6,7 @@ import {
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
+  omitRoutedSubagentWorkEntries,
 } from "./workLog";
 import { makeActivity } from "./storeTestFixtures";
 
@@ -1901,7 +1902,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
 
-  it("omits routed collab subagent tool lifecycle rows from the chat work log", () => {
+  it("omits routed collab subagent tool lifecycle rows from the transcript", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "collab-update",
@@ -1946,10 +1947,56 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
-  it("keeps routed collab subagent rows when includeRoutedSubagentActivities is set", () => {
+  // Providers stream the agent tool call before its receivers, so the routed
+  // entry only becomes recognizable once the later update merges into it.
+  it("omits routed collab entries that gain their receivers from a merged update", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "collab-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Agent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Agent",
+          status: "inProgress",
+          data: {
+            toolCallId: "toolu_merge",
+            callId: "toolu_merge",
+            toolName: "Agent",
+            input: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "collab-receivers",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Agent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Agent",
+          status: "inProgress",
+          data: {
+            toolName: "Agent",
+            receiverThreadId: "toolu_merge",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagents).toHaveLength(1);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
+  });
+
+  it("keeps routed collab subagent rows for the composer strip source", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "routed-agent-update",
@@ -1971,15 +2018,12 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
-
-    const entries = deriveWorkLogEntries(activities, undefined, {
-      includeRoutedSubagentActivities: true,
-    });
+    const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.subagents).toEqual([
       expect.objectContaining({ threadId: "toolu_x", providerThreadId: "toolu_x" }),
     ]);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {

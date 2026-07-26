@@ -140,7 +140,6 @@ import {
   disclosureContentClassName,
 } from "~/lib/disclosureMotion";
 import { getAppTypographyScale } from "../../lib/appTypography";
-import type { SubagentToolTrace } from "./subagentToolTrace.logic";
 import {
   USER_MESSAGE_COLLAPSED_FADE_LINES,
   USER_MESSAGE_COLLAPSED_MAX_LINES,
@@ -390,8 +389,6 @@ interface MessagesTimelineProps {
   onOpenThread?: (threadId: ThreadId) => void;
   /** Open an automation's detail page from a "created automation" transcript card. */
   onOpenAutomation?: (automationId: string) => void;
-  /** Recent child-thread tool calls rendered under subagent rows, keyed by child thread id. */
-  subagentToolTraceByThreadId?: ReadonlyMap<string, SubagentToolTrace>;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
@@ -449,7 +446,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
-  subagentToolTraceByThreadId,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onUndoTurnFiles,
@@ -994,9 +990,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               markdownCwd={markdownCwd}
               onImageExpand={onImageExpand}
               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-              {...(onOpenThread ? { onOpenThread } : {})}
               {...(onOpenAutomation ? { onOpenAutomation } : {})}
-              {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
             />
           );
           const isLiveGroup =
@@ -1448,9 +1442,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 onImageExpand={onImageExpand}
                 onOpenTurnDiff={onOpenTurnDiff}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                {...(onOpenThread ? { onOpenThread } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
               />
             );
@@ -1560,9 +1552,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         markdownCwd={markdownCwd}
                         onImageExpand={onImageExpand}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                        {...(onOpenThread ? { onOpenThread } : {})}
                         {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                        {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
                       />
                     ))}
                   </div>
@@ -1581,9 +1571,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 markdownCwd={markdownCwd}
                 onImageExpand={onImageExpand}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                {...(onOpenThread ? { onOpenThread } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
               />
             ) : (
               <div

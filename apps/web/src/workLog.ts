@@ -197,14 +197,23 @@ export function orderedActivities(
   return ordered;
 }
 
-function shouldOmitRoutedCollabAgentToolActivity(activity: OrchestrationThreadActivity): boolean {
-  const payload = asRecord(activity.payload);
-  if (asTrimmedString(payload?.itemType) !== "collab_agent_tool_call") {
-    return false;
-  }
-  // Routed subagent activity is rendered through child-thread/subagent surfaces;
-  // generic OpenCode task calls have no receiver metadata and need a chat row.
-  return extractCollabSubagents(payload).length > 0;
+// Routed subagent work (Claude's agent fan-out) belongs to the composer subagent
+// strip and to the child threads themselves — the transcript never renders a
+// subagent roster. The check runs on derived entries rather than raw activities
+// because providers stream the tool call first and attach receiver metadata on a
+// later lifecycle update that merges into the same entry. Generic OpenCode task
+// calls carry no receiver metadata and keep their ordinary chat row.
+export function isRoutedSubagentWorkEntry(entry: Pick<WorkLogEntry, "itemType" | "subagents">) {
+  return entry.itemType === "collab_agent_tool_call" && (entry.subagents?.length ?? 0) > 0;
+}
+
+// Returns the same array when nothing is routed so memoized consumers keep their
+// reference identity on the common (no subagents) path.
+export function omitRoutedSubagentWorkEntries<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+): ReadonlyArray<Entry> {
+  const kept = entries.filter((entry) => !isRoutedSubagentWorkEntry(entry));
+  return kept.length === entries.length ? entries : kept;
 }
 
 export function deriveWorkLogEntries(
@@ -212,18 +221,12 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
   options: {
     visibleTurnIds?: ReadonlySet<TurnId | string>;
-    includeRoutedSubagentActivities?: boolean;
   } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
-    .filter(
-      (activity) =>
-        options.includeRoutedSubagentActivities === true ||
-        !shouldOmitRoutedCollabAgentToolActivity(activity),
-    )
     .filter(
       (activity) =>
         activity.kind !== "task.started" &&

@@ -30,6 +30,8 @@ export {
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
+  isRoutedSubagentWorkEntry,
+  omitRoutedSubagentWorkEntries,
   orderedActivities,
   type TimelineEntry,
   type WorkLogAutomation,

@@ -57,6 +57,25 @@ const makeSetup = (dbPath?: string, pendingRecovery: MigrationRecoveryMarker | n
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      if (dbPath) {
+        // The runtime owns this database for its entire lifetime (enforced by
+        // DatabaseLifecycleLock), so make SQLite enforce the same boundary.
+        // This must happen before the first WAL access: SQLite then keeps its
+        // WAL index in heap memory instead of memory-mapping a shared `-shm`
+        // file that an unrelated sqlite client could truncate or rebuild.
+        const lockingModeRows = yield* sql<{ readonly locking_mode: string }>`
+          PRAGMA locking_mode = EXCLUSIVE;
+        `;
+        const lockingMode = lockingModeRows[0]?.locking_mode;
+        if (lockingMode?.toLowerCase() !== "exclusive") {
+          return yield* Effect.fail(
+            new Error(
+              `SQLite exclusive locking mode could not be enabled (result: ${lockingMode ?? "unknown"})`,
+            ),
+          );
+        }
+      }
+      yield* sql`PRAGMA busy_timeout = 5000;`;
       const journalModeRows = yield* sql<{ readonly journal_mode: string }>`
         PRAGMA journal_mode = WAL;
       `;
@@ -74,8 +93,14 @@ const makeSetup = (dbPath?: string, pendingRecovery: MigrationRecoveryMarker | n
       // on every commit is too costly, and losing the last few events on a hard
       // power loss is acceptable.
       yield* sql`PRAGMA synchronous = NORMAL;`;
-      yield* sql`PRAGMA busy_timeout = 5000;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
+      if (dbPath) {
+        // Setting locking_mode changes connection policy; this transaction
+        // actually acquires and retains the database lock before startup
+        // continues, closing the window where another client could attach.
+        yield* sql`BEGIN EXCLUSIVE;`;
+        yield* sql`COMMIT;`;
+      }
       // A pending marker means an earlier startup was interrupted mid-migration.
       // Resuming reuses that attempt's snapshot instead of taking a second one,
       // so the fallback stays the last known-good database.

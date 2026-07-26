@@ -231,6 +231,7 @@ import {
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
+  omitRoutedSubagentWorkEntries,
   buildSourceProposedPlanReference,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
@@ -475,10 +476,6 @@ import {
   deriveComposerSubagentStripItems,
   type ComposerSubagentStripItem,
 } from "./chat/ComposerSubagentStrip.logic";
-import {
-  deriveSubagentToolTraceByThreadId,
-  type SubagentToolTrace,
-} from "./chat/subagentToolTrace.logic";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import {
   buildWorkflowResumePrompt,
@@ -580,7 +577,6 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
-const EMPTY_SUBAGENT_TOOL_TRACES: ReadonlyMap<string, SubagentToolTrace> = new Map();
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -2295,7 +2291,7 @@ export default function ChatView({
       [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries],
     ),
   );
-  const workLogEntries = useMemo(
+  const enrichedWorkLogEntries = useMemo(
     () =>
       hasWorkLogSubagents
         ? enrichSubagentWorkEntries(
@@ -2306,16 +2302,22 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Native-CLI-style nested trace: transcript subagent rows show the child thread's
-  // recent tool calls. Retain child detail subscriptions only while a subagent runs
-  // so its activities stream in live; settled traces stay frozen from whatever the
-  // store already holds.
+  // Subagents are presented by the composer strip (and their own threads); the
+  // transcript drops the routed fan-out rows entirely. The enriched list above is
+  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  const workLogEntries = useMemo(
+    () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
+    [enrichedWorkLogEntries],
+  );
+  // The strip's liveness (running/settled) reads the child thread's own session and
+  // tail activities, so retain a detail subscription while a subagent runs; settled
+  // subagents stay on whatever the store already holds.
   const liveSubagentThreadIdsKey = useMemo(() => {
     if (!hasWorkLogSubagents) {
       return "";
     }
     const threadIds = new Set<string>();
-    for (const entry of workLogEntries) {
+    for (const entry of enrichedWorkLogEntries) {
       for (const subagent of entry.subagents ?? []) {
         if (subagent.isActive && subagent.resolvedThreadId) {
           threadIds.add(subagent.resolvedThreadId);
@@ -2323,7 +2325,7 @@ export default function ChatView({
       }
     }
     return [...threadIds].toSorted().join("\n");
-  }, [hasWorkLogSubagents, workLogEntries]);
+  }, [enrichedWorkLogEntries, hasWorkLogSubagents]);
   useEffect(() => {
     if (!liveSubagentThreadIdsKey) {
       return;
@@ -2337,16 +2339,6 @@ export default function ChatView({
       }
     };
   }, [liveSubagentThreadIdsKey]);
-  const subagentToolTraceByThreadId = useMemo(
-    () =>
-      hasWorkLogSubagents
-        ? deriveSubagentToolTraceByThreadId({
-            workEntries: workLogEntries,
-            threads: relevantWorkLogThreads,
-          })
-        : EMPTY_SUBAGENT_TOOL_TRACES,
-    [hasWorkLogSubagents, relevantWorkLogThreads, workLogEntries],
-  );
   // Native-CLI parity: while a subagent thread is open, the strip derives from the
   // PARENT thread's activities so all sibling subagents (plus a way back to the
   // main thread) stay visible, with the open subagent marked as viewed.
@@ -2389,14 +2381,12 @@ export default function ChatView({
     : latestTurnSettled
       ? null
       : (activeLatestTurn?.turnId ?? null);
-  // Composer-strip source: routed subagent activities are omitted from the timeline
-  // entries above (they render as nested threads), so the strip derives from an
-  // unfiltered pass or it would structurally never see routed subagents.
+  // Composer-strip source: the strip needs the routed subagent entries the
+  // transcript drops, so it derives from the parent thread's own activities.
   const stripRawWorkLogEntries = useMemo(
     () =>
       deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
         visibleTurnIds: stripVisibleTurnIds,
-        includeRoutedSubagentActivities: true,
       }),
     [stripSourceActivities, stripSourceLatestTurnId, stripVisibleTurnIds],
   );
@@ -2650,7 +2640,7 @@ export default function ChatView({
   // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
   const workflowSubagentThreadsByToolUseId = useMemo(() => {
     const refs = new Map<string, WorkflowSubagentThreadRef>();
-    for (const entry of workLogEntries) {
+    for (const entry of enrichedWorkLogEntries) {
       for (const subagent of entry.subagents ?? []) {
         if (!subagent.providerThreadId) {
           continue;
@@ -2663,7 +2653,7 @@ export default function ChatView({
       }
     }
     return refs;
-  }, [workLogEntries]);
+  }, [enrichedWorkLogEntries]);
   // Persisted (per-thread) workflow run flags: pausedByUser tells the settled
   // card apart from a plain stop; dismissed retires a settled card the run's
   // activities would otherwise keep visible. Survive reloads via
@@ -3731,9 +3721,9 @@ export default function ChatView({
       resolveActiveTurnLiveDiffState({
         latestTurnId: activeLatestTurn?.turnId ?? null,
         turnDiffSummaries,
-        workLogEntries: rawWorkLogEntries,
+        workLogEntries,
       }),
-    [activeLatestTurn?.turnId, rawWorkLogEntries, turnDiffSummaries],
+    [activeLatestTurn?.turnId, turnDiffSummaries, workLogEntries],
   );
   const splitTerminalShortcutLabel = useMemo(
     () =>
@@ -11080,7 +11070,6 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
-                    subagentToolTraceByThreadId={subagentToolTraceByThreadId}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}

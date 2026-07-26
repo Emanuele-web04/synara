@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
-import { ThreadId, type TurnId } from "@synara/contracts";
+import type { TurnId } from "@synara/contracts";
 import {
   createElement,
   memo,
@@ -53,7 +53,6 @@ import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { LinkChipIcon } from "../LinkChipIcon";
 import { normalizeCompactToolLabel } from "./MessagesTimeline.logic";
 import { SynaraLogo } from "../SynaraLogo";
-import type { SubagentToolTrace } from "./subagentToolTrace.logic";
 import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -73,12 +72,6 @@ import {
   type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
-import {
-  formatSubagentModelLabel,
-  humanizeSubagentStatus,
-  normalizeSubagentStatusKind,
-  resolveSubagentPresentation,
-} from "../../lib/subagentPresentation";
 
 const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
 const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
@@ -168,19 +161,6 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
     const names = workEntry.changedFiles.map((p) => basenameOfPath(p));
     if (names.length === 1) return names[0]!;
     return `${names.length} files`;
-  }
-
-  if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
-    if (workEntry.subagentAction?.summaryText) {
-      return workEntry.subagentAction.summaryText;
-    }
-    const labels = workEntry.subagents!.map((subagent) => {
-      const presentation = subagentPrimaryLabel(subagent);
-      return (
-        presentation.nickname ?? presentation.primaryLabel ?? basenameOfPath(subagent.threadId)
-      );
-    });
-    return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
   }
 
   if (workEntry.itemType === "collab_agent_tool_call") {
@@ -382,68 +362,6 @@ function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
   return isFileChangeWorkLogEntry(workEntry);
 }
 
-function subagentPrimaryLabel(
-  subagent: NonNullable<TimelineWorkEntry["subagents"]>[number],
-): ReturnType<typeof resolveSubagentPresentation> {
-  return resolveSubagentPresentation({
-    nickname: subagent.nickname,
-    role: subagent.role,
-    title: subagent.title,
-    fallbackId: subagent.threadId,
-  });
-}
-
-function subagentSecondaryLabel(
-  subagent: NonNullable<TimelineWorkEntry["subagents"]>[number],
-  primaryLabel: string,
-): string | null {
-  const parts = [subagent.title, formatSubagentModelLabel(subagent.model)]
-    .filter((value): value is string => Boolean(value))
-    .filter((value) => value !== primaryLabel);
-  if (parts.length === 0) {
-    return null;
-  }
-  return parts.join(" • ");
-}
-
-function subagentStatusClasses(
-  statusLabel: string | undefined,
-  rawStatus: string | undefined,
-  isActive: boolean | undefined,
-): string {
-  switch (normalizeSubagentStatusKind(statusLabel ?? rawStatus, isActive)) {
-    case "running":
-      return "border-sky-500/18 bg-sky-500/8 text-sky-200/90";
-    case "completed":
-      return "border-emerald-500/18 bg-emerald-500/8 text-emerald-200/90";
-    case "failed":
-      return "border-rose-500/18 bg-rose-500/8 text-rose-200/90";
-    case "stopped":
-      return "border-amber-500/18 bg-amber-500/8 text-amber-200/90";
-    case "queued":
-      return "border-violet-500/18 bg-violet-500/8 text-violet-200/90";
-    case "idle":
-    default:
-      return "border-border/45 bg-background/85 text-muted-foreground/68";
-  }
-}
-
-function subagentCardSummary(workEntry: TimelineWorkEntry): string {
-  return (
-    workEntry.subagentAction?.summaryText ??
-    workEntryPreview(workEntry) ??
-    toolWorkEntryHeading(workEntry)
-  );
-}
-
-function subagentCardMeta(workEntry: TimelineWorkEntry): string | null {
-  const modelLabel = formatSubagentModelLabel(workEntry.subagentAction?.model);
-  if (modelLabel && workEntry.subagentAction?.prompt) {
-    return `${modelLabel} • ${workEntry.subagentAction.prompt}`;
-  }
-  return modelLabel ?? workEntry.subagentAction?.prompt ?? null;
-}
-
 function commandTooltipContent(command: string, displayText: string) {
   return (
     <div className="max-w-96 whitespace-pre-wrap leading-tight">
@@ -506,9 +424,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
-  onOpenThread?: (threadId: ThreadId) => void;
   onOpenAutomation?: (automationId: string) => void;
-  subagentToolTraceByThreadId?: ReadonlyMap<string, SubagentToolTrace>;
 }) {
   // Defaults are applied in the body (not in the destructuring pattern): a default
   // value inside a destructuring pattern makes React Compiler bail out on the whole
@@ -524,9 +440,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     turnId,
     onOpenTurnDiff,
     onOpenAgentActivity,
-    onOpenThread,
     onOpenAutomation,
-    subagentToolTraceByThreadId,
   } = props;
   const textFontSizePx = textFontSizePxProp ?? chatMetaFontSizePx;
   const density = densityProp ?? "default";
@@ -569,7 +483,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
       : combineWorkEntryDisplayText(heading, preview);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
-    (workEntry.subagents?.length ?? 0) === 0 &&
     Boolean(preview) &&
     normalizeToolTextForComparison(heading) !== normalizeToolTextForComparison(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
@@ -577,15 +490,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
-  const showSubagentRows =
-    workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0;
-  const visibleSubagents = workEntry.subagents?.slice(0, 3) ?? [];
-  const hiddenSubagentCount = Math.max(
-    0,
-    (workEntry.subagents?.length ?? 0) - visibleSubagents.length,
-  );
-  const subagentSummary = subagentCardSummary(workEntry);
-  const subagentMeta = subagentCardMeta(workEntry);
   const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
@@ -707,185 +611,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
               </button>
             );
           })}
-        </div>
-      ) : showSubagentRows ? (
-        <div className="space-y-1.5">
-          <AgentActivityOpenSurface
-            canOpen={canOpenAgentActivity}
-            compact={compact}
-            title={hoverText}
-            onOpen={openAgentActivity}
-          >
-            <span
-              className={cn(
-                "flex shrink-0 items-center justify-center text-muted-foreground/40",
-                compact ? "size-4" : "size-5",
-              )}
-            >
-              {renderWorkEntryIcon(EntryIcon, compact ? "size-2.5" : "size-3")}
-            </span>
-            <div className="min-w-0 flex-1 overflow-hidden">
-              <p
-                className={cn(
-                  compact ? "truncate leading-5" : "truncate leading-6",
-                  "font-medium text-foreground/72",
-                )}
-                style={{ fontSize: `${rowFontSizePx}px` }}
-                title={hoverText}
-              >
-                <span>{subagentSummary}</span>
-              </p>
-              {subagentMeta ? (
-                <p
-                  className="truncate leading-4 text-muted-foreground/32"
-                  style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
-                  title={subagentMeta}
-                >
-                  {subagentMeta}
-                </p>
-              ) : null}
-            </div>
-          </AgentActivityOpenSurface>
-          {visibleSubagents.length > 0 || hiddenSubagentCount > 0 ? (
-            <div
-              className={cn(
-                "space-y-[5px] rounded-[14px] border border-border/45 bg-background/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-                compact ? "px-2.5 py-2" : "px-3 py-[9px]",
-              )}
-            >
-              {visibleSubagents.map((subagent) => {
-                const presentation = subagentPrimaryLabel(subagent);
-                const primaryLabel = presentation.primaryLabel;
-                const secondaryLabel = subagentSecondaryLabel(subagent, primaryLabel);
-                const displayStatusLabel =
-                  subagent.statusLabel ??
-                  humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
-                const canOpenThread = Boolean(onOpenThread);
-                const toolTrace = subagentToolTraceByThreadId?.get(
-                  subagent.resolvedThreadId ?? subagent.threadId,
-                );
-                return (
-                  <div
-                    key={`${workEntry.id}:${subagent.threadId}`}
-                    className="flex items-start gap-2.5 rounded-xl border border-border/28 bg-background/82 px-[11px] py-2"
-                  >
-                    <span
-                      className={cn(
-                        "mt-1.5 size-1.5 shrink-0 rounded-full",
-                        subagent.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
-                      )}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className="truncate font-semibold leading-[18px] text-foreground/90"
-                        style={{ fontSize: `${rowFontSizePx}px` }}
-                        title={presentation.fullLabel}
-                      >
-                        <span style={{ color: presentation.accentColor }}>
-                          {presentation.nickname ?? primaryLabel}
-                        </span>
-                        {presentation.role ? (
-                          <span className="ml-1 text-[11px] font-medium text-muted-foreground/48">
-                            ({presentation.role})
-                          </span>
-                        ) : null}
-                      </div>
-                      {secondaryLabel ? (
-                        <div
-                          className="truncate pt-0.5 leading-4 text-muted-foreground/56"
-                          style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
-                          title={secondaryLabel}
-                        >
-                          {secondaryLabel}
-                        </div>
-                      ) : null}
-                      {subagent.latestUpdate ? (
-                        <div
-                          className="flex items-baseline gap-1.5 pt-1 text-muted-foreground/42"
-                          style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
-                          title={subagent.latestUpdate}
-                        >
-                          <span className="shrink-0 text-muted-foreground/30">Latest</span>
-                          <span className="truncate">{subagent.latestUpdate}</span>
-                        </div>
-                      ) : null}
-                      {toolTrace ? (
-                        <div className="mt-1.5 space-y-[3px] border-l border-border/35 pl-2">
-                          {toolTrace.entries.map((toolEntry) => {
-                            const ToolEntryIcon = workEntryIcon(toolEntry);
-                            const toolText = combineWorkEntryDisplayText(
-                              toolWorkEntryHeading(toolEntry),
-                              workEntryPreview(toolEntry),
-                            );
-                            return (
-                              <div
-                                key={toolEntry.id}
-                                className="flex min-w-0 items-center gap-1.5 text-muted-foreground/48"
-                                style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
-                                title={toolText}
-                              >
-                                {renderWorkEntryIcon(
-                                  ToolEntryIcon,
-                                  "size-3 shrink-0 text-muted-foreground/32",
-                                )}
-                                <span className="truncate">{toolText}</span>
-                              </div>
-                            );
-                          })}
-                          {toolTrace.overflowCount > 0 ? (
-                            <div
-                              className="pl-[18px] text-muted-foreground/36"
-                              style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
-                            >
-                              +{toolTrace.overflowCount} more tool uses
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      {displayStatusLabel ? (
-                        <span
-                          className={cn(
-                            "shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-medium tracking-[0.08em]",
-                            subagentStatusClasses(
-                              displayStatusLabel,
-                              subagent.rawStatus,
-                              subagent.isActive,
-                            ),
-                          )}
-                        >
-                          {displayStatusLabel}
-                        </span>
-                      ) : null}
-                      <button
-                        type="button"
-                        className={cn(
-                          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium text-muted-foreground/62 transition-colors",
-                          canOpenThread
-                            ? "hover:border-foreground/15 hover:text-foreground/84"
-                            : "cursor-default opacity-50",
-                        )}
-                        disabled={!canOpenThread}
-                        onClick={() =>
-                          onOpenThread?.(
-                            ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId),
-                          )
-                        }
-                      >
-                        Open thread
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              {hiddenSubagentCount > 0 ? (
-                <div className="pl-4 text-[10px] text-muted-foreground/46">
-                  +{hiddenSubagentCount} more
-                </div>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       ) : (
         (() => {

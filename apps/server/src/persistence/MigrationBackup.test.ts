@@ -753,7 +753,7 @@ describe("migration backups", () => {
     expect(await backupPaths(dbPath)).toEqual([]);
   });
 
-  it("creates the main database and live WAL files with private modes", async () => {
+  it("keeps the live database and WAL private without a shared-memory sidecar", async () => {
     const dbPath = await makeDbPath();
 
     await Effect.runPromise(
@@ -762,11 +762,14 @@ describe("migration backups", () => {
         yield* sql`CREATE TABLE permission_probe(value TEXT NOT NULL)`;
         yield* sql`INSERT INTO permission_probe(value) VALUES ('private')`;
         if (process.platform !== "win32") {
-          for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+          for (const filePath of [dbPath, `${dbPath}-wal`]) {
             const stat = yield* Effect.promise(() => fs.stat(filePath));
             expect(stat.mode & 0o777).toBe(0o600);
           }
         }
+        yield* Effect.promise(async () => {
+          await expect(fs.stat(`${dbPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+        });
       }).pipe(
         Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
       ),
