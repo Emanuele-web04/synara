@@ -335,6 +335,77 @@ export function makeAccountStorage(input: AccountStorageInput) {
       ),
     );
 
+  const reconnectBackupPath = (provider: SupportedAccountProvider, ordinal: number) =>
+    path.join(accountDir(root, provider, ordinal), "agent", "home.reconnect-backup");
+
+  // Commits a staged reconnect: the pending login home replaces the live
+  // agent home via rename, with the previous home parked as a backup until
+  // the swap completes. A failure mid-swap restores the backup so the live
+  // credentials are never lost; a crash mid-swap is repaired by
+  // recoverReconnectBackups on the next startup.
+  const commitReconnectHome = (
+    provider: SupportedAccountProvider,
+    operationId: string,
+    ordinal: number,
+  ) =>
+    withProviderLock(
+      provider,
+      tryFs(
+        "accountStorage.commitReconnectHome",
+        `Failed to commit reconnected credentials for '${provider}' ordinal ${ordinal}.`,
+        async () => {
+          const liveHome = path.join(accountDir(root, provider, ordinal), "agent", "home");
+          const stagedHome = path.join(pendingPath(root, provider, operationId), "agent", "home");
+          const backup = reconnectBackupPath(provider, ordinal);
+          ensurePrivateDirectorySync(path.dirname(liveHome));
+          await fs.rm(backup, { recursive: true, force: true });
+          let hadLive = false;
+          try {
+            await fs.rename(liveHome, backup);
+            hadLive = true;
+          } catch (cause) {
+            if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+          }
+          try {
+            await fs.rename(stagedHome, liveHome);
+          } catch (cause) {
+            if (hadLive) await fs.rename(backup, liveHome).catch(() => undefined);
+            throw cause;
+          }
+          await fs.rm(backup, { recursive: true, force: true }).catch(() => undefined);
+          await fs
+            .rm(pendingPath(root, provider, operationId), { recursive: true, force: true })
+            .catch(() => undefined);
+        },
+      ),
+    );
+
+  // Repairs the crash windows of commitReconnectHome: a backup with no live
+  // home means the swap was interrupted after parking the old credentials, so
+  // the backup is restored; a backup next to a live home means the swap
+  // completed and only the cleanup was lost, so the backup is discarded.
+  const recoverReconnectBackups = (provider: SupportedAccountProvider) =>
+    listOrdinals(provider).pipe(
+      Effect.flatMap((ordinals) =>
+        tryFs(
+          "accountStorage.recoverReconnectBackups",
+          `Failed to recover reconnect backups for '${provider}'.`,
+          async () => {
+            for (const ordinal of ordinals) {
+              const backup = reconnectBackupPath(provider, ordinal);
+              const liveHome = path.join(accountDir(root, provider, ordinal), "agent", "home");
+              if ((await fs.stat(backup).catch(() => null)) === null) continue;
+              if ((await fs.stat(liveHome).catch(() => null)) === null) {
+                await fs.rename(backup, liveHome);
+              } else {
+                await fs.rm(backup, { recursive: true, force: true });
+              }
+            }
+          },
+        ),
+      ),
+    );
+
   // Non-secret connect operation metadata persisted alongside the pending
   // login directory so interrupted operations survive a server restart.
   const pendingOperationJsonPath = (provider: SupportedAccountProvider, operationId: string) =>
@@ -525,6 +596,8 @@ export function makeAccountStorage(input: AccountStorageInput) {
     releaseOrdinalDirectory,
     createPendingDirectory,
     finalizePendingDirectory,
+    commitReconnectHome,
+    recoverReconnectBackups,
     writePendingOperation,
     readPendingOperation,
     cancelPendingDirectory,

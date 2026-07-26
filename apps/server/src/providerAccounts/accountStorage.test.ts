@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -100,6 +108,62 @@ describe("accountStorage", () => {
     ]);
     await Effect.runPromise(storage.cleanupPendingDirectories("codex"));
     await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+  });
+
+  describe("reconnect home staging", () => {
+    const liveHome = () => join(root, "accounts", "codex", "1", "agent", "home");
+    const backup = () => join(root, "accounts", "codex", "1", "agent", "home.reconnect-backup");
+
+    const seedLiveHome = async (contents: string) => {
+      await Effect.runPromise(storage.ensureRoot);
+      await Effect.runPromise(storage.writeAccount(record(1)));
+      mkdirSync(liveHome(), { recursive: true });
+      writeFileSync(join(liveHome(), "auth.json"), contents);
+    };
+
+    const stagePending = async (operationId: string, contents: string) => {
+      await Effect.runPromise(storage.createPendingDirectory("codex", operationId));
+      const stagedHome = join(root, "pending", "codex", operationId, "agent", "home");
+      writeFileSync(join(stagedHome, "auth.json"), contents);
+    };
+
+    it("commits a staged reconnect home atomically over the live home", async () => {
+      await seedLiveHome("old");
+      await stagePending("op-r1", "new");
+      await Effect.runPromise(storage.commitReconnectHome("codex", "op-r1", 1));
+      expect(readFileSync(join(liveHome(), "auth.json"), "utf8")).toBe("new");
+      expect(existsSync(backup())).toBe(false);
+      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+    });
+
+    it("restores the live home when the commit fails mid-swap", async () => {
+      await seedLiveHome("old");
+      // No pending directory exists, so the staged rename must fail after
+      // the live home has already been parked as the backup.
+      const failure = await Effect.runPromise(
+        Effect.flip(storage.commitReconnectHome("codex", "missing-op", 1)),
+      );
+      expect(failure.detail).toMatch(/Failed to commit/);
+      expect(readFileSync(join(liveHome(), "auth.json"), "utf8")).toBe("old");
+      expect(existsSync(backup())).toBe(false);
+    });
+
+    it("restores a parked backup when the swap died before completing", async () => {
+      await seedLiveHome("old");
+      renameSync(liveHome(), backup());
+      await Effect.runPromise(storage.recoverReconnectBackups("codex"));
+      expect(readFileSync(join(liveHome(), "auth.json"), "utf8")).toBe("old");
+      expect(existsSync(backup())).toBe(false);
+    });
+
+    it("discards a stale backup once the swap already completed", async () => {
+      await seedLiveHome("new");
+      mkdirSync(backup(), { recursive: true });
+      writeFileSync(join(backup(), "auth.json"), "old");
+      await Effect.runPromise(storage.recoverReconnectBackups("codex"));
+      expect(readFileSync(join(liveHome(), "auth.json"), "utf8")).toBe("new");
+      expect(existsSync(backup())).toBe(false);
+    });
   });
 
   it("stores account secrets as private files in the account root", async () => {
