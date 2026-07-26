@@ -11,7 +11,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SidebarThreadSortOrder } from "../appSettings";
-import { spaceKey } from "../lib/spaceGrouping";
+import { spaceKey, toSpaceIconName } from "../lib/spaceGrouping";
 import { resolveSpaceSelectionTarget } from "../lib/spaceNavigation";
 import {
   createSpace,
@@ -26,15 +26,18 @@ import { readNativeApi } from "../nativeApi";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
 import type { Project, SidebarThreadSummary, Space } from "../types";
+import { useVoidSpaceStore } from "../voidSpaceStore";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { sortThreadsForSidebar } from "./Sidebar.logic";
-import type { SpaceEditorValue } from "./SpaceEditorDialog";
+import type { SpaceEditorMode, SpaceEditorValue } from "./SpaceEditorDialog";
 import { useRouteSpaceSync } from "./useRouteSpaceSync";
 import { toastManager } from "./ui/toast";
 
 type SpaceEditorState =
   | { mode: "create"; projectIdAfterCreate: ProjectId | null }
-  | { mode: "edit"; spaceId: SpaceId };
+  | { mode: "edit"; spaceId: SpaceId }
+  // Void has no row to update, so its edit ends in a local preference rather than a command.
+  | { mode: "void" };
 
 /**
  * Whether the server's space order already equals the one we applied optimistically.
@@ -93,6 +96,9 @@ export function useSpacesController(input: {
   const getLastSpaceThreadId = useSpacesUiStore((store) => store.getLastThreadId);
   const getLastSpaceProjectId = useSpacesUiStore((store) => store.getLastProjectId);
   const reconcileSpacesUi = useSpacesUiStore((store) => store.reconcile);
+  const voidSpace = useVoidSpaceStore((store) => store.voidSpace);
+  const setVoidSpace = useVoidSpaceStore((store) => store.setVoidSpace);
+  const resetVoidSpace = useVoidSpaceStore((store) => store.resetVoidSpace);
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
@@ -248,10 +254,17 @@ export function useSpacesController(input: {
 
   const handleSpaceEditorSubmit = useCallback(
     async (value: SpaceEditorValue) => {
+      if (spaceEditorState?.mode === "void") {
+        // Presentation only: no command, no server round trip, nothing to fail.
+        setVoidSpace(value);
+        return;
+      }
+
       const api = readNativeApi();
       if (!api || !spaceEditorState) {
         throw new Error("The app server is unavailable.");
       }
+      const icon = toSpaceIconName(value.icon);
 
       if (spaceEditorState.mode === "edit") {
         // Only actual changes are sent, so an icon-only edit cannot collide with a
@@ -259,7 +272,7 @@ export function useSpacesController(input: {
         // command — the server rejects no-op metadata updates.
         const currentSpace = spaces.find((space) => space.id === spaceEditorState.spaceId);
         const nextName = currentSpace?.name === value.name ? undefined : value.name;
-        const nextIcon = currentSpace?.icon === value.icon ? undefined : value.icon;
+        const nextIcon = currentSpace?.icon === icon ? undefined : icon;
         if (nextName === undefined && nextIcon === undefined) {
           return;
         }
@@ -272,7 +285,7 @@ export function useSpacesController(input: {
         return;
       }
 
-      const { spaceId, sequence } = await createSpace({ api, name: value.name, icon: value.icon });
+      const { spaceId, sequence } = await createSpace({ api, name: value.name, icon });
       const projectId = spaceEditorState.projectIdAfterCreate;
       if (projectId) {
         try {
@@ -304,6 +317,7 @@ export function useSpacesController(input: {
       routeProjectId,
       selectSpaceForNavigation,
       setOptimisticActiveSpaceId,
+      setVoidSpace,
       spaceEditorState,
       spaces,
     ],
@@ -374,6 +388,13 @@ export function useSpacesController(input: {
       });
     }
   }, []);
+
+  const handleRenameVoid = useCallback(
+    (name: string) => {
+      setVoidSpace({ name });
+    },
+    [setVoidSpace],
+  );
 
   const handleReorderSpaces = useCallback(
     (orderedSpaceIds: ReadonlyArray<SpaceId>, movedSpaceId: SpaceId) => {
@@ -453,6 +474,7 @@ export function useSpacesController(input: {
   const openSpaceEditor = useCallback((spaceId: SpaceId) => {
     setSpaceEditorState({ mode: "edit", spaceId });
   }, []);
+  const openVoidEditor = useCallback(() => setSpaceEditorState({ mode: "void" }), []);
   const closeSpaceEditor = useCallback(() => setSpaceEditorState(null), []);
   const openSpaceProjectPicker = useCallback(
     (spaceId: SpaceId) => setSpaceProjectPickerTargetId(spaceId),
@@ -470,21 +492,36 @@ export function useSpacesController(input: {
   const spaceProjectPickerTarget: Space | null = spaceProjectPickerTargetId
     ? (spaces.find((space) => space.id === spaceProjectPickerTargetId) ?? null)
     : null;
-  const spaceEditorExistingNames = spaces
-    .filter((space) => space.id !== editedSpace?.id)
-    .map((space) => space.name);
+  const editingVoid = spaceEditorState?.mode === "void";
+  /**
+   * Void shares one namespace with the stored spaces: two identically named groups in the
+   * same strip are indistinguishable, so whichever one is not being edited is off limits.
+   */
+  const spaceEditorExistingNames = [
+    ...spaces.filter((space) => space.id !== editedSpace?.id).map((space) => space.name),
+    ...(editingVoid ? [] : [voidSpace.name]),
+  ];
+  const spaceEditorInitialValue: SpaceEditorValue | null = editingVoid
+    ? voidSpace
+    : editedSpace
+      ? { name: editedSpace.name, icon: editedSpace.icon }
+      : null;
 
   return {
     activeSpace,
+    voidSpace,
     editedSpace,
     spaceEditorOpen:
       spaceEditorState?.mode === "create" ||
+      editingVoid ||
       (spaceEditorState?.mode === "edit" && editedSpace !== null),
-    spaceEditorMode: spaceEditorState?.mode ?? ("create" as const),
+    spaceEditorMode: (spaceEditorState?.mode ?? "create") as SpaceEditorMode,
+    spaceEditorInitialValue,
     spaceEditorExistingNames,
     spaceProjectPickerTarget,
     openSpaceCreator,
     openSpaceEditor,
+    openVoidEditor,
     closeSpaceEditor,
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
@@ -492,6 +529,8 @@ export function useSpacesController(input: {
     handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
+    handleRenameVoid,
+    resetVoidSpace,
     handleDeleteSpace,
     handleMoveProjectToSpace,
     handleSpaceEditorSubmit,

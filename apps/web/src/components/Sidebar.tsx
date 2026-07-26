@@ -383,9 +383,7 @@ import {
   SidebarContextMenuIcon,
 } from "./sidebarContextMenuStyles";
 import {
-  VOID_SPACE_ICON,
   VOID_SPACE_KEY,
-  VOID_SPACE_NAME,
   spaceDisplayIcon,
   spaceDisplayName,
   spaceKey,
@@ -3089,13 +3087,15 @@ export default function Sidebar() {
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
     activeSpace,
-    editedSpace,
+    voidSpace,
     spaceEditorOpen,
     spaceEditorMode,
+    spaceEditorInitialValue,
     spaceEditorExistingNames,
     spaceProjectPickerTarget,
     openSpaceCreator,
     openSpaceEditor,
+    openVoidEditor,
     closeSpaceEditor,
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
@@ -3103,6 +3103,8 @@ export default function Sidebar() {
     handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
+    handleRenameVoid,
+    resetVoidSpace,
     handleDeleteSpace,
     handleMoveProjectToSpace,
     handleSpaceEditorSubmit,
@@ -5152,12 +5154,12 @@ export default function Sidebar() {
           chatWorkspaceRoot,
           studioWorkspaceRoot,
         })
-          ? spaceDisplayName(project.spaceId, spaces)
+          ? spaceDisplayName(project.spaceId, spaces, voidSpace)
           : "Global",
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),
-    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot],
+    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot, voidSpace],
   );
   const searchPaletteActions = useMemo<SidebarSearchAction[]>(
     () => [
@@ -5224,13 +5226,15 @@ export default function Sidebar() {
         ? [
             {
               id: "switch-space-void",
-              label: `Switch to ${VOID_SPACE_NAME}`,
+              label: `Switch to ${voidSpace.name}`,
               description: "Jump to unassigned projects.",
-              keywords: ["space", "switch", "void", "unassigned"],
+              // "void" stays a keyword after a rename: it is what the palette answered to
+              // before, and it is still the only word for this group in the docs.
+              keywords: ["space", "switch", "void", "unassigned", voidSpace.name],
               requiresQuery: true,
               run: () => handleSelectSpace(null),
               icon: ({ className }: { className?: string }) => (
-                <SpaceIcon icon={VOID_SPACE_ICON} className={className} />
+                <SpaceIcon icon={voidSpace.icon} className={className} />
               ),
             } satisfies SidebarSearchAction,
           ]
@@ -5268,6 +5272,7 @@ export default function Sidebar() {
       openSpaceCreator,
       spaces,
       usageSettingsShortcutLabel,
+      voidSpace,
     ],
   );
 
@@ -5709,12 +5714,16 @@ export default function Sidebar() {
                     spaces={spaces}
                     activeSpaceId={activeSpaceId}
                     activityBySpaceId={spaceActivityById}
+                    voidSpace={voidSpace}
                     onSelect={handleSelectSpace}
                     onCreate={() => openSpaceCreator()}
                     onEdit={(space) => openSpaceEditor(space.id)}
                     onDelete={(space) => void handleDeleteSpace(space.id)}
                     onReorder={handleReorderSpaces}
                     onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
+                    onEditVoid={openVoidEditor}
+                    onRenameVoid={handleRenameVoid}
+                    onResetVoid={resetVoidSpace}
                     onDropProject={(projectId, spaceId) =>
                       void handleMoveProjectToSpace(projectId, spaceId)
                     }
@@ -6033,9 +6042,7 @@ export default function Sidebar() {
       <SpaceEditorDialog
         open={spaceEditorOpen}
         mode={spaceEditorMode}
-        {...(editedSpace
-          ? { initialValue: { name: editedSpace.name, icon: editedSpace.icon } }
-          : {})}
+        {...(spaceEditorInitialValue ? { initialValue: spaceEditorInitialValue } : {})}
         existingNames={spaceEditorExistingNames}
         onOpenChange={(open) => {
           if (!open) closeSpaceEditor();
@@ -6159,7 +6166,9 @@ export default function Sidebar() {
                       read-out of where it lives today. It wears the same secondary tone
                       as every other leading glyph in this menu. */}
                   <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                    <SpaceIcon icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces)} />
+                    <SpaceIcon
+                      icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces, voidSpace)}
+                    />
                   </span>
                   <span>Move to space</span>
                 </MenuSubTrigger>
@@ -6174,8 +6183,8 @@ export default function Sidebar() {
                     }}
                   >
                     <MenuRadioItem value={VOID_SPACE_KEY}>
-                      <SpaceIcon icon={VOID_SPACE_ICON} className="size-3.5" />
-                      <span className="min-w-0 truncate">Void</span>
+                      <SpaceIcon icon={voidSpace.icon} className="size-3.5" />
+                      <span className="min-w-0 truncate">{voidSpace.name}</span>
                     </MenuRadioItem>
                     {spaces.map((space) => (
                       <MenuRadioItem key={space.id} value={space.id}>

@@ -18,6 +18,7 @@ import {
 import { groupItemsBySpace, resolveActiveSpaceId, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useSpacesUiStore } from "~/spacesUiStore";
 import { useStore } from "~/store";
+import { useVoidSpace } from "~/voidSpaceStore";
 import { SpaceIcon } from "./SpaceIcon";
 
 export interface ProjectMenuPickerOption {
@@ -78,6 +79,7 @@ function ProjectMenuPickerList(props: {
   const spaces = useStore((state) => state.spaces);
   const storedActiveSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   const activeSpaceId = resolveActiveSpaceId(storedActiveSpaceId, spaces);
+  const voidSpace = useVoidSpace();
 
   const groupedOptions = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -93,7 +95,8 @@ function ProjectMenuPickerList(props: {
         return {
           ...option,
           resolvedSpaceId,
-          resolvedSpaceName: option.spaceName ?? spaceDisplayName(resolvedSpaceId, spaces),
+          resolvedSpaceName:
+            option.spaceName ?? spaceDisplayName(resolvedSpaceId, spaces, voidSpace),
         };
       })
       .filter(
@@ -108,8 +111,9 @@ function ProjectMenuPickerList(props: {
       spaces,
       activeSpaceId,
       spaceIdOf: (option) => option.resolvedSpaceId,
+      voidSpace,
     });
-  }, [activeSpaceId, projects, props.projectOptions, query, spaces]);
+  }, [activeSpaceId, projects, props.projectOptions, query, spaces, voidSpace]);
 
   return (
     <PickerPanelShell

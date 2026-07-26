@@ -10,6 +10,7 @@ import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { isOrdinarySpaceProject } from "~/lib/spaces";
 import { cn } from "~/lib/utils";
 import { useSpacesUiStore } from "~/spacesUiStore";
+import { useVoidSpace } from "~/voidSpaceStore";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { SpaceIcon } from "./SpaceIcon";
@@ -40,6 +41,7 @@ export function SpaceProjectPickerDialog(props: {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
+  const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
@@ -75,12 +77,12 @@ export function SpaceProjectPickerDialog(props: {
           normalizedQuery.length === 0 ||
           project.name.toLocaleLowerCase().includes(normalizedQuery) ||
           project.cwd.toLocaleLowerCase().includes(normalizedQuery) ||
-          spaceDisplayName(project.spaceId, props.spaces)
+          spaceDisplayName(project.spaceId, props.spaces, voidSpace)
             .toLocaleLowerCase()
             .includes(normalizedQuery),
       )
       .toSorted((left, right) => left.name.localeCompare(right.name));
-  }, [movableProjects, props.spaces, query]);
+  }, [movableProjects, props.spaces, query, voidSpace]);
   const candidateGroups = useMemo(
     () =>
       groupItemsBySpace({
@@ -88,8 +90,9 @@ export function SpaceProjectPickerDialog(props: {
         spaces: props.spaces,
         activeSpaceId,
         spaceIdOf: (project) => project.spaceId ?? null,
+        voidSpace,
       }),
-    [activeSpaceId, candidates, props.spaces],
+    [activeSpaceId, candidates, props.spaces, voidSpace],
   );
 
   const submit = async () => {

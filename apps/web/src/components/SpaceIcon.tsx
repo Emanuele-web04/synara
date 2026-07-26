@@ -4,10 +4,10 @@
 import { SPACE_ICON_NAMES, type SpaceIconName } from "@synara/contracts";
 
 import { CentralIcon } from "~/lib/central-icons";
-import { VOID_SPACE_ICON } from "~/lib/spaceGrouping";
+import { DEFAULT_VOID_SPACE_ICON, type VoidSpaceIconName } from "~/lib/spaceGrouping";
 import { cn } from "~/lib/utils";
 
-export type SpaceIconValue = SpaceIconName | typeof VOID_SPACE_ICON;
+export type SpaceIconValue = VoidSpaceIconName;
 
 /**
  * Spoken names for the curated icon set. The asset basenames leak numbering and
@@ -37,9 +37,25 @@ const SPACE_ICON_LABELS: Record<SpaceIconName, string> = {
   backpack: "Backpack",
 };
 
+export interface SpaceIconOption {
+  readonly name: SpaceIconValue;
+  readonly label: string;
+}
+
 /** Icon options in the order the picker offers them. */
-export const SPACE_ICON_OPTIONS: ReadonlyArray<{ name: SpaceIconName; label: string }> =
-  SPACE_ICON_NAMES.map((name) => ({ name, label: SPACE_ICON_LABELS[name] }));
+export const SPACE_ICON_OPTIONS: ReadonlyArray<SpaceIconOption> = SPACE_ICON_NAMES.map((name) => ({
+  name,
+  label: SPACE_ICON_LABELS[name],
+}));
+
+/**
+ * Void's own glyph, offered only when editing Void: it is the one icon that means "nothing
+ * is filed here", so a stored Space wearing it would be lying about itself.
+ */
+export const VOID_SPACE_ICON_OPTIONS: ReadonlyArray<SpaceIconOption> = [
+  { name: DEFAULT_VOID_SPACE_ICON, label: "Black hole" },
+  ...SPACE_ICON_OPTIONS,
+];
 
 export function SpaceIcon(props: {
   icon: SpaceIconValue;

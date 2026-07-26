@@ -20,6 +20,7 @@ import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
 import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
+import { useVoidSpace } from "~/voidSpaceStore";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
 import { SpaceIcon } from "../SpaceIcon";
@@ -156,6 +157,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const spaces = useStore((state) => state.spaces);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
+  const voidSpace = useVoidSpace();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -170,7 +172,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     const seen = new Set<string>();
     const nextOptions: ActiveFolderOption[] = [];
     const projectById = new Map(projects.map((project) => [project.id, project] as const));
-    const getSpaceName = (spaceId: SpaceId | null) => spaceDisplayName(spaceId, spaces);
+    const getSpaceName = (spaceId: SpaceId | null) => spaceDisplayName(spaceId, spaces, voidSpace);
 
     for (const project of projects.filter((project) => project.kind === "project")) {
       const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
@@ -243,6 +245,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     selectedWorkspaceRoot,
     sidebarThreads,
     spaces,
+    voidSpace,
   ]);
   const activeFolderPathSet = useMemo(
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
@@ -281,8 +284,9 @@ export const ProjectPicker = memo(function ProjectPicker({
         spaces,
         activeSpaceId,
         spaceIdOf: (option) => option.spaceId,
+        voidSpace,
       }),
-    [activeSpaceId, matchingActiveFolderOptions, spaces],
+    [activeSpaceId, matchingActiveFolderOptions, spaces, voidSpace],
   );
   const filteredActiveFolderOptions = useMemo(
     () => filteredActiveFolderGroups.flatMap((group) => group.items),

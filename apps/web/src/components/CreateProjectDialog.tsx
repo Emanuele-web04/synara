@@ -12,10 +12,11 @@ import {
   isDroppedComposerDirectory,
   resolveDroppedFileAbsolutePath,
 } from "../lib/composerDropPaths";
-import { VOID_SPACE_ICON, VOID_SPACE_KEY, VOID_SPACE_NAME, spaceKey } from "../lib/spaceGrouping";
+import { VOID_SPACE_KEY, spaceKey, toSpaceIconName } from "../lib/spaceGrouping";
 import { createSpace } from "../lib/spaces";
 import { readNativeApi } from "../nativeApi";
 import type { Space } from "../types";
+import { useVoidSpace } from "../voidSpaceStore";
 import { cn } from "~/lib/utils";
 
 import { FolderClosed } from "./FolderClosed";
@@ -129,6 +130,7 @@ export function CreateProjectDialog(props: {
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
       ? [...props.spaces, createdSpace]
       : props.spaces;
+  const voidSpace = useVoidSpace();
 
   const applyPickedFolder = useCallback(
     (picked: string) => {
@@ -242,12 +244,13 @@ export function CreateProjectDialog(props: {
   const handleCreateSpace = async (value: SpaceEditorValue) => {
     const api = readNativeApi();
     if (!api) throw new Error("The app server is unavailable.");
-    const { spaceId } = await createSpace({ api, name: value.name, icon: value.icon });
+    const icon = toSpaceIconName(value.icon);
+    const { spaceId } = await createSpace({ api, name: value.name, icon });
     const createdAt = new Date().toISOString();
     setCreatedSpace({
       id: spaceId,
       name: value.name,
-      icon: value.icon,
+      icon,
       sortOrder: Number.MAX_SAFE_INTEGER,
       createdAt,
       updatedAt: createdAt,
@@ -357,18 +360,18 @@ export function CreateProjectDialog(props: {
                   <SelectValue>
                     <span className="flex items-center gap-2">
                       <SpaceIcon
-                        icon={selectedSpace?.icon ?? VOID_SPACE_ICON}
+                        icon={selectedSpace?.icon ?? voidSpace.icon}
                         className="size-3.5"
                       />
-                      {selectedSpace?.name ?? VOID_SPACE_NAME}
+                      {selectedSpace?.name ?? voidSpace.name}
                     </span>
                   </SelectValue>
                 </SelectTrigger>
                 <ComposerPickerSelectPopup align="start">
                   <SelectItem value={VOID_SPACE_KEY}>
                     <span className="flex items-center gap-2">
-                      <SpaceIcon icon={VOID_SPACE_ICON} className="size-3.5" />
-                      {VOID_SPACE_NAME}
+                      <SpaceIcon icon={voidSpace.icon} className="size-3.5" />
+                      {voidSpace.name}
                     </span>
                   </SelectItem>
                   {spaces.map((space) => (
@@ -430,7 +433,7 @@ export function CreateProjectDialog(props: {
         <SpaceEditorDialog
           open={spaceEditorOpen}
           mode="create"
-          existingNames={spaces.map((space) => space.name)}
+          existingNames={[...spaces.map((space) => space.name), voidSpace.name]}
           onOpenChange={setSpaceEditorOpen}
           onSubmit={handleCreateSpace}
         />
