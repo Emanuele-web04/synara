@@ -7,27 +7,26 @@
  * @module ClaudeAdapterLive
  */
 import { spawn as spawnChildProcess } from "node:child_process";
-import {
-  type AgentInfo,
-  type CanUseTool,
-  type AgentDefinition,
-  query,
-  type HookInput,
-  type HookJSONOutput,
-  type Options as ClaudeQueryOptions,
-  type ModelInfo,
-  type PermissionMode,
-  type PermissionResult,
-  type PermissionUpdate,
-  type SDKMessage,
-  type SDKResultMessage,
-  type SDKControlGetContextUsageResponse,
-  type Settings,
-  type SettingSource,
-  type SDKUserMessage,
-  type SlashCommand,
-  type SpawnOptions as ClaudeSpawnOptions,
-  type SpawnedProcess as ClaudeSpawnedProcess,
+import type {
+  AgentInfo,
+  CanUseTool,
+  AgentDefinition,
+  HookInput,
+  HookJSONOutput,
+  Options as ClaudeQueryOptions,
+  ModelInfo,
+  PermissionMode,
+  PermissionResult,
+  PermissionUpdate,
+  SDKMessage,
+  SDKResultMessage,
+  SDKControlGetContextUsageResponse,
+  Settings,
+  SettingSource,
+  SDKUserMessage,
+  SlashCommand,
+  SpawnOptions as ClaudeSpawnOptions,
+  SpawnedProcess as ClaudeSpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ApprovalRequestId,
@@ -100,6 +99,7 @@ import {
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
 import {
   CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
@@ -414,10 +414,12 @@ function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedPr
 }
 
 export interface ClaudeAdapterLiveOptions {
+  // Async because the default implementation lazily imports the Claude Agent
+  // SDK; test doubles may still return a runtime synchronously.
   readonly createQuery?: (input: {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
-  }) => ClaudeQueryRuntime;
+  }) => ClaudeQueryRuntime | Promise<ClaudeQueryRuntime>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   // Interval for polling a live workflow's transcript directory. Tests shrink it.
@@ -1513,12 +1515,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           })
         : undefined);
 
-    const createQuery =
-      options?.createQuery ??
-      ((input: {
-        readonly prompt: AsyncIterable<SDKUserMessage>;
-        readonly options: ClaudeQueryOptions;
-      }) => query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime);
+    // The Claude Agent SDK is imported on first query construction rather than at
+    // module scope, so boots that never open a Claude session never pay for it.
+    const createQuery = async (input: {
+      readonly prompt: AsyncIterable<SDKUserMessage>;
+      readonly options: ClaudeQueryOptions;
+    }): Promise<ClaudeQueryRuntime> => {
+      const override = options?.createQuery;
+      if (override) {
+        return override(input);
+      }
+      const { query } = await loadClaudeAgentSdk();
+      return query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime;
+    };
     const spawnClaudeProcess = options?.spawnClaudeCodeProcess ?? spawnOwnedClaudeCodeProcess;
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
 
@@ -4604,7 +4613,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : {}),
         };
 
-        const queryRuntime = yield* Effect.try({
+        const queryRuntime = yield* Effect.tryPromise({
           try: () =>
             createQuery({
               prompt,
@@ -5290,7 +5299,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       try {
         // Query construction itself may invoke the spawn callback before
         // throwing, so it belongs inside the same ownership boundary.
-        tempQuery = createQuery({
+        tempQuery = await createQuery({
           prompt: neverResolvingUserMessageStream(),
           options: {
             cwd,

@@ -324,61 +324,62 @@ async function assertDirectoryIdentity(directory: string, openedStat: Stats): Pr
   }
 }
 
+function nullOnMissing(cause: unknown): null {
+  if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+  throw cause;
+}
+
 /**
- * Removes matching regular files from a directory.
+ * The only guarded way this module is allowed to delete files.
  *
- * `olderThanMs` restricts removal to artifacts that have aged past a cutoff.
- * Omitting it removes every match regardless of age, which is only correct for
- * artifacts whose exclusive owner is the caller holding the lifecycle lock.
+ * `names` lists the directory's regular files (readdir's `isFile()` is already
+ * false for symlinks), `lstat` reads one of them, and `unlink` removes one only
+ * after re-checking that it is still a regular, non-symlinked file.
  *
- * The directory itself is opened with no-follow semantics and kept open for
- * the sweep. This prevents a symlinked backup root from redirecting cleanup
- * into another database's directory; identity checks also reject replacement
- * of the root while cleanup is running.
+ * The directory itself is opened with no-follow semantics and kept open for the
+ * whole sweep. This prevents a symlinked backup root from redirecting cleanup
+ * into another database's directory; identity checks before every unlink also
+ * reject replacement of the root while cleanup is running. A missing directory
+ * is not an error — nothing to reclaim is the expected steady state.
  */
-async function removeRegularFiles(
+type DirectorySweep = {
+  readonly names: ReadonlyArray<string>;
+  readonly lstat: (name: string) => Promise<Stats | null>;
+  readonly unlink: (name: string) => Promise<void>;
+};
+
+async function withCleanupDirectory(
   directory: string,
-  matches: (name: string) => boolean,
-  options: { readonly olderThanMs?: number } = {},
+  sweep: (context: DirectorySweep) => Promise<void>,
 ): Promise<void> {
-  const pathStat = await fs.lstat(directory).catch((cause) => {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw cause;
-  });
+  const pathStat = await fs.lstat(directory).catch(nullOnMissing);
   if (pathStat === null) return;
   if (!pathStat.isDirectory() || pathStat.isSymbolicLink()) {
     throw new Error(`Cleanup root is not a real directory: ${directory}`);
   }
 
-  const sweep = async (openedStat: Stats) => {
+  const run = async (openedStat: Stats) => {
     const entries = await fs.readdir(directory, { withFileTypes: true });
-    const cutoff =
-      options.olderThanMs === undefined
-        ? Number.POSITIVE_INFINITY
-        : Date.now() - options.olderThanMs;
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isFile() && matches(entry.name))
-        .map(async (entry) => {
-          const artifactPath = path.join(directory, entry.name);
-          const stat = await fs.lstat(artifactPath).catch((cause) => {
-            if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
-            throw cause;
-          });
-          if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.mtimeMs >= cutoff) return;
-          await assertDirectoryIdentity(directory, openedStat);
-          await fs.unlink(artifactPath).catch((cause) => {
-            if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-          });
-        }),
-    );
+    await sweep({
+      names: entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+      lstat: (name) => fs.lstat(path.join(directory, name)).catch(nullOnMissing),
+      unlink: async (name) => {
+        const artifactPath = path.join(directory, name);
+        const stat = await fs.lstat(artifactPath).catch(nullOnMissing);
+        if (!stat || !stat.isFile() || stat.isSymbolicLink()) return;
+        await assertDirectoryIdentity(directory, openedStat);
+        await fs.unlink(artifactPath).catch((cause) => {
+          if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+        });
+      },
+    });
   };
 
   // Windows cannot portably open and fsync directory handles. The lstat checks
   // still reject symlink roots there; on Unix, keep an O_NOFOLLOW descriptor
   // open for the entire destructive sweep.
   if (process.platform === "win32") {
-    await sweep(pathStat);
+    await run(pathStat);
     return;
   }
 
@@ -391,10 +392,39 @@ async function removeRegularFiles(
     if (!openedStat.isDirectory() || !sameFileIdentity(openedStat, pathStat)) {
       throw new Error(`Cleanup root changed while it was opened: ${directory}`);
     }
-    await sweep(openedStat);
+    await run(openedStat);
   } finally {
     await directoryHandle.close();
   }
+}
+
+/**
+ * Removes matching regular files from a directory.
+ *
+ * `olderThanMs` restricts removal to artifacts that have aged past a cutoff.
+ * Omitting it removes every match regardless of age, which is only correct for
+ * artifacts whose exclusive owner is the caller holding the lifecycle lock.
+ */
+async function removeRegularFiles(
+  directory: string,
+  matches: (name: string) => boolean,
+  options: { readonly olderThanMs?: number } = {},
+): Promise<void> {
+  await withCleanupDirectory(directory, async ({ names, lstat, unlink }) => {
+    const cutoff =
+      options.olderThanMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : Date.now() - options.olderThanMs;
+    await Promise.all(
+      names.filter(matches).map(async (name) => {
+        if (cutoff !== Number.POSITIVE_INFINITY) {
+          const stat = await lstat(name);
+          if (!stat || stat.mtimeMs >= cutoff) return;
+        }
+        await unlink(name);
+      }),
+    );
+  });
 }
 
 const removeStaleRegularFiles = (directory: string, matches: (name: string) => boolean) =>
@@ -428,89 +458,223 @@ function isMigrationRecoveryMarkerPartial(markerBasename: string): (name: string
     name !== markerBasename && name.startsWith(partialPrefix) && name.endsWith(".partial");
 }
 
-async function pruneFailedMigrationBundles(dbPath: string): Promise<void> {
-  const directory = path.dirname(dbPath);
-  const prefix = `${path.basename(dbPath)}.failed-migration-`;
-  const entries = await fs.readdir(directory, { withFileTypes: true });
-  const bundleNames = new Set(
-    entries
-      .filter((entry) => entry.isFile() && entry.name.startsWith(prefix))
-      .map((entry) => entry.name.replace(/-(?:wal|shm)$/u, "")),
-  );
-  const bundles = (
-    await Promise.all(
-      [...bundleNames].map(async (name) => {
-        try {
-          return {
-            name,
-            modifiedAt: (await fs.lstat(path.join(directory, name))).mtimeMs,
-          };
-        } catch (cause) {
-          if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-          // A crash can leave only WAL/SHM sidecars. They are not a restorable
-          // failed bundle and must not keep a completed restore retrying forever.
-          await Promise.all(
-            ["-wal", "-shm"].map((suffix) =>
-              fs.unlink(path.join(directory, `${name}${suffix}`)).catch((unlinkCause) => {
-                if ((unlinkCause as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkCause;
-              }),
-            ),
-          );
-          return null;
-        }
-      }),
-    )
-  ).filter(
-    (bundle): bundle is { readonly name: string; readonly modifiedAt: number } => bundle !== null,
-  );
-  bundles.sort(
-    (left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name),
-  );
-  await Promise.all(
-    bundles.slice(FAILED_MIGRATION_BUNDLE_RETENTION).flatMap(({ name }) =>
-      ["", "-wal", "-shm"].map((suffix) =>
-        fs.unlink(path.join(directory, `${name}${suffix}`)).catch((cause) => {
-          if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-        }),
-      ),
-    ),
-  );
+const BUNDLE_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
+const BUNDLE_SIDECAR_PATTERN = /-(?:wal|shm)$/u;
+
+/**
+ * Matches the compact UTC timestamp every generated artifact carries.
+ *
+ * `compactTimestamp` has emitted `YYYYMMDDThhmmssmmmZ` for as long as this
+ * module has existed, but artifacts written by older releases (the
+ * `pre-tracker-repair` snapshots) use the shorter `YYYYMMDDThhmm` form, so both
+ * the seconds and the milliseconds are optional and the `Z` is not required.
+ * The digit lookarounds stop a longer run of digits from being read as a
+ * timestamp that happens to start inside it.
+ */
+const ARTIFACT_TIMESTAMP_PATTERN =
+  /(?<!\d)(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(\d{3})?Z?(?!\d)/gu;
+
+/**
+ * Orders retention on the timestamp the writer encoded into the filename.
+ *
+ * The name is the only ordering key that survives a restore, a copy, or a
+ * backup tool, all of which rewrite `mtime` freely — and reordering a family by
+ * mtime is how the *newest* snapshot could be the one that gets pruned.
+ *
+ * Returns `null` for a name whose timestamp cannot be read. Callers must treat
+ * that as "retain, never delete": an artifact whose age is unknown cannot be
+ * proven older than the ones being kept.
+ */
+function artifactTimestampMs(name: string): number | null {
+  let parsed: number | null = null;
+  for (const match of name.matchAll(ARTIFACT_TIMESTAMP_PATTERN)) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const second = match[6] === undefined ? 0 : Number(match[6]);
+    const millisecond = match[7] === undefined ? 0 : Number(match[7]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+    if (hour > 23 || minute > 59 || second > 59) continue;
+    parsed = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  }
+  return parsed;
 }
 
+/**
+ * One prefix-delimited family of migration artifacts, and how much of it to keep.
+ *
+ * `directory` is part of the descriptor on purpose: the snapshot families live
+ * in `migrationBackupDirectory(dbPath)` while the failed-migration bundles live
+ * beside the database in `path.dirname(dbPath)`, and a family pointed at the
+ * wrong tree would either reclaim nothing or reclaim something it does not own.
+ */
+type MigrationArtifactFamily = {
+  readonly directory: string;
+  /** Full filename prefix, database basename included. Never matches the live database. */
+  readonly prefix: string;
+  /** Suffix every member carries, when the family has one. */
+  readonly suffix?: string;
+  /** How many of the newest members survive. */
+  readonly retention: number;
+  /** Members own their SQLite `-wal`/`-shm` sidecars and are reclaimed together. */
+  readonly bundled?: boolean;
+  /** Repair 0600/regular-file expectations while walking the family. */
+  readonly ensurePrivate?: boolean;
+};
+
+/**
+ * Keeps the newest `retention` members of one family and reclaims the rest.
+ *
+ * This is the single implementation of retention for every artifact family. The
+ * families differ only in where they live, what they are named, how many to
+ * keep, and whether they carry sidecars — never in their safety rules, which is
+ * why those rules live here once: regular files only, no symlink following, no
+ * deletion of a name the prefix does not claim, no deletion of a name whose age
+ * cannot be established, and ENOENT tolerated throughout.
+ */
+async function pruneMigrationArtifactFamily(family: MigrationArtifactFamily): Promise<void> {
+  const suffix = family.suffix ?? "";
+  await withCleanupDirectory(family.directory, async ({ names, unlink }) => {
+    const present = new Set(names);
+    const members = new Set(
+      names
+        .filter((name) => name.startsWith(family.prefix) && name.endsWith(suffix))
+        .map((name) => (family.bundled ? name.replace(BUNDLE_SIDECAR_PATTERN, "") : name)),
+    );
+
+    const ranked = (
+      await Promise.all(
+        [...members].map(async (name) => {
+          if (family.bundled && !present.has(name)) {
+            // A crash can leave only WAL/SHM sidecars. They are not a restorable
+            // bundle, so they never occupy a retention slot and are reclaimed
+            // outright instead of being ranked against real artifacts.
+            await Promise.all(
+              BUNDLE_SIDECAR_SUFFIXES.map((sidecar) => unlink(`${name}${sidecar}`)),
+            );
+            return null;
+          }
+          const timestampMs = artifactTimestampMs(name);
+          if (timestampMs === null) return null;
+          if (
+            family.ensurePrivate &&
+            (await ensurePrivateRegularFile(path.join(family.directory, name)).catch(
+              nullOnMissing,
+            )) === null
+          ) {
+            return null;
+          }
+          return { name, timestampMs };
+        }),
+      )
+    ).filter(
+      (member): member is { readonly name: string; readonly timestampMs: number } =>
+        member !== null,
+    );
+
+    ranked.sort(
+      (left, right) => right.timestampMs - left.timestampMs || right.name.localeCompare(left.name),
+    );
+    await Promise.all(
+      ranked
+        .slice(Math.max(0, family.retention))
+        .flatMap(({ name }) =>
+          family.bundled
+            ? ["", ...BUNDLE_SIDECAR_SUFFIXES].map((sidecar) => unlink(`${name}${sidecar}`))
+            : [unlink(name)],
+        ),
+    );
+  });
+}
+
+/** Restorable snapshots this codebase writes before it migrates a database. */
+const preMigrationBackupFamily = (dbPath: string, retention: number): MigrationArtifactFamily => ({
+  directory: migrationBackupDirectory(dbPath),
+  prefix: `${path.basename(dbPath)}.pre-migration-`,
+  suffix: ".sqlite",
+  retention,
+  ensurePrivate: true,
+});
+
+/**
+ * Full-size snapshots an older release wrote beside real backups before it
+ * repaired a malformed migration tracker.
+ *
+ * Nothing in this codebase writes them any more and no recovery path can
+ * restore from one, so they are pure one-shot diagnostics — which is exactly
+ * why no prune ever matched them and why a stranded copy sat unreclaimed for
+ * the lifetime of the install. They are the same size as the database itself,
+ * and the snapshot taken minutes either side of one is already retained by the
+ * `pre-migration` family, so a single newest copy is kept purely as a forensic
+ * last resort.
+ */
+export const TRACKER_REPAIR_SNAPSHOT_RETENTION = 1;
+
+const trackerRepairSnapshotFamily = (dbPath: string): MigrationArtifactFamily => ({
+  directory: migrationBackupDirectory(dbPath),
+  prefix: `${path.basename(dbPath)}.pre-tracker-repair-`,
+  suffix: ".sqlite",
+  retention: TRACKER_REPAIR_SNAPSHOT_RETENTION,
+  ensurePrivate: true,
+});
+
+/**
+ * The live database an explicit restore moved aside, with its WAL and SHM.
+ *
+ * These land next to the database rather than in the backup directory. They can
+ * hold writes made after the last snapshot, so more than one is kept — but they
+ * are also full-size copies, which is why the bound matters.
+ */
+const failedMigrationBundleFamily = (dbPath: string): MigrationArtifactFamily => ({
+  directory: path.dirname(dbPath),
+  prefix: `${path.basename(dbPath)}.failed-migration-`,
+  retention: FAILED_MIGRATION_BUNDLE_RETENTION,
+  bundled: true,
+});
+
+const pruneFailedMigrationBundles = (dbPath: string): Promise<void> =>
+  pruneMigrationArtifactFamily(failedMigrationBundleFamily(dbPath));
+
+/**
+ * Reclaims every artifact family a migration can strand, except the restorable
+ * `pre-migration` snapshots.
+ *
+ * Those are deliberately excluded: this runs on the normal startup path, ahead
+ * of the guard that validates the recovery marker, so it must not be able to
+ * remove the snapshot the marker points at. The families it does prune are the
+ * ones no code path ever restores from, and therefore the ones that could grow
+ * without bound — a failed-migration bundle was only ever pruned by the
+ * explicit restore command, which most installs never run.
+ */
+const pruneUnreferencedMigrationArtifacts = (dbPath: string): Promise<void> =>
+  Promise.all([
+    pruneMigrationArtifactFamily(trackerRepairSnapshotFamily(dbPath)),
+    pruneFailedMigrationBundles(dbPath),
+  ]).then(() => undefined);
+
+/**
+ * Applies retention to every migration artifact family, each independently.
+ *
+ * Per-family retention is the point: a shared bound would let one family's churn
+ * evict another's, and a single prefix match is what left the `failed-migration`
+ * and `pre-tracker-repair` families unreclaimable for their entire existence.
+ */
 export const pruneMigrationBackups = (dbPath: string, retention = MIGRATION_BACKUP_RETENTION) =>
   attemptPromise(async () => {
-    const backupDirectory = migrationBackupDirectory(dbPath);
-    const basename = path.basename(dbPath);
-    const prefix = `${basename}.pre-migration-`;
     // Orphaned partials are unreferenced by construction: the only writer holds
     // the database lifecycle lock, and a partial that outlived its writer can
     // never be promoted to a backup. Reclaim them unconditionally — an age
     // cutoff here is what allowed them to accumulate without bound.
-    await removeRegularFiles(backupDirectory, isMigrationBackupPartial(basename));
-    const entries = await fs.readdir(backupDirectory, { withFileTypes: true }).catch((cause) => {
-      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw cause;
-    });
-    const backupNames = entries
-      .filter(
-        (entry) =>
-          entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".sqlite"),
-      )
-      .map((entry) => entry.name);
-    const backups = await Promise.all(
-      backupNames.map(async (name) => {
-        const stat = await ensurePrivateRegularFile(path.join(backupDirectory, name));
-        return { name, modifiedAt: stat.mtimeMs };
-      }),
+    await removeRegularFiles(
+      migrationBackupDirectory(dbPath),
+      isMigrationBackupPartial(path.basename(dbPath)),
     );
-    backups.sort(
-      (left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name),
-    );
-    await Promise.all(
-      backups
-        .slice(Math.max(0, retention))
-        .map(({ name }) => fs.unlink(path.join(backupDirectory, name))),
-    );
+    await Promise.all([
+      pruneMigrationArtifactFamily(preMigrationBackupFamily(dbPath, retention)),
+      pruneUnreferencedMigrationArtifacts(dbPath),
+    ]);
   });
 
 export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan) =>
@@ -796,20 +960,22 @@ async function readMigrationRecoveryMarker(
 }
 
 /**
- * Reclaims stranded pre-migration partials before startup can fail closed.
+ * Reclaims stranded migration artifacts before startup can fail closed.
  *
  * A database that already needs recovery never reaches the backup path, so this
  * must run ahead of {@link requireNoPendingMigrationRecovery}. Without it a
  * wedged install keeps every partial its restart loop produced — the failure
- * mode that filled hundreds of gigabytes in minutes. It only ever removes
- * partials, never a finished backup, never a live marker, never the database.
+ * mode that filled hundreds of gigabytes in minutes.
  *
- * Both partial flavours are swept here: the snapshot partials in the backup
- * directory and the marker partials beside the database. Removing them
- * unconditionally is safe only because every caller holds the database lifecycle
- * lock, which makes this process their sole owner.
+ * Three things are swept: the snapshot partials in the backup directory, the
+ * marker partials beside the database, and the artifact families that no
+ * recovery path can restore from. Removing partials unconditionally is safe only
+ * because every caller holds the database lifecycle lock, which makes this
+ * process their sole owner; the retained families are bounded rather than
+ * emptied. It never removes a finished `pre-migration` backup, never a live
+ * marker, never the database or its WAL/SHM.
  */
-export const reclaimOrphanedMigrationBackupPartials = (dbPath: string) =>
+export const reclaimOrphanedMigrationArtifacts = (dbPath: string) =>
   attemptPromise(async () => {
     const markerPath = migrationRecoveryMarkerPath(dbPath);
     await Promise.all([
@@ -821,6 +987,7 @@ export const reclaimOrphanedMigrationBackupPartials = (dbPath: string) =>
         path.dirname(markerPath),
         isMigrationRecoveryMarkerPartial(path.basename(markerPath)),
       ),
+      pruneUnreferencedMigrationArtifacts(dbPath),
     ]);
   }).pipe(Effect.ignore);
 

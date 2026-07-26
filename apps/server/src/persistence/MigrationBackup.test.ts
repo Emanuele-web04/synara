@@ -12,14 +12,16 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS } from "@synara/shared/migrationRecovery";
 
 import {
+  FAILED_MIGRATION_BUNDLE_RETENTION,
   MIGRATION_BACKUP_RETENTION,
   MigrationRecoveryRequiredError,
+  TRACKER_REPAIR_SNAPSHOT_RETENTION,
   createMigrationBackup,
   estimateMigrationBackupRequiredBytes,
   inspectPendingMigrationRecovery,
   migrationBackupDirectory,
   migrationRecoveryMarkerPath,
-  reclaimOrphanedMigrationBackupPartials,
+  reclaimOrphanedMigrationArtifacts,
   requireNoPendingMigrationRecovery,
   restoreMarkedMigrationBackup,
   resumeMarkedMigration,
@@ -54,6 +56,9 @@ async function backupPaths(dbPath: string): Promise<Array<string>> {
   });
   return names.filter((name) => name.endsWith(".sqlite")).map((name) => path.join(directory, name));
 }
+
+/** A July 2026 day, as the compact UTC date every generated artifact name carries. */
+const artifactDay = (day: number) => `202607${`${day}`.padStart(2, "0")}`;
 
 /** Ages a marker to the state where startup has stopped retrying and fails closed. */
 async function exhaustResumeBudget(markerPath: string): Promise<void> {
@@ -562,7 +567,7 @@ describe("migration backups", () => {
     );
     await fs.writeFile(foreignPartial, "belongs to another database");
 
-    await Effect.runPromise(reclaimOrphanedMigrationBackupPartials(dbPath));
+    await Effect.runPromise(reclaimOrphanedMigrationArtifacts(dbPath));
 
     expect((await fs.lstat(backupDirectory)).isSymbolicLink()).toBe(true);
     await expect(fs.readFile(foreignPartial, "utf8")).resolves.toBe("belongs to another database");
@@ -582,7 +587,7 @@ describe("migration backups", () => {
     await fs.writeFile(strandedBackupPartial, "half-written");
     await fs.writeFile(markerPath, "{}");
 
-    await Effect.runPromise(reclaimOrphanedMigrationBackupPartials(dbPath));
+    await Effect.runPromise(reclaimOrphanedMigrationArtifacts(dbPath));
 
     await expect(fs.stat(strandedMarkerPartial)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(strandedBackupPartial)).rejects.toMatchObject({ code: "ENOENT" });
@@ -751,6 +756,134 @@ describe("migration backups", () => {
     // A current schema is a no-op startup and must not consume retention slots.
     expect(await startDatabase()).toBe(migrationEntries.length);
     expect(await backupPaths(dbPath)).toEqual([]);
+  });
+
+  it("bounds every unreferenced artifact family without touching the live database", async () => {
+    // Regression: retention only ever matched the `pre-migration-` prefix, so
+    // `failed-migration-` bundles and legacy `pre-tracker-repair-` snapshots —
+    // both full-size copies of the database — could never be reclaimed by any
+    // code path a normal install runs.
+    const dbPath = await makeDbPath();
+    const dbDirectory = path.dirname(dbPath);
+    const basename = path.basename(dbPath);
+    const backupDirectory = migrationBackupDirectory(dbPath);
+    await fs.mkdir(backupDirectory, { recursive: true });
+
+    const liveFiles = [
+      dbPath,
+      `${dbPath}-wal`,
+      `${dbPath}-shm`,
+      migrationRecoveryMarkerPath(dbPath),
+    ];
+    await Promise.all(liveFiles.map((filePath) => fs.writeFile(filePath, "live")));
+
+    // Ordering must come from the name, so mtime is deliberately the inverse.
+    const failedBundles = [1, 2, 3, 4, 5, 6].map(
+      (value) => `${basename}.failed-migration-${artifactDay(value)}T120000000Z-${randomUUID()}`,
+    );
+    await Promise.all(
+      failedBundles.flatMap((name, index) =>
+        ["", "-wal", "-shm"].map(async (sidecar) => {
+          const filePath = path.join(dbDirectory, `${name}${sidecar}`);
+          await fs.writeFile(filePath, "moved aside");
+          const inverted = new Date(Date.now() - index * 60_000);
+          await fs.utimes(filePath, inverted, inverted);
+        }),
+      ),
+    );
+    const strandedSidecars = ["-wal", "-shm"].map(
+      (sidecar) => `${basename}.failed-migration-${artifactDay(9)}T120000000Z-stranded${sidecar}`,
+    );
+    const undatedBundle = `${basename}.failed-migration-legacy-without-a-timestamp`;
+    await Promise.all(
+      [...strandedSidecars, undatedBundle, `${undatedBundle}-wal`].map((name) =>
+        fs.writeFile(path.join(dbDirectory, name), "unrankable"),
+      ),
+    );
+
+    // The short `YYYYMMDDThhmm` stamp is the form the released writer used.
+    const trackerRepairs = [1, 2, 3].map(
+      (value) => `${basename}.pre-tracker-repair-v0.6.0-${artifactDay(value)}T1355.sqlite`,
+    );
+    const undatedTrackerRepair = `${basename}.pre-tracker-repair-v0.6.0-unknown.sqlite`;
+    const preMigrationBackups = [1, 2].map(
+      (value) =>
+        `${basename}.pre-migration-v52-to-v53-${artifactDay(value)}T120000000Z-${randomUUID()}.sqlite`,
+    );
+    await Promise.all(
+      [...trackerRepairs, undatedTrackerRepair, ...preMigrationBackups].map((name) =>
+        fs.writeFile(path.join(backupDirectory, name), "snapshot"),
+      ),
+    );
+
+    await Effect.runPromise(reclaimOrphanedMigrationArtifacts(dbPath));
+
+    const remainingBesideDatabase = await fs.readdir(dbDirectory);
+    expect(
+      remainingBesideDatabase
+        .filter((name) => name.startsWith(`${basename}.failed-migration-`))
+        .toSorted(),
+    ).toEqual(
+      [
+        ...failedBundles
+          .slice(-FAILED_MIGRATION_BUNDLE_RETENTION)
+          .flatMap((name) => [name, `${name}-wal`, `${name}-shm`]),
+        // Unrankable names are retained, never guessed at. Sidecars with no
+        // bundle to restore are reclaimed and never occupy a retention slot.
+        undatedBundle,
+        `${undatedBundle}-wal`,
+      ].toSorted(),
+    );
+    for (const filePath of liveFiles) {
+      expect(await fs.readFile(filePath, "utf8")).toBe("live");
+    }
+
+    const remainingBackups = await fs.readdir(backupDirectory);
+    expect(
+      remainingBackups.filter((name) => name.includes("pre-tracker-repair")).toSorted(),
+    ).toEqual(
+      [
+        ...trackerRepairs.slice(-TRACKER_REPAIR_SNAPSHOT_RETENTION),
+        undatedTrackerRepair,
+      ].toSorted(),
+    );
+    // Restorable snapshots are off limits before the recovery marker is validated.
+    expect(remainingBackups.filter((name) => name.includes("pre-migration")).toSorted()).toEqual(
+      [...preMigrationBackups].toSorted(),
+    );
+  });
+
+  it("bounds failed-migration bundles on the normal startup path", async () => {
+    // The explicit restore command was the only caller that ever pruned these,
+    // and most installs never run it — so a 1.2 GB copy of the database sat
+    // beside it indefinitely.
+    const dbPath = await makeDbPath();
+    const basename = path.basename(dbPath);
+
+    const startDatabase = () =>
+      Effect.runPromise(
+        Layer.build(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))).pipe(
+          Effect.scoped,
+        ),
+      );
+    await startDatabase();
+
+    const bundles = [1, 2, 3, 4, 5].map(
+      (value) => `${basename}.failed-migration-${artifactDay(value)}T120000000Z-${randomUUID()}`,
+    );
+    await Promise.all(
+      bundles.map((name) => fs.writeFile(path.join(path.dirname(dbPath), name), "moved aside")),
+    );
+
+    await startDatabase();
+
+    const remaining = (await fs.readdir(path.dirname(dbPath))).filter((name) =>
+      name.startsWith(`${basename}.failed-migration-`),
+    );
+    expect(remaining.toSorted()).toEqual(
+      bundles.slice(-FAILED_MIGRATION_BUNDLE_RETENTION).toSorted(),
+    );
+    await expect(fs.stat(dbPath)).resolves.toBeDefined();
   });
 
   it("keeps the live database and WAL private without a shared-memory sidecar", async () => {

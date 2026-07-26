@@ -4,10 +4,6 @@
 // Exports: makeImportThreadHandler.
 
 import {
-  getSessionInfo as getClaudeSessionInfo,
-  getSessionMessages as getClaudeSessionMessages,
-} from "@anthropic-ai/claude-agent-sdk";
-import {
   CommandId,
   type OrchestrationImportThreadInput,
   type ProviderKind,
@@ -22,6 +18,7 @@ import type { FileSystem, Path } from "effect";
 import { Data, Effect, Option } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils";
+import { loadClaudeAgentSdk } from "../provider/claudeAgentSdk.ts";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
@@ -107,7 +104,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly externalId: string;
   }) {
     const claudeSessionInfo = yield* Effect.tryPromise({
-      try: () => getClaudeSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+      try: async () => {
+        const { getSessionInfo } = await loadClaudeAgentSdk();
+        return getSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined);
+      },
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0
@@ -119,7 +119,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     if (claudeSessionInfo) return;
 
     const sessionFoundElsewhere = yield* Effect.tryPromise({
-      try: () => getClaudeSessionInfo(input.externalId),
+      try: async () => {
+        const { getSessionInfo } = await loadClaudeAgentSdk();
+        return getSessionInfo(input.externalId);
+      },
       catch: () => undefined,
     });
 
@@ -253,8 +256,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly threadId: ThreadId;
   }) {
     const sessionMessages = yield* Effect.tryPromise({
-      try: () =>
-        getClaudeSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+      try: async () => {
+        const { getSessionMessages } = await loadClaudeAgentSdk();
+        return getSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined);
+      },
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0

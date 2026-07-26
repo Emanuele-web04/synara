@@ -1,7 +1,8 @@
 // FILE: providerModelPrefetch.ts
-// Purpose: Warm provider model discovery into the React Query cache before a new
-//          thread mounts ChatView, so the composer can skip the "Loading models"
-//          skeleton on the common new-thread path.
+// Purpose: Warm provider model discovery and composer capabilities into the
+//          React Query cache before a new thread mounts ChatView, so the
+//          composer can skip the "Loading models" skeleton and capability
+//          round-trips on the common new-thread path.
 // Layer: Web lib
 // Exports: resolve + prefetch helpers that mirror ChatView's listModels query keys.
 
@@ -12,6 +13,7 @@ import type { AppSettings } from "../appSettings";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
   providerAgentsQueryOptions,
+  providerComposerCapabilitiesQueryOptions,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 
@@ -174,4 +176,8 @@ export function prefetchProviderModelsForNewThread(
   if (agentsOptions) {
     void queryClient.prefetchQuery(agentsOptions);
   }
+
+  // Composer capabilities gate composer affordances on ChatView mount; the query
+  // has staleTime Infinity, so this costs one IPC per provider per session.
+  void queryClient.prefetchQuery(providerComposerCapabilitiesQueryOptions(input.provider));
 }

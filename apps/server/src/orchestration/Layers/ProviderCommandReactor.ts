@@ -391,19 +391,17 @@ const make = Effect.gen(function* () {
   // projected thread metadata so an option changed mid-turn is still compared
   // against the old subprocess configuration before the next turn starts.
   const threadSessionModelSelections = new Map<string, ModelSelection>();
-  const seedThreadModelSelections = projectionSnapshotQuery.getCommandReadModel().pipe(
-    Effect.tap((snapshot) =>
-      Effect.sync(() => {
-        for (const thread of snapshot.threads) {
-          threadSessionModelSelections.set(thread.id, thread.modelSelection);
-        }
-      }),
-    ),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("provider command reactor failed to seed model selections", {
-        cause: Cause.pretty(cause),
-      }),
-    ),
+  // Seeded from the engine's in-memory command read model, not a second snapshot query.
+  // The engine loads that model once after the projection bootstrap and keeps it current
+  // as commands commit, so reading it here is both free and strictly fresher than
+  // re-running the eight-query snapshot load on the blocking startup path (~150ms on a
+  // large database). It cannot fail, so there is no failure mode left to log.
+  const seedThreadModelSelections = orchestrationEngine.getReadModel().pipe(
+    Effect.map((snapshot) => {
+      for (const thread of snapshot.threads) {
+        threadSessionModelSelections.set(thread.id, thread.modelSelection);
+      }
+    }),
   );
 
   const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (

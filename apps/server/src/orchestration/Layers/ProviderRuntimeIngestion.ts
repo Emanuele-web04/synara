@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   MessageId,
+  type OrchestrationCheckpointFile,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationProposedPlanId,
@@ -151,7 +152,7 @@ type ProviderDiffPlaceholder = {
   // (forwarded to dispatch / re-stored), never mutated in place, so this is a
   // ReadonlyArray — which also lets it accept the readonly `checkpoint.files` from
   // an OrchestrationThread without a defensive copy.
-  readonly files: ReadonlyArray<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>[number]>;
+  readonly files: ReadonlyArray<OrchestrationCheckpointFile>;
 };
 type NativeChildSlotState = {
   initialized: boolean;
@@ -210,12 +211,12 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
   );
 }
 
-function parseProviderTurnDiffFiles(unifiedDiff: string) {
-  try {
-    return parseCheckpointFilesFromUnifiedDiff(unifiedDiff);
-  } catch {
-    return null;
-  }
+function parseProviderTurnDiffFiles(
+  unifiedDiff: string,
+): Effect.Effect<OrchestrationCheckpointFile[] | null> {
+  return parseCheckpointFilesFromUnifiedDiff(unifiedDiff).pipe(
+    Effect.catchCause(() => Effect.succeed(null)),
+  );
 }
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
@@ -2350,7 +2351,7 @@ const make = Effect.gen(function* () {
             );
             const files =
               (canParseLiveDiffPatch
-                ? parseProviderTurnDiffFiles(event.payload.unifiedDiff)
+                ? yield* parseProviderTurnDiffFiles(event.payload.unifiedDiff)
                 : null) ??
               trackedPlaceholder?.files ??
               existingCheckpoint?.files ??

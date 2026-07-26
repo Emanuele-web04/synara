@@ -57,6 +57,7 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
+import { lazyModule } from "../../lazyModule.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   ProviderAdapterRequestError,
@@ -313,7 +314,12 @@ export function makePiBashProcessSupervisor(
   };
 }
 
-let piCodingAgentModulePromise: Promise<PiCodingAgentModule> | undefined;
+// Loads the Pi SDK only when the Pi provider is actually used. The SDK brings in
+// a native clipboard module, so importing it during Synara startup can bloat the
+// desktop backend before any Pi session exists.
+const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
+  () => import("@earendil-works/pi-coding-agent"),
+);
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
@@ -493,14 +499,6 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
 
 function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
   return isPiThinkingLevel(value) ? value : undefined;
-}
-
-// Loads the Pi SDK only when the Pi provider is actually used. The SDK brings in
-// a native clipboard module, so importing it during Synara startup can bloat the
-// desktop backend before any Pi session exists.
-async function loadPiCodingAgentModule(): Promise<PiCodingAgentModule> {
-  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
-  return piCodingAgentModulePromise;
 }
 
 function getLocalSupportedThinkingLevels(

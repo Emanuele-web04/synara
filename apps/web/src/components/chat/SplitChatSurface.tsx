@@ -17,7 +17,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
-  ChatMountSkeleton,
+  ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
   LazyDiffPanel,
@@ -881,7 +881,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const splitThreadIds = new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []);
 
   if (!activeSplitView) {
-    return <ChatMountSkeleton />;
+    return <ChatMountLoader />;
   }
 
   const chooseThreadForPane = (threadId: ThreadId, paneOverride?: PaneId) => {

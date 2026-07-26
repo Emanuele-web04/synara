@@ -21,7 +21,7 @@ import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
-import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
   Cache,
@@ -69,6 +69,7 @@ import {
   parseClaudeAuthStatusFromOutput,
 } from "../claudeAuthStatus";
 import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
+import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
 import {
   detailFromResult,
@@ -459,6 +460,7 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
 const probeClaudeSubscription = () => {
   const abort = new AbortController();
   return Effect.tryPromise(async () => {
+    const { query: claudeQuery } = await loadClaudeAgentSdk();
     const q = claudeQuery({
       // oxlint-disable-next-line require-yield
       prompt: (async function* (): AsyncGenerator<SDKUserMessage> {

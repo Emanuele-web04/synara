@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import {
   inspectPendingMigrationRecovery,
-  reclaimOrphanedMigrationBackupPartials,
+  reclaimOrphanedMigrationArtifacts,
   resumeMarkedMigration,
   runWithPreMigrationBackup,
   type MigrationRecoveryMarker,
@@ -126,8 +126,8 @@ export const makeSqlitePersistenceLive = (dbPath: string) =>
         yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
         // Ahead of the guard on purpose: a database that fails closed below
         // never reaches the backup path, so this is the only opportunity to
-        // reclaim partials stranded by an earlier failed startup.
-        yield* reclaimOrphanedMigrationBackupPartials(dbPath);
+        // reclaim artifacts stranded by an earlier failed startup or restore.
+        yield* reclaimOrphanedMigrationArtifacts(dbPath);
         const pendingRecovery = yield* inspectPendingMigrationRecovery(dbPath);
         yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
 

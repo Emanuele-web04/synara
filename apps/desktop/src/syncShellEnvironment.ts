@@ -7,21 +7,14 @@ import {
   listLoginShellCandidates,
   mergePathEntries,
   readPathFromLaunchctl,
-  readEnvironmentFromLoginShell,
   readWindowsPersistentEnvironment,
   type ShellEnvironmentReader,
   type WindowsEnvironmentReader,
 } from "@synara/shared/shell";
-
-const LOGIN_SHELL_ENV_NAMES = [
-  "PATH",
-  "SSH_AUTH_SOCK",
-  "HOMEBREW_PREFIX",
-  "HOMEBREW_CELLAR",
-  "HOMEBREW_REPOSITORY",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-] as const;
+import {
+  createCachedLoginShellEnvironmentReader,
+  LOGIN_SHELL_ENVIRONMENT_NAMES,
+} from "@synara/shared/loginShellEnvironment";
 
 function logShellEnvironmentWarning(message: string, error?: unknown): void {
   console.warn(`[desktop] ${message}`, error instanceof Error ? error.message : (error ?? ""));
@@ -93,13 +86,17 @@ export function syncShellEnvironment(
 
   if (platform !== "darwin" && platform !== "linux") return { pathHydrated: false };
 
-  const readEnvironment = options.readEnvironment ?? readEnvironmentFromLoginShell;
+  // Cached by default. The probe is the single most expensive thing on the desktop's
+  // pre-`whenReady()` path, and its answer only changes when the shell, the user, or one
+  // of its startup files does — so it is read from disk instead of recomputed per launch.
+  const readEnvironment =
+    options.readEnvironment ?? createCachedLoginShellEnvironmentReader({ env, platform });
   const shellEnvironment: Partial<Record<string, string>> = {};
 
   try {
     for (const shell of listLoginShellCandidates(platform, env.SHELL, options.userShell)) {
       try {
-        Object.assign(shellEnvironment, readEnvironment(shell, LOGIN_SHELL_ENV_NAMES));
+        Object.assign(shellEnvironment, readEnvironment(shell, LOGIN_SHELL_ENVIRONMENT_NAMES));
         if (shellEnvironment.PATH) {
           break;
         }

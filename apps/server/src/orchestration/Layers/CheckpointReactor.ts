@@ -399,7 +399,7 @@ const make = Effect.gen(function* () {
             ignoreWhitespace: false,
           })
           .pipe(
-            Effect.map((diff) => parseCheckpointFilesFromUnifiedDiff(diff)),
+            Effect.flatMap((diff) => parseCheckpointFilesFromUnifiedDiff(diff)),
             Effect.tapError((error) =>
               appendCaptureFailureActivity({
                 threadId: input.threadId,
@@ -680,7 +680,7 @@ const make = Effect.gen(function* () {
       .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [liveCheckpointRef] })
       .pipe(Effect.catch(() => Effect.void));
 
-    const files = parseCheckpointFilesFromUnifiedDiff(diff);
+    const files = yield* parseCheckpointFilesFromUnifiedDiff(diff);
     if (files.length === 0) {
       return;
     }

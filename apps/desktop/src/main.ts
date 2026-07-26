@@ -215,7 +215,9 @@ import {
 // baseline, so a replacement during startup cannot silently become "normal."
 const startupBundleIdentity = captureStartupBundleIdentity();
 
-// Deliberately still on the pre-`whenReady()` path, despite costing ~1s of cold start.
+// Deliberately still on the pre-`whenReady()` path. On posix it is normally a cache read
+// (see `createCachedLoginShellEnvironmentReader`); only a first launch, a changed shell
+// startup file, or an aged-out entry pays the ~1s login-shell probe again.
 // The reads a few lines below decide where this install's data lives, and two of them
 // depend on what this probe brings in: `resolveUserDataPath()` takes the Electron profile
 // directory from XDG_CONFIG_HOME on Linux, which the login-shell probe captures, and

@@ -284,8 +284,8 @@ export function useHandleNewThread() {
           applyProviderOverride(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route
-        // subtree renders interruptibly and the browser can paint the composer
-        // skeleton immediately instead of freezing on the synchronous commit.
+        // subtree renders interruptibly and the browser can paint the chat
+        // mount loader immediately instead of freezing on the synchronous commit.
         navigate: () =>
           new Promise<void>((resolve, reject) => {
             startTransition(() => {
