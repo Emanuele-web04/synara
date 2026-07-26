@@ -128,10 +128,11 @@ interface ButtonProps extends useRender.ComponentProps<"button"> {
   shape?: VariantProps<typeof buttonVariants>["shape"];
 }
 
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant, size, shape, render, ...props },
-  ref,
-) {
+// `ref` rides along in `...props` instead of going through `forwardRef`: React 19 passes it as a
+// plain prop, and `mergeProps` forwards it to the rendered element either way. Pulling it out into
+// a local made React Compiler read the whole component as a ref access during render and skip it —
+// which costs every button on screen its auto-memoization.
+function Button({ className, variant, size, shape, render, ...props }: ButtonProps) {
   const typeValue: React.ButtonHTMLAttributes<HTMLButtonElement>["type"] = render
     ? undefined
     : "button";
@@ -139,7 +140,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   const defaultProps = {
     className: cn(buttonVariants({ className, shape, size, variant })),
     "data-slot": "button",
-    ref,
     type: typeValue,
   };
 
@@ -148,7 +148,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     props: mergeProps<"button">(defaultProps, props),
     render,
   });
-});
+}
 
 /** Dialog footers and inline error actions share this sizing override. */
 const dialogActionButtonClassName =

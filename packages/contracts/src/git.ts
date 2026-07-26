@@ -384,6 +384,21 @@ export const GitReadWorkingTreeDiffResult = Schema.Struct({
 });
 export type GitReadWorkingTreeDiffResult = typeof GitReadWorkingTreeDiffResult.Type;
 
+/**
+ * Line counts for a scope's patch, without the patch itself.
+ *
+ * The `+N/-M` badge surfaces only ever needed these three numbers, and a working tree with a
+ * large diff makes the patch text megabytes — sending it so the renderer can re-derive them
+ * costs bandwidth and main-thread parse time proportional to the diff. `null` totals mean the
+ * scope is clean.
+ */
+export const GitWorkingTreeDiffStatsResult = Schema.Struct({
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  fileCount: NonNegativeInt,
+});
+export type GitWorkingTreeDiffStatsResult = typeof GitWorkingTreeDiffStatsResult.Type;
+
 // Stage/unstage are fire-and-forget index mutations; callers refetch status/diff.
 export const GitStageFilesResult = Schema.Struct({
   ok: Schema.Boolean,

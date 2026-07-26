@@ -273,7 +273,6 @@ export interface TraitsMenuContentProps {
   onSelectionComplete?: () => void;
 }
 
-// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   provider,
   threadId,
@@ -319,6 +318,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
   const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
   const hasPriorContextWindowSection = thinkingEnabled !== null;
+  // Both descriptor ids are resolved up here rather than inline. React Compiler cannot lower a `??`
+  // in an object-key position, and it cannot match an optional-chained expression in a dependency
+  // list to its own inferred scope — either one makes it skip this component entirely.
+  const contextWindowTraitId = contextWindowDescriptor?.id ?? "contextWindow";
+  const primarySelectDescriptorId = primarySelectDescriptor?.id;
   const hasPriorEffortSection = thinkingEnabled !== null || contextWindowOptions.length > 1;
   const hasPriorFastModeSection =
     thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
@@ -341,44 +345,35 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     [threadId, provider, modelOptions, model, setProviderModelOptions, onSelectionComplete],
   );
 
-  const handleEffortChange = useCallback(
-    (value: string) => {
-      if (ultrathinkPromptControlled) return;
-      if (!value) return;
-      const nextOption = effortLevels.find((option) => option.value === value);
-      if (!nextOption) return;
-      if (promptInjectedValues.includes(nextOption.value)) {
-        const nextPrompt =
-          prompt.trim().length === 0
-            ? ULTRATHINK_PROMPT_PREFIX
-            : applyClaudePromptEffortPrefix(prompt, "ultrathink");
-        onPromptChange(nextPrompt);
-        onSelectionComplete?.();
-        return;
-      }
-      const optionId =
-        primarySelectDescriptor?.id ??
-        (provider === "kilo" || provider === "opencode"
-          ? "variant"
-          : provider === "pi"
-            ? "thinkingLevel"
-            : provider === "claudeAgent"
-              ? "effort"
-              : "reasoningEffort");
-      commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
-    },
-    [
-      ultrathinkPromptControlled,
-      effortLevels,
-      prompt,
-      promptInjectedValues,
-      provider,
-      primarySelectDescriptor?.id,
-      onPromptChange,
-      onSelectionComplete,
-      commitTrait,
-    ],
-  );
+  // Deliberately not wrapped in `useCallback`: its inputs all come out of one
+  // `getComposerTraitSelection` call, which React Compiler memoizes as a single scope, so no
+  // hand-written dependency list can match it and the validator refuses to compile the component at
+  // all. Letting the compiler own this memoization is what gets the whole file optimized.
+  const handleEffortChange = (value: string) => {
+    if (ultrathinkPromptControlled) return;
+    if (!value) return;
+    const nextOption = effortLevels.find((option) => option.value === value);
+    if (!nextOption) return;
+    if (promptInjectedValues.includes(nextOption.value)) {
+      const nextPrompt =
+        prompt.trim().length === 0
+          ? ULTRATHINK_PROMPT_PREFIX
+          : applyClaudePromptEffortPrefix(prompt, "ultrathink");
+      onPromptChange(nextPrompt);
+      onSelectionComplete?.();
+      return;
+    }
+    const optionId =
+      primarySelectDescriptorId ??
+      (provider === "kilo" || provider === "opencode"
+        ? "variant"
+        : provider === "pi"
+          ? "thinkingLevel"
+          : provider === "claudeAgent"
+            ? "effort"
+            : "reasoningEffort");
+    commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
+  };
 
   if (!hasVisibleControls && !hasAgentControls) {
     return null;
@@ -409,9 +404,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               label: option.label,
               isDefault: option.value === defaultContextWindow,
             }))}
-            onValueChange={(value) =>
-              commitTrait({ [contextWindowDescriptor?.id ?? "contextWindow"]: value })
-            }
+            onValueChange={(value) => commitTrait({ [contextWindowTraitId]: value })}
             onSelectionComplete={onSelectionComplete}
           />
         </>

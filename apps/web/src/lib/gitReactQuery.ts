@@ -32,6 +32,12 @@ export const gitQueryKeys = {
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
   ) => ["git", "working-tree-diff", cwd, scope] as const,
+  // Deliberately nested under the patch key so every existing
+  // `["git", "working-tree-diff", ...]` invalidation refreshes the counts too.
+  workingTreeDiffStats: (
+    cwd: string | null,
+    scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
+  ) => ["git", "working-tree-diff", cwd, scope, "stats"] as const,
   diffSummary: (
     cacheScope: string | null,
     model: string | null,
@@ -185,6 +191,40 @@ export function gitPullRequestSnapshotQueryOptions(input: {
         : GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS,
     refetchOnWindowFocus: (query) =>
       !query.state.data || query.state.data.pullRequest.state === "open",
+    refetchOnReconnect: true,
+  });
+}
+
+/**
+ * Line counts for the selected scope, resolved server-side.
+ *
+ * Separate from `gitWorkingTreeDiffQueryOptions` on purpose: the badge surfaces poll these
+ * numbers every few seconds while a turn is live, and the patch they used to be derived from
+ * grows with the working tree — on a 10k-line diff that meant refetching megabytes of text and
+ * reparsing it on the renderer's main thread just to show `+N/-M`. The response here is three
+ * integers regardless of diff size. Fetch the patch itself only when showing the diff.
+ */
+export function gitWorkingTreeDiffStatsQueryOptions(input: {
+  cwd: string | null;
+  scope?: GitReadWorkingTreeDiffInput["scope"];
+  enabled?: boolean;
+  refetchInterval?: number | false;
+}) {
+  const scope = input.scope ?? "workingTree";
+  const refetchInterval = input.refetchInterval;
+  return queryOptions({
+    queryKey: gitQueryKeys.workingTreeDiffStats(input.cwd, scope),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) {
+        throw new Error("Working tree diff stats are unavailable.");
+      }
+      return api.git.workingTreeDiffStats({ cwd: input.cwd, scope });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null,
+    staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
+    ...(refetchInterval !== undefined ? { refetchInterval } : {}),
+    refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
 }

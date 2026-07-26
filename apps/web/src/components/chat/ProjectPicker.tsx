@@ -73,6 +73,29 @@ interface ActiveFolderOption {
   secondaryLabel: string | null;
 }
 
+/**
+ * Existing projects switch the draft into that project; raw paths stay workspace roots.
+ *
+ * Module scope on purpose: the caller runs this inside a `try`, and React Compiler cannot lower a
+ * conditional expression there — inlining it makes the whole picker skip compilation.
+ */
+function startActiveFolderSelection(
+  folder: ActiveFolderOption,
+  handlers: {
+    isProjectSelectionMode: boolean;
+    onSelectProject?: ((projectId: ProjectId) => void | Promise<void>) | undefined;
+    onSelectWorkspaceRoot?: ((workspaceRoot: string) => void) | undefined;
+  },
+): void | Promise<void> {
+  if (folder.projectId && handlers.onSelectProject) {
+    return handlers.onSelectProject(folder.projectId);
+  }
+  if (handlers.isProjectSelectionMode) {
+    return undefined;
+  }
+  return handlers.onSelectWorkspaceRoot?.(folder.cwd);
+}
+
 function basenameOfPath(value: string | null | undefined): string | null {
   if (!value) return null;
   const normalized = value.replace(/[\\/]+$/, "");
@@ -143,7 +166,6 @@ export const ProjectPicker = memo(function ProjectPicker({
   const [directoryEntries, setDirectoryEntries] = useState<readonly ProjectDirectoryEntry[]>([]);
   const isProjectSelectionMode = selectionMode === "project";
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
     const nextOptions: ActiveFolderOption[] = [];
@@ -391,13 +413,11 @@ export const ProjectPicker = memo(function ProjectPicker({
   const handleSelectActiveFolder = useCallback(
     (folder: ActiveFolderOption) => {
       try {
-        // Existing projects should switch the draft into that project; raw paths stay workspace roots.
-        const selection =
-          folder.projectId && onSelectProject
-            ? onSelectProject(folder.projectId)
-            : isProjectSelectionMode
-              ? undefined
-              : onSelectWorkspaceRoot?.(folder.cwd);
+        const selection = startActiveFolderSelection(folder, {
+          isProjectSelectionMode,
+          onSelectProject,
+          onSelectWorkspaceRoot,
+        });
         void Promise.resolve(selection)
           .then(() => {
             setOpen(false);
@@ -430,8 +450,10 @@ export const ProjectPicker = memo(function ProjectPicker({
       }
       if (onCreateProjectFromPath) {
         await onCreateProjectFromPath(pickedPath);
-      } else {
-        onSelectWorkspaceRoot?.(pickedPath);
+      } else if (onSelectWorkspaceRoot) {
+        // Spelled out instead of `onSelectWorkspaceRoot?.(…)`: an optional call is a value block,
+        // which React Compiler cannot lower inside a `try`.
+        onSelectWorkspaceRoot(pickedPath);
       }
       setIsPicking(false);
       setOpen(false);
@@ -443,7 +465,13 @@ export const ProjectPicker = memo(function ProjectPicker({
 
   const handleResetToHome = useCallback(() => {
     try {
-      void Promise.resolve(onResetToHome?.())
+      // Statement form, not `onResetToHome?.()` or a ternary, for the same reason as
+      // `handleAddNewProject`: any value block inside a `try` is one the compiler rejects.
+      let reset: void | Promise<void> | undefined;
+      if (onResetToHome) {
+        reset = onResetToHome();
+      }
+      void Promise.resolve(reset)
         .then(() => {
           setOpen(false);
         })

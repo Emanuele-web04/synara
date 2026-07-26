@@ -36,6 +36,21 @@ type SpaceEditorState =
   | { mode: "create"; projectIdAfterCreate: ProjectId | null }
   | { mode: "edit"; spaceId: SpaceId };
 
+/**
+ * Whether the server's space order already equals the one we applied optimistically.
+ *
+ * Module scope because the caller checks this inside a `try`, and React Compiler cannot lower a
+ * logical expression there — inlining it costs the whole controller its memoization.
+ */
+function spaceOrderMatches(
+  confirmed: ReadonlyArray<SpaceId>,
+  expected: ReadonlyArray<SpaceId>,
+): boolean {
+  return (
+    confirmed.length === expected.length && confirmed.every((id, index) => id === expected[index])
+  );
+}
+
 export function useSpacesController(input: {
   /** Ordinary (space-assignable) projects; computed by Sidebar because its own memos need it too. */
   ordinarySpaceProjects: readonly Project[];
@@ -309,13 +324,15 @@ export function useSpacesController(input: {
       );
       if (!confirmed) return;
 
+      // Resolved before the `try`: React Compiler cannot lower a `??` chain inside a try block.
+      const activeContextProject =
+        activeRouteProject ??
+        (isOnKanban && routeProjectId ? (projectById.get(routeProjectId) ?? null) : null);
+
       try {
         await deleteSpace({ api, spaceId });
         if (activeSpaceId === spaceId) {
           selectSpaceForNavigation(null);
-          const activeContextProject =
-            activeRouteProject ??
-            (isOnKanban && routeProjectId ? (projectById.get(routeProjectId) ?? null) : null);
           if (!isOrdinarySpaceProject(activeContextProject, workspacePaths)) {
             // Same explicit landing as an empty-Space switch: we just selected Void, so the
             // restore must not reopen a thread that files into some other Space.
@@ -370,10 +387,7 @@ export function useSpacesController(input: {
           const snapshot = await api.orchestration.getShellSnapshot();
           useStore.getState().syncServerShellSnapshot(snapshot);
           const confirmedSpaceIds = snapshot.spaces.map((space) => space.id);
-          if (
-            confirmedSpaceIds.length === orderedSpaceIds.length &&
-            confirmedSpaceIds.every((spaceId, index) => spaceId === orderedSpaceIds[index])
-          ) {
+          if (spaceOrderMatches(confirmedSpaceIds, orderedSpaceIds)) {
             return;
           }
         } catch {
@@ -406,9 +420,13 @@ export function useSpacesController(input: {
       const project = projectById.get(projectId);
       if (!api || !project || (project.spaceId ?? null) === spaceId) return;
       onCloseProjectContextMenu();
+      // Evaluated before the `try` (see `spaceOrderMatches`); none of these inputs can change
+      // across the await anyway.
+      const movesTheRoutedProject =
+        activeRouteProjectId === projectId || (isOnKanban && routeProjectId === projectId);
       try {
         await moveProjectToSpace({ api, projectId, spaceId });
-        if (activeRouteProjectId === projectId || (isOnKanban && routeProjectId === projectId)) {
+        if (movesTheRoutedProject) {
           selectSpaceForNavigation(spaceId);
         }
       } catch (error) {
