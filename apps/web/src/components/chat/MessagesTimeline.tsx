@@ -954,11 +954,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        row.kind === "work" ||
-          row.kind === "working-header" ||
-          (row.kind === "message" && row.message.role === "assistant")
-          ? "pb-2"
-          : "pb-4",
+        row.kind === "working" ||
+          (row.kind === "message" &&
+            row.message.role === "assistant" &&
+            row.assistantTurnInProgress)
+          ? "pb-1"
+          : row.kind === "work" ||
+              row.kind === "working-header" ||
+              (row.kind === "message" && row.message.role === "assistant")
+            ? "pb-2"
+            : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
         row.kind === "message" && row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
@@ -989,6 +994,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
               markdownCwd={markdownCwd}
               onImageExpand={onImageExpand}
+              timestampFormat={timestampFormat}
               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
               {...(onOpenAutomation ? { onOpenAutomation } : {})}
             />
@@ -1391,7 +1397,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // so a live turn reads as one block, not a stack of timestamped
           // fragments. `showAssistantCopyButton` is exactly the terminal-message
           // signal (see deriveTerminalAssistantMessageIds).
-          const isTerminalAssistantMessage = row.showAssistantCopyButton;
+          const isTerminalAssistantMessage =
+            row.showAssistantCopyButton && !row.assistantTurnInProgress;
           const assistantMeta = [
             isTerminalAssistantMessage
               ? formatShortTimestamp(row.message.createdAt, timestampFormat)
@@ -1441,6 +1448,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 markdownCwd={markdownCwd}
                 onImageExpand={onImageExpand}
                 onOpenTurnDiff={onOpenTurnDiff}
+                timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
@@ -1541,7 +1549,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   )}
                 {!hasCollapsedWork && display.statusEntries.length > 0 && (
-                  <div className={cn("space-y-0.5", placement === "leading" ? "mb-2" : "mt-2")}>
+                  <div
+                    className={cn(
+                      "space-y-0.5",
+                      placement === "leading"
+                        ? row.assistantTurnInProgress
+                          ? "mb-0.5"
+                          : "mb-2"
+                        : "mt-2",
+                    )}
+                  >
                     {display.statusEntries.map((workEntry) => (
                       <TimelineWorkEntryRow
                         key={`${placement}-status-row:${row.message.id}:${workEntry.id}`}
@@ -1551,6 +1568,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                         markdownCwd={markdownCwd}
                         onImageExpand={onImageExpand}
+                        timestampFormat={timestampFormat}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenAutomation ? { onOpenAutomation } : {})}
                       />
@@ -1570,6 +1588,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
                 markdownCwd={markdownCwd}
                 onImageExpand={onImageExpand}
+                timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
               />

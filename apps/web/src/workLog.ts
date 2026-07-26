@@ -1,6 +1,7 @@
 import {
   isToolLifecycleItemType,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
+  type OrchestrationLatestTurnState,
   type OrchestrationThreadActivity,
   type ProviderKind,
   type ToolLifecycleItemType,
@@ -54,6 +55,7 @@ export interface WorkLogEntry {
   toolName?: string;
   toolCallId?: string;
   toolStatus?: SynaraMcpToolStatus;
+  liveActivity?: WorkLogLiveActivity;
   toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: WorkLogRequestKind;
@@ -68,6 +70,26 @@ export interface WorkLogEntry {
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
+}
+
+export type WorkLogLiveActivityState =
+  | "starting"
+  | "thinking"
+  | "running_tool"
+  | "waiting"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface WorkLogLiveActivity {
+  state: WorkLogLiveActivityState;
+  label: string;
+  startedAt?: string;
+  lastActivityAt: string;
+  detail?: string;
+  progress?: number;
+  elapsedSeconds?: number;
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -128,6 +150,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   toolName?: string;
   runtimeWarningRepeatCount?: number;
   runtimeWarningMessage?: string;
+  suppressStandaloneCommandStart?: boolean;
 }
 
 export function isFileChangeWorkLogEntry(
@@ -221,6 +244,10 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
   options: {
     visibleTurnIds?: ReadonlySet<TurnId | string>;
+    activeTurnId?: TurnId | null;
+    activeTurnStartedAt?: string | null;
+    latestTurnState?: OrchestrationLatestTurnState | null;
+    latestTurnCompletedAt?: string | null;
   } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
@@ -243,7 +270,6 @@ export function deriveWorkLogEntries(
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
   // `toolName` and `activityKind` are intentionally kept: they are public
@@ -252,15 +278,23 @@ export function deriveWorkLogEntries(
   // GitHub icon, user-input rows -> question / submit glyphs). Stripping
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
-  return collapseDerivedWorkLogEntries(entries).map(
-    ({
-      collapseCommand: _collapseCommand,
-      collapseKey: _collapseKey,
-      runtimeWarningMessage: _runtimeWarningMessage,
-      runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
-      ...entry
-    }) => entry,
-  );
+  return reconcileSettledLiveActivities(
+    collapseDerivedWorkLogEntries(entries),
+    ordered,
+    latestTurnId,
+    options,
+  )
+    .filter((entry) => !isUninformativeCommandStartEntry(entry))
+    .map(
+      ({
+        collapseCommand: _collapseCommand,
+        collapseKey: _collapseKey,
+        runtimeWarningMessage: _runtimeWarningMessage,
+        runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
+        suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+        ...entry
+      }) => entry,
+    );
 }
 
 function shouldKeepActivityForWorkLog(
@@ -297,20 +331,11 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   return activity.tone !== "error";
 }
 
-function isUninformativeCommandStartActivity(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind !== "tool.started") {
-    return false;
-  }
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
-  if (extractWorkLogItemType(payload) !== "command_execution") {
-    return false;
-  }
-  const commandAction = extractPrimaryCommandAction(payload);
-  const commandPreview = extractToolCommand(payload, commandAction);
-  return !commandAction && !commandPreview.command;
+function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
+  return (
+    entry.activityKind === "tool.started" &&
+    entry.suppressStandaloneCommandStart === true
+  );
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -476,6 +501,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
+  if (
+    activity.kind === "tool.started" &&
+    itemType === "command_execution" &&
+    !commandAction &&
+    !commandPreview.command
+  ) {
+    entry.suppressStandaloneCommandStart = true;
+  }
   const subagents = extractCollabSubagents(payload);
   if (subagents.length > 0) {
     entry.subagents = subagents;
@@ -515,6 +548,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     });
   if (readableTitle) {
     entry.toolTitle = readableTitle;
+  }
+  const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
+  if (liveActivity) {
+    entry.liveActivity = liveActivity;
   }
   if (
     entry.detail &&
@@ -587,7 +624,67 @@ function deriveToolLifecycleStatus(
 ): SynaraMcpToolStatus | undefined {
   if (!isRenderableToolLifecycleActivity(activityKind)) return undefined;
   if (isFailedToolLifecyclePayload(payload)) return "failed";
+  if (isCancelledToolLifecyclePayload(payload)) return "cancelled";
   return activityKind === "tool.completed" ? "completed" : "running";
+}
+
+function deriveWorkLogLiveActivity(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown> | null,
+  entry: WorkLogEntry,
+): WorkLogLiveActivity | undefined {
+  if (!isRenderableToolLifecycleActivity(activity.kind)) {
+    return undefined;
+  }
+
+  const data = asRecord(payload?.data);
+  const stateRecord = asRecord(data?.state);
+  const rawOutput = asRecord(data?.rawOutput);
+  const rawStatus = [payload?.status, data?.status, stateRecord?.status, rawOutput?.status].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  const normalizedStatus = rawStatus?.trim().toLowerCase();
+  const state: WorkLogLiveActivityState = isFailedToolLifecyclePayload(payload)
+    ? "failed"
+    : isCancelledToolLifecyclePayload(payload)
+      ? "cancelled"
+      : activity.kind === "tool.completed" ||
+          (normalizedStatus &&
+            ["completed", "complete", "success", "succeeded"].includes(normalizedStatus))
+        ? "completed"
+        : "running_tool";
+  const detail =
+    asTrimmedString(data?.summary) ??
+    (activity.kind === "tool.updated"
+      ? asTrimmedString(payload?.detail)
+      : state === "failed" || state === "cancelled"
+        ? (entry.detail ?? null)
+        : null);
+  const progress = deriveWorkLogLiveActivityProgress(payload, data);
+  const elapsedSeconds = firstFiniteNumber(payload?.elapsedSeconds, data?.elapsedSeconds);
+
+  return {
+    state,
+    label: entry.toolTitle ?? entry.label,
+    lastActivityAt: activity.createdAt,
+    ...(activity.kind === "tool.started" ? { startedAt: activity.createdAt } : {}),
+    ...(detail ? { detail } : {}),
+    ...(progress !== undefined ? { progress } : {}),
+    ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}),
+  };
+}
+
+function deriveWorkLogLiveActivityProgress(
+  payload: Record<string, unknown> | null,
+  data: Record<string, unknown> | null,
+): number | undefined {
+  const progress = firstFiniteNumber(payload?.progress, data?.progress);
+  if (progress !== undefined) {
+    return progress;
+  }
+
+  const percent = firstFiniteNumber(data?.percent);
+  return percent === undefined ? undefined : percent / 100;
 }
 
 function isFailedToolLifecyclePayload(payload: Record<string, unknown> | null): boolean {
@@ -611,6 +708,25 @@ function isFailedToolLifecyclePayload(payload: Record<string, unknown> | null): 
     rawOutput?.isError,
     rawOutput?.is_error,
   ].some((flag) => flag === true || flag === 1 || flag === "true");
+}
+
+function isCancelledToolLifecyclePayload(payload: Record<string, unknown> | null): boolean {
+  const data = asRecord(payload?.data);
+  const state = asRecord(data?.state);
+  const rawOutput = asRecord(data?.rawOutput);
+  return [payload?.status, data?.status, state?.status, rawOutput?.status].some(
+    (status) =>
+      typeof status === "string" &&
+      [
+        "cancelled",
+        "canceled",
+        "declined",
+        "interrupted",
+        "killed",
+        "stopped",
+        "aborted",
+      ].includes(status.trim().toLowerCase()),
+  );
 }
 
 function summarizeToolPayloadOutput(payload: Record<string, unknown> | null): string | null {
@@ -851,6 +967,9 @@ function shouldCollapseToolLifecycleEntries(
   if (previous.activityKind === "tool.completed") {
     return false;
   }
+  if (previous.suppressStandaloneCommandStart && next.toolCallId === undefined) {
+    return false;
+  }
   if (previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey) {
     if (previous.collapseKey.startsWith("tool:")) {
       return true;
@@ -881,15 +1000,32 @@ function mergeDerivedWorkLogEntries(
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const preview = next.preview ?? previous.preview;
   const toolTitle = mergeWorkLogToolTitle(previous, next);
-  const itemType = next.itemType ?? previous.itemType;
-  const requestKind = next.requestKind ?? previous.requestKind;
+  const preservePreviousToolSemantics =
+    next.activityKind === "tool.updated" &&
+    next.itemType === "mcp_tool_call" &&
+    previous.itemType !== undefined &&
+    previous.itemType !== "mcp_tool_call";
+  const itemType = preservePreviousToolSemantics
+    ? previous.itemType
+    : (next.itemType ?? previous.itemType);
+  const requestKind = preservePreviousToolSemantics
+    ? previous.requestKind
+    : (next.requestKind ?? previous.requestKind);
   const subagents = next.subagents ?? previous.subagents;
   const subagentAction = next.subagentAction ?? previous.subagentAction;
   const synaraThreadCreation = next.synaraThreadCreation ?? previous.synaraThreadCreation;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
-  const toolStatus = next.toolStatus ?? previous.toolStatus;
+  const preservePreviousTerminalState =
+    previous.liveActivity !== undefined &&
+    !isInProgressLiveActivityState(previous.liveActivity.state) &&
+    next.liveActivity !== undefined &&
+    isInProgressLiveActivityState(next.liveActivity.state);
+  const toolStatus = preservePreviousTerminalState
+    ? previous.toolStatus
+    : (next.toolStatus ?? previous.toolStatus);
+  const liveActivity = mergeWorkLogLiveActivity(previous.liveActivity, next.liveActivity);
   const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const turnId = next.turnId ?? previous.turnId;
   return {
@@ -911,8 +1047,223 @@ function mergeDerivedWorkLogEntries(
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
+    ...(liveActivity ? { liveActivity } : {}),
     ...(toolDetails ? { toolDetails } : {}),
   };
+}
+
+function mergeWorkLogLiveActivity(
+  previous: WorkLogLiveActivity | undefined,
+  next: WorkLogLiveActivity | undefined,
+): WorkLogLiveActivity | undefined {
+  if (!previous) return next;
+  if (!next) return previous;
+  if (
+    !isInProgressLiveActivityState(previous.state) &&
+    isInProgressLiveActivityState(next.state)
+  ) {
+    return {
+      ...previous,
+      ...(next.detail || previous.detail ? { detail: next.detail ?? previous.detail } : {}),
+      ...(next.progress !== undefined || previous.progress !== undefined
+        ? { progress: next.progress ?? previous.progress }
+        : {}),
+    };
+  }
+  const startedAt = previous.startedAt ?? next.startedAt;
+  const lifecycleElapsedSeconds = startedAt
+    ? (Date.parse(next.lastActivityAt) - Date.parse(startedAt)) / 1_000
+    : undefined;
+  const activityDeltaSeconds =
+    (Date.parse(next.lastActivityAt) - Date.parse(previous.lastActivityAt)) / 1_000;
+  const carriedElapsedSeconds =
+    next.elapsedSeconds === undefined &&
+    previous.elapsedSeconds !== undefined &&
+    Number.isFinite(activityDeltaSeconds)
+      ? previous.elapsedSeconds + Math.max(0, activityDeltaSeconds)
+      : previous.elapsedSeconds;
+  const elapsedCandidates = [
+    lifecycleElapsedSeconds,
+    next.elapsedSeconds,
+    carriedElapsedSeconds,
+  ].filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const terminalElapsedSeconds =
+    next.state === "completed" || next.state === "failed" || next.state === "cancelled"
+      ? elapsedCandidates.length > 0
+        ? Math.max(0, ...elapsedCandidates)
+        : undefined
+      : undefined;
+  return {
+    state: next.state,
+    label: next.label || previous.label,
+    lastActivityAt: next.lastActivityAt,
+    ...(startedAt ? { startedAt } : {}),
+    ...(next.detail || previous.detail ? { detail: next.detail ?? previous.detail } : {}),
+    ...(next.progress !== undefined || previous.progress !== undefined
+      ? { progress: next.progress ?? previous.progress }
+      : {}),
+    ...(terminalElapsedSeconds !== undefined
+      ? { elapsedSeconds: terminalElapsedSeconds }
+      : next.elapsedSeconds !== undefined || carriedElapsedSeconds !== undefined
+        ? { elapsedSeconds: next.elapsedSeconds ?? carriedElapsedSeconds }
+        : {}),
+  };
+}
+
+function reconcileSettledLiveActivities(
+  entries: ReadonlyArray<DerivedWorkLogEntry>,
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+  options: {
+    activeTurnId?: TurnId | null;
+    activeTurnStartedAt?: string | null;
+    latestTurnState?: OrchestrationLatestTurnState | null;
+    latestTurnCompletedAt?: string | null;
+  },
+): DerivedWorkLogEntry[] {
+  const terminalByTurnId = new Map<
+    TurnId | string,
+    {
+      state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">;
+      settledAt: string;
+    }
+  >();
+  for (const activity of activities) {
+    if (activity.turnId === null) {
+      continue;
+    }
+    if (activity.kind === "turn.aborted") {
+      terminalByTurnId.set(activity.turnId, {
+        state: "cancelled",
+        settledAt: activity.createdAt,
+      });
+    } else if (activity.kind === "turn.completed") {
+      terminalByTurnId.set(activity.turnId, {
+        state: activity.tone === "error" ? "failed" : "completed",
+        settledAt: activity.createdAt,
+      });
+    }
+  }
+
+  const latestTerminalState =
+    options.latestTurnState === "completed"
+      ? "completed"
+      : options.latestTurnState === "error"
+        ? "failed"
+        : options.latestTurnState === "interrupted"
+          ? "cancelled"
+          : null;
+  if (
+    latestTurnId &&
+    latestTerminalState &&
+    options.latestTurnCompletedAt &&
+    !terminalByTurnId.has(latestTurnId)
+  ) {
+    terminalByTurnId.set(latestTurnId, {
+      state: latestTerminalState,
+      settledAt: options.latestTurnCompletedAt,
+    });
+  }
+
+  const hasActiveTurnContext = options.activeTurnId !== undefined;
+  const activeTurnStartedAtMs = options.activeTurnStartedAt
+    ? Date.parse(options.activeTurnStartedAt)
+    : Number.NaN;
+  return entries.map((entry) => {
+    const liveActivity = entry.liveActivity;
+    if (!liveActivity || !isInProgressLiveActivityState(liveActivity.state)) {
+      return entry;
+    }
+
+    const terminal = entry.turnId ? terminalByTurnId.get(entry.turnId) : undefined;
+    if (terminal) {
+      return {
+        ...entry,
+        toolStatus:
+          terminal.state === "failed"
+            ? "failed"
+            : terminal.state === "cancelled"
+              ? "cancelled"
+              : "completed",
+        liveActivity: settleWorkLogLiveActivity(
+          liveActivity,
+          terminal.state,
+          terminal.settledAt,
+        ),
+      };
+    }
+
+    if (!hasActiveTurnContext) {
+      return entry;
+    }
+    const entryLastActivityAtMs = Date.parse(liveActivity.lastActivityAt);
+    const turnlessEntryBelongsToActiveTurn =
+      (entry.turnId === undefined || entry.turnId === null) &&
+      Number.isFinite(activeTurnStartedAtMs) &&
+      Number.isFinite(entryLastActivityAtMs) &&
+      entryLastActivityAtMs >= activeTurnStartedAtMs;
+    if (
+      options.activeTurnId !== null &&
+      (entry.turnId === options.activeTurnId || turnlessEntryBelongsToActiveTurn)
+    ) {
+      return entry;
+    }
+
+    const settledState =
+      latestTurnId && entry.turnId === latestTurnId && latestTerminalState
+        ? latestTerminalState
+        : "cancelled";
+    return {
+      ...entry,
+      toolStatus:
+        settledState === "failed"
+          ? "failed"
+          : settledState === "cancelled"
+            ? "cancelled"
+            : "completed",
+      liveActivity: settleWorkLogLiveActivity(
+        liveActivity,
+        settledState,
+        latestTurnId &&
+          entry.turnId === latestTurnId &&
+          options.latestTurnCompletedAt
+          ? options.latestTurnCompletedAt
+          : liveActivity.lastActivityAt,
+      ),
+    };
+  });
+}
+
+function isInProgressLiveActivityState(state: WorkLogLiveActivityState): boolean {
+  return (
+    state === "starting" ||
+    state === "thinking" ||
+    state === "running_tool" ||
+    state === "waiting" ||
+    state === "streaming"
+  );
+}
+
+function settleWorkLogLiveActivity(
+  activity: WorkLogLiveActivity,
+  state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">,
+  settledAt: string,
+): WorkLogLiveActivity {
+  const activityAtMs = Date.parse(activity.lastActivityAt);
+  const settledAtMs = Date.parse(settledAt);
+  const lastActivityAt =
+    Number.isFinite(activityAtMs) &&
+    Number.isFinite(settledAtMs) &&
+    settledAtMs >= activityAtMs
+      ? settledAt
+      : activity.lastActivityAt;
+  return (
+    mergeWorkLogLiveActivity(activity, {
+      state,
+      label: activity.label,
+      lastActivityAt,
+    }) ?? activity
+  );
 }
 
 function mergeWorkLogToolTitle(
@@ -1012,6 +1363,12 @@ function asTrimmedString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  return values.find(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
 }
 
 function normalizeCollabIdentifier(value: string | null | undefined): string | null {
@@ -1507,7 +1864,9 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
-  return asTrimmedString(data?.toolCallId ?? data?.callID ?? data?.callId ?? item?.id);
+  return asTrimmedString(
+    data?.toolCallId ?? data?.toolUseId ?? data?.callID ?? data?.callId ?? item?.id,
+  );
 }
 
 function stripTrailingExitCode(value: string): {
