@@ -50,6 +50,29 @@ describe("cliIntegration", () => {
     }
   });
 
+  it("shims run the TypeScript source entry under bun", async () => {
+    const integration = make();
+    await Effect.runPromise(integration.install);
+    const contents = readFileSync(join(root, "bin", "codex"), "utf8");
+    expect(contents).toContain(`exec bun '${launcherEntry}'`);
+  });
+
+  it("shims run a packaged .mjs launcher bundle under node", async () => {
+    mkdirSync(join(root, "packaged", "bin"), { recursive: true });
+    const packagedEntry = join(root, "packaged", "bin", "launcher.mjs");
+    writeFileSync(packagedEntry, "// bundled launcher\n");
+    writeFileSync(join(root, "packaged", "package.json"), JSON.stringify({ version: "4.5.6" }));
+    const integration = makeCliIntegration({
+      root,
+      launcherEntry: packagedEntry,
+      env: { PATH: "" },
+    });
+    const status = await Effect.runPromise(integration.install);
+    expect(status.launcherVersion).toBe("4.5.6");
+    const contents = readFileSync(join(root, "bin", "codex"), "utf8");
+    expect(contents).toContain(`exec node '${packagedEntry}'`);
+  });
+
   it("uninstall removes every shim, the version file, and the bin directory", async () => {
     const integration = make();
     await Effect.runPromise(integration.install);
