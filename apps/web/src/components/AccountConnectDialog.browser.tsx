@@ -1,7 +1,7 @@
 import "../index.css";
 
 import type { ProviderAccountsConnectStatus } from "@synara/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -10,6 +10,7 @@ const harness = vi.hoisted(() => ({
   beginConnect: vi.fn(async (): Promise<{ operationId: string }> => ({ operationId: "op-1" })),
   cancelConnect: vi.fn(async () => undefined),
   setActive: vi.fn(async () => undefined),
+  getSnapshot: vi.fn(async () => ({ providers: [] })),
   connectStatus: {
     operationId: "op-1",
     state: "succeeded",
@@ -25,6 +26,7 @@ vi.mock("~/nativeApi", () => ({
       beginConnect: harness.beginConnect,
       cancelConnect: harness.cancelConnect,
       setActive: harness.setActive,
+      getSnapshot: harness.getSnapshot,
       getConnectStatus: async () =>
         harness.connectStatus as unknown as ProviderAccountsConnectStatus,
     },
@@ -32,6 +34,7 @@ vi.mock("~/nativeApi", () => ({
 }));
 
 import { AccountConnectDialog, type AccountConnectRequest } from "./AccountConnectDialog";
+import { providerAccountsSnapshotQueryOptions } from "~/lib/providerAccountsReactQuery";
 
 const CODEX_CAPABILITIES = {
   agent: { oauth: "supported", apiKey: "supported" },
@@ -50,11 +53,18 @@ const renderDialog = (request: AccountConnectRequest) => {
   const onOpenChange = vi.fn();
   const result = render(
     <QueryClientProvider client={queryClient}>
+      <SnapshotObserver />
       <AccountConnectDialog request={request} onOpenChange={onOpenChange} />
     </QueryClientProvider>,
   );
-  return { result, onOpenChange };
+  return { result, onOpenChange, queryClient };
 };
+
+/** Stands in for the rest of the UI subscribed to the provider-account snapshot. */
+function SnapshotObserver() {
+  useQuery(providerAccountsSnapshotQueryOptions());
+  return null;
+}
 
 describe("AccountConnectDialog", () => {
   afterEach(() => {
@@ -62,6 +72,7 @@ describe("AccountConnectDialog", () => {
     harness.beginConnect.mockImplementation(async () => ({ operationId: "op-1" }));
     harness.cancelConnect.mockClear();
     harness.setActive.mockClear();
+    harness.getSnapshot.mockClear();
     harness.connectStatus = {
       operationId: "op-1",
       state: "succeeded",
@@ -154,6 +165,35 @@ describe("AccountConnectDialog", () => {
     const group = dialog.getByRole("radiogroup", { name: "Connection method" });
     await group.getByRole("radio", { name: "API key" }).click();
     await expect.element(dialog.getByLabelText("Codex API key")).toBeVisible();
+  });
+
+  it("refetches the account snapshot when delayed browser OAuth succeeds", async () => {
+    harness.connectStatus = {
+      operationId: "op-1",
+      state: "pending",
+      provider: "codex",
+      surface: "agent",
+    };
+    renderDialog({ provider: "codex", capabilities: CODEX_CAPABILITIES });
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect.element(dialog.getByText("Starting sign-in…")).toBeVisible();
+
+    const snapshotFetchesBeforeSuccess = harness.getSnapshot.mock.calls.length;
+    harness.connectStatus = {
+      operationId: "op-1",
+      state: "succeeded",
+      provider: "codex",
+      surface: "agent",
+      ordinal: 2,
+    };
+
+    await expect
+      .element(dialog.getByText("Connected as Codex 2."), { timeout: 10_000 })
+      .toBeVisible();
+    await vi.waitFor(() =>
+      expect(harness.getSnapshot.mock.calls.length).toBeGreaterThan(snapshotFetchesBeforeSuccess),
+    );
   });
 
   it("surfaces begin-connect errors inline", async () => {
