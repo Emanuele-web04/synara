@@ -1,8 +1,3 @@
-// FILE: release-smoke.ts
-// Purpose: Smoke-tests release version alignment and merged macOS updater manifests.
-// Layer: Release verification script
-// Depends on: update-release-package-versions.ts and merge-mac-update-manifests.ts.
-
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -337,7 +332,7 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    'createRequire(new URL("./package.json", import.meta.url)',
+    'createRequire(new URL("./package.json", import.meta.url))',
     "Expected desktop packaging to resolve dependencies from the owning scripts workspace.",
   );
   assertContains(

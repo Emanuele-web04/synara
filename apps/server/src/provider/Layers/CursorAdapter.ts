@@ -628,6 +628,7 @@ export function makeCursorAdapter(
             cursorSettings: effectiveCursorSettings,
             childProcessSpawner,
             cwd,
+            ...(input.accountLaunch !== undefined ? { accountLaunch: input.accountLaunch } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
             ...(agentGatewayCredentials

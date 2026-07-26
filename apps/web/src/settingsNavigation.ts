@@ -1,8 +1,3 @@
-// FILE: settingsNavigation.ts
-// Purpose: Share the settings topic taxonomy between the main sidebar and the settings screen.
-// Layer: Route/UI support
-// Exports: section ids, nav items, and search normalization helper
-
 export const SETTINGS_SECTION_IDS = [
   "general",
   "profile",
@@ -13,6 +8,7 @@ export const SETTINGS_SECTION_IDS = [
   "shortcuts",
   "worktrees",
   "archived",
+  "accounts",
   "models",
   "providers",
   "skills",
@@ -124,6 +120,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "View and restore archived threads.",
     icon: "archive",
     eyebrow: "Thread management",
+  },
+  {
+    id: "accounts",
+    group: "synara",
+    label: "Accounts",
+    description: "Connected provider accounts and the active numbered slot per provider.",
+    icon: "user",
+    eyebrow: "Identities",
   },
   {
     id: "models",
