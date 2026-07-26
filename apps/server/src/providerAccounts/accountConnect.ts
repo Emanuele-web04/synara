@@ -10,7 +10,7 @@ import {
   type ProviderAccountRecord,
 } from "@synara/contracts";
 import { isConnectSupported, supportLevelFor } from "@synara/shared/providerAccounts/capabilities";
-import { accountAgentHome, pendingPath } from "@synara/shared/providerAccounts/accountPaths";
+import { pendingPath } from "@synara/shared/providerAccounts/accountPaths";
 import { Cause, Data, Effect } from "effect";
 
 import type { AccountStorageShape, ProviderAccountStorageError } from "./accountStorage";
@@ -261,9 +261,15 @@ export function makeAccountConnect(input: AccountConnectInput) {
         );
       }
       const { provider } = operation;
-      const ordinal =
-        operation.reconnectOrdinal ??
-        (yield* storage.finalizePendingDirectory(provider, operationId));
+      // Reconnects committed here have already passed the runner's own
+      // verification: the swap only happens after a successful login.
+      let ordinal: number;
+      if (operation.reconnectOrdinal !== undefined) {
+        ordinal = operation.reconnectOrdinal;
+        yield* storage.commitReconnectHome(provider, operationId, ordinal);
+      } else {
+        ordinal = yield* storage.finalizePendingDirectory(provider, operationId);
+      }
       const existing = yield* storage.readAccount(provider, ordinal);
       yield* storage.writeAccount(buildConnectedRecord(operation, existing, ordinal, identity));
       yield* activateIfFirst(provider, ordinal);
@@ -324,6 +330,11 @@ export function makeAccountConnect(input: AccountConnectInput) {
               const detail =
                 failure._tag === "Some" ? failure.value.detail : "An unexpected error occurred.";
               failOperation(operation, `Failed to finalize the OAuth connection: ${detail}`);
+              // The staged login directory is dead either way; live
+              // credentials were never touched, so discarding it is safe.
+              yield* storage
+                .cancelPendingDirectory(operation.provider, operation.operationId)
+                .pipe(Effect.ignore);
               return toStatus(operation);
             }),
           ),
@@ -385,36 +396,33 @@ export function makeAccountConnect(input: AccountConnectInput) {
         return { operationId: operation.operationId };
       }
 
-      // OAuth: new accounts log in inside a pending directory that only
-      // becomes a numbered slot on success; reconnects log in directly into
-      // the existing slot's profile home.
-      let profileHome: string;
-      if (connectInput.ordinal === undefined) {
-        yield* storage.createPendingDirectory(provider, operation.operationId);
-        // Persist non-secret metadata so a restart can surface the interrupted
-        // operation as a truthful terminal state instead of "unknown".
-        yield* storage.writePendingOperation(
+      // OAuth logins always run inside a pending directory so a failed,
+      // cancelled, or interrupted login never touches live credentials: new
+      // accounts turn the pending directory into a numbered slot on success,
+      // reconnects atomically swap the staged home into the existing slot.
+      yield* storage.createPendingDirectory(provider, operation.operationId);
+      // Persist non-secret metadata so a restart can surface the interrupted
+      // operation as a truthful terminal state instead of "unknown".
+      yield* storage.writePendingOperation(
+        provider,
+        operation.operationId,
+        JSON.stringify({
+          operationId: operation.operationId,
           provider,
-          operation.operationId,
-          JSON.stringify({
-            operationId: operation.operationId,
-            provider,
-            surface,
-            authMethod,
-            startedAt: now(),
-            // Owner pid so sibling server instances sharing the account root
-            // can tell a live in-flight login from an interrupted one.
-            pid: process.pid,
-          }),
-        );
-        profileHome = path.join(
-          pendingPath(storage.root, provider, operation.operationId),
-          "agent",
-          "home",
-        );
-      } else {
-        profileHome = accountAgentHome(storage.root, provider, connectInput.ordinal);
-      }
+          surface,
+          authMethod,
+          ...(connectInput.ordinal !== undefined ? { reconnectOrdinal: connectInput.ordinal } : {}),
+          startedAt: now(),
+          // Owner pid so sibling server instances sharing the account root
+          // can tell a live in-flight login from an interrupted one.
+          pid: process.pid,
+        }),
+      );
+      const profileHome = path.join(
+        pendingPath(storage.root, provider, operation.operationId),
+        "agent",
+        "home",
+      );
       startOauthLogin(operation, profileHome);
       return { operationId: operation.operationId };
     });
@@ -430,7 +438,7 @@ export function makeAccountConnect(input: AccountConnectInput) {
             operation.state = "cancelled";
             operation.finishedAt = Date.now();
             operation.loginHandle?.cancel();
-            if (operation.reconnectOrdinal === undefined && operation.authMethod === "oauth") {
+            if (operation.authMethod === "oauth") {
               yield* storage.cancelPendingDirectory(operation.provider, operation.operationId);
             }
             delete operation.apiKey;
@@ -536,6 +544,9 @@ export function makeAccountConnect(input: AccountConnectInput) {
         ),
         Effect.ignore,
       );
+      // Repair reconnect swaps interrupted mid-commit so every account has a
+      // usable agent home again.
+      yield* storage.recoverReconnectBackups(provider).pipe(Effect.ignore);
       const pendingIds = yield* storage
         .listPendingOperations(provider)
         .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
