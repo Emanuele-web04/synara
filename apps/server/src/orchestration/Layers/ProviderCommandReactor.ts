@@ -48,6 +48,10 @@ import {
 } from "@synara/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { claudeSelectionRequiresRestart } from "@synara/shared/model";
+import {
+  formatProviderDeliveryBlockDetail,
+  PROVIDER_DELIVERY_BLOCK_SUMMARY,
+} from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 
@@ -3202,14 +3206,14 @@ const make = Effect.gen(function* () {
           yield* appendProviderFailureActivity({
             threadId: event.payload.threadId,
             kind: "provider.turn.start.failed",
-            summary: "Thread is blocked by an earlier provider failure",
+            summary: PROVIDER_DELIVERY_BLOCK_SUMMARY,
             detail: `The message was not sent to the provider. Blocking failure: ${blockerDetail}`,
             turnId: null,
             createdAt,
           });
           yield* setThreadSessionError({
             threadId: event.payload.threadId,
-            detail: `Thread is blocked by an earlier provider failure: ${blockerDetail}`,
+            detail: formatProviderDeliveryBlockDetail(blockerDetail),
             createdAt,
           });
         }).pipe(

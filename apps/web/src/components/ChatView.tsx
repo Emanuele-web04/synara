@@ -273,6 +273,7 @@ import {
 } from "../hooks/useComposerCommandMenuItems";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
 import { SynaraLogo } from "./SynaraLogo";
@@ -9881,6 +9882,17 @@ export default function ChatView({
     if (!activeThread) return;
     setThreadError(activeThread.id, null);
   }, [activeThread, setThreadError]);
+  const clearThreadErrorAfterUnblock = useCallback(
+    (unblockedThreadId: ThreadId) => {
+      setThreadError(unblockedThreadId, null);
+    },
+    [setThreadError],
+  );
+  const { unblockThread: unblockActiveThread, unblocking: unblockingActiveThread } =
+    useThreadUnblock({
+      threadId: activeThread?.id ?? null,
+      onUnblocked: clearThreadErrorAfterUnblock,
+    });
   const dismissActiveProviderHealthBanner = useCallback(() => {
     if (!activeProviderHealthBannerDismissalKey) return;
     setDismissedProviderHealthBannerKeys((current) => {
@@ -10932,7 +10944,12 @@ export default function ChatView({
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
       />
-      <ThreadErrorBanner error={activeThread.error} onDismiss={dismissActiveThreadError} />
+      <ThreadErrorBanner
+        error={activeThread.error}
+        onDismiss={dismissActiveThreadError}
+        onUnblock={unblockActiveThread}
+        unblocking={unblockingActiveThread}
+      />
       <RateLimitBanner
         rateLimitStatus={visibleActiveRateLimitStatus}
         onDismiss={dismissActiveRateLimitBanner}

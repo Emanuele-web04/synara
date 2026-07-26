@@ -25,6 +25,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { PROVIDER_DELIVERY_BLOCK_SUMMARY } from "@synara/shared/providerDeliveryBlock";
 import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1087,6 +1088,141 @@ describe("ProviderCommandReactor", () => {
           harness.deliveryRepository.firstBlockingDeliveryForThread({
             consumerName: "provider-command-reactor.v1",
             threadId: "thread-1",
+          }),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  // Recovery contract behind the web "Unblock thread" action: abandoning the
+  // blocker never replays the ambiguous command itself, but the turn starts the
+  // quarantine skipped afterwards were provably never sent, so they are replayed.
+  it("REL-01B gate: abandoning a blocker replays turn starts skipped while quarantined", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "connection closed after request write",
+          }),
+        ),
+    });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-abandon-source");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-abandon-session-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-abandon-interrupt"),
+        threadId,
+        turnId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () =>
+      Effect.runPromise(
+        harness.deliveryRepository
+          .firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId,
+          })
+          .pipe(Effect.map(Option.isSome)),
+      ),
+    );
+
+    // Settle the session so the follow-up message starts a turn instead of queueing.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-abandon-session-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    const skippedTurn = await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-abandon-skipped-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("abandon-skipped-user"),
+          role: "user",
+          text: "Message sent while the thread was blocked",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const state = await Effect.runPromise(
+        harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+      );
+      return state.pipe(Option.getOrThrow).lastAckedSequence >= skippedTurn.sequence;
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+    expect((await readHarnessThread(harness))?.session?.lastError).toContain(
+      PROVIDER_DELIVERY_BLOCK_SUMMARY,
+    );
+
+    const blocker = (
+      await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId,
+        }),
+      )
+    ).pipe(Option.getOrThrow);
+    const reconciled = await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: blocker.eventSequence,
+        threadId,
+        expectedState: "uncertain",
+        outcome: "abandon",
+        reconciledBy: "local-loopback:local-loopback",
+        note: "Unblocked from the thread error banner.",
+      }),
+    );
+
+    expect(reconciled).toMatchObject({ outcome: "abandon", state: "succeeded" });
+    // The abandoned interrupt is never retried; the skipped message is.
+    expect(harness.interruptTurn.mock.calls.length).toBe(1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(
+      Option.isNone(
+        await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId,
           }),
         ),
       ),

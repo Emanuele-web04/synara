@@ -219,6 +219,10 @@
     "./unifiedPatchStats": {
       "types": "./src/unifiedPatchStats.ts",
       "import": "./src/unifiedPatchStats.ts"
+    },
+    "./providerDeliveryBlock": {
+      "types": "./src/providerDeliveryBlock.ts",
+      "import": "./src/providerDeliveryBlock.ts"
     }
   },
   "scripts": {
