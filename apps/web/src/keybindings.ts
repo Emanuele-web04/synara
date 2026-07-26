@@ -9,7 +9,8 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
 } from "@synara/contracts";
-import { isMacPlatform } from "./lib/utils";
+import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
+import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
   type?: string;
@@ -19,6 +20,7 @@ export interface ShortcutEventLike {
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+  repeat?: boolean;
 }
 
 export interface ShortcutMatchContext {
@@ -720,6 +722,28 @@ export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {
   const key = event.key.toLowerCase();
 
   return key === "l" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+}
+
+export function isKeyboardShortcutsHelpShortcut(
+  event: ShortcutEventLike,
+  platform = navigator.platform,
+): boolean {
+  return isKeyboardShortcutsHelpChord(
+    {
+      key: event.key,
+      meta: event.metaKey,
+      ctrl: event.ctrlKey,
+      shift: event.shiftKey,
+      alt: event.altKey,
+      ...(event.type !== undefined ? { type: event.type } : {}),
+      ...(event.code !== undefined ? { code: event.code } : {}),
+      ...(event.repeat !== undefined ? { repeat: event.repeat } : {}),
+    },
+    {
+      isMac: isMacPlatform(platform),
+      isWindows: isWindowsPlatform(platform),
+    },
+  );
 }
 
 export function terminalNavigationShortcutData(

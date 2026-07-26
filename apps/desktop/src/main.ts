@@ -49,6 +49,7 @@ import {
 } from "electron-updater";
 
 import type { ContextMenuItem } from "@synara/contracts";
+import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
@@ -135,7 +136,9 @@ import {
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
+  applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
+  resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -326,7 +329,35 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
-const browserManager = new DesktopBrowserManager();
+const browserManager = new DesktopBrowserManager({
+  beforeInputEvent: (event, input) => {
+    if (
+      isKeyboardShortcutsHelpChord(
+        {
+          type: input.type,
+          key: input.key,
+          code: input.code,
+          meta: input.meta,
+          ctrl: input.control,
+          shift: input.shift,
+          alt: input.alt,
+          repeat: input.isAutoRepeat,
+        },
+        {
+          isMac: process.platform === "darwin",
+          isWindows: process.platform === "win32",
+        },
+      )
+    ) {
+      event.preventDefault();
+      dispatchMenuAction("show-shortcuts");
+      return true;
+    }
+
+    const target = resolveMenuTargetWindow()?.webContents;
+    return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
+  },
+});
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
@@ -1319,6 +1350,35 @@ function attachDesktopZoomFactorSync(window: BrowserWindow): void {
   window.webContents.on("did-finish-load", notify);
 }
 
+function adjustWebContentsZoom(webContents: Electron.WebContents, multiplier: number): void {
+  const nextZoomFactor = Math.min(
+    DESKTOP_MENU_MAX_ZOOM_FACTOR,
+    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
+  );
+  webContents.setZoomFactor(nextZoomFactor);
+}
+
+function handleDesktopPhysicalZoomShortcut(
+  event: Electron.Event,
+  input: Electron.Input,
+  target: Electron.WebContents,
+): boolean {
+  const action = resolveDesktopPhysicalZoomAction(process.platform, input);
+  if (!action || target.isDestroyed()) {
+    return false;
+  }
+
+  event.preventDefault();
+  applyDesktopPhysicalZoomAction(target, action);
+  return true;
+}
+
+function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
+  window.webContents.on("before-input-event", (event, input) => {
+    handleDesktopPhysicalZoomShortcut(event, input, window.webContents);
+  });
+}
+
 function resetWindowZoomFromMenu(): void {
   resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
 }
@@ -1326,11 +1386,7 @@ function resetWindowZoomFromMenu(): void {
 function adjustWindowZoomFromMenu(multiplier: number): void {
   const webContents = resolveMenuTargetWindow()?.webContents;
   if (!webContents) return;
-  const nextZoomFactor = Math.min(
-    DESKTOP_MENU_MAX_ZOOM_FACTOR,
-    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
-  );
-  webContents.setZoomFactor(nextZoomFactor);
+  adjustWebContentsZoom(webContents, multiplier);
 }
 
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
@@ -3817,6 +3873,7 @@ function createWindow(): BrowserWindow {
   browserManager.setWindow(window);
   attachDesktopZoomFactorSync(window);
   attachRendererCrashRecovery(window);
+  attachDesktopPhysicalZoomShortcuts(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();
