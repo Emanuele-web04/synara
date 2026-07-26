@@ -3,7 +3,7 @@ import type {
   ProviderAccountsConnectStatus,
   SupportedAccountProvider,
 } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { Button } from "./ui/button";
@@ -23,6 +23,7 @@ import {
   ACCOUNT_PROVIDER_API_KEY_DOCS,
   accountProviderLabel,
   providerAccountsConnectStatusQueryOptions,
+  providerAccountsQueryKeys,
   useProviderAccountsBeginConnect,
   useProviderAccountsCancelConnect,
   useProviderAccountsSetActive,
@@ -77,6 +78,16 @@ function AccountConnectDialogBody({
   const setActive = useProviderAccountsSetActive();
   const statusQuery = useQuery(providerAccountsConnectStatusQueryOptions({ operationId }));
   const status: ProviderAccountsConnectStatus | undefined = statusQuery.data;
+  const queryClient = useQueryClient();
+
+  // A successful connect changes the account roster, so refresh the snapshot
+  // the rest of the UI reads from as soon as polling reports success.
+  const succeeded = status?.state === "succeeded";
+  useEffect(() => {
+    if (succeeded) {
+      void queryClient.invalidateQueries({ queryKey: providerAccountsQueryKeys.snapshot() });
+    }
+  }, [succeeded, queryClient]);
 
   // After a failure or cancellation, return to the method chooser (keeping the
   // selected method) so the user can immediately retry or switch methods.
