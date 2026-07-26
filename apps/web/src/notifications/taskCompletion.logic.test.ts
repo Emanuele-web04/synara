@@ -55,6 +55,49 @@ function makeThread(overrides: Partial<Thread>): Thread {
   };
 }
 
+function buildCollectedTaskCompletionCopy(assistantText: string) {
+  const completedAt = "2026-04-05T10:00:05.000Z";
+  const candidates = collectCompletedThreadCandidates(
+    [makeThread({})],
+    [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: completedAt,
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt,
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-1"),
+            role: "assistant",
+            text: assistantText,
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt,
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ],
+  );
+  const candidate = candidates[0];
+  if (!candidate) {
+    throw new Error("Expected a completed thread candidate");
+  }
+  return buildTaskCompletionCopy(candidate);
+}
+
 describe("collectCompletedThreadCandidates", () => {
   it("returns threads that moved from working to completed", () => {
     const previous = [
@@ -204,6 +247,56 @@ describe("collectCompletedThreadCandidates", () => {
     expect(collectCompletedThreadCandidates(previous, next)[0]?.assistantSummary).toBe(
       "Working on it now.",
     );
+  });
+
+  it("does not reuse a legacy null-turn reply for a newer completed turn", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:04.000Z",
+          startedAt: "2026-04-05T10:00:04.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-legacy"),
+            role: "assistant",
+            text: "Stale answer from an imported turn.",
+            createdAt: "2026-04-05T09:00:00.000Z",
+            completedAt: "2026-04-05T09:00:01.000Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "   ",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-2"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    const candidate = collectCompletedThreadCandidates(previous, next)[0];
+    expect(candidate?.assistantSummary).toBeNull();
+    expect(candidate && buildTaskCompletionCopy(candidate)).toEqual({
+      title: "Polish notifications",
+      body: "Finished working.",
+    });
   });
 
   it("returns threads that settle after skipping the visible running-to-ready transition", () => {
@@ -442,16 +535,225 @@ describe("shouldShowThreadNotificationToast", () => {
 describe("buildTaskCompletionCopy", () => {
   it("prefers assistant output when available", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Finished the task and everything looks good.",
-      }),
+      buildCollectedTaskCompletionCopy("Finished the task and everything looks good."),
     ).toEqual({
       title: "Polish notifications",
       body: "Finished the task and everything looks good.",
+    });
+  });
+
+  it("keeps compact context while stripping assistant Markdown", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Sì, esattamente così: · menu principale con Model, Effort e Speed · slider dentro Advanced",
+    });
+  });
+
+  it("preserves technical underscores and cleans an unclosed code fence", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
+    });
+  });
+
+  it("preserves useful content inside a closed code fence", () => {
+    expect(buildCollectedTaskCompletionCopy('Result:\n```json\n{"status":"ok"}\n```')).toEqual({
+      title: "Polish notifications",
+      body: 'Result: {"status":"ok"}',
+    });
+  });
+
+  it("does not reinterpret Markdown-shaped syntax inside fenced code", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return x - y",
+    });
+  });
+
+  it.each([
+    ["four-backtick", "Result:\n````python\ndef __init__(self):\n  return x * y * z\n````"],
+    ["tilde", "Result:\n~~~python\ndef __init__(self):\n  return x * y * z\n~~~"],
+  ])("preserves Markdown-shaped syntax inside a %s fence", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return x * y * z",
+    });
+  });
+
+  it("recognizes CRLF fenced blocks without swallowing following prose", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Result:\r\n```ts\r\nconst foo__bar__ = true;\r\n```\r\n**Done**",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Result: const foo__bar__ = true; Done",
+    });
+  });
+
+  it("only normalizes list markers at the start of a line", () => {
+    expect(buildCollectedTaskCompletionCopy("Computed 7 * 6 = 42; auth - tests pass.")).toEqual({
+      title: "Polish notifications",
+      body: "Computed 7 * 6 = 42; auth - tests pass.",
+    });
+  });
+
+  it("preserves spaced multiplication operators", () => {
+    expect(buildCollectedTaskCompletionCopy("Computed 2 * 3 * 4 = 24.")).toEqual({
+      title: "Polish notifications",
+      body: "Computed 2 * 3 * 4 = 24.",
+    });
+  });
+
+  it("removes GFM task-list markers with their list prefix", () => {
+    expect(buildCollectedTaskCompletionCopy("- [x] Tests passed\n- [ ] Release pending")).toEqual({
+      title: "Polish notifications",
+      body: "· Tests passed · Release pending",
+    });
+  });
+
+  it("preserves numeric prefixes longer than Markdown ordered-list markers", () => {
+    expect(buildCollectedTaskCompletionCopy("1234567890. tests passed")).toEqual({
+      title: "Polish notifications",
+      body: "1234567890. tests passed",
+    });
+  });
+
+  it("consumes balanced parentheses in Markdown link destinations", () => {
+    expect(
+      buildCollectedTaskCompletionCopy("Read the [docs](https://example.com/a_(b)) for details."),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Read the docs for details.",
+    });
+  });
+
+  it.each([
+    ["full", "Read [the guide][docs].\n[docs]: https://example.com", "Read the guide."],
+    ["collapsed", "Read [the guide][].\n[the guide]: https://example.com", "Read the guide."],
+    ["shortcut", "Read [docs].\n[docs]: https://example.com", "Read docs."],
+  ])("strips %s reference links and their definitions", (_label, assistantText, expectedBody) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: expectedBody,
+    });
+  });
+
+  it("preserves bracketed status text that is not a valid reference definition", () => {
+    expect(buildCollectedTaskCompletionCopy("[status]: all tests passed")).toEqual({
+      title: "Polish notifications",
+      body: "[status]: all tests passed",
+    });
+  });
+
+  it("handles bracket-heavy generated output without recursive rescanning", () => {
+    expect(buildCollectedTaskCompletionCopy("[".repeat(16_000))).toEqual({
+      title: "Polish notifications",
+      body: `${"[".repeat(119)}…`,
+    });
+  });
+
+  it("keeps separate triple-backtick inline spans independent", () => {
+    expect(buildCollectedTaskCompletionCopy("Use ```foo``` now.\nThen ```bar``` next.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo now. Then bar next.",
+    });
+  });
+
+  it("preserves shorter backtick runs inside multi-backtick code spans", () => {
+    expect(buildCollectedTaskCompletionCopy("Use ``foo ` bar`` now.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo ` bar now.",
+    });
+  });
+
+  it("preserves Markdown-shaped syntax inside code spans that cross line breaks", () => {
+    expect(buildCollectedTaskCompletionCopy("Use `foo\n__bar__` now.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo __bar__ now.",
+    });
+  });
+
+  it("does not strip underscores from inline code identifiers", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated __init__.py and foo__bar__.",
+    });
+  });
+
+  it("does not treat intraword double underscores as emphasis", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated foo__bar__ successfully.",
+    });
+  });
+
+  it("does not treat double underscores beside Unicode identifier characters as emphasis", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated café__menu__ and 变量__名称__.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated café__menu__ and 变量__名称__.",
+    });
+  });
+
+  it("renders escaped Markdown punctuation literally", () => {
+    expect(
+      buildCollectedTaskCompletionCopy("Use \\*literal\\*, \\_name\\_, and \\[raw\\]."),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Use *literal*, _name_, and [raw].",
+    });
+  });
+
+  it.each([
+    [
+      "blockquote",
+      "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```",
+      "Result: def __init__(self): return value",
+    ],
+    [
+      "list",
+      "Result:\n- ```python\n  def __init__(self):\n  return value\n  ```",
+      "Result: def __init__(self): return value",
+    ],
+    [
+      "ordered list",
+      "Result:\n10. ```python\n    def __init__(self):\n    return value\n    ```\n**Done**",
+      "Result: def __init__(self): return value Done",
+    ],
+    [
+      "ordered list with an over-indented fence-like code line",
+      "Result:\n10. ```python\n    def __init__(self):\n        ```\n    return value\n    ```\n**Done**",
+      "Result: def __init__(self): ``` return value Done",
+    ],
+  ])(
+    "preserves Markdown-shaped syntax inside a fence nested in a %s",
+    (_label, assistantText, expectedBody) => {
+      expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+        title: "Polish notifications",
+        body: expectedBody,
+      });
+    },
+  );
+
+  it.each([
+    ["blockquote", "Result:\n> ```\n> code\n\n**Done**"],
+    ["list", "Result:\n- ```\n  code\n\n**Done**"],
+  ])("stops an unclosed fence at its %s container boundary", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: code Done",
     });
   });
 });
