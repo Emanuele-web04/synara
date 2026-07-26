@@ -14,6 +14,13 @@ export default mergeConfig(
         "~": srcPath,
       },
     },
+    optimizeDeps: {
+      rolldownOptions: {
+        // High-volume optimizer warnings can deadlock rolldown across the
+        // napi boundary on low-CPU runners (rolldown/rolldown#9748).
+        logLevel: "silent",
+      },
+    },
     test: {
       include: [
         "src/components/**/*.browser.tsx",
