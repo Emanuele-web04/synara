@@ -528,6 +528,14 @@ export function makeAccountConnect(input: AccountConnectInput) {
   // timeout) belongs to a live sibling instance and must be left alone.
   const recoverInterruptedOperations = Effect.gen(function* () {
     for (const provider of SupportedAccountProvider.literals) {
+      // Ordinal directories whose finalize never committed are removed first
+      // so a crashed move can neither shadow an ordinal nor resurrect later.
+      yield* storage.recoverIncompleteFinalizations(provider).pipe(
+        Effect.tapCause((cause) =>
+          Effect.logWarning("providerAccounts.finalize_recovery_failed", { cause }),
+        ),
+        Effect.ignore,
+      );
       const pendingIds = yield* storage
         .listPendingOperations(provider)
         .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
