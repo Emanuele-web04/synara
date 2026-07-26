@@ -3,6 +3,7 @@
 // launcher version, PATH visibility). This module is the single source of
 // truth for shim scripts; nothing ships pre-generated shims.
 
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,14 +23,16 @@ export class CliIntegrationError extends Data.TaggedError("CliIntegrationError")
 
 const VERSION_FILE = "launcher-version";
 
-// The standalone launcher entry point, resolved relative to this module so
-// the shims work from a source checkout. A packaged runtime must ship the
-// launcher and keep this relative layout.
-const defaultLauncherEntry = (): string =>
-  path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../../account-launcher/src/launcher.ts",
-  );
+// The standalone launcher entry point, resolved relative to this module.
+// Packaged CLI/desktop artifacts stage a self-contained bundle next to the
+// server bundle (dist/account-launcher/bin/launcher.mjs); a source checkout
+// falls back to the TypeScript entry in the launcher workspace.
+const defaultLauncherEntry = (): string => {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const packagedEntry = path.resolve(moduleDir, "account-launcher/bin/launcher.mjs");
+  if (existsSync(packagedEntry)) return packagedEntry;
+  return path.resolve(moduleDir, "../../../account-launcher/src/launcher.ts");
+};
 
 // The launcher package.json is the single source of truth for the installed
 // launcher version; a hardcoded constant here would silently drift.
@@ -53,11 +56,16 @@ export interface CliIntegrationInput {
   readonly platform?: NodeJS.Platform;
 }
 
+// The bundled launcher artifact runs under Node; only the TypeScript source
+// entry from a checkout needs Bun.
+const launcherRuntime = (launcherEntry: string): string =>
+  launcherEntry.endsWith(".ts") ? "bun" : "node";
+
 const shimScript = (shimName: string, launcherEntry: string): string =>
   [
     "#!/bin/sh",
     "# Synara provider shim (installed by Synara CLI integration).",
-    `${SYNARA_LAUNCHER_SHIM}=${shimName} exec bun ${shellQuote(launcherEntry)} "$@"`,
+    `${SYNARA_LAUNCHER_SHIM}=${shimName} exec ${launcherRuntime(launcherEntry)} ${shellQuote(launcherEntry)} "$@"`,
     "",
   ].join("\n");
 
