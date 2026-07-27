@@ -3,6 +3,8 @@
 // Layer: UI fallback helper
 // Depends on: global document/body and shared Tailwind theme tokens already loaded by the app.
 
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "./surfaceStyles";
+
 export function showConfirmDialogFallback(message: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     // Split message into title (first line) and description (rest)
@@ -72,7 +74,8 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
     cancelBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-[13px] font-medium text-[var(--color-text-foreground)] outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:ring-1 focus-visible:ring-ring/60";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-[13px] font-medium text-[var(--color-text-foreground)] outline-none focus-visible:ring-1 focus-visible:ring-ring/60 " +
+      ELEVATED_HOVER_SURFACE_CLASS_NAME;
     cancelBtn.addEventListener("click", () => cleanup(false));
 
     // Confirm button mirrors the chat send action's foreground-on-background treatment.

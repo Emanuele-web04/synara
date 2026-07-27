@@ -303,9 +303,7 @@ describe("MessagesTimeline tool details", () => {
     );
 
     try {
-      const fileRow = document.querySelector<HTMLButtonElement>(
-        "[data-file-change-row='true']",
-      );
+      const fileRow = document.querySelector<HTMLButtonElement>("[data-file-change-row='true']");
       expect(fileRow).not.toBeNull();
       fileRow?.click();
       expect(onOpenTurnDiff).toHaveBeenCalledWith(turnId, "src/app.ts");

@@ -141,17 +141,11 @@ describe("createCachedLoginShellEnvironmentReader", () => {
       probe,
     };
 
-    createCachedLoginShellEnvironmentReader(options)(fixture.shell, [
-      "PATH",
-      "SSH_AUTH_SOCK",
-    ]);
+    createCachedLoginShellEnvironmentReader(options)(fixture.shell, ["PATH", "SSH_AUTH_SOCK"]);
     FS.unlinkSync(sshAuthSocket);
 
     expect(
-      createCachedLoginShellEnvironmentReader(options)(fixture.shell, [
-        "PATH",
-        "SSH_AUTH_SOCK",
-      ]),
+      createCachedLoginShellEnvironmentReader(options)(fixture.shell, ["PATH", "SSH_AUTH_SOCK"]),
     ).toEqual({ PATH: "/usr/bin", SSH_AUTH_SOCK: "/fresh-agent.sock" });
     expect(probe).toHaveBeenCalledTimes(2);
   });
@@ -169,10 +163,7 @@ describe("createCachedLoginShellEnvironmentReader", () => {
       probe,
     };
 
-    createCachedLoginShellEnvironmentReader(baseOptions)(fixture.shell, [
-      "PATH",
-      "SSH_AUTH_SOCK",
-    ]);
+    createCachedLoginShellEnvironmentReader(baseOptions)(fixture.shell, ["PATH", "SSH_AUTH_SOCK"]);
 
     expect(
       createCachedLoginShellEnvironmentReader({

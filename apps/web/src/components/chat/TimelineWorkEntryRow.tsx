@@ -40,10 +40,7 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { cn } from "~/lib/utils";
 
-import {
-  isFileChangeWorkLogEntry,
-  type WorkLogEntry,
-} from "../../session-logic";
+import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import {
   formatAgentActivityEntryPreview,
   isAgentActivityWorkEntry,

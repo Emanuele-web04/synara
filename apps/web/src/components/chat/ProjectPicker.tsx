@@ -22,6 +22,7 @@ import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { FolderClosed } from "../FolderClosed";
 import { SpaceIcon } from "../SpaceIcon";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -80,6 +81,13 @@ interface ActiveFolderOption {
  * Module scope on purpose: the caller runs this inside a `try`, and React Compiler cannot lower a
  * conditional expression there — inlining it makes the whole picker skip compilation.
  */
+/** Full-width action row in the picker footer (add project, reset to home). */
+const PICKER_FOOTER_ACTION_CLASS_NAME = cn(
+  "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm",
+  ELEVATED_HOVER_SURFACE_CLASS_NAME,
+  "hover:text-[var(--color-text-foreground)]",
+);
+
 function startActiveFolderSelection(
   folder: ActiveFolderOption,
   handlers: {
@@ -561,7 +569,10 @@ export const ProjectPicker = memo(function ProjectPicker({
             <>
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                className={cn(
+                  PICKER_FOOTER_ACTION_CLASS_NAME,
+                  "disabled:cursor-not-allowed disabled:opacity-60",
+                )}
                 onClick={() => void handleAddNewProject()}
                 disabled={isPicking}
               >
@@ -573,7 +584,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               {shouldShowResetToHome ? (
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+                  className={PICKER_FOOTER_ACTION_CLASS_NAME}
                   onClick={handleResetToHome}
                 >
                   <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />

@@ -76,10 +76,7 @@ function parseTimestamp(value: string | undefined): number | null {
   return Number.isNaN(timestamp) ? null : timestamp;
 }
 
-export function liveActivityElapsedMs(
-  activity: WorkLogLiveActivity,
-  nowMs: number,
-): number | null {
+export function liveActivityElapsedMs(activity: WorkLogLiveActivity, nowMs: number): number | null {
   const startedAtMs = parseTimestamp(activity.startedAt);
   const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
   const reportedElapsedMs =
@@ -135,10 +132,7 @@ function activitySubject(entry: Pick<WorkLogEntry, "itemType" | "requestKind">):
   return "tool";
 }
 
-function activityStateLead(
-  activity: WorkLogLiveActivity,
-  subject: string,
-): string {
+function activityStateLead(activity: WorkLogLiveActivity, subject: string): string {
   switch (activity.state) {
     case "starting":
       return `Starting ${subject}`;
@@ -179,9 +173,7 @@ export function formatLiveActivityProgress(progress: number): string {
   return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
 }
 
-export function formatLiveActivityStateLabel(
-  state: WorkLogLiveActivity["state"],
-): string {
+export function formatLiveActivityStateLabel(state: WorkLogLiveActivity["state"]): string {
   switch (state) {
     case "starting":
       return "Starting";

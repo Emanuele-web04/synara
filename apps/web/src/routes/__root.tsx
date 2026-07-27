@@ -913,10 +913,7 @@ function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
 
 function isTerminalThreadSessionStatus(status: string): boolean {
   return (
-    status === "ready" ||
-    status === "interrupted" ||
-    status === "stopped" ||
-    status === "error"
+    status === "ready" || status === "interrupted" || status === "stopped" || status === "error"
   );
 }
 
@@ -1383,8 +1380,7 @@ function EventRouter() {
           return;
         }
         const currentThread = getThreadFromState(useStore.getState(), threadId);
-        const projectionRepairsTerminalFence =
-          threadProjectionTerminalFencePending.has(threadId);
+        const projectionRepairsTerminalFence = threadProjectionTerminalFencePending.has(threadId);
         const projectionSettlesCurrentTurn =
           currentThread?.latestTurn?.state === "running" &&
           snapshot.thread.latestTurn !== null &&
@@ -1755,8 +1751,7 @@ function EventRouter() {
       const now = Date.now();
       let availableProjectionReconcileSlots = Math.max(
         0,
-        THREAD_DETAIL_PROJECTION_RECONCILE_MAX_CONCURRENCY -
-          threadProjectionReconcileInFlight.size,
+        THREAD_DETAIL_PROJECTION_RECONCILE_MAX_CONCURRENCY - threadProjectionReconcileInFlight.size,
       );
       for (const threadId of subscribedThreadIds) {
         if (shouldPollThreadDetailCatchup(threadId)) {
@@ -1773,8 +1768,7 @@ function EventRouter() {
           nextThreadProjectionReconcileAtById.delete(threadId);
           continue;
         }
-        const nextProjectionReconcileAt =
-          nextThreadProjectionReconcileAtById.get(threadId);
+        const nextProjectionReconcileAt = nextThreadProjectionReconcileAtById.get(threadId);
         if (
           availableProjectionReconcileSlots > 0 &&
           !threadProjectionReconcileInFlight.has(threadId) &&

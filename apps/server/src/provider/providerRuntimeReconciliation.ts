@@ -90,9 +90,10 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   ) {
     return null;
   }
-  return session?.activeTurnId ?? (thread.latestTurn?.state === "running"
-    ? thread.latestTurn.turnId
-    : null);
+  return (
+    session?.activeTurnId ??
+    (thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null)
+  );
 }
 
 function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
@@ -115,9 +116,7 @@ function bindingLastError(binding: ProviderRuntimeBinding): string | null {
     return null;
   }
   const lastError = payload.lastError;
-  return typeof lastError === "string" && lastError.trim().length > 0
-    ? lastError.trim()
-    : null;
+  return typeof lastError === "string" && lastError.trim().length > 0 ? lastError.trim() : null;
 }
 
 function bindingActiveTurnId(binding: ProviderRuntimeBinding): string | null {

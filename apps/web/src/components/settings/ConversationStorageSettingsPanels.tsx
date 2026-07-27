@@ -20,15 +20,12 @@ import { serverQueryKeys, serverWorktreesQueryOptions } from "~/lib/serverReactQ
 import { unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
-import {
-  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
-  SETTINGS_EMPTY_STATE_CLASS_NAME,
-} from "~/settingsPanelStyles";
+import { SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createThreadShellsSelector } from "~/storeSelectors";
 import { formatWorktreePathForDisplay } from "~/worktreeCleanup";
 import { toastManager } from "../ui/toast";
-import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { SettingsEmptyState, SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 type WorktreeAssociation = {
   worktreePath?: string | null | undefined;
@@ -60,17 +57,9 @@ function compareArchivedThreads(left: ArchivedSortableThread, right: ArchivedSor
 
 function WorktreesStatus(props: { children: string; error?: boolean }) {
   return (
-    <div
-      className={cn(
-        SETTINGS_EMPTY_STATE_CLASS_NAME,
-        "px-4 py-6 text-sm",
-        props.error
-          ? "border-destructive/30 bg-destructive/5 text-destructive"
-          : "text-muted-foreground",
-      )}
-    >
+    <SettingsEmptyState layout="status" tone={props.error ? "destructive" : "muted"}>
       {props.children}
-    </div>
+    </SettingsEmptyState>
   );
 }
 
@@ -382,7 +371,7 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
 
   if (archivedGroups.length === 0) {
     return (
-      <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
+      <SettingsEmptyState>
         <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
           <ArchiveIcon className="size-5" />
         </div>
@@ -390,7 +379,7 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
         <div className="mt-1 text-sm text-muted-foreground">
           Archived threads will appear here and can be restored to the sidebar.
         </div>
-      </div>
+      </SettingsEmptyState>
     );
   }
 

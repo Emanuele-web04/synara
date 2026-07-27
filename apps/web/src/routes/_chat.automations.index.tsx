@@ -25,6 +25,7 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { createAllThreadsSelector } from "~/storeSelectors";
@@ -99,7 +100,10 @@ function AutomationListRow({
           onClick();
         }
       }}
-      className="group flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+      className={cn(
+        "group flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-2.5 text-left",
+        ELEVATED_HOVER_SURFACE_CLASS_NAME,
+      )}
     >
       <span className="mt-0.5 flex shrink-0">{leading}</span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">

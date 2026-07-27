@@ -140,9 +140,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
                 ? plan.terminalSession.lastError
                 : null,
           updatedAt:
-            plan.action === "settle-terminal-projection"
-              ? plan.terminalSession.updatedAt
-              : now,
+            plan.action === "settle-terminal-projection" ? plan.terminalSession.updatedAt : now,
         },
         createdAt: now,
       });

@@ -785,9 +785,9 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
-            projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
-              Effect.map(Option.getOrNull),
-            ),
+            projectionReadModelQuery
+              .getThreadDetailSnapshotById(input.threadId)
+              .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>

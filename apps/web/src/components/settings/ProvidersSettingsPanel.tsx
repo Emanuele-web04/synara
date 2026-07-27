@@ -48,7 +48,13 @@ import {
   withProviderUpdateTimeout,
 } from "~/providerUpdates";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
-import { SETTINGS_INSET_LIST_CLASS_NAME, SETTINGS_RADIUS_CLASS_NAME } from "~/settingsPanelStyles";
+import {
+  SETTINGS_INSET_LIST_CLASS_NAME,
+  SETTINGS_INSET_RADIUS_CLASS_NAME,
+  SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+  SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+} from "~/settingsPanelStyles";
+import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -454,7 +460,8 @@ function SortableProviderVisibilityRow(props: {
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
-        `flex items-center justify-between gap-3 ${SETTINGS_RADIUS_CLASS_NAME} border border-[color:var(--color-border)] bg-transparent px-3 py-2.5`,
+        SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+        "flex items-center justify-between gap-3 px-3 py-2.5",
         isDragging && "z-10 opacity-80 shadow-lg",
       )}
     >
@@ -463,8 +470,9 @@ function SortableProviderVisibilityRow(props: {
           type="button"
           ref={setActivatorNodeRef}
           className={cn(
-            "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing",
-            SETTINGS_RADIUS_CLASS_NAME,
+            "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground active:cursor-grabbing",
+            ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+            SETTINGS_INSET_RADIUS_CLASS_NAME,
           )}
           aria-label={`Reorder ${props.option.title}`}
           {...attributes}
@@ -485,24 +493,20 @@ function SortableProviderVisibilityRow(props: {
 
 function ProviderDocsLinks({ docs }: { docs: ProviderInstallSettings["docs"] }) {
   return (
-    <div className={cn(SETTINGS_INSET_LIST_CLASS_NAME, "px-3 py-2.5")}>
+    <div className={cn(SETTINGS_OUTLINED_SURFACE_CLASS_NAME, "px-3 py-2.5")}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-xs font-medium text-foreground">CLI docs</span>
         <div className="flex flex-wrap gap-2">
           {docs.map((doc) => (
-            <a
+            <Button
               key={`${doc.label}:${doc.href}`}
-              href={doc.href}
-              target="_blank"
-              rel="noreferrer"
-              className={cn(
-                "inline-flex h-7 items-center gap-1.5 border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground",
-                SETTINGS_RADIUS_CLASS_NAME,
-              )}
+              variant="outline"
+              size="sm"
+              render={<a href={doc.href} target="_blank" rel="noreferrer" />}
             >
               <span>{doc.label}</span>
               <ExternalLinkIcon className="size-3" />
-            </a>
+            </Button>
           ))}
         </div>
       </div>
@@ -924,7 +928,7 @@ export function ProvidersSettingsPanel({
                 className={cn(
                   "mt-4",
                   SETTINGS_INSET_LIST_CLASS_NAME,
-                  "divide-y divide-[color:var(--color-border)]",
+                  SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
                 )}
               >
                 {outdatedProviderStatuses.map((providerStatus) => {

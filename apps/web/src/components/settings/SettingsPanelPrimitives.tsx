@@ -1,7 +1,8 @@
 // FILE: SettingsPanelPrimitives.tsx
 // Purpose: Shared settings section card and row primitives (Codex-style bordered groups).
 // Layer: Settings UI components
-// Exports: SettingsCard, SettingsSection, SettingsListRow, SettingsRow, SettingsSelectPopup
+// Exports: SettingsCard, SettingsSectionShell, SettingsSection, SettingsEmptyState,
+//          SettingsListRow, SettingsRow, SettingsSelectPopup
 
 import { type ComponentProps, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
@@ -11,27 +12,113 @@ import {
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
+  SETTINGS_EMPTY_STATE_CLASS_NAME,
   SETTINGS_PANEL_SECTION_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
+  SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
 } from "~/settingsPanelStyles";
 import { SelectPopup } from "~/components/ui/select";
 import { composerPickerMenuShellClassName } from "~/components/chat/composerPickerSize";
 
-const settingsCardClassName = cn(
-  SETTINGS_CARD_CLASS_NAME,
-  "divide-y divide-[color:var(--color-border)]",
-);
+/**
+ * Grouped settings card. Children stack as rows separated by hairlines; pass
+ * `divided={false}` for a card that draws its own internal structure (the theme editor's
+ * header/body split) and `className` for one that adds layout to the card itself.
+ */
+export function SettingsCard({
+  divided: dividedProp,
+  className,
+  children,
+}: {
+  divided?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  const divided = dividedProp ?? true;
+  return (
+    <div
+      className={cn(
+        SETTINGS_CARD_CLASS_NAME,
+        divided && SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
 
-export function SettingsCard({ children }: { children: ReactNode }) {
-  return <div className={settingsCardClassName}>{children}</div>;
+/**
+ * Labelled settings group without the card — the `<section>`, its heading, and an
+ * optional trailing header action (Refresh, …). Use it when a group holds something
+ * other than a single card (a card plus editors, a loading/empty swap); use
+ * {@link SettingsSection} for the common card-only case.
+ */
+export function SettingsSectionShell({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
+      {action != null ? (
+        <div className="flex items-center justify-between gap-2">
+          <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{title}</h2>
+          {action}
+        </div>
+      ) : (
+        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{title}</h2>
+      )}
+      {children}
+    </section>
+  );
 }
 
 export function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
-      <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{title}</h2>
+    <SettingsSectionShell title={title}>
       <SettingsCard>{children}</SettingsCard>
-    </section>
+    </SettingsSectionShell>
+  );
+}
+
+/**
+ * Dashed placeholder block for "nothing here yet" / "nothing matched" / status copy.
+ * `layout` picks the two shapes in use: a one-line left-aligned status strip, or a
+ * taller centered empty block. `tone` switches to the destructive treatment for
+ * failures (worktree load errors).
+ */
+export function SettingsEmptyState({
+  layout: layoutProp,
+  tone: toneProp,
+  className,
+  children,
+}: {
+  layout?: "block" | "status";
+  tone?: "muted" | "destructive";
+  className?: string;
+  children: ReactNode;
+}) {
+  const layout = layoutProp ?? "block";
+  const tone = toneProp ?? "muted";
+  return (
+    <div
+      className={cn(
+        SETTINGS_EMPTY_STATE_CLASS_NAME,
+        "px-4 text-sm",
+        layout === "block" ? "py-10 text-center" : "py-6",
+        tone === "destructive"
+          ? "border-destructive/30 bg-destructive/5 text-destructive"
+          : "text-muted-foreground",
+        className,
+      )}
+    >
+      {children}
+    </div>
   );
 }
 

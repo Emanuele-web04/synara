@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 import { MessageCircleIcon, PencilIcon, TextWrapIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 
 interface TranscriptSelectionActionProps {
   left: number;
@@ -31,7 +32,10 @@ function TranscriptSelectionToolbarButton({
       type="button"
       aria-label={label}
       title={label}
-      className="pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+      className={cn(
+        "pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium text-[var(--color-text-foreground)]",
+        ELEVATED_HOVER_SURFACE_CLASS_NAME,
+      )}
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();

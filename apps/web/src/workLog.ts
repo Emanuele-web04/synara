@@ -332,10 +332,7 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
 }
 
 function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
-  return (
-    entry.activityKind === "tool.started" &&
-    entry.suppressStandaloneCommandStart === true
-  );
+  return entry.activityKind === "tool.started" && entry.suppressStandaloneCommandStart === true;
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -596,8 +593,7 @@ function deriveProviderRuntimeReconciliationCollapseKey(
   }
   const provider = asTrimmedString(payload?.provider);
   const action = asTrimmedString(payload?.action);
-  const projectedTurnId =
-    asTrimmedString(payload?.projectedTurnId) ?? activity.turnId ?? undefined;
+  const projectedTurnId = asTrimmedString(payload?.projectedTurnId) ?? activity.turnId ?? undefined;
   const runtimeTurnId = asTrimmedString(payload?.runtimeTurnId);
   if (
     !provider ||
@@ -717,15 +713,9 @@ function isCancelledToolLifecyclePayload(payload: Record<string, unknown> | null
   return [payload?.status, data?.status, state?.status, rawOutput?.status].some(
     (status) =>
       typeof status === "string" &&
-      [
-        "cancelled",
-        "canceled",
-        "declined",
-        "interrupted",
-        "killed",
-        "stopped",
-        "aborted",
-      ].includes(status.trim().toLowerCase()),
+      ["cancelled", "canceled", "declined", "interrupted", "killed", "stopped", "aborted"].includes(
+        status.trim().toLowerCase(),
+      ),
   );
 }
 
@@ -837,9 +827,7 @@ function collapseDerivedWorkLogEntries(
   // exact repeats; different turns/actions remain independently visible.
   const seenRuntimeReconciliationKeys = new Set<string>();
   for (const entry of entries) {
-    const runtimeReconciliationKey = entry.collapseKey?.startsWith(
-      "provider-runtime-reconcile:",
-    )
+    const runtimeReconciliationKey = entry.collapseKey?.startsWith("provider-runtime-reconcile:")
       ? entry.collapseKey
       : undefined;
     if (runtimeReconciliationKey !== undefined) {
@@ -1058,10 +1046,7 @@ function mergeWorkLogLiveActivity(
 ): WorkLogLiveActivity | undefined {
   if (!previous) return next;
   if (!next) return previous;
-  if (
-    !isInProgressLiveActivityState(previous.state) &&
-    isInProgressLiveActivityState(next.state)
-  ) {
+  if (!isInProgressLiveActivityState(previous.state) && isInProgressLiveActivityState(next.state)) {
     return {
       ...previous,
       ...(next.detail || previous.detail ? { detail: next.detail ?? previous.detail } : {}),
@@ -1185,11 +1170,7 @@ function reconcileSettledLiveActivities(
             : terminal.state === "cancelled"
               ? "cancelled"
               : "completed",
-        liveActivity: settleWorkLogLiveActivity(
-          liveActivity,
-          terminal.state,
-          terminal.settledAt,
-        ),
+        liveActivity: settleWorkLogLiveActivity(liveActivity, terminal.state, terminal.settledAt),
       };
     }
 
@@ -1224,9 +1205,7 @@ function reconcileSettledLiveActivities(
       liveActivity: settleWorkLogLiveActivity(
         liveActivity,
         settledState,
-        latestTurnId &&
-          entry.turnId === latestTurnId &&
-          options.latestTurnCompletedAt
+        latestTurnId && entry.turnId === latestTurnId && options.latestTurnCompletedAt
           ? options.latestTurnCompletedAt
           : liveActivity.lastActivityAt,
       ),
@@ -1252,9 +1231,7 @@ function settleWorkLogLiveActivity(
   const activityAtMs = Date.parse(activity.lastActivityAt);
   const settledAtMs = Date.parse(settledAt);
   const lastActivityAt =
-    Number.isFinite(activityAtMs) &&
-    Number.isFinite(settledAtMs) &&
-    settledAtMs >= activityAtMs
+    Number.isFinite(activityAtMs) && Number.isFinite(settledAtMs) && settledAtMs >= activityAtMs
       ? settledAt
       : activity.lastActivityAt;
   return (

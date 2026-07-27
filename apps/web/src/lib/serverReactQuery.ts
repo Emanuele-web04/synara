@@ -52,7 +52,10 @@ interface ProviderStatusSnapshot {
   readonly providers: readonly ServerProviderStatus[];
 }
 
-const latestProviderStatusSnapshotByQueryClient = new WeakMap<QueryClient, ProviderStatusSnapshot>();
+const latestProviderStatusSnapshotByQueryClient = new WeakMap<
+  QueryClient,
+  ProviderStatusSnapshot
+>();
 
 function recordProviderStatusSnapshot(
   queryClient: QueryClient,

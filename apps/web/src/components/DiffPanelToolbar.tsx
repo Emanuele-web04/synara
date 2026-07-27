@@ -25,6 +25,10 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import {
+  ELEVATED_HOVER_SURFACE_CLASS_NAME,
+  ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+} from "~/surfaceStyles";
 import type { TimestampFormat } from "~/appSettings";
 import type { TurnDiffSummary } from "~/types";
 import type { RepoDiffScope } from "~/repoDiffScopeStore";
@@ -59,8 +63,8 @@ const DIFF_PANEL_PICKER_ICON_CLASS_NAME = "size-3.5 shrink-0 text-[var(--color-t
 const DIFF_PANEL_PICKER_TRIGGER_CLASS_NAME = cn(
   "flex h-8 min-w-0 max-w-[min(38%,11rem)] cursor-pointer items-center gap-1.5 rounded-lg py-1 pl-1.5 pr-2 text-left",
   "text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)]",
-  "outline-none transition-colors",
-  "hover:bg-[var(--color-background-elevated-secondary)]",
+  "outline-none",
+  ELEVATED_HOVER_SURFACE_CLASS_NAME,
   "focus-visible:bg-[var(--color-background-elevated-secondary)]",
 );
 
@@ -460,7 +464,8 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                   type="button"
                   className={cn(
                     "mx-1 mt-1 flex h-8 w-[calc(100%-0.5rem)] cursor-pointer items-center justify-center rounded-md px-2 text-[11px]",
-                    "text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground",
+                    "text-muted-foreground",
+                    ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
                   )}
                   onClick={() => setVisibleTurnCount(nextVisibleTurnCount)}
                 >

@@ -178,9 +178,7 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot) {
     getThreadDetailSnapshotRequestCount += 1;
     const request = body as { readonly threadId?: ThreadId } | null;
-    const thread = request?.threadId
-      ? findThreadDetailFromFixtureSnapshot(request.threadId)
-      : null;
+    const thread = request?.threadId ? findThreadDetailFromFixtureSnapshot(request.threadId) : null;
     return thread
       ? {
           snapshotSequence: fixture.snapshot.snapshotSequence,

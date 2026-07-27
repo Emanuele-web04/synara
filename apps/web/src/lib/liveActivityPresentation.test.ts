@@ -13,9 +13,7 @@ import {
 
 const STARTED_AT = "2026-07-26T14:00:00.000Z";
 
-function runningActivity(
-  overrides: Partial<WorkLogLiveActivity> = {},
-): WorkLogLiveActivity {
+function runningActivity(overrides: Partial<WorkLogLiveActivity> = {}): WorkLogLiveActivity {
   return {
     state: "running_tool",
     label: "Bash",
@@ -61,9 +59,7 @@ describe("live activity presentation", () => {
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
 
     expect(liveActivityElapsedMs(activity, nowMs)).toBe(134_000);
-    expect(formatLiveActivityMeta(activity, nowMs)).toBe(
-      "Active 3s ago · 2m 14s elapsed",
-    );
+    expect(formatLiveActivityMeta(activity, nowMs)).toBe("Active 3s ago · 2m 14s elapsed");
   });
 
   it("reports quiet live tools without claiming they are frozen", () => {
@@ -111,9 +107,9 @@ describe("live activity presentation", () => {
     });
 
     expect(formatLiveActivityStateLabel(activity.state)).toBe("Running tool");
-    expect(
-      formatLiveActivityElapsed(activity, Date.parse("2026-07-26T14:02:14.000Z")),
-    ).toBe("2m 14s");
+    expect(formatLiveActivityElapsed(activity, Date.parse("2026-07-26T14:02:14.000Z"))).toBe(
+      "2m 14s",
+    );
     expect(formatLiveActivityProgress(activity.progress ?? 0)).toBe("42%");
   });
 });

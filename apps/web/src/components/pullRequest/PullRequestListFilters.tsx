@@ -18,6 +18,14 @@ import {
   PR_FINE_TEXT_CLASS_NAME,
   PR_META_TEXT_CLASS_NAME,
 } from "./pullRequestText";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+
+/** One selectable project in the filter popover — full-width row with a trailing check. */
+const PROJECT_FILTER_OPTION_CLASS_NAME = cn(
+  PR_BODY_TEXT_CLASS_NAME,
+  "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left",
+  ELEVATED_HOVER_SURFACE_CLASS_NAME,
+);
 
 export function PullRequestFilterPillGroup<T extends string>({
   value,
@@ -106,8 +114,7 @@ export function PullRequestProjectFilterPopover({
               setOpen(false);
             }}
             className={cn(
-              PR_BODY_TEXT_CLASS_NAME,
-              "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+              PROJECT_FILTER_OPTION_CLASS_NAME,
               value === undefined && "text-foreground",
             )}
           >
@@ -123,11 +130,7 @@ export function PullRequestProjectFilterPopover({
                 onChange(id);
                 setOpen(false);
               }}
-              className={cn(
-                PR_BODY_TEXT_CLASS_NAME,
-                "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
-                value === id && "text-foreground",
-              )}
+              className={cn(PROJECT_FILTER_OPTION_CLASS_NAME, value === id && "text-foreground")}
             >
               <span className="min-w-0 truncate">{title}</span>
               {value === id ? <CheckIcon aria-hidden className="size-3.5 shrink-0" /> : null}
