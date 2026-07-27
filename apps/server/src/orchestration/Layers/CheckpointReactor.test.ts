@@ -44,6 +44,7 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionNotFoundError, type ProviderServiceError } from "../../provider/Errors.ts";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
@@ -79,7 +80,10 @@ function createProviderServiceHarness(
   const now = new Date().toISOString();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const rollbackConversation = vi.fn(
-    (_input: { readonly threadId: ThreadId; readonly numTurns: number }) => Effect.void,
+    (_input: {
+      readonly threadId: ThreadId;
+      readonly numTurns: number;
+    }): Effect.Effect<void, ProviderServiceError> => Effect.void,
   );
 
   const unsupported = <A>() =>
@@ -234,6 +238,21 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 30_000)
     }
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for git ref '${ref}'.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return poll();
+  };
+  return poll();
+}
+
+async function waitForGitRefMissing(cwd: string, ref: string, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  const poll = async (): Promise<void> => {
+    if (!gitRefExists(cwd, ref)) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for git ref '${ref}' to be deleted.`);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     return poll();
@@ -1919,9 +1938,141 @@ describe("CheckpointReactor", () => {
       numTurns: 1,
     });
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
+    // Stale refs are dropped only after the completion commits, so `thread.reverted`
+    // does not imply the cleanup already ran.
+    await waitForGitRefMissing(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
+    );
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(false);
+  });
+
+  it("reverts a thread whose provider session is no longer running", async () => {
+    const harness = await createHarness({ hasSession: false });
+    const createdAt = new Date().toISOString();
+
+    for (const turnCount of [1, 2] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`cmd-sessionless-revert-diff-${turnCount}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId(`turn-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        }),
+      );
+    }
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-sessionless-revert"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnCount: 1,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    // Checkpoints and the provider binding both outlive an idle stop, so the
+    // workspace must resolve from the thread/project instead of a live session.
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      numTurns: 1,
+    });
+  });
+
+  it("restores the workspace when provider conversation rollback fails", async () => {
+    const harness = await createHarness();
+    const createdAt = new Date().toISOString();
+    fs.writeFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "preserve\n", "utf8");
+    harness.provider.rollbackConversation.mockImplementationOnce(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId: "thread-1" })),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-compensated-revert-session-set"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    for (const turnCount of [1, 2] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`cmd-compensated-revert-diff-${turnCount}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId(`turn-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        }),
+      );
+    }
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-compensated-revert"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnCount: 1,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
+      true,
+    );
+    // Proves the revert was refused by the provider and not by an earlier
+    // precondition, so the worktree really was restored before compensation.
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      numTurns: 1,
+    });
+    // The worktree — tracked and untracked alike — must land exactly where it
+    // started, because the conversation was never trimmed.
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    expect(fs.readFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "utf8")).toBe(
+      "preserve\n",
+    );
+    // Cleanup runs only after the completion commits, which never happened.
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
+    ).toBe(true);
+    expect(
+      runGit(harness.cwd, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/synara/checkpoints/revert-rescue",
+      ]),
+    ).toBe("");
   });
 
   it("restores turn zero from the persisted checkpoint family", async () => {
@@ -2243,27 +2394,38 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
-  it("appends an error activity when revert is requested without an active session", async () => {
+  it("appends an error activity when the requested turn count has no recorded checkpoint", async () => {
+    // No `thread.turn.diff.complete` is dispatched, so the thread's current turn
+    // count is zero. The missing provider session is deliberate but incidental:
+    // a sessionless thread reverts fine once its checkpoints exist.
     const harness = await createHarness({ hasSession: false });
     const createdAt = new Date().toISOString();
 
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
-        commandId: CommandId.makeUnsafe("cmd-revert-no-session"),
+        commandId: CommandId.makeUnsafe("cmd-revert-unknown-turn-count"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnCount: 1,
         createdAt,
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    const events = await waitForEvent(
+      harness.engine,
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "checkpoint.revert.failed",
     );
+    const failure = events.find(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "checkpoint.revert.failed",
+    ) as Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
 
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
-    );
+    expect(failure.payload.activity.payload).toMatchObject({
+      detail: "Checkpoint turn count 1 exceeds current turn count 0.",
+    });
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 });
