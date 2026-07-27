@@ -144,6 +144,32 @@ describe("OrchestrationEngine", () => {
       reason: "stopped",
     });
 
+    // A turn start takes the priority `user` lane, but priority is not
+    // admissibility: the WebSocket keeps serving while the engine quiesces, and
+    // starting a provider turn here would spawn a session the shutdown fences
+    // moments later, orphaning the turn.
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-engine-quiesce-turn-start"),
+          threadId,
+          message: {
+            messageId: MessageId.makeUnsafe("msg-engine-quiesce-turn-start"),
+            role: "user",
+            text: "Rejected after quiesce",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandAdmissionError",
+      reason: "stopped",
+    });
+
     await expect(
       system.run(
         system.engine.dispatch({

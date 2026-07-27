@@ -46,6 +46,7 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { ProviderSessionNotFoundError, type ProviderServiceError } from "../../provider/Errors.ts";
 import {
+  CHECKPOINT_REFS_PREFIX,
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnLive,
@@ -202,6 +203,18 @@ function runGit(cwd: string, args: ReadonlyArray<string>) {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
+}
+
+/**
+ * Rescue refs live at `<prefix>/<encoded thread id>/revert-rescue/<token>`, so
+ * they cannot be found by scanning a fixed `revert-rescue` prefix — that would
+ * be a pattern `git for-each-ref` can never match, and a leak would go
+ * unnoticed. List the whole checkpoint namespace and filter instead.
+ */
+function listRevertRescueRefs(cwd: string): ReadonlyArray<string> {
+  return runGit(cwd, ["for-each-ref", "--format=%(refname)", CHECKPOINT_REFS_PREFIX])
+    .split("\n")
+    .filter((ref) => ref.includes("/revert-rescue/"));
 }
 
 function createGitRepository(hasInitialCommit = true) {
@@ -1947,6 +1960,9 @@ describe("CheckpointReactor", () => {
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(false);
+    // The rescue snapshot is throwaway: a successful revert must not leave one
+    // behind, since nothing else ever sweeps them.
+    expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
   });
 
   it("reverts a thread whose provider session is no longer running", async () => {
@@ -2066,13 +2082,7 @@ describe("CheckpointReactor", () => {
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(true);
-    expect(
-      runGit(harness.cwd, [
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/synara/checkpoints/revert-rescue",
-      ]),
-    ).toBe("");
+    expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
   });
 
   it("restores turn zero from the persisted checkpoint family", async () => {

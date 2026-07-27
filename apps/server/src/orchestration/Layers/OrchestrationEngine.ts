@@ -162,6 +162,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const commandQueues = {
     control: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
+    user: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
     normal: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
     wake: yield* Queue.unbounded<void>(),
   } satisfies OrchestrationCommandQueues<CommandEnvelope>;
@@ -1016,6 +1017,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Effect.all(
           [
             Queue.interrupt(commandQueues.control),
+            Queue.interrupt(commandQueues.user),
             Queue.interrupt(commandQueues.normal),
             Queue.interrupt(commandQueues.wake),
           ],

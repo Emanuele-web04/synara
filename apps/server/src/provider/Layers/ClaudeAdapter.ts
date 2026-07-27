@@ -4012,7 +4012,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               // transcript instead of replaying the same broken id forever.
               context.resumeSessionId = undefined;
               context.lastAssistantUuid = undefined;
-              context.trackedTasks.clear();
+              // The map is the source for `turn.tasks.updated`, so clearing it
+              // silently would strand the turn's task chips: the next dispatch
+              // sees an empty map and emits no correction.
+              if (context.trackedTasks.size > 0) {
+                context.trackedTasks.clear();
+                yield* emitTrackedTasksUpdated(context, {
+                  rawPayload: { source: "claude.stale-resume-invalidated" },
+                });
+              }
               yield* Effect.logWarning("claude.session.stale_resume_invalidated", {
                 threadId: context.session.threadId,
                 detail: message,
