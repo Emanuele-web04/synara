@@ -25,7 +25,8 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 2;
+const LAUNCHER_VERSION = 3;
+const LAUNCHER_BINARY_NAME = "Synara";
 const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 
@@ -51,11 +52,12 @@ function setPlistString(plistPath, key, value) {
   throw new Error(`Failed to update plist key "${key}" at ${plistPath}: ${details}`.trim());
 }
 
-function patchMainBundleInfoPlist(appBundlePath, iconPath) {
+function patchMainBundleInfoPlist(appBundlePath, iconPath, launcherBinaryName) {
   const infoPlistPath = join(appBundlePath, "Contents", "Info.plist");
   setPlistString(infoPlistPath, "CFBundleDisplayName", APP_DISPLAY_NAME);
   setPlistString(infoPlistPath, "CFBundleName", APP_DISPLAY_NAME);
   setPlistString(infoPlistPath, "CFBundleIdentifier", APP_BUNDLE_ID);
+  setPlistString(infoPlistPath, "CFBundleExecutable", launcherBinaryName);
   setPlistString(infoPlistPath, "CFBundleIconFile", "icon.icns");
   setPlistString(infoPlistPath, "NSMicrophoneUsageDescription", MICROPHONE_USAGE_DESCRIPTION);
 
@@ -110,8 +112,9 @@ function buildMacLauncher(electronBinaryPath) {
   const sourceAppBundlePath = resolve(electronBinaryPath, "../../..");
   const runtimeDir = join(desktopDir, ".electron-runtime");
   const targetAppBundlePath = join(runtimeDir, `${APP_DISPLAY_NAME}.app`);
-  const targetBinaryPath = join(targetAppBundlePath, "Contents", "MacOS", "Electron");
-  const iconPath = join(desktopDir, "resources", "icon.icns");
+  const electronBinaryDir = join(targetAppBundlePath, "Contents", "MacOS");
+  const targetBinaryPath = join(electronBinaryDir, LAUNCHER_BINARY_NAME);
+  const iconPath = join(desktopDir, "resources", desktopIdentity.iconFileName ?? "icon.icns");
   const metadataPath = join(runtimeDir, "metadata.json");
 
   mkdirSync(runtimeDir, { recursive: true });
@@ -134,8 +137,29 @@ function buildMacLauncher(electronBinaryPath) {
 
   rmSync(targetAppBundlePath, { recursive: true, force: true });
   cpSync(sourceAppBundlePath, targetAppBundlePath, { recursive: true });
-  patchMainBundleInfoPlist(targetAppBundlePath, iconPath);
+  patchMainBundleInfoPlist(targetAppBundlePath, iconPath, LAUNCHER_BINARY_NAME);
   patchHelperBundleInfoPlists(targetAppBundlePath);
+
+  const launcherScript = `#!/bin/sh
+set -e
+
+unset ELECTRON_RUN_AS_NODE
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_DESKTOP_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+[ -n "$SYNARA_DESKTOP_FLAVOR" ] || export SYNARA_DESKTOP_FLAVOR="${desktopFlavor}"
+
+cd "$SOURCE_DESKTOP_DIR" || exit 1
+
+if [ $# -eq 0 ]; then
+  exec "$SCRIPT_DIR/Electron" "$SOURCE_DESKTOP_DIR/dist-electron/main.js"
+else
+  exec "$SCRIPT_DIR/Electron" "$@"
+fi
+`;
+  writeFileSync(targetBinaryPath, launcherScript, { mode: 0o755 });
+
   writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
 
   return targetBinaryPath;
