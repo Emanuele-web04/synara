@@ -43,6 +43,7 @@
 - Fixed composer command-menu state transitions and exact-optional browser fixture typing when no empty-state label is supplied.
 - Fixed completion-summary parsing when a closing inline-code run is absent.
 - Fixed a default-parameter call in `ChatView` that caused React Compiler to bail out of a protected hot path.
+- Fixed macOS release artifact builds exhausting Node's default heap while bundling the production web client.
 - Fixed the landing project heading inheriting the wrong text color.
 
 ### Verification

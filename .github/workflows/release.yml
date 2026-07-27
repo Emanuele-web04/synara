@@ -208,6 +208,7 @@ jobs:
         name: Build desktop artifact
         shell: bash
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
