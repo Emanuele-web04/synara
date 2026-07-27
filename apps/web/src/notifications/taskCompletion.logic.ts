@@ -249,8 +249,12 @@ function protectMarkdownInlineCode(text: string, protect: (content: string) => s
   while (runIndex < runs.length) {
     const openingRun = runs[runIndex];
     const closingRunIndex = nextMatchingRun[runIndex];
-    const closingRun = closingRunIndex === undefined ? undefined : runs[closingRunIndex];
-    if (!openingRun || !closingRun) {
+    if (!openingRun || closingRunIndex === undefined) {
+      runIndex += 1;
+      continue;
+    }
+    const closingRun = runs[closingRunIndex];
+    if (!closingRun) {
       runIndex += 1;
       continue;
     }

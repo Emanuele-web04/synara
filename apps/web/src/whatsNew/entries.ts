@@ -22,6 +22,84 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.2",
+    date: "Jul 27",
+    features: [
+      {
+        id: "universal-live-tool-activity",
+        title: "Every agent's live tool work is visible",
+        description:
+          "Follow tools as they start, update, and finish across supported providers, with consistent labels and details directly in the transcript.",
+        details:
+          "Synara now normalizes live and settled tool activity into one presentation model, preserves expandable tool details and interactions, and reconciles terminal states without leaving duplicate or permanently running work rows behind.",
+      },
+      {
+        id: "reliable-live-recovery",
+        title: "Live tasks recover after reconnects",
+        description:
+          "Provider status, active turns, and thread details converge back to the server's real state after dropped connections or delayed events.",
+        details:
+          "Reconnect refreshes preserve useful status while new data arrives, stale live projections are fenced and repaired, settled turns stop polling, and thread-detail ownership is reconciled across lease, snapshot, and subscription races.",
+      },
+      {
+        id: "follow-up-dispatch-mode",
+        title: "Choose whether follow-ups queue or steer",
+        description:
+          "Set new messages sent during active work to wait their turn or steer the current agent immediately.",
+        details:
+          "The new conversation setting is searchable in Settings and is applied consistently by the composer while a task is running, with Queue as the predictable default and Steer available for more interactive workflows.",
+      },
+      {
+        id: "recover-blocked-threads",
+        title: "Blocked threads can be recovered",
+        description:
+          "When an uncertain provider delivery quarantines a thread, the error banner now offers a safe Unblock thread action.",
+        details:
+          "Synara abandons ambiguous blockers oldest-first, then replays only the skipped turn starts. This restores the conversation without risking a duplicate resend of the command whose delivery could not be proven.",
+      },
+      {
+        id: "automation-and-desktop-resilience",
+        title: "Automations and desktop recovery are tougher",
+        description:
+          "Dedicated automation runs, clearer completion policies, and bounded desktop crash recovery make unattended work more dependable.",
+        details:
+          "Automation self-cancellation is explicitly authorized, run state and completion policies persist more reliably, renderer crashes use bounded reload recovery with actionable prompts, and process supervision, executable lookup, terminal wrappers, worktrees, and Git status broadcasting handle failure boundaries more carefully.",
+      },
+      {
+        id: "faster-startup-and-diffs",
+        title: "Startup and large diffs do less work",
+        description:
+          "Synara loads expensive provider and diff machinery only when needed and computes working-tree statistics without transferring full patches.",
+        details:
+          "Shell environment probes and orchestration startup state are reused, route chunks are preloaded selectively, supervised process scans are throttled, and React Compiler coverage protects chat, picker, hook, and UI hot paths.",
+      },
+      {
+        id: "storage-and-artifact-safety",
+        title: "Local state stays safer",
+        description:
+          "Exclusive SQLite locking and stricter migration-artifact cleanup reduce the chance of competing writers or abandoned update files.",
+        details:
+          "Database access now proves exclusive ownership, migration backups and resumable artifacts receive broader retention and reclamation coverage, and orphan cleanup stays bounded to verified Synara-owned paths.",
+      },
+      {
+        id: "custom-void-space",
+        title: "Make the Void space your own",
+        description:
+          "Rename Void and choose its icon so unassigned projects fit the way you organize your workspace.",
+        details:
+          "The custom presentation is stored locally and appears consistently in the sidebar, Space switcher, project pickers, and creation flows, with validation and a one-step reset to the default.",
+      },
+      {
+        id: "readability-and-interface-polish",
+        title: "Small details are calmer and clearer",
+        description:
+          "Completion notifications retain useful Markdown context, command menus explain loading and empty states, and Settings are organized around user intent.",
+        details:
+          "This release also standardizes settings cards and elevated hover surfaces, simplifies subagent transcript rows, preserves the landing project color, keeps Ctrl-minus zoom working on Windows and browser guests, improves diff and composer hot paths, and makes fenced code, references, nested Markdown, and technical completion summaries safer and easier to read.",
+      },
+    ],
+  },
+  {
     version: "0.6.1",
     date: "Jul 25",
     features: [

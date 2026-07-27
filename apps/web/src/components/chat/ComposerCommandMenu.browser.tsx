@@ -19,7 +19,7 @@ async function mountMenu(input: {
       resolvedTheme="dark"
       isLoading={input.isLoading}
       triggerKind={input.triggerKind}
-      emptyStateText={input.emptyStateText}
+      {...(input.emptyStateText === undefined ? {} : { emptyStateText: input.emptyStateText })}
       activeItemId={null}
       onHighlightedItemChange={vi.fn()}
       onSelect={vi.fn()}

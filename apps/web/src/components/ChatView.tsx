@@ -6702,12 +6702,15 @@ export default function ChatView({
 
   const onSend = async (
     e?: { preventDefault: () => void },
-    dispatchMode: "queue" | "steer" = resolveFollowUpDispatchMode({
-      behavior: settings.followUpBehavior,
-      hasLiveTurn,
-    }),
+    requestedDispatchMode?: "queue" | "steer",
     queuedTurn?: QueuedComposerChatTurn,
   ): Promise<boolean> => {
+    const dispatchMode =
+      requestedDispatchMode ??
+      resolveFollowUpDispatchMode({
+        behavior: settings.followUpBehavior,
+        hasLiveTurn,
+      });
     e?.preventDefault();
     const api = readNativeApi();
     const lateSendHandlers = lateComposerSendHandlersRef.current;

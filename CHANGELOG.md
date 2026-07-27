@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.6.2 - 2026-07-27
+
+### Added
+
+- Added universal live tool activity across supported providers, with normalized running and settled states, consistent labels, expandable details, and transcript interactions.
+- Added a configurable follow-up dispatch mode so messages sent during active work can either queue for the next turn or steer the current turn.
+- Added an `Unblock thread` recovery action for provider-delivery quarantines; blockers are abandoned oldest-first and skipped turn starts are replayed without resending an ambiguous command.
+- Added local customization for the Void space name and icon, including validation, reset behavior, and consistent presentation across the sidebar, Space switcher, project pickers, and project creation.
+- Added dedicated automation-run handling, explicit completion policies, and authorized automation self-cancellation.
+- Added bounded Electron renderer-crash recovery with reload limits and actionable recovery prompts.
+- Added server-side working-tree diff statistics and shared unified-patch parsing so large diff totals no longer require transferring complete patches to the client.
+- Added React Compiler parity coverage for chat, picker, hook, and shared UI hot paths.
+
+### Changed
+
+- Reworked reconnect reconciliation so provider status, active turns, work logs, and terminal thread projections converge to the server snapshot without stale refreshes winning races or settled tasks polling indefinitely.
+- Batched stale thread-detail eviction and reconciled ownership across lease, reconnect, snapshot, and subscription-retention boundaries.
+- Reduced startup and steady-state work by lazily loading provider and diff-parser dependencies, caching login-shell environment probes, reusing in-memory orchestration state, selectively preloading route chunks, and throttling supervised-process descendant scans.
+- Hardened automation scheduling, projection, persistence, completion, and cancellation lifecycles for unattended work.
+- Hardened desktop and server process management across executable discovery, shell-environment hydration, backend supervision, terminal wrappers, managed worktrees, Git status broadcasting, and replacement of stale processes.
+- Enforced exclusive SQLite ownership and expanded verified retention, reclamation, and cleanup behavior for migration backups and interrupted update artifacts.
+- Simplified subagent activity in the transcript and consolidated live and settled tool presentation around the shared work log.
+- Reorganized Settings by user intent and consolidated shared settings cards, empty states, elevated surfaces, and hover styles.
+- Improved completion notifications so bounded Markdown summaries preserve fenced and nested code, technical context, references, delimiters, and turn-scoped copy while remaining safe to render.
+- Improved composer command-menu loading and empty states, shared picker styling, and React Compiler-friendly code paths.
+- Bumped Synara release package versions to `0.6.2` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed universal tool rows that could duplicate, lose interactions, regress after settlement, or remain visually active after a tool or turn reached a terminal state.
+- Fixed stale live thread projections after reconnect, including delayed refresh races, mismatched repair identity, stale terminal turns, and polling that continued after convergence.
+- Fixed provider status disappearing or being replaced by stale data while a reconnect refresh was in flight.
+- Fixed unowned thread details surviving lease, reconnect, and snapshot races.
+- Fixed permanently quarantined threads that previously exposed the delivery blocker but offered no client recovery path.
+- Fixed desktop renderer crashes that could leave Synara blank instead of recovering within a bounded retry policy.
+- Fixed competing SQLite access that could proceed without proving exclusive database ownership.
+- Fixed startup overhead from repeated shell probes, eagerly loaded provider SDKs and diff parsers, redundant orchestration reads, and over-frequent process-tree inspection.
+- Fixed orphaned or interrupted migration artifacts not being reclaimed under the expanded retention policy.
+- Fixed Windows `Ctrl+-` zoom behavior while preserving native menu shortcuts, browser-guest shortcuts help, and cross-platform shortcut boundaries.
+- Fixed completion notifications that could flatten or truncate fenced code, nested inline code, Markdown references, technical detail, or delimiter-sensitive text.
+- Fixed composer command-menu state transitions and exact-optional browser fixture typing when no empty-state label is supplied.
+- Fixed completion-summary parsing when a closing inline-code run is absent.
+- Fixed a default-parameter call in `ChatView` that caused React Compiler to bail out of a protected hot path.
+- Fixed the landing project heading inheriting the wrong text color.
+
+### Verification
+
+- Final `bun run fmt:check` passed across 15,535 files.
+- Final `bun run lint` passed with 296 warnings and 0 errors.
+- Final `bun run typecheck` passed across all 7 packages after fixing two release-blocking exactness checks; only existing TS44 informational messages and Astro deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecations, plugin timing notices, and large-chunk warnings remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 10m58.197s after fixing one React Compiler bailout. Web passed 264 files / 3,250 tests; server/CLI passed 278 files / 2,951 tests with 2 skipped files / 7 skipped tests; desktop passed 39 files / 362 tests with 1 skipped file / 5 skipped tests; shared passed 41 files / 424 tests with 1 skipped test; contracts passed 13 files / 135 tests; scripts passed 13 files / 83 tests.
+- Focused reruns passed for completion-notification logic (48 tests), the composer command menu (4 browser tests), and React Compiler hot-path parity (12 tests). No flaky test was identified.
+
 ## 0.6.1 - 2026-07-25
 
 ### Added
