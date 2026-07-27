@@ -36,6 +36,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   Array as EffectArray,
   Cause,
+  Duration,
   Effect,
   Exit,
   Layer,
@@ -135,6 +136,15 @@ type StopRuntimeSessionEffect = ReturnType<StopRuntimeSession>;
 type InteractionResponse =
   | { readonly kind: "approval"; readonly input: ProviderRespondToRequestInput }
   | { readonly kind: "userInput"; readonly input: ProviderRespondToUserInputInput };
+
+/**
+ * Hard deadlines for provider lifecycle calls. Every caller of these paths
+ * holds a serialized resource (the per-thread lifecycle lock, an orchestration
+ * command slot, or the provider command reactor's delivery lock), so an
+ * unbounded adapter call is a process-wide stall, not a local one.
+ */
+const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
+const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
 
 function toValidationError(
   operation: string,
@@ -1216,16 +1226,46 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const adapter = yield* registry.getByProvider(input.provider);
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
-              const session = yield* adapter.startSession({
-                ...input,
-                lifecycleGeneration: lease.generation,
-                ...(effectiveProviderOptions !== undefined
-                  ? { providerOptions: effectiveProviderOptions }
-                  : {}),
-                ...(effectiveResumeCursor !== undefined
-                  ? { resumeCursor: effectiveResumeCursor }
-                  : {}),
-              });
+              // A provider start that never returns holds this thread's
+              // lifecycle lock and the caller's command slot forever. Bound it,
+              // retire whatever the adapter may have half-spawned, and fail
+              // with text the caller can surface as a session error.
+              const started = yield* adapter
+                .startSession({
+                  ...input,
+                  lifecycleGeneration: lease.generation,
+                  ...(effectiveProviderOptions !== undefined
+                    ? { providerOptions: effectiveProviderOptions }
+                    : {}),
+                  ...(effectiveResumeCursor !== undefined
+                    ? { resumeCursor: effectiveResumeCursor }
+                    : {}),
+                })
+                .pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
+              if (Option.isNone(started)) {
+                yield* Effect.logError("provider session start exceeded its deadline", {
+                  threadId,
+                  provider: input.provider,
+                  timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
+                });
+                yield* adapter.stopSession(threadId).pipe(
+                  Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to retire a timed-out provider session start", {
+                      threadId,
+                      provider: input.provider,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                );
+                return yield* toValidationError(
+                  "ProviderService.startSession",
+                  `Provider '${input.provider}' did not finish starting within ${Duration.toMillis(
+                    PROVIDER_START_SESSION_TIMEOUT,
+                  )}ms for thread '${threadId}'.`,
+                );
+              }
+              const session = started.value;
               replacementStarted = true;
 
               if (session.provider !== adapter.provider) {
@@ -1595,7 +1635,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           schema: ProviderInterruptTurnInput,
           payload: rawInput,
         });
-        return yield* lifecycle.runCurrent(input.threadId, (currentGeneration) =>
+        // Urgent: an interrupt is the user's only escape hatch from a wedged
+        // turn, so it must not queue behind a lifecycle mutation that hangs.
+        return yield* lifecycle.runCurrentUrgent(input.threadId, (currentGeneration) =>
           Effect.gen(function* () {
             const routed = yield* resolveRoutableSession({
               threadId: input.threadId,

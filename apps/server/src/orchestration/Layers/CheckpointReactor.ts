@@ -12,7 +12,7 @@ import {
   type ProviderSession,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Cause, Effect, Layer, Option, Schedule, Stream } from "effect";
+import { Cause, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
@@ -36,7 +36,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
-import { CheckpointStoreError } from "../../checkpointing/Errors.ts";
+import { CheckpointInvariantError, type CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import { OrchestrationDispatchError } from "../Errors.ts";
 import {
   CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
@@ -57,6 +57,8 @@ type ReactorInput =
     };
 
 const CHECKPOINT_REACTOR_CAPACITY = 256;
+
+const REVERT_LEASE_ACQUIRE_TIMEOUT_MS = 15_000;
 
 function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
@@ -196,13 +198,44 @@ const make = Effect.gen(function* () {
     return undefined;
   });
 
-  const appendRevertFailureActivity = (input: {
+  // Anchors a revert failure on a turn the transcript still renders: clients
+  // drop turn-less activities once a thread has turn-stamped messages, which
+  // made every revert failure invisible.
+  const resolveRevertFailureTurnId = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnCount: number;
+  }) {
+    const thread = yield* getThreadDetail(input.threadId);
+    if (!thread) {
+      return null;
+    }
+    const targetCheckpoint = thread.checkpoints.find(
+      (checkpoint) => checkpoint.checkpointTurnCount === input.turnCount,
+    );
+    if (targetCheckpoint) {
+      return targetCheckpoint.turnId;
+    }
+    const latestCheckpoint = thread.checkpoints.reduce<(typeof thread.checkpoints)[number] | null>(
+      (latest, checkpoint) =>
+        latest === null || checkpoint.checkpointTurnCount > latest.checkpointTurnCount
+          ? checkpoint
+          : latest,
+      null,
+    );
+    return latestCheckpoint?.turnId ?? thread.latestTurn?.turnId ?? null;
+  });
+
+  const appendRevertFailureActivity = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnCount: number;
     readonly detail: string;
     readonly createdAt: string;
-  }) =>
-    orchestrationEngine
+  }) {
+    const turnId = yield* resolveRevertFailureTurnId({
+      threadId: input.threadId,
+      turnCount: input.turnCount,
+    });
+    yield* orchestrationEngine
       .dispatch({
         type: "thread.activity.append",
         commandId: serverCommandId("checkpoint-revert-failure"),
@@ -216,7 +249,7 @@ const make = Effect.gen(function* () {
             turnCount: input.turnCount,
             detail: input.detail,
           },
-          turnId: null,
+          turnId,
           createdAt: input.createdAt,
         },
         createdAt: input.createdAt,
@@ -228,6 +261,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
+  });
 
   const appendCaptureFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -312,28 +346,26 @@ const make = Effect.gen(function* () {
   // active provider session CWD and falling back to the thread/project config.
   // Returns undefined when no CWD can be determined or the workspace is not
   // a git repository.
+  //
+  // Every checkpoint path (baseline, completion, revert) shares this single
+  // policy: a worktree thread whose baseline resolved through the workspace
+  // while its completion snapshot resolved through the session cwd would diff
+  // two different checkouts.
   const resolveCheckpointCwd = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">;
     readonly project: OrchestrationProjectShell;
-    readonly preferSessionRuntime: boolean;
   }) {
     const fromSession = yield* resolveSessionRuntimeForThread(input.threadId);
-    const fromThread = resolveThreadWorkspaceCwd({
-      thread: input.thread,
-      projects: [input.project],
-    });
-
-    const cwd = input.preferSessionRuntime
-      ? (Option.match(fromSession, {
-          onNone: () => undefined,
-          onSome: (runtime) => runtime.cwd,
-        }) ?? fromThread)
-      : (fromThread ??
-        Option.match(fromSession, {
-          onNone: () => undefined,
-          onSome: (runtime) => runtime.cwd,
-        }));
+    const cwd =
+      Option.match(fromSession, {
+        onNone: () => undefined,
+        onSome: (runtime) => runtime.cwd,
+      }) ??
+      resolveThreadWorkspaceCwd({
+        thread: input.thread,
+        projects: [input.project],
+      });
 
     if (!cwd) {
       return undefined;
@@ -564,7 +596,6 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       thread,
       project,
-      preferSessionRuntime: true,
     });
     if (!checkpointCwd) {
       yield* Effect.logDebug(
@@ -645,7 +676,6 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       thread,
       project,
-      preferSessionRuntime: true,
     });
     if (!checkpointCwd) {
       return;
@@ -752,7 +782,6 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       thread,
       project,
-      preferSessionRuntime: false,
     });
     if (!checkpointCwd) {
       return;
@@ -853,7 +882,6 @@ const make = Effect.gen(function* () {
       threadId,
       thread,
       project,
-      preferSessionRuntime: false,
     });
     if (!checkpointCwd) {
       return;
@@ -966,26 +994,32 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (event.payload.scope === "files") {
-      const project = yield* getProjectShell(thread.projectId);
-      const checkpointCwd = project
-        ? yield* resolveCheckpointCwd({
-            threadId: event.payload.threadId,
-            thread,
-            project,
-            preferSessionRuntime: true,
-          })
-        : undefined;
-      if (!checkpointCwd) {
-        yield* appendRevertFailureActivity({
+    // Both scopes resolve the workspace the same way: prefer a live provider
+    // session cwd, fall back to the thread/project workspace. Requiring a live
+    // session here would make revert fail after an idle stop or a restart, even
+    // though the checkpoints and the provider binding both survive that.
+    const project = yield* getProjectShell(thread.projectId);
+    const checkpointCwd = project
+      ? yield* resolveCheckpointCwd({
           threadId: event.payload.threadId,
-          turnCount: event.payload.turnCount,
-          detail: "No git workspace is available for file Undo.",
-          createdAt: now,
-        }).pipe(Effect.catch(() => Effect.void));
-        return;
-      }
+          thread,
+          project,
+        })
+      : undefined;
+    if (!checkpointCwd) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          event.payload.scope === "files"
+            ? "No git workspace is available for file Undo."
+            : "No git workspace is available for this thread's checkpoints.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
 
+    if (event.payload.scope === "files") {
       const isUndoableCheckpoint = (checkpoint: (typeof thread.checkpoints)[number]) =>
         checkpoint.status === "ready" &&
         checkpoint.files.length > 0 &&
@@ -1122,26 +1156,6 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
-    if (Option.isNone(sessionRuntime)) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: "No active provider session with workspace cwd is bound to this thread.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
-    if (!isGitWorkspace(sessionRuntime.value.cwd)) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: "Checkpoints are unavailable because this project is not a git repository.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
-
     const earliestManagedBaselineRef = thread.checkpoints
       .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
       .map((checkpoint) =>
@@ -1169,15 +1183,87 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: sessionRuntime.value.cwd,
-      checkpointRef: targetCheckpointRef,
-    });
-    if (!restored) {
+    // Preconditions before side effects: the filesystem checkpoint must exist
+    // before anything is mutated. Discovering it only at restore time would
+    // leave the conversation rolled back over a worktree that still holds the
+    // undone turns' files — the exact divergence this ordering prevents.
+    const missingTargetCheckpointDetail = yield* checkpointStore
+      .hasCheckpointRef({
+        cwd: checkpointCwd,
+        checkpointRef: targetCheckpointRef,
+      })
+      .pipe(
+        Effect.map((exists) =>
+          exists
+            ? null
+            : `Filesystem checkpoint is unavailable for turn ${event.payload.turnCount}.`,
+        ),
+        Effect.catch((error) =>
+          Effect.succeed(
+            `Filesystem checkpoint for turn ${event.payload.turnCount} could not be verified: ${error.message}`,
+          ),
+        ),
+      );
+    if (missingTargetCheckpointDetail !== null) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
-        detail: `Filesystem checkpoint is unavailable for turn ${event.payload.turnCount}.`,
+        detail: missingTargetCheckpointDetail,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    // Conversation first, files second: a rolled-back conversation over an
+    // untouched worktree is recoverable (the revert can simply be retried),
+    // while reverted files under a conversation that still remembers the
+    // undone turns is not.
+    const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
+    if (rolledBackTurns > 0) {
+      const conversationRollbackFailure = yield* providerService
+        .rollbackConversation({
+          threadId: sessionThreadId,
+          numTurns: rolledBackTurns,
+        })
+        .pipe(
+          Effect.as(null),
+          Effect.catch((error) =>
+            Effect.succeed(`Conversation rollback failed, no files were changed: ${error.message}`),
+          ),
+        );
+      if (conversationRollbackFailure !== null) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: conversationRollbackFailure,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+    }
+
+    const restoreFailure = yield* checkpointStore
+      .restoreCheckpoint({
+        cwd: checkpointCwd,
+        checkpointRef: targetCheckpointRef,
+      })
+      .pipe(
+        Effect.map((restored) =>
+          restored
+            ? null
+            : `Filesystem checkpoint became unavailable for turn ${event.payload.turnCount} during the revert.`,
+        ),
+        Effect.catch((error) =>
+          Effect.succeed(
+            `Filesystem restore failed after the conversation was rolled back: ${error.message}`,
+          ),
+        ),
+      );
+    if (restoreFailure !== null) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: restoreFailure,
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -1185,15 +1271,7 @@ const make = Effect.gen(function* () {
 
     // Invalidate the workspace entry cache so the @-mention file picker
     // reflects the reverted filesystem state.
-    clearWorkspaceIndexCache(sessionRuntime.value.cwd);
-
-    const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
-    if (rolledBackTurns > 0) {
-      yield* providerService.rollbackConversation({
-        threadId: sessionRuntime.value.threadId,
-        numTurns: rolledBackTurns,
-      });
-    }
+    clearWorkspaceIndexCache(checkpointCwd);
 
     const staleCheckpointRefs = thread.checkpoints
       .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
@@ -1201,7 +1279,7 @@ const make = Effect.gen(function* () {
 
     if (staleCheckpointRefs.length > 0) {
       yield* checkpointStore.deleteCheckpointRefs({
-        cwd: sessionRuntime.value.cwd,
+        cwd: checkpointCwd,
         checkpointRefs: staleCheckpointRefs,
       });
     }
@@ -1236,9 +1314,44 @@ const make = Effect.gen(function* () {
         event.payload.threadId,
       );
       const sessionThreadId = providerThread?.id ?? event.payload.threadId;
-      return yield* turnCheckpointCoordinator.withThreadLease(
-        sessionThreadId,
-        handleRevertRequestedWithoutLease(event, sessionThreadId),
+
+      // The per-thread lease is shared with checkpoint capture, which can park
+      // on a slow git command or be held by a turn that never settles. Bound
+      // only the acquisition — once the lease is held the revert itself must
+      // run to completion — by parking the lease in a child fiber and racing a
+      // timeout against the handshake.
+      const leaseAcquired = yield* Deferred.make<void>();
+      const leaseReleased = yield* Deferred.make<void>();
+      const leaseFiber = yield* Effect.forkChild(
+        turnCheckpointCoordinator.withThreadLease(
+          sessionThreadId,
+          Deferred.succeed(leaseAcquired, undefined).pipe(
+            Effect.andThen(Deferred.await(leaseReleased)),
+          ),
+        ),
+        { startImmediately: true },
+      );
+
+      const acquired = yield* Deferred.await(leaseAcquired).pipe(
+        Effect.timeoutOption(REVERT_LEASE_ACQUIRE_TIMEOUT_MS),
+      );
+      if (Option.isNone(acquired)) {
+        yield* Fiber.interrupt(leaseFiber).pipe(Effect.ignore);
+        return yield* new CheckpointInvariantError({
+          operation: "thread revert",
+          detail: `Undo could not start because another checkpoint operation held this thread for more than ${Math.round(
+            REVERT_LEASE_ACQUIRE_TIMEOUT_MS / 1000,
+          )}s. Try again in a moment.`,
+        });
+      }
+
+      return yield* handleRevertRequestedWithoutLease(event, sessionThreadId).pipe(
+        Effect.ensuring(
+          Deferred.succeed(leaseReleased, undefined).pipe(
+            Effect.andThen(Fiber.join(leaseFiber)),
+            Effect.ignore,
+          ),
+        ),
       );
     });
 

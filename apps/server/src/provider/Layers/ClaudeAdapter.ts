@@ -307,6 +307,10 @@ interface ClaudeSessionContext {
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly trackedTasks: Map<string, ClaudeTrackedTask>;
   turnState: ClaudeTurnState | undefined;
+  // Survives `turnState` being cleared so a terminal result that arrives with no
+  // live turn still names the turn it settles. An id-less `turn.completed` is
+  // dropped by runtime ingestion and leaves the projection running forever.
+  lastTurnId: TurnId | undefined;
   interruptRequestedTurnId: TurnId | undefined;
   lastKnownContextWindow: number | undefined;
   currentAutoCompactWindow: number | undefined;
@@ -884,6 +888,9 @@ const CLAUDE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
+// The SDK's interrupt resolves only once the CLI acknowledges it; a wedged CLI
+// would otherwise stall the caller (and the provider command reactor) forever.
+const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
 export const buildEmbeddedClaudeSystemPromptAppend = (gatewayControlAvailable: boolean) =>
   [
     "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
@@ -2293,6 +2300,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
           }
 
+          // Runtime ingestion drops a terminal event it cannot attribute to a
+          // turn, which strands the projection in "running". The last turn this
+          // session owned is the only turn this result can belong to, because a
+          // newer one would still have live turn state.
+          const settledTurnId = context.lastTurnId;
+          if (settledTurnId === undefined) {
+            yield* Effect.logWarning("claude turn result arrived with no attributable turn", {
+              threadId: context.session.threadId,
+              status,
+            });
+          }
           const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
             type: "turn.completed",
@@ -2300,6 +2318,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             provider: PROVIDER,
             createdAt: stamp.createdAt,
             threadId: context.session.threadId,
+            ...(settledTurnId !== undefined ? { turnId: settledTurnId } : {}),
             payload: {
               state: status,
               ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
@@ -2479,6 +2498,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           inFlightTools: new Map(),
           trackedTasks: new Map(),
           turnState: undefined,
+          lastTurnId: undefined,
           interruptRequestedTurnId: undefined,
           lastKnownContextWindow: context.lastKnownContextWindow,
           currentAutoCompactWindow: context.currentAutoCompactWindow,
@@ -2980,6 +3000,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           nextSyntheticAssistantBlockIndex: -1,
           assistantMessageBlockBase: 0,
         };
+        context.lastTurnId = turnId;
         context.session = {
           ...context.session,
           status: "running",
@@ -4737,6 +4758,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             inFlightTools,
             trackedTasks,
             turnState: undefined,
+            lastTurnId: undefined,
             interruptRequestedTurnId: undefined,
             lastKnownContextWindow: resolveClaudeApiModelIdContextWindowMaxTokens(
               apiModelId ?? effectiveClaudeModel,
@@ -5047,6 +5069,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const updatedAt = yield* nowIso;
         context.turnState = turnState;
+        context.lastTurnId = turnId;
         context.session = {
           ...context.session,
           status: "running",
@@ -5135,10 +5158,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (context.turnState) {
           context.interruptRequestedTurnId = context.turnState.turnId;
         }
-        yield* Effect.tryPromise({
+        const acknowledged = yield* Effect.tryPromise({
           try: () => context.query.interrupt(),
           catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
-        });
+        }).pipe(Effect.timeoutOption(CLAUDE_INTERRUPT_TIMEOUT));
+        if (Option.isNone(acknowledged)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/interrupt",
+            detail: `The Claude CLI did not acknowledge the interrupt within ${Duration.toMillis(
+              CLAUDE_INTERRUPT_TIMEOUT,
+            )}ms.`,
+          });
+        }
       });
 
     // Stops one background task by its SDK task id (workflow runs and their member

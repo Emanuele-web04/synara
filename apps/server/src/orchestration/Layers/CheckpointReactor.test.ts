@@ -1293,16 +1293,17 @@ describe("CheckpointReactor", () => {
   });
 
   it("continues processing runtime events after a single checkpoint runtime failure", async () => {
-    const nonRepositorySessionCwd = fs.mkdtempSync(
-      path.join(os.tmpdir(), "synara-checkpoint-runtime-non-repo-"),
-    );
-    tempDirs.push(nonRepositorySessionCwd);
-
-    const harness = await createHarness({
-      seedFilesystemCheckpoints: false,
-      providerSessionCwd: nonRepositorySessionCwd,
-    });
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
+
+    // Force the completion capture to fail inside git: a ref nested under the
+    // turn-1 checkpoint ref makes `git update-ref` refuse to create it, while
+    // every other checkpoint ref in the family stays writable.
+    runGit(harness.cwd, [
+      "update-ref",
+      `${checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)}/blocker`,
+      "HEAD",
+    ]);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1343,6 +1344,15 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-after-runtime-failure"),
     });
 
+    // The first event must genuinely fail, otherwise this test proves nothing.
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    );
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
+    ).toBe(false);
+
+    // The second event is still processed by the same worker.
     await waitForGitRefExists(
       harness.cwd,
       checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
