@@ -552,6 +552,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       ),
     );
 
+  // Callers must build this effect inside a fiber (see `runEnvelope`): the body
+  // runs synchronously, so anything it throws is only contained when it is raised
+  // while an effect is being evaluated.
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
@@ -972,10 +975,47 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     ),
   );
 
+  /**
+   * Runs one envelope with the worker's structural safety net.
+   *
+   * `processEnvelope` builds its effect synchronously, so a throw raised while
+   * building it (schema/normalization helpers, read-model access, anything added
+   * to that body later) would otherwise propagate into the worker's `flatMap`
+   * before `Effect.ensuring` is attached: the envelope would never be finished
+   * (`outstanding` leaks, `drain` hangs, the caller waits out the dispatch
+   * timeout) and the defect would kill the worker fiber, wedging every later
+   * command. Building it inside `Effect.suspend` turns that into a defect of this
+   * effect, which is contained per envelope so one poisoned command fails alone.
+   */
+  const runEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> =>
+    Effect.suspend(() => processEnvelope(envelope)).pipe(
+      Effect.catchCause((cause): Effect.Effect<void> => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.logError("orchestration worker defect while processing command").pipe(
+          Effect.annotateLogs({
+            commandId: envelope.command.commandId,
+            commandType: envelope.command.type,
+            cause: Cause.pretty(cause),
+          }),
+          Effect.andThen(
+            Deferred.fail(envelope.result, makeCommandInternalError(envelope.command)),
+          ),
+          Effect.asVoid,
+        );
+      }),
+      // Last resort: even a defect raised by the handler above (a throwing getter
+      // on the command, say) must not escape into the worker loop.
+      Effect.catchCause(
+        (cause): Effect.Effect<void> =>
+          Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.void,
+      ),
+      Effect.ensuring(finishEnvelope),
+    );
+
   const worker = Effect.forever(
-    takeNextOrchestrationCommand(commandQueues).pipe(
-      Effect.flatMap((envelope) => processEnvelope(envelope).pipe(Effect.ensuring(finishEnvelope))),
-    ),
+    takeNextOrchestrationCommand(commandQueues).pipe(Effect.flatMap(runEnvelope)),
   );
   const workerFiber = yield* Effect.forkScoped(worker);
 
