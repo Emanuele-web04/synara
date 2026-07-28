@@ -234,7 +234,8 @@ function isSensitiveElement(element: Element): boolean {
     tag === "OPTION" ||
     (element instanceof HTMLElement && element.isContentEditable) ||
     element.matches("[autocomplete*='password' i], [autocomplete*='cc-' i]") ||
-    element.querySelector("input[type='password'], [autocomplete*='cc-' i]") !== null
+    element.querySelector("input[type='password'], [autocomplete*='cc-' i], [contenteditable]") !==
+      null
   );
 }
 

@@ -128,6 +128,17 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       width: number;
       height: number;
     };
+    const sensitiveContainerGeometry = await mcp.call("browser_evaluate", {
+      expression:
+        "(() => { const r = document.querySelector('#private-editor-wrap').getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; })()",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const sensitiveContainerRect = sensitiveContainerGeometry.structuredContent.value as {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
     const webviewRect = await page.locator("webview").boundingBox();
     if (!webviewRect) throw new Error("Visible annotation guest lost its bounds.");
 
@@ -206,6 +217,50 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       source: { url: site.appUrl },
     });
     expect(JSON.stringify(committedEvent)).not.toContain("private-annotation");
+
+    await page.mouse.click(
+      webviewRect.x + sensitiveContainerRect.x + 6,
+      webviewRect.y + sensitiveContainerRect.y + sensitiveContainerRect.height / 2,
+    );
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(
+        () =>
+          electronApp.evaluate(() => {
+            const fixture = (
+              globalThis as typeof globalThis & {
+                __synaraVisibleBrowserE2E: {
+                  annotationEvents: BrowserAnnotationEvent[];
+                };
+              }
+            ).__synaraVisibleBrowserE2E;
+            return fixture.annotationEvents.filter((event) => event.kind === "committed").length;
+          }),
+        { timeout: 5_000, intervals: [25, 50, 100] },
+      )
+      .toBe(2);
+    const sensitiveContainerEvent = await electronApp.evaluate(() => {
+      const fixture = (
+        globalThis as typeof globalThis & {
+          __synaraVisibleBrowserE2E: {
+            annotationEvents: BrowserAnnotationEvent[];
+          };
+        }
+      ).__synaraVisibleBrowserE2E;
+      return fixture.annotationEvents.filter(
+        (event): event is Extract<BrowserAnnotationEvent, { kind: "committed" }> =>
+          event.kind === "committed",
+      )[1];
+    });
+    expect(sensitiveContainerEvent?.annotation).toMatchObject({
+      selector: "#private-editor-wrap",
+      name: null,
+      text: null,
+    });
+    expect(JSON.stringify(sensitiveContainerEvent)).not.toContain(
+      "Private draft must not be captured",
+    );
 
     const manualClicks = await electronApp.evaluate(
       (_electron, input) => {

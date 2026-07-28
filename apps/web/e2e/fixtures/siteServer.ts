@@ -39,6 +39,8 @@ const APP_HTML = `<!doctype html>
       label, button { display: block; margin: 0 0 18px; }
       input { width: 280px; height: 28px; }
       #manual { width: 180px; height: 42px; }
+      #private-editor-wrap { width: 320px; padding: 18px; border: 1px solid #444; }
+      #private-editor { width: 240px; padding: 8px; }
       #hover-result { visibility: hidden; }
       #hover-target:hover + #hover-result { visibility: visible; }
       #drag-source, #drop-target { width: 180px; min-height: 36px; padding: 8px; border: 1px solid #444; }
@@ -53,6 +55,9 @@ const APP_HTML = `<!doctype html>
       <button id="agent" type="button">Commit agent action</button>
       <button id="point" type="button">Commit point action</button>
       <input id="manual" type="button" value="Manual Playwright action" />
+      <section id="private-editor-wrap">
+        <div id="private-editor" contenteditable="true">Private draft must not be captured</div>
+      </section>
       <button id="hover-target" type="button">Reveal hover state</button>
       <span id="hover-result">Trusted hover revealed</span>
       <label>Fixture choice
