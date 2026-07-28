@@ -17,6 +17,7 @@ import {
   type ProviderMentionReference,
   type ProviderNativeCommandDescriptor,
   type ProviderPluginDescriptor,
+  type ProviderRequestKind,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderStartOptions,
@@ -164,9 +165,12 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
   buildTranscriptAutoFollowSignal,
+  commitAfterRuntimeModePersistence,
+  createRuntimeModePersistenceQueue,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
   hasFileUndoSettled,
+  persistModelSelectionBeforeRuntimeMode,
   promptStillMatchesActiveHistoryBrowse,
   type PendingFileUndo,
   type PromptHistoryNavigationState,
@@ -277,6 +281,10 @@ import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
+import {
+  normalizeRuntimeModeForProvider,
+  providerModelSupportsAutoRuntimeMode,
+} from "../lib/runtimeMode";
 import { SynaraLogo } from "./SynaraLogo";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
@@ -1742,6 +1750,20 @@ export default function ChatView({
   }, [activeThread, pendingFileUndo]);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const runtimeModePersistenceQueuesRef = useRef(
+    new Map<ThreadId, ReturnType<typeof createRuntimeModePersistenceQueue>>(),
+  );
+  useEffect(() => {
+    const existing = runtimeModePersistenceQueuesRef.current.get(threadId);
+    if (existing) {
+      existing.syncAcknowledgedMode(runtimeMode);
+      return;
+    }
+    runtimeModePersistenceQueuesRef.current.set(
+      threadId,
+      createRuntimeModePersistenceQueue(runtimeMode),
+    );
+  }, [runtimeMode, threadId]);
   const interactionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
@@ -2164,15 +2186,36 @@ export default function ChatView({
     customModelsByProvider,
     availableModelOptionsByProvider: modelOptionsByProvider,
   });
-  const selectedRuntimeModel = useMemo(
-    () =>
-      resolveRuntimeModelDescriptor({
-        provider: selectedProvider,
-        model: selectedModel,
-        runtimeModels: runtimeModelsByProvider[selectedProvider],
-      }),
-    [runtimeModelsByProvider, selectedModel, selectedProvider],
-  );
+  const draftModelSelectionForSelectedProvider =
+    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+  const persistedClaudeSupportsAutoMode =
+    selectedProvider === "claudeAgent"
+      ? draftModelSelectionForSelectedProvider?.provider === "claudeAgent" &&
+        draftModelSelectionForSelectedProvider.model === selectedModel
+        ? draftModelSelectionForSelectedProvider.supportsAutoMode
+        : activeThread?.modelSelection.provider === "claudeAgent" &&
+            activeThread.modelSelection.model === selectedModel
+          ? activeThread.modelSelection.supportsAutoMode
+          : undefined
+      : undefined;
+  const selectedRuntimeModel = useMemo(() => {
+    const discovered = resolveRuntimeModelDescriptor({
+      provider: selectedProvider,
+      model: selectedModel,
+      runtimeModels: runtimeModelsByProvider[selectedProvider],
+    });
+    if (discovered) {
+      return discovered;
+    }
+    return selectedProvider === "claudeAgent" &&
+      typeof persistedClaudeSupportsAutoMode === "boolean"
+      ? {
+          slug: selectedModel,
+          name: selectedModel,
+          supportsAutoMode: persistedClaudeSupportsAutoMode,
+        }
+      : undefined;
+  }, [persistedClaudeSupportsAutoMode, runtimeModelsByProvider, selectedModel, selectedProvider]);
   const composerProviderState = useMemo(
     () =>
       getComposerProviderState({
@@ -2186,8 +2229,6 @@ export default function ChatView({
   );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
     if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
       return buildModelSelection(
@@ -2196,12 +2237,18 @@ export default function ChatView({
         selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
       );
     }
-    return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch);
+    return buildModelSelection(
+      selectedProvider,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      selectedProvider === "claudeAgent" ? selectedRuntimeModel?.supportsAutoMode : undefined,
+    );
   }, [
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
+    selectedRuntimeModel,
   ]);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const selectedModelForPicker =
@@ -4554,46 +4601,102 @@ export default function ChatView({
     [activeProject, persistProjectScripts],
   );
 
-  const handleRuntimeModeChange = useCallback(
-    (mode: RuntimeMode) => {
-      if (mode === runtimeMode) return;
-      setComposerDraftRuntimeMode(threadId, mode);
-      if (isLocalDraftThread) {
-        setDraftThreadContext(threadId, { runtimeMode: mode });
+  const persistRuntimeModeChange = useCallback(
+    async (mode: RuntimeMode): Promise<boolean> => {
+      let queue = runtimeModePersistenceQueuesRef.current.get(threadId);
+      if (!queue) {
+        queue = createRuntimeModePersistenceQueue(runtimeMode);
+        runtimeModePersistenceQueuesRef.current.set(threadId, queue);
       }
-      if (serverThread) {
-        const api = readNativeApi();
-        if (api) {
-          void api.orchestration
-            .dispatchCommand({
-              type: "thread.runtime-mode.set",
-              commandId: newCommandId(),
-              threadId,
-              runtimeMode: mode,
-              createdAt: new Date().toISOString(),
-            })
-            .catch((error) => {
-              toastManager.add({
-                type: "error",
-                title: "Could not update access mode",
-                description:
-                  error instanceof Error ? error.message : "An unexpected error occurred.",
-              });
+      return queue.persist(mode, async (currentMode, nextMode) => {
+        if (serverThread) {
+          const api = readNativeApi();
+          if (!api) {
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: "Synara is not connected to the server.",
             });
+            return false;
+          }
+          const persistenceInput = {
+            currentModelSelection: serverThread.modelSelection,
+            ...(nextMode === "auto" ? { nextModelSelection: selectedModelSelection } : {}),
+            currentRuntimeMode: currentMode,
+            nextRuntimeMode: nextMode,
+            persistModelSelection: (modelSelection: ModelSelection) =>
+              api.orchestration.dispatchCommand({
+                type: "thread.meta.update",
+                commandId: newCommandId(),
+                threadId,
+                modelSelection,
+              }),
+            persistRuntimeMode: (runtimeMode: RuntimeMode) =>
+              api.orchestration.dispatchCommand({
+                type: "thread.runtime-mode.set",
+                commandId: newCommandId(),
+                threadId,
+                runtimeMode,
+                createdAt: new Date().toISOString(),
+              }),
+          };
+          try {
+            await persistModelSelectionBeforeRuntimeMode(persistenceInput);
+          } catch (error) {
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            });
+            return false;
+          }
         }
-      }
-      scheduleComposerFocus();
+        setComposerDraftRuntimeMode(threadId, nextMode);
+        if (isLocalDraftThread) {
+          setDraftThreadContext(threadId, { runtimeMode: nextMode });
+        }
+        scheduleComposerFocus();
+        return true;
+      });
     },
     [
       isLocalDraftThread,
       runtimeMode,
       scheduleComposerFocus,
+      selectedModelSelection,
       serverThread,
       setComposerDraftRuntimeMode,
       setDraftThreadContext,
       threadId,
     ],
   );
+  const handleRuntimeModeChange = useCallback(
+    (mode: RuntimeMode) => {
+      void persistRuntimeModeChange(mode);
+    },
+    [persistRuntimeModeChange],
+  );
+
+  useEffect(() => {
+    if (
+      activeThread &&
+      runtimeMode === "auto" &&
+      !providerModelSupportsAutoRuntimeMode(
+        selectedProvider,
+        selectedRuntimeModel,
+        activeProviderStatus,
+      )
+    ) {
+      handleRuntimeModeChange("approval-required");
+    }
+  }, [
+    activeProviderStatus,
+    activeThread,
+    handleRuntimeModeChange,
+    runtimeMode,
+    selectedProvider,
+    selectedRuntimeModel,
+  ]);
 
   const handleInteractionModeChange = useCallback(
     (mode: ProviderInteractionMode) => {
@@ -4671,30 +4774,27 @@ export default function ChatView({
         return;
       }
 
-      if (
-        input.modelSelection !== undefined &&
-        (input.modelSelection.model !== serverThread.modelSelection.model ||
-          input.modelSelection.provider !== serverThread.modelSelection.provider ||
-          JSON.stringify(input.modelSelection.options ?? null) !==
-            JSON.stringify(serverThread.modelSelection.options ?? null))
-      ) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: input.threadId,
-          modelSelection: input.modelSelection,
-        });
-      }
-
-      if (input.runtimeMode !== serverThread.runtimeMode) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.runtime-mode.set",
-          commandId: newCommandId(),
-          threadId: input.threadId,
-          runtimeMode: input.runtimeMode,
-          createdAt: input.createdAt,
-        });
-      }
+      await persistModelSelectionBeforeRuntimeMode({
+        currentModelSelection: serverThread.modelSelection,
+        ...(input.modelSelection !== undefined ? { nextModelSelection: input.modelSelection } : {}),
+        currentRuntimeMode: serverThread.runtimeMode,
+        nextRuntimeMode: input.runtimeMode,
+        persistModelSelection: (modelSelection) =>
+          api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            modelSelection,
+          }),
+        persistRuntimeMode: (runtimeMode) =>
+          api.orchestration.dispatchCommand({
+            type: "thread.runtime-mode.set",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            runtimeMode,
+            createdAt: input.createdAt,
+          }),
+      });
 
       if (input.interactionMode !== serverThread.interactionMode) {
         await api.orchestration.dispatchCommand({
@@ -5709,7 +5809,7 @@ export default function ChatView({
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
 
   const onProviderModelSelect = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
+    async (provider: ProviderKind, model: ModelSlug) => {
       if (!activeThread) return;
       if (lockedProvider !== null && provider !== lockedProvider) {
         scheduleComposerFocus();
@@ -5720,27 +5820,57 @@ export default function ChatView({
         availableOptions: modelOptionsByProvider[provider],
         fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
       });
-      const nextModelSelection: ModelSelection = {
+      const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model: resolvedModel,
-      };
-      setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
-      if (provider === "cursor") {
-        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-          persistSticky: true,
-          model: resolvedModel,
-        });
+        runtimeModels: runtimeModelsByProvider[provider],
+      });
+      const nextModelSelection = buildModelSelection(
+        provider,
+        resolvedModel,
+        undefined,
+        provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
+      );
+      const providerStatus = findProviderStatus(providerStatuses, provider);
+      const nextRuntimeMode =
+        runtimeMode === "auto" &&
+        !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
+          ? "approval-required"
+          : normalizeRuntimeModeForProvider(runtimeMode, provider);
+      // Commit the canonical downgrade before storing an incompatible model.
+      // On failure the Auto draft remains visible so compatibility checks can retry.
+      const didCommitSelection = await commitAfterRuntimeModePersistence({
+        currentRuntimeMode: runtimeMode,
+        nextRuntimeMode,
+        persistRuntimeMode: persistRuntimeModeChange,
+        commit: () => {
+          setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
+          if (provider === "cursor") {
+            setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+              persistSticky: true,
+              model: resolvedModel,
+            });
+          }
+        },
+      });
+      if (!didCommitSelection) {
+        scheduleComposerFocus();
+        return;
       }
       scheduleComposerFocus();
     },
     [
       activeThread,
+      customModelsByProvider,
       lockedProvider,
+      modelOptionsByProvider,
+      persistRuntimeModeChange,
+      providerStatuses,
+      runtimeMode,
+      runtimeModelsByProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
-      customModelsByProvider,
-      modelOptionsByProvider,
     ],
   );
 
@@ -7582,6 +7712,9 @@ export default function ChatView({
           targetProjectDefaultModelSelectionForSend?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
+        selectedModelSelectionForSend.provider === "claudeAgent"
+          ? selectedModelSelectionForSend.supportsAutoMode
+          : undefined,
       );
 
       if (isLocalDraftThread) {
@@ -7859,6 +7992,7 @@ export default function ChatView({
       requestId: ApprovalRequestId,
       decision: ProviderApprovalDecision,
       lifecycleGeneration?: string,
+      requestKind?: ProviderRequestKind,
     ) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
@@ -7867,10 +8001,14 @@ export default function ChatView({
       setRespondingRequestKeys((existing) =>
         existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
-      // Durably persist "always allow" client-side so the next turn (after an
-      // idle-stop or runtime restart) keeps full-access instead of asking again.
-      // The server's session override only covers the current live turn.
-      const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(runtimeMode, decision);
+      // Persist supervised "always allow" client-side so the next turn (after an
+      // idle-stop or runtime restart) uses full access. Auto remains the durable
+      // thread policy; its server-side override applies only to the live session.
+      const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(
+        runtimeMode,
+        decision,
+        requestKind,
+      );
       if (durableRuntimeMode) {
         setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
       }
@@ -10084,6 +10222,9 @@ export default function ChatView({
   };
 
   const runtimeUsageControlsProps = {
+    provider: selectedProvider,
+    runtimeModel: selectedRuntimeModel,
+    providerStatus: activeProviderStatus,
     runtimeMode,
     onRuntimeModeChange: handleRuntimeModeChange,
     contextWindow: runtimeUsageContextWindow,

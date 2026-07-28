@@ -122,6 +122,52 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({ ...BASE_STATUS, authStatus: "unauthenticated" });
   });
+
+  it("does not reuse Auto capability from a different Claude binary", () => {
+    const status: ServerProviderStatus = {
+      provider: "claudeAgent",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      supportsAutoRuntimeMode: true,
+      autoRuntimeModeBinaryPath: "claude",
+      checkedAt: BASE_STATUS.checkedAt,
+    };
+
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "claudeAgent",
+        status,
+        customBinaryPath: "/custom/bin/claude",
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      checkedAt: BASE_STATUS.checkedAt,
+    });
+  });
+
+  it("preserves Auto capability probed from the selected Codex binary", () => {
+    const status: ServerProviderStatus = {
+      provider: "codex",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      supportsAutoRuntimeMode: true,
+      autoRuntimeModeBinaryPath: "/custom/bin/codex",
+      checkedAt: BASE_STATUS.checkedAt,
+    };
+
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "codex",
+        status,
+        customBinaryPath: "/custom/bin/codex",
+      }),
+    ).toEqual(status);
+  });
 });
 
 describe("isProviderUsable", () => {

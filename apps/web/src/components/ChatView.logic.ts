@@ -5,6 +5,7 @@ import {
   type ModelSlug,
   type ProviderApprovalDecision,
   type ProviderKind,
+  type ProviderRequestKind,
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
@@ -96,23 +97,138 @@ export function hasFileUndoSettled(input: {
   });
 }
 
-const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
-
 /**
  * "Always allow" (acceptForSession) only auto-approves the live provider turn.
  * Because the client is the source of truth for runtime mode (it sends it with
- * every turn), the choice must also flip the thread to full-access so it survives
- * idle-stop and runtime restarts instead of reverting to approval-required on the
- * next turn. Returns the runtime mode to persist, or null when nothing changes.
+ * every turn), a supervised thread must also flip to full-access so the choice
+ * survives idle-stop and runtime restarts. Auto is different: its AI reviewer
+ * remains the durable policy, while acceptForSession applies only to the current
+ * live provider session. Returns the runtime mode to persist, or null when
+ * nothing changes.
  */
 export function resolveRuntimeModeAfterApprovalDecision(
   currentRuntimeMode: RuntimeMode,
   decision: ProviderApprovalDecision,
+  requestKind?: ProviderRequestKind,
 ): RuntimeMode | null {
-  if (decision === "acceptForSession" && currentRuntimeMode !== ALWAYS_ALLOW_RUNTIME_MODE) {
-    return ALWAYS_ALLOW_RUNTIME_MODE;
+  // Permission-profile grants are narrower than a runtime-mode override.
+  // Their acceptForSession decision is persisted by the provider for only
+  // that permission set and must not silently broaden the whole thread.
+  if (requestKind === "permissions") {
+    return null;
+  }
+  if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
+    return "full-access";
   }
   return null;
+}
+
+export async function commitAfterRuntimeModePersistence(input: {
+  currentRuntimeMode: RuntimeMode;
+  nextRuntimeMode: RuntimeMode;
+  persistRuntimeMode: (mode: RuntimeMode) => Promise<boolean>;
+  commit: () => void;
+}): Promise<boolean> {
+  if (
+    input.nextRuntimeMode !== input.currentRuntimeMode &&
+    !(await input.persistRuntimeMode(input.nextRuntimeMode))
+  ) {
+    return false;
+  }
+  input.commit();
+  return true;
+}
+
+export interface RuntimeModePersistenceQueue {
+  syncAcknowledgedMode: (mode: RuntimeMode) => void;
+  persist: (
+    mode: RuntimeMode,
+    operation: (currentMode: RuntimeMode, nextMode: RuntimeMode) => Promise<boolean>,
+  ) => Promise<boolean>;
+}
+
+/**
+ * Serializes access-mode writes for one thread. Equality is checked only when a
+ * queued choice starts, after earlier choices have settled, so Auto → Full
+ * access → Auto cannot drop the final Auto choice against a stale render.
+ */
+export function createRuntimeModePersistenceQueue(
+  initialMode: RuntimeMode,
+): RuntimeModePersistenceQueue {
+  let acknowledgedMode = initialMode;
+  let pendingCount = 0;
+  let tail: Promise<void> = Promise.resolve();
+
+  return {
+    syncAcknowledgedMode(mode) {
+      if (pendingCount === 0) {
+        acknowledgedMode = mode;
+      }
+    },
+    persist(mode, operation) {
+      pendingCount += 1;
+      const result = tail.then(async () => {
+        if (mode === acknowledgedMode) {
+          return true;
+        }
+        const persisted = await operation(acknowledgedMode, mode);
+        if (persisted) {
+          acknowledgedMode = mode;
+        }
+        return persisted;
+      });
+      tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result.finally(() => {
+        pendingCount -= 1;
+      });
+    },
+  };
+}
+
+export function modelSelectionsEqual(left: ModelSelection, right: ModelSelection): boolean {
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null) &&
+    (left.provider !== "claudeAgent" ||
+      right.provider !== "claudeAgent" ||
+      left.supportsAutoMode === right.supportsAutoMode)
+  );
+}
+
+/**
+ * Runtime-mode validation uses the canonical thread model. Persist a changed
+ * model first when enabling Auto, but downgrade from Auto first so an
+ * incompatible replacement model is not rejected by the old policy.
+ */
+export async function persistModelSelectionBeforeRuntimeMode(input: {
+  currentModelSelection: ModelSelection;
+  nextModelSelection?: ModelSelection;
+  currentRuntimeMode: RuntimeMode;
+  nextRuntimeMode: RuntimeMode;
+  persistModelSelection: (selection: ModelSelection) => Promise<unknown>;
+  persistRuntimeMode: (mode: RuntimeMode) => Promise<unknown>;
+}): Promise<void> {
+  const nextModelSelection = input.nextModelSelection;
+  const modelChanged =
+    nextModelSelection !== undefined &&
+    !modelSelectionsEqual(input.currentModelSelection, nextModelSelection);
+  const runtimeChanged = input.currentRuntimeMode !== input.nextRuntimeMode;
+  const downgradesFromAuto =
+    input.currentRuntimeMode === "auto" && input.nextRuntimeMode !== "auto";
+
+  if (runtimeChanged && downgradesFromAuto) {
+    await input.persistRuntimeMode(input.nextRuntimeMode);
+  }
+  if (modelChanged && nextModelSelection !== undefined) {
+    await input.persistModelSelection(nextModelSelection);
+  }
+  if (runtimeChanged && !downgradesFromAuto) {
+    await input.persistRuntimeMode(input.nextRuntimeMode);
+  }
 }
 
 export function shouldRenderProviderHealthBanner(input: {

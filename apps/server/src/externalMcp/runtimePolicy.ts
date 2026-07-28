@@ -2,9 +2,11 @@ import type { ExternalMcpCapability, RuntimeMode } from "@synara/contracts";
 
 import { GatewayToolError } from "../agentGateway/toolRuntime.ts";
 
+type ExternalMcpRuntimeMode = Exclude<RuntimeMode, "auto">;
+
 export interface ExternalMcpRuntimePolicy {
   readonly environment: "local" | "worktree";
-  readonly runtimeMode: RuntimeMode;
+  readonly runtimeMode: ExternalMcpRuntimeMode;
 }
 
 export function resolveExternalMcpRuntimePolicy(input: {
@@ -14,6 +16,12 @@ export function resolveExternalMcpRuntimePolicy(input: {
 }): ExternalMcpRuntimePolicy {
   const environment = input.requestedEnvironment ?? "worktree";
   const runtimeMode = input.requestedRuntimeMode ?? "approval-required";
+  if (runtimeMode === "auto") {
+    throw new GatewayToolError(
+      "capability_denied",
+      "Auto execution is available only to Codex and Claude sessions.",
+    );
+  }
   if (environment === "local" && !input.capabilities.has("runtime:local")) {
     throw new GatewayToolError(
       "capability_denied",

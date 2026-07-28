@@ -6,7 +6,7 @@
  *
  * @module ClaudeAdapterLive
  */
-import { spawn as spawnChildProcess } from "node:child_process";
+import { execFile, spawn as spawnChildProcess } from "node:child_process";
 import type {
   AgentInfo,
   CanUseTool,
@@ -139,6 +139,11 @@ import {
   type ClaudeWorkflowRuntimeState,
 } from "../claudeWorkflowRuntime.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
+import {
+  isClaudeAutoModeCliVersionSupported,
+  MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION,
+} from "../claudeCliVersion.ts";
+import { parseGenericCliVersion } from "../providerMaintenance.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -277,6 +282,7 @@ interface ClaudeSessionContext {
   readonly lifecycleGeneration?: string;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
   readonly query: ClaudeQueryRuntime;
+  readonly messageStream?: AsyncIterable<SDKMessage>;
   readonly processOwner: ClaudeProcessOwner;
   stopDeferred?: Deferred.Deferred<void, ProviderAdapterProcessError>;
   streamFiber: Fiber.Fiber<void, Error> | undefined;
@@ -299,6 +305,10 @@ interface ClaudeSessionContext {
   currentApiModelId: string | undefined;
   resumeSessionId: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
+  // Supervised-mode "Always allow this session": later canUseTool prompts
+  // auto-allow for this live session only. Auto must keep routing every SDK
+  // "ask" outcome through its reviewer/user boundary.
+  approvalsAlwaysAllowedForSession: boolean;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{
     id: TurnId;
@@ -395,6 +405,55 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly close: () => void;
 }
 
+function prestartClaudeMessageStream(queryRuntime: ClaudeQueryRuntime): AsyncIterable<SDKMessage> {
+  // SDK discovery waits for a handshake that only starts on the first iterator read.
+  // Keep that read for the real stream consumer, while making cancellation win the
+  // race so session teardown never waits on an unread first message.
+  const iterator = queryRuntime[Symbol.asyncIterator]();
+  const firstResult = iterator.next();
+  void firstResult.catch(() => undefined);
+  const doneResult: IteratorResult<SDKMessage> = { done: true, value: undefined };
+  let resolveClosed!: (result: IteratorResult<SDKMessage>) => void;
+  const closedResult = new Promise<IteratorResult<SDKMessage>>((resolve) => {
+    resolveClosed = resolve;
+  });
+  let firstResultPending = true;
+  let closed = false;
+
+  const raceWithClose = (
+    result: Promise<IteratorResult<SDKMessage>>,
+  ): Promise<IteratorResult<SDKMessage>> => {
+    void result.catch(() => undefined);
+    return Promise.race([result, closedResult]);
+  };
+
+  const messageIterator: AsyncIterableIterator<SDKMessage> = {
+    next: () => {
+      if (closed) {
+        return Promise.resolve(doneResult);
+      }
+      const result = firstResultPending ? firstResult : iterator.next();
+      firstResultPending = false;
+      return raceWithClose(result);
+    },
+    return: async () => {
+      if (!closed) {
+        closed = true;
+        resolveClosed(doneResult);
+        const returnResult = iterator.return?.();
+        if (returnResult) {
+          void returnResult.catch(() => undefined);
+        }
+      }
+      return doneResult;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  return messageIterator;
+}
+
 export type ClaudeOwnedProcess = ClaudeSpawnedProcess & ProcessExitHandle;
 
 interface ClaudeProcessOwner {
@@ -417,6 +476,40 @@ function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedPr
   }) as unknown as ClaudeOwnedProcess;
 }
 
+async function readInstalledClaudeCliVersion(input: {
+  readonly binaryPath: string;
+  readonly cwd?: string;
+  readonly env: NodeJS.ProcessEnv;
+}): Promise<string | null> {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
+    cwd: input.cwd,
+    env: input.env,
+  });
+  return new Promise((resolve, reject) => {
+    execFile(
+      prepared.command,
+      prepared.args,
+      {
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        env: input.env,
+        shell: prepared.shell,
+        ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+        windowsHide: true,
+        timeout: 10_000,
+        maxBuffer: 64 * 1024,
+        encoding: "utf8",
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(parseGenericCliVersion(`${stdout}\n${stderr}`));
+      },
+    );
+  });
+}
+
 export interface ClaudeAdapterLiveOptions {
   // Async because the default implementation lazily imports the Claude Agent
   // SDK; test doubles may still return a runtime synchronously.
@@ -430,6 +523,11 @@ export interface ClaudeAdapterLiveOptions {
   readonly workflowRuntimePollIntervalMs?: number;
   readonly spawnClaudeCodeProcess?: (options: ClaudeSpawnOptions) => ClaudeOwnedProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+  readonly readClaudeCliVersion?: (input: {
+    readonly binaryPath: string;
+    readonly cwd?: string;
+    readonly env: NodeJS.ProcessEnv;
+  }) => Promise<string | null>;
 }
 
 function mapSupportedCommands(commands: SlashCommand[]): ProviderListCommandsResult {
@@ -673,6 +771,17 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
     default:
       return undefined;
   }
+}
+
+function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
+  return {
+    slug: model.value,
+    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
+    name: model.displayName,
+    ...(typeof model.supportsAutoMode === "boolean"
+      ? { supportsAutoMode: model.supportsAutoMode }
+      : {}),
+  };
 }
 
 function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undefined {
@@ -1543,6 +1652,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     };
     const spawnClaudeProcess = options?.spawnClaudeCodeProcess ?? spawnOwnedClaudeCodeProcess;
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
+    const readClaudeCliVersion = options?.readClaudeCliVersion ?? readInstalledClaudeCliVersion;
 
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
     const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
@@ -1550,6 +1660,65 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sessionLifecycleLocks = new Map<ThreadId, Semaphore.Semaphore>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
+    const verifyClaudeAutoModelSupport = (input: {
+      readonly queryRuntime: ClaudeQueryRuntime;
+      readonly selectedModel: string | undefined;
+      readonly apiModelId: string | undefined;
+      readonly operation: "startSession" | "sendTurn";
+    }) =>
+      Effect.gen(function* () {
+        const requestedModel = input.selectedModel ?? input.apiModelId ?? "selected model";
+        const discoveredModels = yield* Effect.tryPromise({
+          try: () => input.queryRuntime.supportedModels(),
+          catch: (cause) =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: input.operation,
+              issue: toMessage(
+                cause,
+                `Could not verify that Claude model "${requestedModel}" supports Auto mode.`,
+              ),
+            }),
+        }).pipe(
+          // ProviderService gives session startup 60 seconds. Let cold startup
+          // discovery use nearly that budget while retaining cleanup headroom;
+          // live model switches keep their short bound.
+          Effect.timeout(Duration.seconds(input.operation === "startSession" ? 55 : 5)),
+          Effect.mapError((cause) =>
+            cause instanceof ProviderAdapterValidationError
+              ? cause
+              : new ProviderAdapterValidationError({
+                  provider: PROVIDER,
+                  operation: input.operation,
+                  issue: `Could not verify that Claude model "${requestedModel}" supports Auto mode before the model discovery timeout.`,
+                }),
+          ),
+        );
+        cachedModels = {
+          models: discoveredModels.map(mapClaudeModelInfo),
+          source: "sdk",
+          cached: false,
+        };
+        const requestedModels = new Set(
+          [input.selectedModel, input.apiModelId].filter(
+            (model): model is string => model !== undefined,
+          ),
+        );
+        const selectedModel = discoveredModels.find(
+          (model) =>
+            requestedModels.has(model.value) ||
+            (model.resolvedModel !== undefined && requestedModels.has(model.resolvedModel)),
+        );
+        if (selectedModel?.supportsAutoMode !== true) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: input.operation,
+            issue: selectedModel
+              ? `Claude model "${selectedModel.displayName}" does not support Auto mode.`
+              : `Could not verify that Claude model "${requestedModel}" supports Auto mode.`,
+          });
+        }
+      });
     const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
@@ -2499,6 +2668,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           currentApiModelId: undefined,
           resumeSessionId: undefined,
           pendingApprovals: new Map(),
+          approvalsAlwaysAllowedForSession: false,
           pendingUserInputs: new Map(),
           turns: [],
           inFlightTools: new Map(),
@@ -3533,6 +3703,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
+          case "permission_denied": {
+            const reason =
+              message.decision_reason?.trim() ||
+              message.message?.trim() ||
+              "Claude's automatic permission reviewer denied this action.";
+            yield* emitRuntimeWarning(
+              context,
+              `${message.tool_name} was denied: ${reason}`,
+              message,
+            );
+            return;
+          }
           case "status":
             yield* offerRuntimeEvent(context, {
               ...base,
@@ -3960,7 +4142,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       });
 
     const runSdkStream = (context: ClaudeSessionContext): Effect.Effect<void, Error> =>
-      Stream.fromAsyncIterable(context.query, (cause) =>
+      Stream.fromAsyncIterable(context.messageStream ?? context.query, (cause) =>
         toError(cause, "Claude runtime stream failed."),
       ).pipe(
         Stream.takeWhile(() => !context.stopped),
@@ -4426,13 +4608,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               }
 
               const runtimeMode = input.runtimeMode ?? "full-access";
-              if (runtimeMode === "full-access") {
+              if (runtimeMode === "full-access" || context.approvalsAlwaysAllowedForSession) {
                 return {
                   behavior: "allow",
                   updatedInput: toolInput,
                 } satisfies PermissionResult;
               }
 
+              // In native Auto mode the SDK calls canUseTool only for the
+              // classifier's interactive "ask" outcome. Auto-allowed calls
+              // bypass this hook, while auto-denied calls arrive as
+              // permission_denied stream messages. Keep this prompt so risky
+              // calls still reach the user instead of becoming unrestricted.
               const requestId = ApprovalRequestId.makeUnsafe(yield* Random.nextUUIDv4);
               const requestType = classifyRequestType(toolName);
               const detail = summarizeToolRequest(toolName, toolInput);
@@ -4441,7 +4628,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 requestType,
                 detail,
                 decision: decisionDeferred,
-                ...(callbackOptions.suggestions
+                ...(callbackOptions.suggestions && callbackOptions.suggestions.length > 0
                   ? { suggestions: callbackOptions.suggestions }
                   : {}),
               };
@@ -4463,6 +4650,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   args: {
                     toolName,
                     input: toolInput,
+                    sessionApprovalAvailable:
+                      callbackOptions.suggestions !== undefined &&
+                      callbackOptions.suggestions.length > 0,
                     ...(callbackOptions.toolUseID ? { toolUseId: callbackOptions.toolUseID } : {}),
                   },
                 },
@@ -4530,6 +4720,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               });
 
               if (decision === "accept" || decision === "acceptForSession") {
+                if (decision === "acceptForSession" && runtimeMode !== "auto") {
+                  // The SDK's permission suggestions only cover some requests;
+                  // supervised mode preserves its live "always allow" fallback.
+                  // Auto stays reviewer-gated and applies only SDK-provided
+                  // permission suggestions below.
+                  context.approvalsAlwaysAllowedForSession = true;
+                }
                 return {
                   behavior: "allow",
                   updatedInput: toolInput,
@@ -4575,8 +4772,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
         const permissionMode =
-          toPermissionMode(providerOptions?.permissionMode) ??
-          (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined);
+          input.runtimeMode === "auto"
+            ? "auto"
+            : (toPermissionMode(providerOptions?.permissionMode) ??
+              (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
         const settings = {
           // Native 1M models otherwise compact near their full model limit. Keep
           // Synara's safer 200k budget explicit unless the thread opts into 1M.
@@ -4595,6 +4794,33 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         };
         const claudeSubagents = buildClaudeSdkSubagents();
         const claudeSdkEnv = yield* resolveClaudeSdkEnv;
+        if (input.runtimeMode === "auto") {
+          const binaryPath = providerOptions?.binaryPath ?? "claude";
+          const installedVersion = yield* Effect.tryPromise({
+            try: () =>
+              readClaudeCliVersion({
+                binaryPath,
+                ...(input.cwd ? { cwd: input.cwd } : {}),
+                env: claudeSdkEnv,
+              }),
+            catch: (cause) =>
+              new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "startSession",
+                issue: `Could not verify Auto mode support for Claude CLI at "${binaryPath}": ${toMessage(cause, "version probe failed")}`,
+              }),
+          });
+          if (!isClaudeAutoModeCliVersionSupported(installedVersion)) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue:
+                installedVersion === null
+                  ? `Could not determine whether Claude CLI at "${binaryPath}" supports Auto mode.`
+                  : `Claude CLI ${installedVersion} at "${binaryPath}" does not support Auto mode; upgrade to ${MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION} or newer.`,
+            });
+          }
+        }
         const failedStartupProcessOwner = failedStartupProcessOwners.get(threadId);
         if (failedStartupProcessOwner) {
           // A prior createQuery failure may have happened after spawning. Do
@@ -4699,18 +4925,27 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ]).pipe(Effect.asVoid),
           ),
         );
+        const messageStream =
+          input.runtimeMode === "auto" ? prestartClaudeMessageStream(queryRuntime) : undefined;
 
         let installationContext: ClaudeSessionContext | undefined;
         let installationComplete = false;
 
         return yield* Effect.gen(function* () {
-          // Populate model cache in background from first session
-          if (!cachedModels) {
+          if (input.runtimeMode === "auto") {
+            yield* verifyClaudeAutoModelSupport({
+              queryRuntime,
+              selectedModel: effectiveClaudeModel,
+              apiModelId,
+              operation: "startSession",
+            });
+          } else if (!cachedModels) {
+            // Populate model cache in the background from the first non-Auto session.
             queryRuntime
               .supportedModels()
               .then((models) => {
                 cachedModels = {
-                  models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+                  models: models.map(mapClaudeModelInfo),
                   source: "sdk",
                   cached: false,
                 };
@@ -4770,6 +5005,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : {}),
             promptQueue,
             query: queryRuntime,
+            ...(messageStream ? { messageStream } : {}),
             processOwner,
             streamFiber: undefined,
             startedAt,
@@ -4782,6 +5018,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             currentApiModelId: apiModelId,
             resumeSessionId: sessionId,
             pendingApprovals,
+            approvalsAlwaysAllowedForSession: false,
             pendingUserInputs,
             turns: [],
             inFlightTools,
@@ -4952,6 +5189,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (modelSelection?.model) {
           const apiModelId = resolveApiModelId(modelSelection);
           if (apiModelId !== context.currentApiModelId) {
+            if (context.session.runtimeMode === "auto") {
+              yield* verifyClaudeAutoModelSupport({
+                queryRuntime: context.query,
+                selectedModel: modelSelection.model,
+                apiModelId,
+                operation: "sendTurn",
+              });
+            }
             yield* Effect.tryPromise({
               try: () => context.query.setModel(apiModelId),
               catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
@@ -5525,7 +5770,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               .supportedModels()
               .then((models) => {
                 cachedModels = {
-                  models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+                  models: models.map(mapClaudeModelInfo),
                   source: "sdk",
                   cached: false,
                 };

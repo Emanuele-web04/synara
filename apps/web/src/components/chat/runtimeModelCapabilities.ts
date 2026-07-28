@@ -58,7 +58,9 @@ export function resolveRuntimeModelDescriptor(input: {
 
   return runtimeModels.find((candidate) => {
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
-    if (normalizedCandidate === normalizedModel) {
+    const normalizedResolvedModel =
+      normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel;
+    if (normalizedCandidate === normalizedModel || normalizedResolvedModel === normalizedModel) {
       return true;
     }
     return (

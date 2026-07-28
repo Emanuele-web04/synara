@@ -430,12 +430,35 @@ export function runtimeTurnState(
 
 function requestKindFromCanonicalRequestType(
   requestType: string | undefined,
-): "command" | "file-read" | "file-change" | undefined {
+): "command" | "file-read" | "file-change" | "permissions" | undefined {
   if (requestType === "command_execution_approval" || requestType === "exec_command_approval")
     return "command";
   if (requestType === "file_read_approval") return "file-read";
+  if (requestType === "permissions_approval") return "permissions";
   return requestType === "file_change_approval" || requestType === "apply_patch_approval"
     ? "file-change"
+    : undefined;
+}
+
+function requestedPermissionProfile(
+  event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
+): Record<string, unknown> | undefined {
+  if (event.payload.requestType !== "permissions_approval") {
+    return undefined;
+  }
+  const args = asObject(event.payload.args);
+  const permissions = asObject(args?.permissions);
+  return permissions && Object.keys(permissions).length > 0
+    ? (boundActivityData(permissions) as Record<string, unknown>)
+    : undefined;
+}
+
+function sessionApprovalAvailable(
+  event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
+): boolean | undefined {
+  const args = asObject(event.payload.args);
+  return typeof args?.sessionApprovalAvailable === "boolean"
+    ? args.sessionApprovalAvailable
     : undefined;
 }
 
@@ -507,6 +530,10 @@ export function projectProviderRuntimeActivities(
         return [];
       }
       const requestKind = requestKindFromCanonicalRequestType(event.payload.requestType);
+      const permissionProfile =
+        event.type === "request.opened" ? requestedPermissionProfile(event) : undefined;
+      const canApproveForSession =
+        event.type === "request.opened" ? sessionApprovalAvailable(event) : undefined;
       const requestId = nonEmptyTrimmed(event.requestId);
       return [
         {
@@ -523,7 +550,9 @@ export function projectProviderRuntimeActivities(
                   ? "File-read approval requested"
                   : requestKind === "file-change"
                     ? "File-change approval requested"
-                    : "Approval requested",
+                    : requestKind === "permissions"
+                      ? "Permission approval requested"
+                      : "Approval requested",
           payload: toActivityPayload({
             // Omitted, never `undefined`: `Schema.Json` rejects a member that is
             // explicitly present and undefined.
@@ -535,6 +564,10 @@ export function projectProviderRuntimeActivities(
             requestType: event.payload.requestType,
             ...(event.type === "request.opened" && event.payload.detail
               ? { detail: truncateDetail(event.payload.detail) }
+              : {}),
+            ...(permissionProfile ? { permissionProfile } : {}),
+            ...(canApproveForSession !== undefined
+              ? { sessionApprovalAvailable: canApproveForSession }
               : {}),
             ...(event.type === "request.resolved" && event.payload.decision
               ? { decision: event.payload.decision }

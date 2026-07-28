@@ -13,6 +13,7 @@ export function createBrowserTestServerConfig(checkedAt: string): ServerConfig {
         status: "ready",
         available: true,
         authStatus: "authenticated",
+        supportsAutoRuntimeMode: true,
         checkedAt,
       },
     ],

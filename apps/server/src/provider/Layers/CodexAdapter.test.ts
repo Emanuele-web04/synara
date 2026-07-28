@@ -1030,6 +1030,38 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps permission-profile approval requests to the canonical permission kind", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-permissions-request"),
+        kind: "request",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "item/permissions/requestApproval",
+        requestId: ApprovalRequestId.makeUnsafe("req-permissions-1"),
+        requestKind: "permissions",
+        payload: {
+          reason: "Needs network access",
+          permissions: { network: { enabled: true } },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "request.opened") return;
+      assert.equal(firstEvent.value.payload.requestType, "permissions_approval");
+      assert.equal(firstEvent.value.payload.detail, "Needs network access");
+      assert.deepEqual(firstEvent.value.payload.args, {
+        reason: "Needs network access",
+        permissions: { network: { enabled: true } },
+      });
+    }),
+  );
+
   it.effect("preserves file-read request type when mapping serverRequest/resolved", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

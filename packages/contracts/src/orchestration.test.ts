@@ -29,15 +29,23 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  RuntimeMode,
 } from "./orchestration";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
+const decodeRuntimeMode = Schema.decodeUnknownEffect(RuntimeMode);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
+
+it.effect("decodes the AI-reviewed auto runtime mode", () =>
+  Effect.gen(function* () {
+    assert.strictEqual(yield* decodeRuntimeMode("auto"), "auto");
+  }),
+);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
@@ -566,10 +574,17 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
+        supportsAutoMode: false,
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
+    assert.strictEqual(
+      parsed.modelSelection?.provider === "claudeAgent"
+        ? parsed.modelSelection.supportsAutoMode
+        : undefined,
+      false,
+    );
   }),
 );
 

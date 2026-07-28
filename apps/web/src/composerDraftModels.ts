@@ -129,6 +129,7 @@ export function makeModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderModelOptions[ProviderKind],
+  supportsAutoMode?: boolean,
 ): ModelSelection {
   switch (provider) {
     case "antigravity":
@@ -158,6 +159,7 @@ export function makeModelSelection(
               options: options as Extract<ModelSelection, { provider: "claudeAgent" }>["options"],
             }
           : {}),
+        ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
       };
     case "cursor":
       return {
@@ -490,7 +492,14 @@ export function normalizeModelSelection(
           reasoningEffort: modelOptions?.antigravity?.reasoningEffort ?? antigravityLegacyEffort,
         }
       : options;
-  return makeModelSelection(provider, model, normalizedOptions);
+  return makeModelSelection(
+    provider,
+    model,
+    normalizedOptions,
+    provider === "claudeAgent" && typeof candidate?.supportsAutoMode === "boolean"
+      ? candidate.supportsAutoMode
+      : undefined,
+  );
 }
 
 export function reconcileProviderScopedModelSelection(
@@ -501,7 +510,16 @@ export function reconcileProviderScopedModelSelection(
     return requested;
   }
   if (current.model === requested.model) {
-    return makeModelSelection(requested.provider, requested.model, current.options);
+    const currentSupportsAutoMode =
+      current.provider === "claudeAgent" ? current.supportsAutoMode : undefined;
+    return makeModelSelection(
+      requested.provider,
+      requested.model,
+      current.options,
+      requested.provider === "claudeAgent"
+        ? (requested.supportsAutoMode ?? currentSupportsAutoMode)
+        : undefined,
+    );
   }
   if (
     current.provider !== "codex" &&
@@ -533,7 +551,12 @@ export function reconcileProviderScopedModelSelection(
       preservedOptions = Object.keys(remainingOptions).length > 0 ? remainingOptions : undefined;
     }
   }
-  return makeModelSelection(requested.provider, requested.model, preservedOptions);
+  return makeModelSelection(
+    requested.provider,
+    requested.model,
+    preservedOptions,
+    requested.provider === "claudeAgent" ? requested.supportsAutoMode : undefined,
+  );
 }
 
 export function stripNonStickyModelOptions(selection: ModelSelection): ModelSelection {
@@ -552,6 +575,7 @@ export function stripNonStickyModelOptions(selection: ModelSelection): ModelSele
     selection.provider,
     selection.model,
     Object.keys(rest).length > 0 ? rest : undefined,
+    selection.supportsAutoMode,
   );
 }
 
@@ -576,7 +600,12 @@ export function legacySyncModelSelectionOptions(
     return null;
   }
   const options = modelOptions?.[modelSelection.provider];
-  return makeModelSelection(modelSelection.provider, modelSelection.model, options);
+  return makeModelSelection(
+    modelSelection.provider,
+    modelSelection.model,
+    options,
+    modelSelection.provider === "claudeAgent" ? modelSelection.supportsAutoMode : undefined,
+  );
 }
 
 export function legacyMergeModelSelectionIntoProviderModelOptions(

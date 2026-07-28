@@ -40,6 +40,7 @@ import {
   modelSelectionForProjectChange,
   providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
+  reconcileAutomationFormAutoModeSupport,
   runResultSummary,
   runResultTitle,
   scheduleKindFromSchedule,
@@ -55,6 +56,50 @@ const projectId = (value: string) => ProjectId.makeUnsafe(value);
 const threadId = (value: string) => ThreadId.makeUnsafe(value);
 const commandId = (value: string) => CommandId.makeUnsafe(value);
 const messageId = (value: string) => MessageId.makeUnsafe(value);
+
+describe("reconcileAutomationFormAutoModeSupport", () => {
+  it("persists refreshed Claude capability before an Auto automation is submitted", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      modelSelection: {
+        provider: "claudeAgent" as const,
+        model: "sonnet",
+        supportsAutoMode: false,
+      },
+      runtimeMode: "approval-required" as const,
+    };
+
+    expect(reconcileAutomationFormAutoModeSupport(form, true)).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "sonnet",
+        supportsAutoMode: true,
+      },
+      runtimeMode: "approval-required",
+    });
+  });
+
+  it("downgrades an Auto automation when refreshed capability is unavailable", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      modelSelection: {
+        provider: "claudeAgent" as const,
+        model: "sonnet",
+        supportsAutoMode: true,
+      },
+      runtimeMode: "auto" as const,
+    };
+
+    expect(reconcileAutomationFormAutoModeSupport(form, false)).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "sonnet",
+        supportsAutoMode: false,
+      },
+      runtimeMode: "approval-required",
+    });
+  });
+});
 
 const baseRun: AutomationRun = {
   id: runId("run-1"),

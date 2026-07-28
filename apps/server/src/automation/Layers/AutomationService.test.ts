@@ -527,6 +527,43 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("rejects Claude Auto automations for models that do not support Auto", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const unsupportedModelSelection = {
+        provider: "claudeAgent" as const,
+        model: "claude-haiku-4-5",
+        supportsAutoMode: false,
+      };
+
+      const createError = yield* service
+        .create({
+          ...createInput(),
+          modelSelection: unsupportedModelSelection,
+          runtimeMode: "auto",
+        })
+        .pipe(Effect.flip);
+      assert.match(createError.message, /does not support Auto mode/);
+
+      const definition = yield* service.create({
+        ...createInput(),
+        modelSelection: {
+          ...unsupportedModelSelection,
+          supportsAutoMode: true,
+        },
+        runtimeMode: "auto",
+      });
+      const updateError = yield* service
+        .update({
+          id: definition.id,
+          modelSelection: unsupportedModelSelection,
+        })
+        .pipe(Effect.flip);
+      assert.match(updateError.message, /does not support Auto mode/);
+    }),
+  );
+
   it.effect("accepts and dismisses persisted automation proposals", () =>
     Effect.gen(function* () {
       resetHarness();

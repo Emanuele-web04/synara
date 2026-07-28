@@ -751,7 +751,12 @@ function makeHarnessLayer(
             ],
           },
         ],
-        claudeAgent: [{ slug: "claude-sonnet-5", name: "Claude Sonnet 5" }],
+        claudeAgent: [
+          {
+            slug: "claude-sonnet-5",
+            name: "Claude Sonnet 5",
+          },
+        ],
         cursor: [{ slug: "auto", name: "Auto" }],
         antigravity: [
           {
@@ -1414,6 +1419,24 @@ describe("AgentGateway", () => {
       assert.property(createThreadProperties, "baseRef");
       assert.notProperty(createThreadProperties, "baseBranch");
       assert.notProperty(createThreadProperties, "branchName");
+      assert.deepEqual(
+        (createThreadProperties?.runtimeMode as { enum?: string[] } | undefined)?.enum,
+        ["approval-required", "full-access"],
+      );
+      const createThreadsTool = tools.find((tool) => tool.name === "synara_create_threads");
+      const createThreadsItems = (
+        createThreadsTool?.inputSchema.properties?.threads as
+          | {
+              items?: {
+                properties?: Record<string, unknown>;
+              };
+            }
+          | undefined
+      )?.items;
+      assert.deepEqual(
+        (createThreadsItems?.properties?.runtimeMode as { enum?: string[] } | undefined)?.enum,
+        ["approval-required", "full-access"],
+      );
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");

@@ -6,6 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type {
   Options as ClaudeQueryOptions,
   HookInput,
+  ModelInfo,
   PermissionMode,
   PermissionResult,
   SDKControlGetContextUsageResponse,
@@ -28,14 +29,22 @@ import {
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
+import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
-  makeClaudeAdapterLive,
+  makeClaudeAdapterLive as makeClaudeAdapterLiveBase,
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
 } from "./ClaudeAdapter.ts";
+
+function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
+  return makeClaudeAdapterLiveBase({
+    readClaudeCliVersion: async () => MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION,
+    ...options,
+  });
+}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -54,6 +63,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
   public readonly applyFlagSettingsCalls: Array<Record<string, unknown>> = [];
   public getContextUsageCalls = 0;
+  public iteratorNextCalls = 0;
   private contextUsageResponse: SDKControlGetContextUsageResponse | undefined;
   private contextUsageNeverResolves = false;
   public closeCalls = 0;
@@ -146,8 +156,18 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     return [];
   };
 
-  readonly supportedModels = async (): Promise<[]> => {
-    return [];
+  readonly supportedModels = async (): Promise<Array<ModelInfo>> => {
+    return [
+      {
+        value: "claude-sonnet-5",
+        displayName: "Claude Sonnet 5",
+        description: "Default supported test model",
+        supportsEffort: true,
+        supportsAdaptiveThinking: true,
+        supportsFastMode: false,
+        supportsAutoMode: true,
+      },
+    ];
   };
 
   readonly supportedAgents = async (): Promise<[]> => {
@@ -162,6 +182,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     return {
       next: () => {
+        this.iteratorNextCalls += 1;
         if (this.queue.length > 0) {
           const value = this.queue.shift();
           if (value) {
@@ -428,6 +449,66 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("derives auto permission mode without bypassing permission safeguards", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "auto",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.permissionMode, "auto");
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("rejects Auto on an unsupported selected Claude binary before session startup", () => {
+    const query = new FakeClaudeQuery();
+    let createQueryCalls = 0;
+    const layer = makeClaudeAdapterLiveBase({
+      readClaudeCliVersion: async ({ binaryPath }) => {
+        assert.equal(binaryPath, "/custom/bin/claude");
+        return "2.1.110";
+      },
+      createQuery: () => {
+        createQueryCalls += 1;
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+          providerOptions: {
+            claudeAgent: {
+              binaryPath: "/custom/bin/claude",
+            },
+          },
+        }),
+      );
+
+      assert.ok(Exit.isFailure(result));
+      assert.equal(createQueryCalls, 0);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
     );
   });
 
@@ -2242,6 +2323,50 @@ describe("ClaudeAdapterLive", () => {
         const detail = firstNotice.payload.detail as Record<string, unknown>;
         assert.equal(detail.subtype, "background_tasks_changed");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("surfaces Claude Auto permission denials as a specific warning", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "auto",
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "permission_denied",
+        tool_name: "Bash",
+        tool_use_id: "tool-denied-1",
+        decision_reason_type: "classifier",
+        decision_reason: "The command could modify system settings.",
+        message: "Permission denied",
+        session_id: "sdk-session-denial",
+        uuid: "denial-1",
+      } as unknown as SDKMessage);
+
+      const warning = yield* Fiber.join(warningFiber);
+      assert.equal(warning._tag, "Some");
+      if (warning._tag !== "Some" || warning.value.type !== "runtime.warning") return;
+      assert.equal(
+        warning.value.payload.message,
+        "Bash was denied: The command could modify system settings.",
+      );
+      assert.equal(
+        (warning.value.payload.detail as Record<string, unknown>).tool_use_id,
+        "tool-denied-1",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -6240,7 +6365,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("bridges approval request/response lifecycle through canUseTool", () => {
+  it.effect("keeps Auto reviewer-gated after accepting one request for the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -6248,7 +6373,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
-        runtimeMode: "approval-required",
+        runtimeMode: "auto",
       });
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
@@ -6315,6 +6440,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.deepEqual(requested.value.providerRefs, {
         providerItemId: ProviderItemId.makeUnsafe("tool-use-1"),
       });
+      assert.deepEqual(requested.value.payload.args, {
+        toolName: "Bash",
+        input: { command: "pwd" },
+        sessionApprovalAvailable: true,
+        toolUseId: "tool-use-1",
+      });
       const runtimeRequestId = requested.value.requestId;
       assert.equal(typeof runtimeRequestId, "string");
       if (runtimeRequestId === undefined) {
@@ -6324,7 +6455,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       yield* adapter.respondToRequest(
         session.threadId,
         ApprovalRequestId.makeUnsafe(runtimeRequestId),
-        "accept",
+        "acceptForSession",
       );
 
       const resolved = yield* Stream.runHead(adapter.streamEvents);
@@ -6337,13 +6468,52 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         return;
       }
       assert.equal(resolved.value.requestId, requested.value.requestId);
-      assert.equal(resolved.value.payload.decision, "accept");
+      assert.equal(resolved.value.payload.decision, "acceptForSession");
       assert.deepEqual(resolved.value.providerRefs, {
         providerItemId: ProviderItemId.makeUnsafe("tool-use-1"),
       });
 
       const permissionResult = yield* Effect.promise(() => permissionPromise);
-      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+      const allowedPermissionResult = permissionResult as {
+        readonly behavior?: string;
+        readonly updatedPermissions?: unknown;
+      } | null;
+      assert.equal(allowedPermissionResult?.behavior, "allow");
+      assert.deepEqual(allowedPermissionResult?.updatedPermissions, [
+        {
+          type: "setMode",
+          mode: "default",
+          destination: "session",
+        },
+      ]);
+
+      const secondPermissionPromise = canUseTool(
+        "Bash",
+        { command: "git status" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-2",
+          requestId: "request-tool-use-2",
+        },
+      );
+      const secondRequested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(secondRequested._tag, "Some");
+      if (secondRequested._tag !== "Some" || secondRequested.value.type !== "request.opened") {
+        return;
+      }
+      assert.equal(secondRequested.value.payload.detail, "Bash: git status");
+      const secondRuntimeRequestId = secondRequested.value.requestId;
+      if (secondRuntimeRequestId === undefined) {
+        return;
+      }
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(secondRuntimeRequestId),
+        "decline",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const secondPermissionResult = yield* Effect.promise(() => secondPermissionPromise);
+      assert.equal((secondPermissionResult as PermissionResult).behavior, "deny");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -6463,6 +6633,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         return;
       }
       assert.equal(agentRequested.value.payload.requestType, "dynamic_tool_call");
+      assert.equal(
+        (agentRequested.value.payload.args as Record<string, unknown>).sessionApprovalAvailable,
+        false,
+      );
 
       yield* adapter.respondToRequest(
         session.threadId,
@@ -6762,6 +6936,79 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("rejects unsupported live model switches before changing an Auto session", () => {
+    const query = new FakeClaudeQuery();
+    (
+      query as unknown as {
+        supportedModels: () => Promise<
+          Array<{ value: string; displayName: string; supportsAutoMode: boolean }>
+        >;
+      }
+    ).supportedModels = async () => [
+      {
+        value: "claude-opus-4-6",
+        displayName: "Claude Opus 4.6",
+        supportsAutoMode: true,
+      },
+      {
+        value: "claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        supportsAutoMode: false,
+      },
+      {
+        value: "claude-fable-5",
+        displayName: "Claude Fable 5",
+        supportsAutoMode: true,
+      },
+    ];
+    const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "auto",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+        },
+      });
+
+      const unsupportedSwitch = yield* Effect.exit(
+        adapter.sendTurn({
+          threadId: session.threadId,
+          input: "switch to Haiku",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-haiku-4-5",
+          },
+          attachments: [],
+        }),
+      );
+
+      assert.ok(Exit.isFailure(unsupportedSwitch));
+      assert.deepEqual(query.setModelCalls, []);
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "switch to Fable",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-fable-5",
+        },
+        attachments: [],
+      });
+      assert.deepEqual(query.setModelCalls, ["claude-fable-5"]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
     );
   });
 
@@ -7387,7 +7634,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("closes an uninstalled Claude query when post-spawn setup fails", () => {
     const query = new FakeClaudeQuery();
-    (query as { supportedModels: () => Promise<[]> }).supportedModels = () => {
+    (query as unknown as { supportedModels: () => Promise<[]> }).supportedModels = () => {
       throw new Error("simulated post-spawn setup failure");
     };
     const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
@@ -7409,6 +7656,170 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(query.closeCalls, 1);
       assert.equal(yield* adapter.hasSession(THREAD_ID), false);
       assert.equal((yield* adapter.listSessions()).length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("rejects Auto when the Claude SDK marks the selected model unsupported", () => {
+    const query = new FakeClaudeQuery();
+    (
+      query as unknown as {
+        supportedModels: () => Promise<
+          Array<{ value: string; displayName: string; supportsAutoMode: boolean }>
+        >;
+      }
+    ).supportedModels = async () => {
+      assert.ok(query.iteratorNextCalls > 0, "model discovery must follow iterator startup");
+      return [
+        {
+          value: "claude-haiku-4-5",
+          displayName: "Claude Haiku 4.5",
+          supportsAutoMode: false,
+        },
+      ];
+    };
+    const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-haiku-4-5",
+          },
+        }),
+      );
+
+      assert.ok(Exit.isFailure(result));
+      assert.equal(query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("matches Auto capability through Claude's resolved model id", () => {
+    const query = new FakeClaudeQuery();
+    (
+      query as unknown as {
+        supportedModels: () => Promise<
+          Array<{
+            value: string;
+            resolvedModel: string;
+            displayName: string;
+            supportsAutoMode: boolean;
+          }>
+        >;
+      }
+    ).supportedModels = async () => [
+      {
+        value: "sonnet",
+        resolvedModel: "claude-sonnet-5",
+        displayName: "Claude Sonnet 5",
+        supportsAutoMode: false,
+      },
+    ];
+    const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-5",
+          },
+        }),
+      );
+
+      assert.ok(Exit.isFailure(result));
+      assert.equal(query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("rejects Auto when the selected Claude model omits capability metadata", () => {
+    const query = new FakeClaudeQuery();
+    (
+      query as unknown as {
+        supportedModels: () => Promise<Array<{ value: string; displayName: string }>>;
+      }
+    ).supportedModels = async () => [
+      {
+        value: "claude-sonnet-5",
+        displayName: "Claude Sonnet 5",
+      },
+    ];
+    const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-5",
+          },
+        }),
+      );
+
+      assert.ok(Exit.isFailure(result));
+      assert.equal(query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("rejects Auto when Claude model capability discovery fails", () => {
+    const query = new FakeClaudeQuery();
+    (query as unknown as { supportedModels: () => Promise<never> }).supportedModels = async () => {
+      throw new Error("simulated model discovery failure");
+    };
+    const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+        }),
+      );
+
+      assert.ok(Exit.isFailure(result));
+      assert.equal(query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),

@@ -466,6 +466,8 @@ function toRequestTypeFromMethod(method: string): CanonicalRequestType {
       return "file_read_approval";
     case "item/fileChange/requestApproval":
       return "file_change_approval";
+    case "item/permissions/requestApproval":
+      return "permissions_approval";
     case "applyPatchApproval":
       return "apply_patch_approval";
     case "execCommandApproval":
@@ -489,6 +491,8 @@ function toRequestTypeFromKind(kind: unknown): CanonicalRequestType {
       return "file_read_approval";
     case "file-change":
       return "file_change_approval";
+    case "permissions":
+      return "permissions_approval";
     default:
       return "unknown";
   }
@@ -953,6 +957,28 @@ function mapToRuntimeEvents(
           requestType,
           ...(decision ? { decision } : {}),
           ...(event.payload !== undefined ? { resolution: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
+  if (event.method === "item/autoApprovalReview/completed") {
+    const review = asObject(payload?.review) ?? payload;
+    const status = asString(review?.status);
+    if (status !== "denied" && status !== "aborted") {
+      return [];
+    }
+    const rationale =
+      asString(review?.rationale) ??
+      asString(review?.reason) ??
+      `Automatic approval review ${status} this action.`;
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "runtime.warning",
+        payload: {
+          message: rationale,
+          ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },
     ];

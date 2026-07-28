@@ -35,6 +35,7 @@ async function mountApprovalPanel(input?: { approval?: PendingApproval; isRespon
       _requestId: ApprovalRequestId,
       _decision: ProviderApprovalDecision,
       _lifecycleGeneration?: string,
+      _requestKind?: ProviderRequestKind,
     ) => undefined,
   );
   const screen = await render(
@@ -71,6 +72,7 @@ describe("ComposerPendingApprovalPanel", () => {
         APPROVAL_REQUEST_ID,
         decision,
         LIFECYCLE_GENERATION,
+        "command",
       );
     } finally {
       await mounted.cleanup();
@@ -86,6 +88,21 @@ describe("ComposerPendingApprovalPanel", () => {
     try {
       await expect.element(page.getByText("Approve this command?")).toBeInTheDocument();
       await expect.element(page.getByText("bun run test")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides session approval when the provider cannot persist it", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({ sessionApprovalAvailable: false }),
+    });
+
+    try {
+      await expect.element(page.getByRole("button", { name: /Approve once/u })).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: /Always allow this session/u }))
+        .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

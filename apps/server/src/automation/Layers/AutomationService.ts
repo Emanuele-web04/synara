@@ -32,6 +32,7 @@ import {
   automationRequiresTargetThread,
 } from "@synara/shared/automationMode";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -784,6 +785,16 @@ export const AutomationServiceLive = Layer.effect(
         : Effect.void;
     };
 
+    const validateAutoRuntimeMode = (input: {
+      readonly modelSelection: AutomationDefinition["modelSelection"];
+      readonly runtimeMode: AutomationDefinition["runtimeMode"];
+    }) => {
+      const issue = autoRuntimeModeSelectionIssue(input);
+      return issue === null
+        ? Effect.void
+        : Effect.fail(new AutomationServiceError({ message: issue }));
+    };
+
     // Run-path backstop for the fast-interval policy. validateSchedulePolicy enforces this at
     // create/update; this guards the run path it never covers. Effect.try converts a throwing
     // schedule (invalid cron/timezone in a persisted row) into a typed error so the dispatch
@@ -958,6 +969,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: definition.worktreeMode,
           acknowledgedRisks: definition.acknowledgedRisks,
         });
+        yield* validateAutoRuntimeMode(definition);
         yield* validateFastIntervalPolicy({
           schedule: definition.schedule,
           enabled: definition.enabled,
@@ -2358,6 +2370,10 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: input.worktreeMode ?? "auto",
           acknowledgedRisks: input.acknowledgedRisks ?? [],
         });
+        yield* validateAutoRuntimeMode({
+          modelSelection: input.modelSelection,
+          runtimeMode: input.runtimeMode ?? "approval-required",
+        });
         yield* validateHeartbeatTarget({
           mode: input.mode ?? "standalone",
           projectId: input.projectId,
@@ -2413,6 +2429,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: updated.worktreeMode,
           acknowledgedRisks: updated.acknowledgedRisks,
         });
+        yield* validateAutoRuntimeMode(updated);
         yield* validateHeartbeatTarget(updated);
         const saved = yield* automationRepository
           .saveDefinition(updated)

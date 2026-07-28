@@ -13,7 +13,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { ApprovalRequestId, ThreadId } from "@synara/contracts";
+import { ApprovalRequestId, ThreadId, type RuntimeMode } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
@@ -40,15 +40,23 @@ import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
 import { acquireAgentGatewaySessionLease } from "./agentGateway/sessionLease.ts";
+import { MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION } from "./provider/codexCliVersion.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
   approvalPolicy: "never",
+  approvalsReviewer: "user",
   sandboxPolicy: { type: "dangerFullAccess" },
 } as const;
 const approvalRequiredTurnOverrides = {
   approvalPolicy: "untrusted",
+  approvalsReviewer: "user",
   sandboxPolicy: { type: "readOnly" },
+} as const;
+const autoTurnOverrides = {
+  approvalPolicy: "on-request",
+  approvalsReviewer: "auto_review",
+  sandboxPolicy: { type: "workspaceWrite" },
 } as const;
 
 describe("Codex Synara harness policy", () => {
@@ -101,7 +109,7 @@ describe("Codex Synara harness policy", () => {
   });
 });
 
-function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" = "full-access") {
+function createSendTurnHarness(runtimeMode: RuntimeMode = "full-access") {
   const manager = new CodexAppServerManager();
   const context = {
     session: {
@@ -241,9 +249,7 @@ function createPendingUserInputHarness() {
   return { manager, context, requireSession, writeMessage, emitEvent };
 }
 
-function createPendingApprovalHarness(
-  runtimeMode: "approval-required" | "full-access" = "approval-required",
-) {
+function createPendingApprovalHarness(runtimeMode: RuntimeMode = "approval-required") {
   const manager = new CodexAppServerManager();
   const context = {
     lifecycleGeneration: "generation-request-a",
@@ -280,6 +286,7 @@ function createPendingApprovalHarness(
       | undefined
       | {
           approvalPolicy: "never";
+          approvalsReviewer: "user";
           sandboxPolicy: { type: "dangerFullAccess" };
         },
     collabReceiverTurns: new Map(),
@@ -353,6 +360,7 @@ function createCollabNotificationHarness() {
       | undefined
       | {
           approvalPolicy: "never";
+          approvalsReviewer: "user";
           sandboxPolicy: { type: "dangerFullAccess" };
         },
     collabReceiverTurns: new Map<string, string>(),
@@ -726,6 +734,86 @@ describe("codex CLI version gate", () => {
       reset();
       await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
       expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reuse a general-version verdict for the stricter Auto floor", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-floor-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.100.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.100.0"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+        }),
+      ).rejects.toThrow(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for Auto when the Codex CLI version cannot be parsed", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-unknown-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? "@echo off\r\necho codex-cli development\r\n"
+        : '#!/bin/sh\necho "codex-cli development"\n',
+      { mode: 0o755 },
+    );
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      // Preserve compatibility with custom development builds for ordinary sessions.
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+        }),
+      ).rejects.toThrow(`Auto mode requires v${MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION} or newer`);
     } finally {
       reset();
       vi.unstubAllEnvs();
@@ -1503,6 +1591,40 @@ describe("startSession", () => {
       await manager.stopAll();
     }
   });
+
+  it("requires a Codex CLI version with AI approval-review support for auto mode", async () => {
+    const manager = new CodexAppServerManager();
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+        throw new Error("Codex Auto version gate");
+      });
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-auto-version"),
+          provider: "codex",
+          runtimeMode: "auto",
+        }),
+      ).rejects.toThrow("Codex Auto version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
 });
 
 describe("sendTurn", () => {
@@ -1586,6 +1708,29 @@ describe("sendTurn", () => {
         {
           type: "text",
           text: "Check this before changing files",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("routes Codex approvals through the AI reviewer in auto mode", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("auto");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Make the routine workspace changes",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...autoTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Make the routine workspace changes",
           text_elements: [],
         },
       ],
@@ -2575,6 +2720,85 @@ describe("respondToRequest", () => {
       emitEvent.mock.calls.some(([event]) => (event as { kind?: string }).kind === "request"),
     ).toBe(false);
   });
+
+  it("keeps later permission-profile requests interactive during an always-allowed session", async () => {
+    const { manager, context, writeMessage, emitEvent } = createPendingApprovalHarness();
+    const permissions = {
+      network: { enabled: true },
+      fileSystem: { read: ["/tmp/example"] },
+    };
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    writeMessage.mockClear();
+    emitEvent.mockClear();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "item/permissions/requestApproval",
+      params: {
+        turnId: "turn_2",
+        itemId: "item_permissions",
+        permissions,
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(1);
+    expect(Array.from(context.pendingApprovals.values())[0]).toEqual(
+      expect.objectContaining({
+        method: "item/permissions/requestApproval",
+        requestedPermissions: permissions,
+      }),
+    );
+    expect(writeMessage).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        method: "item/permissions/requestApproval",
+        requestKind: "permissions",
+      }),
+    );
+  });
+
+  it("does not sweep a pending permission-profile request into always allow", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+    const permissions = {
+      network: { enabled: true },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 101,
+      method: "item/permissions/requestApproval",
+      params: {
+        turnId: "turn_1",
+        itemId: "item_permissions",
+        permissions,
+      },
+    });
+    const permissionRequestId = Array.from(context.pendingApprovals.keys()).find(
+      (requestId) => requestId !== "req-approval-1",
+    );
+    if (permissionRequestId === undefined) {
+      throw new Error("Expected the permission-profile request to remain pending.");
+    }
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    expect(context.pendingApprovals.has(permissionRequestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        id: 101,
+      }),
+    );
+  });
 });
 
 describe("respondToUserInput", () => {
@@ -2912,6 +3136,83 @@ describe("collab child conversation routing", () => {
     );
   });
 
+  it("responds to permission-profile approvals with the requested native permissions", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+    const permissions = {
+      network: { enabled: true },
+      fileSystem: { read: ["/tmp/example"] },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 45,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_permissions",
+        itemId: "call_permissions",
+        reason: "Needs package metadata",
+        permissions,
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        method: "item/permissions/requestApproval",
+        requestKind: "permissions",
+        requestedPermissions: permissions,
+      }),
+    );
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      pendingRequest.requestId,
+      "acceptForSession",
+    );
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 45,
+      result: { permissions, scope: "session" },
+    });
+    expect(context.sessionApprovalOverride).toBeUndefined();
+    expect(emitEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "item/requestApproval/decision",
+        requestKind: "permissions",
+      }),
+    );
+  });
+
+  it("returns protocol-valid turn scope and omits null permission categories", async () => {
+    const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 46,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_permissions_nullable",
+        itemId: "call_permissions_nullable",
+        permissions: {
+          network: null,
+          fileSystem: { read: ["/tmp/example"] },
+        },
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 46,
+      result: {
+        permissions: {
+          fileSystem: { read: ["/tmp/example"] },
+        },
+        scope: "turn",
+      },
+    });
+  });
+
   it("preserves an unmapped child user-input route through the answered event", async () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
 
@@ -2976,6 +3277,7 @@ describe("collab child conversation routing", () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
     context.sessionApprovalOverride = {
       approvalPolicy: "never",
+      approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" },
     };
 

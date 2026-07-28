@@ -340,7 +340,11 @@ describe("provider runtime activity projection", () => {
         eventId: "approval-request",
         lifecycleGeneration: "generation-1",
         requestId: ApprovalRequestId.makeUnsafe("request-1"),
-        payload: { requestType: "command_execution_approval", detail: "pwd" },
+        payload: {
+          requestType: "command_execution_approval",
+          detail: "pwd",
+          args: { sessionApprovalAvailable: false },
+        },
       }),
     )[0];
     expect(approval).toMatchObject({
@@ -352,6 +356,37 @@ describe("provider runtime activity projection", () => {
         requestKind: "command",
         requestType: "command_execution_approval",
         detail: "pwd",
+        sessionApprovalAvailable: false,
+      },
+    });
+
+    const permissionApproval = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "permission-approval-request",
+        requestId: ApprovalRequestId.makeUnsafe("permission-request-1"),
+        payload: {
+          requestType: "permissions_approval",
+          detail: "Needs package metadata",
+          args: {
+            permissions: {
+              network: { enabled: true },
+              fileSystem: { read: ["/tmp/example"] },
+            },
+          },
+        },
+      }),
+    )[0];
+    expect(permissionApproval).toMatchObject({
+      kind: "approval.requested",
+      summary: "Permission approval requested",
+      payload: {
+        requestKind: "permissions",
+        detail: "Needs package metadata",
+        permissionProfile: {
+          network: { enabled: true },
+          fileSystem: { read: ["/tmp/example"] },
+        },
       },
     });
 

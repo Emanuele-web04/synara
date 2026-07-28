@@ -21,9 +21,11 @@ import {
   MessageId,
   ThreadId,
   type ProviderKind,
+  type RuntimeMode,
   type ServerProviderStatus,
   type TurnDispatchMode,
 } from "@synara/contracts";
+import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -140,18 +142,18 @@ export const makeAgentGateway = Effect.gen(function* () {
   // that runs with more privileges than the user granted the caller itself —
   // otherwise an approval-required or worktree-isolated agent escalates by proxy.
   const assertCallerMayDriveThread = (
-    caller: { readonly runtimeMode: string; readonly envMode?: string | null | undefined },
+    caller: { readonly runtimeMode: RuntimeMode; readonly envMode?: string | null | undefined },
     target: {
       readonly id: string;
-      readonly runtimeMode: string;
+      readonly runtimeMode: RuntimeMode;
       readonly envMode?: string | null | undefined;
     },
   ) =>
     Effect.gen(function* () {
-      if (target.runtimeMode === "full-access" && caller.runtimeMode !== "full-access") {
+      if (runtimeModeEscalatesPrivilege(caller.runtimeMode, target.runtimeMode)) {
         return yield* Effect.fail(
           new ToolInputError(
-            `Thread "${target.id}" runs in "full-access" mode but your thread is "approval-required"; you cannot drive higher-privileged threads. Ask the user to do this or to elevate your thread.`,
+            `Thread "${target.id}" runs in "${target.runtimeMode}" mode but your thread runs in "${caller.runtimeMode}"; you cannot drive higher-privileged threads. Ask the user to do this or to elevate your thread.`,
           ),
         );
       }
@@ -290,7 +292,10 @@ export const makeAgentGateway = Effect.gen(function* () {
             description:
               "Local Git revision, #PR, or GitHub pull-request URL for a detached worktree. Defaults to the selected checkout's HEAD.",
           },
-          runtimeMode: { type: "string", enum: ["approval-required", "full-access"] },
+          runtimeMode: {
+            type: "string",
+            enum: ["approval-required", "full-access"],
+          },
         },
         required: ["requestId", "prompt"],
         additionalProperties: false,

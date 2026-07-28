@@ -1,10 +1,20 @@
-import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  ThreadId,
+  TurnId,
+  type ModelSlug,
+  type RuntimeMode,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
+  commitAfterRuntimeModePersistence,
+  createRuntimeModePersistenceQueue,
+  persistModelSelectionBeforeRuntimeMode,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
@@ -1891,9 +1901,172 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("full-access", "acceptForSession")).toBeNull();
   });
 
+  it("keeps Auto as the durable policy after a session-scoped approval", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession")).toBeNull();
+  });
+
   it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
+  });
+
+  it("does not widen a permission-profile grant to full access", () => {
+    expect(
+      resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession", "permissions"),
+    ).toBeNull();
+  });
+});
+
+describe("commitAfterRuntimeModePersistence", () => {
+  it("does not commit an incompatible model when the canonical downgrade fails", async () => {
+    const calls: Array<string> = [];
+
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return false;
+      },
+      commit: () => calls.push("commit"),
+    });
+
+    expect(committed).toBe(false);
+    expect(calls).toEqual(["persist"]);
+  });
+
+  it("commits the model only after the canonical downgrade succeeds", async () => {
+    const calls: Array<string> = [];
+
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return true;
+      },
+      commit: () => calls.push("commit"),
+    });
+
+    expect(committed).toBe(true);
+    expect(calls).toEqual(["persist", "commit"]);
+  });
+});
+
+describe("createRuntimeModePersistenceQueue", () => {
+  it("persists the final rapid selection after an opposite update is already in flight", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const calls: Array<[RuntimeMode, RuntimeMode]> = [];
+    const queue = createRuntimeModePersistenceQueue("auto");
+    const persist = async (currentMode: RuntimeMode, nextMode: RuntimeMode) => {
+      calls.push([currentMode, nextMode]);
+      if (calls.length === 1) {
+        await firstBlocked;
+      }
+      return true;
+    };
+
+    const fullAccess = queue.persist("full-access", persist);
+    await Promise.resolve();
+    const auto = queue.persist("auto", persist);
+    expect(calls).toEqual([["auto", "full-access"]]);
+
+    releaseFirst?.();
+    await expect(Promise.all([fullAccess, auto])).resolves.toEqual([true, true]);
+    expect(calls).toEqual([
+      ["auto", "full-access"],
+      ["full-access", "auto"],
+    ]);
+  });
+
+  it("keeps the acknowledged mode when an earlier queued write fails", async () => {
+    const calls: Array<[RuntimeMode, RuntimeMode]> = [];
+    const queue = createRuntimeModePersistenceQueue("auto");
+    const failed = queue.persist("full-access", async (currentMode, nextMode) => {
+      calls.push([currentMode, nextMode]);
+      return false;
+    });
+    const finalAuto = queue.persist("auto", async (currentMode, nextMode) => {
+      calls.push([currentMode, nextMode]);
+      return true;
+    });
+
+    await expect(Promise.all([failed, finalAuto])).resolves.toEqual([false, true]);
+    expect(calls).toEqual([["auto", "full-access"]]);
+  });
+});
+
+describe("persistModelSelectionBeforeRuntimeMode", () => {
+  const previousModel = {
+    provider: "droid",
+    model: "claude-opus-4-8",
+  } as const;
+  const autoCapableModel = {
+    provider: "codex",
+    model: "gpt-5.6-sol",
+  } as const;
+
+  it("persists a newly selected model before enabling Auto", async () => {
+    const calls: Array<string> = [];
+
+    await persistModelSelectionBeforeRuntimeMode({
+      currentModelSelection: previousModel,
+      nextModelSelection: autoCapableModel,
+      currentRuntimeMode: "approval-required",
+      nextRuntimeMode: "auto",
+      persistModelSelection: async () => {
+        calls.push("model");
+      },
+      persistRuntimeMode: async () => {
+        calls.push("runtime");
+      },
+    });
+
+    expect(calls).toEqual(["model", "runtime"]);
+  });
+
+  it("does not enable Auto when persisting the selected model fails", async () => {
+    const calls: Array<string> = [];
+
+    await expect(
+      persistModelSelectionBeforeRuntimeMode({
+        currentModelSelection: previousModel,
+        nextModelSelection: autoCapableModel,
+        currentRuntimeMode: "approval-required",
+        nextRuntimeMode: "auto",
+        persistModelSelection: async () => {
+          calls.push("model");
+          throw new Error("model persistence failed");
+        },
+        persistRuntimeMode: async () => {
+          calls.push("runtime");
+        },
+      }),
+    ).rejects.toThrow("model persistence failed");
+
+    expect(calls).toEqual(["model"]);
+  });
+
+  it("downgrades from Auto before persisting an incompatible model", async () => {
+    const calls: Array<string> = [];
+
+    await persistModelSelectionBeforeRuntimeMode({
+      currentModelSelection: autoCapableModel,
+      nextModelSelection: previousModel,
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistModelSelection: async () => {
+        calls.push("model");
+      },
+      persistRuntimeMode: async () => {
+        calls.push("runtime");
+      },
+    });
+
+    expect(calls).toEqual(["runtime", "model"]);
   });
 });
 

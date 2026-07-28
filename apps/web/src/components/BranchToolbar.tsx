@@ -1,7 +1,13 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type { ThreadId, RuntimeMode } from "@synara/contracts";
+import type {
+  ProviderKind,
+  ProviderModelDescriptor,
+  ServerProviderStatus,
+  ThreadId,
+  RuntimeMode,
+} from "@synara/contracts";
 import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
@@ -13,6 +19,10 @@ import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import {
+  RUNTIME_MODE_PRESENTATION,
+  providerModelSupportsAutoRuntimeMode,
+} from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
   createAllThreadsSelector,
@@ -31,6 +41,7 @@ import {
   type BranchSelectorVariant,
 } from "./BranchToolbarBranchSelector";
 import {
+  RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
   COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
@@ -118,6 +129,9 @@ export interface BranchToolbarProps {
 }
 
 export interface RuntimeUsageControlsProps {
+  provider?: ProviderKind | undefined;
+  runtimeModel?: ProviderModelDescriptor | undefined;
+  providerStatus?: ServerProviderStatus | null | undefined;
   runtimeMode?: RuntimeMode | undefined;
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
@@ -132,11 +146,18 @@ export interface RuntimeUsageControlsProps {
 }
 
 export function RuntimeUsageControls({
+  provider,
+  runtimeModel,
+  providerStatus,
   runtimeMode,
   onRuntimeModeChange,
   className,
   hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
+  const autoModeAvailable =
+    provider !== undefined &&
+    providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
+  const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
   const hideLabel = hideLabelProp ?? false;
   return (
     <div
@@ -157,22 +178,23 @@ export function RuntimeUsageControls({
                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
-                title={
-                  runtimeMode === "full-access"
-                    ? "Full access — click to change permissions"
-                    : "Default permissions — click to change permissions"
-                }
+                title={`${runtimePresentation.label}: ${runtimePresentation.description} Click to change permissions.`}
               />
             }
           >
             <span className="inline-flex items-center gap-1.5">
               {runtimeMode === "full-access" ? (
                 <CentralIcon name="shield-access" className="size-3.5 shrink-0" />
+              ) : runtimeMode === "auto" ? (
+                <CentralIcon
+                  name="shield-code"
+                  className={cn("size-3.5 shrink-0", RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME)}
+                />
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+                {runtimePresentation.label}
               </span>
               <ChevronDownIcon
                 className={cn(
@@ -182,13 +204,14 @@ export function RuntimeUsageControls({
               />
             </span>
           </MenuTrigger>
-          <ComposerPickerMenuPopup align="start" side="top" className="min-w-44">
+          <ComposerPickerMenuPopup align="start" side="top" className="min-w-72">
             <MenuRadioGroup
               value={runtimeMode}
               onValueChange={(value) => {
                 if (
                   !value ||
-                  (value !== "full-access" && value !== "approval-required") ||
+                  (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
+                  (value === "auto" && !autoModeAvailable) ||
                   value === runtimeMode
                 ) {
                   return;
@@ -196,19 +219,45 @@ export function RuntimeUsageControls({
                 onRuntimeModeChange(value);
               }}
             >
+              <MenuRadioItem value="approval-required">
+                <span className="inline-flex items-start gap-2">
+                  <HiOutlineHandRaised className="mt-0.5 size-4 shrink-0" />
+                  <span className="flex flex-col">
+                    <span>Supervised</span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {RUNTIME_MODE_PRESENTATION["approval-required"].description}
+                    </span>
+                  </span>
+                </span>
+              </MenuRadioItem>
+              {autoModeAvailable ? (
+                <MenuRadioItem value="auto">
+                  <span className="inline-flex items-start gap-2">
+                    <CentralIcon
+                      name="shield-code"
+                      className={cn("mt-0.5 size-4 shrink-0", RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME)}
+                    />
+                    <span className="flex flex-col">
+                      <span>Auto</span>
+                      <span className="text-xs font-normal text-muted-foreground">
+                        {RUNTIME_MODE_PRESENTATION.auto.description}
+                      </span>
+                    </span>
+                  </span>
+                </MenuRadioItem>
+              ) : null}
               <MenuRadioItem
                 value="full-access"
                 className="data-checked:text-[var(--runtime-full-access-accent)]"
               >
-                <span className="inline-flex items-center gap-2">
-                  <CentralIcon name="shield-access" className="size-4 shrink-0" />
-                  Full access
-                </span>
-              </MenuRadioItem>
-              <MenuRadioItem value="approval-required">
-                <span className="inline-flex items-center gap-2">
-                  <HiOutlineHandRaised className="size-4 shrink-0" />
-                  Default permissions
+                <span className="inline-flex items-start gap-2">
+                  <CentralIcon name="shield-access" className="mt-0.5 size-4 shrink-0" />
+                  <span className="flex flex-col">
+                    <span>Full access</span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {RUNTIME_MODE_PRESENTATION["full-access"].description}
+                    </span>
+                  </span>
                 </span>
               </MenuRadioItem>
             </MenuRadioGroup>

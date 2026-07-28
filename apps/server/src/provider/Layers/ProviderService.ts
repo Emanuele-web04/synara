@@ -32,6 +32,10 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@synara/contracts";
+import {
+  providerSupportsAutoRuntimeMode,
+  unsupportedAutoRuntimeModeMessage,
+} from "@synara/shared/runtimeMode";
 import { createHash, randomUUID } from "node:crypto";
 import {
   Array as EffectArray,
@@ -98,6 +102,21 @@ const configuredProviderRuntimeIdleStopMs = process.env.SYNARA_PROVIDER_RUNTIME_
 const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
   ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
+
+function validateAutoRuntimeMode(
+  operation: string,
+  provider: ProviderSession["provider"],
+  runtimeMode: ProviderSession["runtimeMode"],
+) {
+  return runtimeMode !== "auto" || providerSupportsAutoRuntimeMode(provider)
+    ? Effect.void
+    : Effect.fail(
+        new ProviderValidationError({
+          operation,
+          issue: unsupportedAutoRuntimeModeMessage(provider),
+        }),
+      );
+}
 
 export function summarizeProviderRuntimeQuarantineCause(cause: string): {
   readonly cause: string;
@@ -1110,6 +1129,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const persistedCwd = readPersistedCwd(binding.runtimePayload);
           const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
           const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
+          yield* validateAutoRuntimeMode(
+            input.operation,
+            binding.provider,
+            binding.runtimeMode ?? "full-access",
+          );
 
           const resumed = yield* adapter.startSession({
             threadId: binding.threadId,
@@ -1219,6 +1243,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           threadId,
           provider: parsed.provider ?? "codex",
         };
+        yield* validateAutoRuntimeMode(
+          "ProviderService.startSession",
+          input.provider,
+          input.runtimeMode,
+        );
         clearRuntimeIdleTimer(threadId);
         yield* waitForRuntimeIdleStop(threadId);
         return yield* lifecycle.run(threadId, (lease) =>
@@ -1402,6 +1431,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const effectiveProviderOptions =
           input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
+        yield* validateAutoRuntimeMode(
+          "ProviderService.forkThread",
+          sourceBinding.provider,
+          input.runtimeMode,
+        );
 
         const adapter = yield* registry.getByProvider(sourceBinding.provider);
         if (!adapter.forkThread) {
