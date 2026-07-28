@@ -22,15 +22,16 @@ import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
-import { SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
+import { SettingsCard, SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 import {
-  SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+  SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
 } from "../settingsPanelStyles";
+import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "../surfaceStyles";
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
@@ -48,11 +49,19 @@ type ThemePackEditorProps = {
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
+/** Borderless text action in the editor's header chrome (Copy, Import). */
+const EDITOR_TEXT_ACTION_CLASS_NAME = cn(
+  "rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)]",
+  ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+);
+
 export function ThemePackEditor({
   variant,
-  isActive = false,
-  mode = "system",
+  isActive: isActiveProp,
+  mode: modeProp,
 }: ThemePackEditorProps) {
+  const isActive = isActiveProp ?? false;
+  const mode = modeProp ?? "system";
   const {
     darkTheme,
     lightTheme,
@@ -68,7 +77,6 @@ export function ThemePackEditor({
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const codeThemes = useMemo(() => {
     const options = getAvailableCodeThemes(variant);
     return options.map((option) => ({
@@ -112,7 +120,7 @@ export function ThemePackEditor({
   };
 
   return (
-    <div className={cn(SETTINGS_CARD_CLASS_NAME, "overflow-hidden")}>
+    <SettingsCard divided={false}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
@@ -121,7 +129,10 @@ export function ThemePackEditor({
             <button
               type="button"
               onClick={() => resetThemeVariant(variant)}
-              className="rounded-md px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)]",
+                ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+              )}
             >
               Reset
             </button>
@@ -132,7 +143,7 @@ export function ThemePackEditor({
           <button
             type="button"
             onClick={() => void handleCopy()}
-            className="rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+            className={EDITOR_TEXT_ACTION_CLASS_NAME}
           >
             Copy
           </button>
@@ -171,7 +182,7 @@ export function ThemePackEditor({
         {contextLabel}
       </div>
 
-      <div className="divide-y divide-[color:var(--color-border)]">
+      <div className={SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME}>
         <ThemeRow label="Accent">
           <ColorPill
             color={theme.accent}
@@ -261,7 +272,7 @@ export function ThemePackEditor({
           />
         </ThemeRow>
       </div>
-    </div>
+    </SettingsCard>
   );
 }
 
@@ -375,7 +386,10 @@ function ColorPill({
             setDraftHex(null);
             onReset();
           }}
-          className="rounded-md p-1 text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+          className={cn(
+            "rounded-md p-1 text-[var(--color-text-foreground-tertiary)]",
+            ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+          )}
           aria-label={`Reset ${ariaLabel}`}
           title="Reset to default"
         >
@@ -475,7 +489,7 @@ function FontInput({
   value,
   placeholder,
   ariaLabel,
-  mono = false,
+  mono: monoProp,
   onChange,
 }: {
   value: string;
@@ -484,6 +498,7 @@ function FontInput({
   mono?: boolean;
   onChange: (next: string) => void;
 }) {
+  const mono = monoProp ?? false;
   const [draft, setDraft] = useState<string | null>(null);
   return (
     <Input
@@ -571,10 +586,7 @@ function ImportThemeDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <button
-            type="button"
-            className="rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
-          >
+          <button type="button" className={EDITOR_TEXT_ACTION_CLASS_NAME}>
             Import
           </button>
         }

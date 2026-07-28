@@ -1,7 +1,13 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type { ThreadId, RuntimeMode } from "@synara/contracts";
+import type {
+  ProviderKind,
+  ProviderModelDescriptor,
+  ServerProviderStatus,
+  ThreadId,
+  RuntimeMode,
+} from "@synara/contracts";
 import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
@@ -13,6 +19,10 @@ import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import {
+  RUNTIME_MODE_PRESENTATION,
+  providerModelSupportsAutoRuntimeMode,
+} from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
   createAllThreadsSelector,
@@ -24,12 +34,14 @@ import {
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolveFixedLocalWorkspacePatch,
 } from "./BranchToolbar.logic";
 import {
   BranchToolbarBranchSelector,
   type BranchSelectorVariant,
 } from "./BranchToolbarBranchSelector";
 import {
+  RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
   COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
@@ -73,8 +85,8 @@ const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
 function ContinueInMenuItem({
   icon,
   label,
-  selected = false,
-  disabled = false,
+  selected: selectedProp,
+  disabled: disabledProp,
   onSelect,
 }: {
   icon: ReactNode;
@@ -83,6 +95,8 @@ function ContinueInMenuItem({
   disabled?: boolean;
   onSelect?: () => void;
 }) {
+  const selected = selectedProp ?? false;
+  const disabled = disabledProp ?? false;
   return (
     <MenuItem disabled={disabled} {...(onSelect ? { onClick: onSelect } : {})}>
       {icon}
@@ -91,6 +105,44 @@ function ContinueInMenuItem({
         <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
       ) : null}
     </MenuItem>
+  );
+}
+
+function RuntimeModeMenuItem({
+  mode,
+  icon,
+  accent = false,
+}: {
+  mode: RuntimeMode;
+  icon: ReactNode;
+  accent?: boolean;
+}) {
+  const presentation = RUNTIME_MODE_PRESENTATION[mode];
+  return (
+    <MenuRadioItem
+      value={mode}
+      className={cn(
+        "runtime-mode-menu-item",
+        mode === "auto" && "runtime-mode-menu-item--auto",
+        accent &&
+          "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
+      )}
+    >
+      <span className="grid w-full min-w-0 flex-1 grid-cols-[1.25rem_minmax(0,1fr)] items-start gap-x-3">
+        <span className="flex h-5 items-center justify-center">{icon}</span>
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span>{presentation.label}</span>
+          <span
+            className={cn(
+              "runtime-mode-menu-description text-xs font-normal",
+              accent ? "text-current" : "text-muted-foreground",
+            )}
+          >
+            {presentation.description}
+          </span>
+        </span>
+      </span>
+    </MenuRadioItem>
   );
 }
 
@@ -109,9 +161,15 @@ export interface BranchToolbarProps {
   variant?: BranchSelectorVariant;
   // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
   showBranchSelector?: boolean;
+  // Studio-like containers bind the toolbar to one concrete local folder and
+  // must not persist project/worktree metadata from branch selector actions.
+  fixedLocalWorkspaceCwd?: string | null;
 }
 
 export interface RuntimeUsageControlsProps {
+  provider?: ProviderKind | undefined;
+  runtimeModel?: ProviderModelDescriptor | undefined;
+  providerStatus?: ServerProviderStatus | null | undefined;
   runtimeMode?: RuntimeMode | undefined;
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
@@ -126,11 +184,19 @@ export interface RuntimeUsageControlsProps {
 }
 
 export function RuntimeUsageControls({
+  provider,
+  runtimeModel,
+  providerStatus,
   runtimeMode,
   onRuntimeModeChange,
   className,
-  hideLabel = false,
+  hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
+  const autoModeAvailable =
+    provider !== undefined &&
+    providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
+  const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
+  const hideLabel = hideLabelProp ?? false;
   return (
     <div
       className={cn(
@@ -148,24 +214,23 @@ export function RuntimeUsageControls({
                 className={cn(
                   "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 [&_svg]:mx-0 sm:px-2.5",
                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+                  runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
-                title={
-                  runtimeMode === "full-access"
-                    ? "Full access — click to change permissions"
-                    : "Default permissions — click to change permissions"
-                }
+                title={`${runtimePresentation.label}: ${runtimePresentation.description}. Click to change permissions.`}
               />
             }
           >
             <span className="inline-flex items-center gap-1.5">
               {runtimeMode === "full-access" ? (
                 <CentralIcon name="shield-access" className="size-3.5 shrink-0" />
+              ) : runtimeMode === "auto" ? (
+                <CentralIcon name="shield-code" className="size-3.5 shrink-0" />
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+                {runtimePresentation.label}
               </span>
               <ChevronDownIcon
                 className={cn(
@@ -175,13 +240,19 @@ export function RuntimeUsageControls({
               />
             </span>
           </MenuTrigger>
-          <ComposerPickerMenuPopup align="start" side="top" className="min-w-44">
+          <ComposerPickerMenuPopup
+            align="start"
+            side="top"
+            className="runtime-mode-menu w-[26rem] min-w-[26rem]"
+          >
             <MenuRadioGroup
+              className="flex flex-col gap-1"
               value={runtimeMode}
               onValueChange={(value) => {
                 if (
                   !value ||
-                  (value !== "full-access" && value !== "approval-required") ||
+                  (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
+                  (value === "auto" && !autoModeAvailable) ||
                   value === runtimeMode
                 ) {
                   return;
@@ -189,21 +260,21 @@ export function RuntimeUsageControls({
                 onRuntimeModeChange(value);
               }}
             >
-              <MenuRadioItem
-                value="full-access"
-                className="data-checked:text-[var(--runtime-full-access-accent)]"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <CentralIcon name="shield-access" className="size-4 shrink-0" />
-                  Full access
-                </span>
-              </MenuRadioItem>
-              <MenuRadioItem value="approval-required">
-                <span className="inline-flex items-center gap-2">
-                  <HiOutlineHandRaised className="size-4 shrink-0" />
-                  Default permissions
-                </span>
-              </MenuRadioItem>
+              <RuntimeModeMenuItem
+                mode="approval-required"
+                icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
+              />
+              {autoModeAvailable ? (
+                <RuntimeModeMenuItem
+                  mode="auto"
+                  icon={<CentralIcon name="shield-code" className="size-4 shrink-0" />}
+                />
+              ) : null}
+              <RuntimeModeMenuItem
+                mode="full-access"
+                accent
+                icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
+              />
             </MenuRadioGroup>
           </ComposerPickerMenuPopup>
         </Menu>
@@ -219,12 +290,16 @@ export default function BranchToolbar({
   envLocked,
   onHandoffToWorktree,
   onHandoffToLocal,
-  handoffBusy = false,
+  handoffBusy: handoffBusyProp,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
-  variant = "toolbar",
-  showBranchSelector = true,
+  variant: variantProp,
+  showBranchSelector: showBranchSelectorProp,
+  fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
+  const handoffBusy = handoffBusyProp ?? false;
+  const variant = variantProp ?? "toolbar";
+  const showBranchSelector = showBranchSelectorProp ?? true;
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
@@ -238,13 +313,24 @@ export default function BranchToolbar({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const hasServerThread = serverThread !== undefined;
   const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
-  const activeThreadBranch = serverThread?.branch ?? draftThread?.branch ?? null;
-  const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const activeThreadBranch = hasServerThread
+    ? (serverThread.branch ?? null)
+    : (draftThread?.branch ?? null);
+  const activeWorktreePath = hasServerThread
+    ? (serverThread.worktreePath ?? null)
+    : (draftThread?.worktreePath ?? null);
+  const activeWorkingDirectory = hasServerThread
+    ? (serverThread.workingDirectory ?? null)
+    : (draftThread?.workingDirectory ?? null);
   const activeProvider =
     serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
-  const branchCwd = activeWorktreePath ?? activeProject?.cwd ?? null;
-  const hasServerThread = serverThread !== undefined;
+  const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
+  const branchCwd = usesFixedLocalWorkspace
+    ? fixedLocalWorkspaceCwd
+    : (activeWorktreePath ?? activeWorkingDirectory ?? activeProject?.cwd ?? null);
+  const branchProjectCwd = usesFixedLocalWorkspace ? branchCwd : (activeProject?.cwd ?? null);
   const effectiveEnvMode = resolveEffectiveEnvMode({
     activeWorktreePath,
     hasServerThread,
@@ -259,6 +345,43 @@ export default function BranchToolbar({
   const setThreadWorkspace = useCallback(
     (patch: ThreadWorkspacePatch) => {
       if (!activeThreadId) return;
+      if (usesFixedLocalWorkspace) {
+        const nextWorkspace = resolveFixedLocalWorkspacePatch({
+          currentWorkingDirectory: activeWorkingDirectory,
+          patch,
+        });
+        const nextWorkingDirectory = nextWorkspace.workingDirectory ?? null;
+        if (nextWorkingDirectory === activeWorkingDirectory) {
+          return;
+        }
+
+        const api = readNativeApi();
+        if (serverThread?.session && api) {
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.session.stop",
+              commandId: newCommandId(),
+              threadId: activeThreadId,
+              createdAt: new Date().toISOString(),
+            })
+            .catch(() => undefined);
+        }
+        if (api && hasServerThread) {
+          void api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: activeThreadId,
+            ...nextWorkspace,
+          });
+        }
+        if (hasServerThread) {
+          setThreadWorkspaceAction(activeThreadId, nextWorkspace);
+          return;
+        }
+        setDraftThreadContext(threadId, nextWorkspace);
+        return;
+      }
+
       const branch = patch.branch !== undefined ? patch.branch : activeThreadBranch;
       const worktreePath =
         patch.worktreePath !== undefined ? patch.worktreePath : activeWorktreePath;
@@ -329,6 +452,7 @@ export default function BranchToolbar({
     [
       activeThreadId,
       activeThreadBranch,
+      activeWorkingDirectory,
       serverThread?.session,
       activeWorktreePath,
       hasServerThread,
@@ -339,17 +463,26 @@ export default function BranchToolbar({
       setDraftThreadContext,
       threadId,
       effectiveEnvMode,
+      usesFixedLocalWorkspace,
     ],
   );
 
   const canHandoffToWorktree = Boolean(
-    hasServerThread && envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+    !usesFixedLocalWorkspace &&
+    hasServerThread &&
+    envLocked &&
+    !activeWorktreePath &&
+    effectiveEnvMode === "local",
   );
-  const canHandoffToLocal = Boolean(hasServerThread && activeWorktreePath);
+  const canHandoffToLocal = Boolean(
+    !usesFixedLocalWorkspace && hasServerThread && activeWorktreePath,
+  );
   const canSwitchToWorktree = Boolean(
-    !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+    !usesFixedLocalWorkspace && !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
   );
-  const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
+  const canSwitchToLocal = Boolean(
+    !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
+  );
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
   const usageSummary = useProviderUsageSummary({
@@ -504,7 +637,7 @@ export default function BranchToolbar({
 
         {showBranchSelector ? (
           <BranchToolbarBranchSelector
-            activeProjectCwd={activeProject.cwd}
+            activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
             activeThreadBranch={activeThreadBranch}
             activeWorktreePath={activeWorktreePath}
             branchCwd={branchCwd}

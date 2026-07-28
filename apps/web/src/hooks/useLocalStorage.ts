@@ -54,43 +54,63 @@ function dispatchLocalStorageChange(key: string) {
   );
 }
 
+/**
+ * The one place that reads a key and survives a corrupt or undecodable entry.
+ *
+ * All three read sites below (initial state, key change, cross-tab sync) need exactly this, and it
+ * lives at module scope on purpose: React Compiler cannot lower a `??` inside a `try` block, so an
+ * inlined copy would make the whole hook — which most of the app calls — skip compilation.
+ */
+function readLocalStorageItemOrFallback<T, E>(
+  key: string,
+  fallback: T,
+  schema: Schema.Codec<T, E>,
+): T {
+  try {
+    const item = getLocalStorageItem(key, schema);
+    return item ?? fallback;
+  } catch (error) {
+    console.error("[LOCALSTORAGE] Error:", error);
+    return fallback;
+  }
+}
+
+/** Persists one write, mirroring `useState`'s updater-or-value contract. Module scope: see above. */
+function persistLocalStorageValue<T, E>(
+  key: string,
+  previous: T,
+  value: T | ((val: T) => T),
+  schema: Schema.Codec<T, E>,
+): T {
+  const valueToStore = typeof value === "function" ? (value as (val: T) => T)(previous) : value;
+  try {
+    if (valueToStore === null) {
+      removeLocalStorageItem(key);
+    } else {
+      setLocalStorageItem(key, valueToStore, schema);
+    }
+    // Dispatch event after state update completes to avoid nested state updates
+    queueMicrotask(() => dispatchLocalStorageChange(key));
+  } catch (error) {
+    console.error("[LOCALSTORAGE] Error:", error);
+  }
+  return valueToStore;
+}
+
 export function useLocalStorage<T, E>(
   key: string,
   initialValue: T,
   schema: Schema.Codec<T, E>,
 ): [T, (value: T | ((val: T) => T)) => void] {
   // Get the initial value from localStorage or use the provided initialValue
-  const [storedValue, setStoredValue] = useState<T>(() => {
-    try {
-      const item = getLocalStorageItem(key, schema);
-      return item ?? initialValue;
-    } catch (error) {
-      console.error("[LOCALSTORAGE] Error:", error);
-      return initialValue;
-    }
-  });
+  const [storedValue, setStoredValue] = useState<T>(() =>
+    readLocalStorageItemOrFallback(key, initialValue, schema),
+  );
 
   // Return a wrapped version of useState's setter function that persists the new value to localStorage
-  // Manual memoization kept: this hook does not compile under React Compiler
-  // (try/catch with value blocks), so the setter identity must be stabilized
-  // by hand — it flows into effect deps across the app.
   const setValue = useCallback(
     (value: T | ((val: T) => T)) => {
-      try {
-        setStoredValue((prev) => {
-          const valueToStore = typeof value === "function" ? (value as (val: T) => T)(prev) : value;
-          if (valueToStore === null) {
-            removeLocalStorageItem(key);
-          } else {
-            setLocalStorageItem(key, valueToStore, schema);
-          }
-          // Dispatch event after state update completes to avoid nested state updates
-          queueMicrotask(() => dispatchLocalStorageChange(key));
-          return valueToStore;
-        });
-      } catch (error) {
-        console.error("[LOCALSTORAGE] Error:", error);
-      }
+      setStoredValue((prev) => persistLocalStorageValue(key, prev, value, schema));
     },
     [key, schema],
   );
@@ -106,12 +126,7 @@ export function useLocalStorage<T, E>(
     }
     prevKeyRef.current = key;
     const timeoutId = window.setTimeout(() => {
-      try {
-        const newValue = getLocalStorageItem(key, schema);
-        setStoredValue(newValue ?? initialValue);
-      } catch (error) {
-        console.error("[LOCALSTORAGE] Error:", error);
-      }
+      setStoredValue(readLocalStorageItemOrFallback(key, initialValue, schema));
     }, 0);
     return () => {
       window.clearTimeout(timeoutId);
@@ -121,12 +136,7 @@ export function useLocalStorage<T, E>(
   // Listen for storage events from other tabs AND custom events from the same tab
   useEffect(() => {
     const syncFromStorage = () => {
-      try {
-        const newValue = getLocalStorageItem(key, schema);
-        setStoredValue(newValue ?? initialValue);
-      } catch (error) {
-        console.error("[LOCALSTORAGE] Error:", error);
-      }
+      setStoredValue(readLocalStorageItemOrFallback(key, initialValue, schema));
     };
 
     const handleStorageChange = (event: StorageEvent) => {

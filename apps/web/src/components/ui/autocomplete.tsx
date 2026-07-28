@@ -11,11 +11,11 @@ const Autocomplete = AutocompletePrimitive.Root;
 
 function AutocompleteInput({
   className,
-  showTrigger = false,
-  showClear = false,
+  showTrigger: showTriggerProp,
+  showClear: showClearProp,
   startAddon,
   size,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: Omit<AutocompletePrimitive.Input.Props, "size"> & {
   showTrigger?: boolean;
@@ -25,6 +25,9 @@ function AutocompleteInput({
   variant?: "default" | "soft";
   ref?: React.Ref<HTMLInputElement>;
 }) {
+  const showTrigger = showTriggerProp ?? false;
+  const showClear = showClearProp ?? false;
+  const variant = variantProp ?? "default";
   const sizeValue = (size ?? "default") as "sm" | "default" | "lg" | number;
 
   return (
@@ -80,10 +83,10 @@ function AutocompleteInput({
 function AutocompletePopup({
   className,
   children,
-  side = "bottom",
-  sideOffset = 4,
+  side: sideProp,
+  sideOffset: sideOffsetProp,
   alignOffset,
-  align = "start",
+  align: alignProp,
   anchor,
   ...props
 }: AutocompletePrimitive.Popup.Props & {
@@ -93,6 +96,9 @@ function AutocompletePopup({
   side?: AutocompletePrimitive.Positioner.Props["side"];
   anchor?: AutocompletePrimitive.Positioner.Props["anchor"];
 }) {
+  const side = sideProp ?? "bottom";
+  const sideOffset = sideOffsetProp ?? 4;
+  const align = alignProp ?? "start";
   return (
     <AutocompletePrimitive.Portal>
       <AutocompletePrimitive.Positioner

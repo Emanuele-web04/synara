@@ -39,8 +39,18 @@ export function normalizeProviderStatusForLocalConfig(input: {
     return status;
   }
 
-  if (status.available || status.authStatus !== "unknown") {
+  if (normalizeCustomBinaryPath(status.autoRuntimeModeBinaryPath) === customBinaryPath) {
     return status;
+  }
+
+  const {
+    supportsAutoRuntimeMode: _staleAutoSupport,
+    autoRuntimeModeBinaryPath: _staleAutoBinaryPath,
+    ...statusWithoutStaleAutoCapability
+  } = status;
+
+  if (status.available || status.authStatus !== "unknown") {
+    return statusWithoutStaleAutoCapability;
   }
 
   if (normalizeCustomBinaryPath(input.confirmedCustomBinaryPath) === customBinaryPath) {
@@ -60,7 +70,7 @@ export function normalizeProviderStatusForLocalConfig(input: {
   }
 
   return {
-    ...status,
+    ...statusWithoutStaleAutoCapability,
     available: true,
     status: "warning",
     message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. Availability will be confirmed when you start a session.`,

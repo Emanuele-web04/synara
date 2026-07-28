@@ -5,6 +5,7 @@ import {
   type ModelSlug,
   type ProviderApprovalDecision,
   type ProviderKind,
+  type ProviderRequestKind,
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
@@ -53,7 +54,9 @@ export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
 export interface PendingFileUndo {
   readonly threadId: ThreadIdType;
-  readonly turnCount: number;
+  // A changes card can merge several turns; one Undo reverts all of them, so the
+  // request only settles once every targeted turn has settled (or one failed).
+  readonly turnCounts: readonly number[];
   readonly existingFailureActivityIds: readonly string[];
 }
 
@@ -65,10 +68,16 @@ export function hasFileUndoSettled(input: {
     return false;
   }
 
-  const targetSummary = input.thread.turnDiffSummaries.find(
-    (summary) => summary.checkpointTurnCount === input.pending.turnCount,
+  const targetTurnCounts = new Set(input.pending.turnCounts);
+  const targetSummaries = input.thread.turnDiffSummaries.filter(
+    (summary) =>
+      summary.checkpointTurnCount !== undefined &&
+      targetTurnCounts.has(summary.checkpointTurnCount),
   );
-  if (targetSummary?.files.length === 0) {
+  if (
+    targetSummaries.length > 0 &&
+    targetSummaries.every((summary) => summary.files.length === 0)
+  ) {
     return true;
   }
 
@@ -79,31 +88,147 @@ export function hasFileUndoSettled(input: {
       existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
-      !("turnCount" in activity.payload)
+      !("turnCount" in activity.payload) ||
+      typeof activity.payload.turnCount !== "number"
     ) {
       return false;
     }
-    return activity.payload.turnCount === input.pending.turnCount;
+    return targetTurnCounts.has(activity.payload.turnCount);
   });
 }
-
-const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
 
 /**
  * "Always allow" (acceptForSession) only auto-approves the live provider turn.
  * Because the client is the source of truth for runtime mode (it sends it with
- * every turn), the choice must also flip the thread to full-access so it survives
- * idle-stop and runtime restarts instead of reverting to approval-required on the
- * next turn. Returns the runtime mode to persist, or null when nothing changes.
+ * every turn), a supervised thread must also flip to full-access so the choice
+ * survives idle-stop and runtime restarts. Auto is different: its AI reviewer
+ * remains the durable policy, while acceptForSession applies only to the current
+ * live provider session. Returns the runtime mode to persist, or null when
+ * nothing changes.
  */
 export function resolveRuntimeModeAfterApprovalDecision(
   currentRuntimeMode: RuntimeMode,
   decision: ProviderApprovalDecision,
+  requestKind?: ProviderRequestKind,
 ): RuntimeMode | null {
-  if (decision === "acceptForSession" && currentRuntimeMode !== ALWAYS_ALLOW_RUNTIME_MODE) {
-    return ALWAYS_ALLOW_RUNTIME_MODE;
+  // Permission-profile grants are narrower than a runtime-mode override.
+  // Their acceptForSession decision is persisted by the provider for only
+  // that permission set and must not silently broaden the whole thread.
+  if (requestKind === "permissions") {
+    return null;
+  }
+  if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
+    return "full-access";
   }
   return null;
+}
+
+export async function commitAfterRuntimeModePersistence(input: {
+  currentRuntimeMode: RuntimeMode;
+  nextRuntimeMode: RuntimeMode;
+  persistRuntimeMode: (mode: RuntimeMode) => Promise<boolean>;
+  commit: () => void;
+}): Promise<boolean> {
+  if (
+    input.nextRuntimeMode !== input.currentRuntimeMode &&
+    !(await input.persistRuntimeMode(input.nextRuntimeMode))
+  ) {
+    return false;
+  }
+  input.commit();
+  return true;
+}
+
+export interface RuntimeModePersistenceQueue {
+  syncAcknowledgedMode: (mode: RuntimeMode) => void;
+  persist: (
+    mode: RuntimeMode,
+    operation: (currentMode: RuntimeMode, nextMode: RuntimeMode) => Promise<boolean>,
+  ) => Promise<boolean>;
+}
+
+/**
+ * Serializes access-mode writes for one thread. Equality is checked only when a
+ * queued choice starts, after earlier choices have settled, so Auto → Full
+ * access → Auto cannot drop the final Auto choice against a stale render.
+ */
+export function createRuntimeModePersistenceQueue(
+  initialMode: RuntimeMode,
+): RuntimeModePersistenceQueue {
+  let acknowledgedMode = initialMode;
+  let pendingCount = 0;
+  let tail: Promise<void> = Promise.resolve();
+
+  return {
+    syncAcknowledgedMode(mode) {
+      if (pendingCount === 0) {
+        acknowledgedMode = mode;
+      }
+    },
+    persist(mode, operation) {
+      pendingCount += 1;
+      const result = tail.then(async () => {
+        if (mode === acknowledgedMode) {
+          return true;
+        }
+        const persisted = await operation(acknowledgedMode, mode);
+        if (persisted) {
+          acknowledgedMode = mode;
+        }
+        return persisted;
+      });
+      tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result.finally(() => {
+        pendingCount -= 1;
+      });
+    },
+  };
+}
+
+export function modelSelectionsEqual(left: ModelSelection, right: ModelSelection): boolean {
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null) &&
+    (left.provider !== "claudeAgent" ||
+      right.provider !== "claudeAgent" ||
+      left.supportsAutoMode === right.supportsAutoMode)
+  );
+}
+
+/**
+ * Runtime-mode validation uses the canonical thread model. Persist a changed
+ * model first when enabling Auto, but downgrade from Auto first so an
+ * incompatible replacement model is not rejected by the old policy.
+ */
+export async function persistModelSelectionBeforeRuntimeMode(input: {
+  currentModelSelection: ModelSelection;
+  nextModelSelection?: ModelSelection;
+  currentRuntimeMode: RuntimeMode;
+  nextRuntimeMode: RuntimeMode;
+  persistModelSelection: (selection: ModelSelection) => Promise<unknown>;
+  persistRuntimeMode: (mode: RuntimeMode) => Promise<unknown>;
+}): Promise<void> {
+  const nextModelSelection = input.nextModelSelection;
+  const modelChanged =
+    nextModelSelection !== undefined &&
+    !modelSelectionsEqual(input.currentModelSelection, nextModelSelection);
+  const runtimeChanged = input.currentRuntimeMode !== input.nextRuntimeMode;
+  const downgradesFromAuto =
+    input.currentRuntimeMode === "auto" && input.nextRuntimeMode !== "auto";
+
+  if (runtimeChanged && downgradesFromAuto) {
+    await input.persistRuntimeMode(input.nextRuntimeMode);
+  }
+  if (modelChanged && nextModelSelection !== undefined) {
+    await input.persistModelSelection(nextModelSelection);
+  }
+  if (runtimeChanged && !downgradesFromAuto) {
+    await input.persistRuntimeMode(input.nextRuntimeMode);
+  }
 }
 
 export function shouldRenderProviderHealthBanner(input: {
@@ -526,6 +651,25 @@ export function resolveActiveTurnLiveDiffState(input: {
   };
 }
 
+export type ThreadDetailHydration = "ready" | "loading" | "failed";
+
+/**
+ * A server thread's shell row alone cannot distinguish "no messages" from
+ * "history not loaded yet", so an empty timeline only counts as a genuine empty
+ * landing once the detail snapshot has been applied. Local draft threads have no
+ * server detail to wait for and are always ready.
+ */
+export function resolveThreadDetailHydration(input: {
+  readonly isServerThread: boolean;
+  readonly hasTimelineEntries: boolean;
+  readonly detailSyncState: "synced" | "failed" | null;
+}): ThreadDetailHydration {
+  if (!input.isServerThread || input.hasTimelineEntries || input.detailSyncState === "synced") {
+    return "ready";
+  }
+  return input.detailSyncState === "failed" ? "failed" : "loading";
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -549,6 +693,7 @@ export function buildLocalDraftThread(
     envMode: draftThread.envMode,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
+    workingDirectory: draftThread.workingDirectory ?? null,
     lastKnownPr: draftThread.lastKnownPr ?? null,
     handoff: null,
     turnDiffSummaries: [],

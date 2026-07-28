@@ -15,6 +15,7 @@ import { Checkbox } from "~/components/ui/checkbox";
 import { IconButton } from "~/components/ui/icon-button";
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 
 const JUMP_CLICK_DELAY_MS = 180;
 
@@ -139,7 +140,8 @@ export function EnvironmentEditableChecklistRow({
   return (
     <li
       className={cn(
-        "flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-[var(--color-background-elevated-secondary)]",
+        "flex items-center gap-1.5 rounded-lg px-2 py-1",
+        ELEVATED_HOVER_SURFACE_CLASS_NAME,
         className,
       )}
     >

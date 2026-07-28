@@ -12,6 +12,19 @@ import {
 } from "../projectScripts";
 import type { Project, ProjectScript, Thread } from "../types";
 
+/** Success toast for one handoff. Module scope: its ternaries live outside the caller's `try`. */
+function reportThreadHandoffSuccess(
+  targetMode: "local" | "worktree",
+  result: { conflictsDetected: boolean; message?: string | null },
+): void {
+  toastManager.add({
+    type: result.conflictsDetected ? "warning" : "success",
+    title:
+      targetMode === "worktree" ? "Thread handed off to worktree" : "Thread handed off to local",
+    ...(result.message ? { description: result.message } : {}),
+  });
+}
+
 export function useThreadWorkspaceHandoff(input: {
   activeProject: Project | undefined;
   activeThread: Thread | undefined;
@@ -35,7 +48,6 @@ export function useThreadWorkspaceHandoff(input: {
   const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
   const [worktreeHandoffName, setWorktreeHandoffName] = useState("");
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const handoffThread = useCallback(
     async (targetMode: "local" | "worktree", options?: { preferredWorktreeName?: string }) => {
       if (
@@ -47,45 +59,48 @@ export function useThreadWorkspaceHandoff(input: {
         return false;
       }
 
+      // The whole payload is resolved before the `try`: React Compiler cannot lower `??` inside a
+      // try block, and this hook backs the local/worktree switch on every thread.
+      const handoffPayload = {
+        commandId: newCommandId(),
+        threadId: input.activeThread.id,
+        targetMode,
+        currentBranch: input.activeThread.branch ?? null,
+        worktreePath: input.activeThread.worktreePath ?? null,
+        associatedWorktreePath: input.activeThreadAssociatedWorktree.associatedWorktreePath,
+        associatedWorktreeBranch: input.activeThreadAssociatedWorktree.associatedWorktreeBranch,
+        associatedWorktreeRef: input.activeThreadAssociatedWorktree.associatedWorktreeRef,
+        preferredLocalBranch: input.activeRootBranch ?? input.activeThread.branch ?? null,
+        preferredWorktreeBaseBranch:
+          input.activeRootBranch ??
+          input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
+          input.activeThread.branch ??
+          null,
+        preferredNewWorktreeName: options?.preferredWorktreeName ?? null,
+      };
+
       try {
         await input.stopActiveThreadSession();
-        const result = await handoffThreadMutation.mutateAsync({
-          commandId: newCommandId(),
-          threadId: input.activeThread.id,
-          targetMode,
-          currentBranch: input.activeThread.branch ?? null,
-          worktreePath: input.activeThread.worktreePath ?? null,
-          associatedWorktreePath: input.activeThreadAssociatedWorktree.associatedWorktreePath,
-          associatedWorktreeBranch: input.activeThreadAssociatedWorktree.associatedWorktreeBranch,
-          associatedWorktreeRef: input.activeThreadAssociatedWorktree.associatedWorktreeRef,
-          preferredLocalBranch: input.activeRootBranch ?? input.activeThread.branch ?? null,
-          preferredWorktreeBaseBranch:
-            input.activeRootBranch ??
-            input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
-            input.activeThread.branch ??
-            null,
-          preferredNewWorktreeName: options?.preferredWorktreeName ?? null,
-        });
+        const result = await handoffThreadMutation.mutateAsync(handoffPayload);
 
-        if (targetMode === "worktree" && result.worktreePath) {
-          const setupScript = setupProjectScript(input.activeProject.scripts);
-          if (setupScript) {
-            await input.runProjectScript(setupScript, {
-              cwd: result.worktreePath,
-              worktreePath: result.worktreePath,
-              rememberAsLastInvoked: false,
-            });
+        // Nested `if`s rather than `&&`, and the toast assembled outside: every value block —
+        // `&&`, `??`, a ternary, a conditional spread — is one React Compiler refuses to lower
+        // inside a `try`, and one is enough to drop the whole hook's memoization.
+        if (targetMode === "worktree") {
+          const worktreePath = result.worktreePath;
+          if (worktreePath) {
+            const setupScript = setupProjectScript(input.activeProject.scripts);
+            if (setupScript) {
+              await input.runProjectScript(setupScript, {
+                cwd: worktreePath,
+                worktreePath,
+                rememberAsLastInvoked: false,
+              });
+            }
           }
         }
 
-        toastManager.add({
-          type: result.conflictsDetected ? "warning" : "success",
-          title:
-            targetMode === "worktree"
-              ? "Thread handed off to worktree"
-              : "Thread handed off to local",
-          ...(result.message ? { description: result.message } : {}),
-        });
+        reportThreadHandoffSuccess(targetMode, result);
         return true;
       } catch (error) {
         toastManager.add({

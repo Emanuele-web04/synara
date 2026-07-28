@@ -27,9 +27,10 @@ const SHAPE_CLASS_NAME: Record<PullRequestWarningNoteShape, string> = {
 export function PullRequestWarningNote({
   children,
   className,
-  shape = "note",
+  shape: shapeProp,
   ...props
 }: HTMLAttributes<HTMLParagraphElement> & { shape?: PullRequestWarningNoteShape }) {
+  const shape = shapeProp ?? "note";
   return (
     <p
       {...props}

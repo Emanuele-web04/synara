@@ -25,6 +25,7 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { createAllThreadsSelector } from "~/storeSelectors";
@@ -33,13 +34,14 @@ import {
   AutomationDialog,
   acknowledgedRiskIdsForFormWarnings,
   automationAttentionLabel,
-  automationStatusDotClass,
+  automationListRowIcon,
   buildAutomationFormWarnings,
   createInputFromForm,
   formatCadenceLong,
   formatNextRun,
   formFromDefinition,
   isFormSubmittable,
+  isLiveRun,
   isRowInteractiveEventTarget,
   isUnresolvedTriageResult,
   providerOptionsForAutomationEdit,
@@ -54,19 +56,6 @@ export const Route = createFileRoute("/_chat/automations/")({
 });
 
 const selectAllThreads = createAllThreadsSelector();
-
-type LiveAutomationRun = AutomationRun & {
-  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
-};
-
-function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
-  return (
-    run?.status === "pending" ||
-    run?.status === "claimed" ||
-    run?.status === "running" ||
-    run?.status === "waiting-for-approval"
-  );
-}
 
 /** Unread successful result the user has not opened yet — surfaced as quiet row meta. */
 function hasUnreadResult(run: AutomationRun | null): boolean {
@@ -85,7 +74,7 @@ function AutomationListRow({
   detail,
   meta,
   onDelete,
-  dimmed = false,
+  dimmed: dimmedProp,
 }: {
   readonly onClick: () => void;
   readonly leading: ReactNode;
@@ -95,6 +84,7 @@ function AutomationListRow({
   readonly onDelete?: () => void;
   readonly dimmed?: boolean;
 }) {
+  const dimmed = dimmedProp ?? false;
   return (
     // A div with role="button" (not a real <button>) so inline controls like the hover delete
     // can be nested buttons; the keydown guard lets those controls handle their own events
@@ -110,7 +100,10 @@ function AutomationListRow({
           onClick();
         }
       }}
-      className="group flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+      className={cn(
+        "group flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-2.5 text-left",
+        ELEVATED_HOVER_SURFACE_CLASS_NAME,
+      )}
     >
       <span className="mt-0.5 flex shrink-0">{leading}</span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -289,8 +282,6 @@ function AutomationsRouteView() {
 
   const renderRow = (definition: AutomationDefinition) => {
     const latestRun: AutomationRun | null = runsByAutomationId.get(definition.id)?.[0] ?? null;
-    const needsAttention =
-      definition.enabled && latestRun !== null && automationAttentionLabel(latestRun) !== null;
     return (
       <AutomationListRow
         key={definition.id}
@@ -301,18 +292,10 @@ function AutomationsRouteView() {
             params: { automationId: definition.id },
           })
         }
-        leading={
-          <CentralIcon
-            name={
-              definition.enabled
-                ? needsAttention
-                  ? "exclamation-circle"
-                  : "circle-placeholder-on"
-                : "play-circle"
-            }
-            className={cn("size-4", automationStatusDotClass(definition, latestRun))}
-          />
-        }
+        leading={(() => {
+          const icon = automationListRowIcon(definition, latestRun);
+          return <CentralIcon name={icon.name} className={icon.className} />;
+        })()}
         title={definition.name}
         detail={rowSubtitle(definition, latestRun, now)}
         meta={hasUnreadResult(latestRun) ? "New result" : undefined}

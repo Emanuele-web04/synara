@@ -197,6 +197,20 @@ const make = Effect.gen(function* () {
         schema: ProviderListModelsInput,
         payload: input,
       });
+      // The enabled check is a short-circuit, not a precondition, and
+      // ServerSettingsError is outside this operation's error channel. An
+      // unreadable settings file falls back to discovering models, which is
+      // what this call did before the gate existed.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      if (settings !== null && !settings.providers[parsed.provider].enabled) {
+        return {
+          models: [],
+          source: "disabled",
+          cached: false,
+        };
+      }
       const adapter = yield* registry.getByProvider(parsed.provider);
       if (!adapter.listModels) {
         return {

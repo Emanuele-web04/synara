@@ -2,6 +2,7 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestrationThread,
   ProjectKind,
   ThreadMarker,
 } from "@synara/contracts";
@@ -20,6 +21,7 @@ import {
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -63,6 +65,22 @@ const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
+
+function validateAutoRuntimeMode(
+  command: OrchestrationCommand,
+  modelSelection: OrchestrationThread["modelSelection"],
+  runtimeMode: OrchestrationThread["runtimeMode"],
+) {
+  const issue = autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection });
+  return issue === null
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: issue,
+        }),
+      );
+}
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],
@@ -245,6 +263,109 @@ function deriveCommandAssociatedWorktreeMetadataPatch(input: {
       ? { associatedWorktreeRef: input.associatedWorktreeRef }
       : {}),
   });
+}
+
+type CreatedThreadWorkspaceCommand = Pick<
+  Extract<
+    OrchestrationCommand,
+    { type: "thread.create" | "thread.handoff.create" | "thread.fork.create" }
+  >,
+  | "envMode"
+  | "branch"
+  | "worktreePath"
+  | "workingDirectory"
+  | "associatedWorktreePath"
+  | "associatedWorktreeBranch"
+  | "associatedWorktreeRef"
+>;
+
+function resolveCreatedThreadWorkspaceMetadata(
+  projectKind: ProjectKind | undefined,
+  command: CreatedThreadWorkspaceCommand,
+) {
+  if (projectKind === "studio") {
+    return {
+      envMode: "local" as const,
+      branch: null,
+      worktreePath: null,
+      // Backward compatibility: older Studio clients sent "Use a folder" through
+      // worktreePath. Preserve that folder while stripping its worktree semantics.
+      workingDirectory:
+        command.workingDirectory !== undefined ? command.workingDirectory : command.worktreePath,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+    };
+  }
+
+  return {
+    envMode: command.envMode,
+    branch: command.branch,
+    worktreePath: command.worktreePath,
+    workingDirectory: command.workingDirectory ?? null,
+    ...deriveCommandAssociatedWorktreeMetadata({
+      branch: command.branch,
+      worktreePath: command.worktreePath,
+      ...(command.associatedWorktreePath !== undefined
+        ? { associatedWorktreePath: command.associatedWorktreePath }
+        : {}),
+      ...(command.associatedWorktreeBranch !== undefined
+        ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
+        : {}),
+      ...(command.associatedWorktreeRef !== undefined
+        ? { associatedWorktreeRef: command.associatedWorktreeRef }
+        : {}),
+    }),
+  };
+}
+
+function resolveThreadWorkspaceMetadataPatch(
+  projectKind: ProjectKind | undefined,
+  command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
+  currentThread: OrchestrationThread,
+) {
+  if (projectKind === "studio") {
+    return {
+      envMode: "local" as const,
+      branch: null,
+      worktreePath: null,
+      workingDirectory:
+        command.workingDirectory !== undefined
+          ? command.workingDirectory
+          : command.worktreePath
+            ? command.worktreePath
+            : (currentThread.workingDirectory ?? currentThread.worktreePath),
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+    };
+  }
+
+  return {
+    ...(command.envMode !== undefined ? { envMode: command.envMode } : {}),
+    ...(command.branch !== undefined ? { branch: command.branch } : {}),
+    ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+    ...(command.workingDirectory !== undefined
+      ? { workingDirectory: command.workingDirectory }
+      : {}),
+    ...deriveCommandAssociatedWorktreeMetadataPatch({
+      ...(command.branch !== undefined ? { branch: command.branch } : {}),
+      ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+      ...(command.associatedWorktreePath !== undefined
+        ? { associatedWorktreePath: command.associatedWorktreePath }
+        : {}),
+      ...(command.associatedWorktreeBranch !== undefined
+        ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
+        : {}),
+      ...(command.associatedWorktreeRef !== undefined
+        ? { associatedWorktreeRef: command.associatedWorktreeRef }
+        : {}),
+    }),
+    ...(command.createBranchFlowCompleted !== undefined
+      ? { createBranchFlowCompleted: command.createBranchFlowCompleted }
+      : {}),
+  };
 }
 
 function deriveConversationRollbackTarget(
@@ -750,7 +871,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -760,6 +881,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -775,23 +897,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
-          envMode: command.envMode,
-          branch: command.branch,
-          worktreePath: command.worktreePath,
-          ...deriveCommandAssociatedWorktreeMetadata({
-            branch: command.branch,
-            worktreePath: command.worktreePath,
-            ...(command.associatedWorktreePath !== undefined
-              ? { associatedWorktreePath: command.associatedWorktreePath }
-              : {}),
-            ...(command.associatedWorktreeBranch !== undefined
-              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
-              : {}),
-            ...(command.associatedWorktreeRef !== undefined
-              ? { associatedWorktreeRef: command.associatedWorktreeRef }
-              : {}),
-          }),
-          createBranchFlowCompleted: command.createBranchFlowCompleted,
+          ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
+          createBranchFlowCompleted:
+            project.kind === "studio" ? false : command.createBranchFlowCompleted,
           isPinned: command.isPinned,
           parentThreadId: command.parentThreadId,
           ...(command.creationSource !== undefined
@@ -816,7 +924,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.handoff.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -831,6 +939,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
 
       const sourceThread = yield* requireThread({
         readModel,
@@ -865,23 +974,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
-          envMode: command.envMode,
-          branch: command.branch,
-          worktreePath: command.worktreePath,
-          ...deriveCommandAssociatedWorktreeMetadata({
-            branch: command.branch,
-            worktreePath: command.worktreePath,
-            ...(command.associatedWorktreePath !== undefined
-              ? { associatedWorktreePath: command.associatedWorktreePath }
-              : {}),
-            ...(command.associatedWorktreeBranch !== undefined
-              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
-              : {}),
-            ...(command.associatedWorktreeRef !== undefined
-              ? { associatedWorktreeRef: command.associatedWorktreeRef }
-              : {}),
-          }),
-          createBranchFlowCompleted: command.createBranchFlowCompleted,
+          ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
+          createBranchFlowCompleted:
+            project.kind === "studio" ? false : command.createBranchFlowCompleted,
           isPinned: false,
           parentThreadId: null,
           subagentAgentId: null,
@@ -899,6 +994,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
+      // Imported messages keep their source-thread timestamps so the transcript still
+      // reads chronologically. They are not activity in this thread: the retention
+      // clock floors on the new thread's own createdAt/updatedAt (see
+      // `threadRetention.getThreadLastActivityMs`) so a handoff of an old
+      // conversation is never born past the retention cutoff.
       const importedMessageEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
         command.importedMessages.map((message) => ({
           ...withEventBase({
@@ -926,7 +1026,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.fork.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -941,6 +1041,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
 
       const sourceThread = yield* requireThread({
         readModel,
@@ -969,23 +1070,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
-          envMode: command.envMode,
-          branch: command.branch,
-          worktreePath: command.worktreePath,
-          ...deriveCommandAssociatedWorktreeMetadata({
-            branch: command.branch,
-            worktreePath: command.worktreePath,
-            ...(command.associatedWorktreePath !== undefined
-              ? { associatedWorktreePath: command.associatedWorktreePath }
-              : {}),
-            ...(command.associatedWorktreeBranch !== undefined
-              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
-              : {}),
-            ...(command.associatedWorktreeRef !== undefined
-              ? { associatedWorktreeRef: command.associatedWorktreeRef }
-              : {}),
-          }),
-          createBranchFlowCompleted: command.createBranchFlowCompleted,
+          ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
+          createBranchFlowCompleted:
+            project.kind === "studio" ? false : command.createBranchFlowCompleted,
           isPinned: false,
           parentThreadId: null,
           subagentAgentId: null,
@@ -999,6 +1086,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
+      // Imported messages keep their source-thread timestamps so the transcript still
+      // reads chronologically. They are not activity in this thread: the retention
+      // clock floors on the new thread's own createdAt/updatedAt (see
+      // `threadRetention.getThreadLastActivityMs`) so a fork of an old conversation
+      // is never born past the retention cutoff.
       const importedMessageEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
         command.importedMessages.map((message) => ({
           ...withEventBase({
@@ -1099,11 +1191,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.meta.update": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
+      if (command.modelSelection !== undefined) {
+        yield* validateAutoRuntimeMode(command, command.modelSelection, thread.runtimeMode);
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -1119,25 +1215,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
-          ...(command.envMode !== undefined ? { envMode: command.envMode } : {}),
-          ...(command.branch !== undefined ? { branch: command.branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
-          ...deriveCommandAssociatedWorktreeMetadataPatch({
-            ...(command.branch !== undefined ? { branch: command.branch } : {}),
-            ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
-            ...(command.associatedWorktreePath !== undefined
-              ? { associatedWorktreePath: command.associatedWorktreePath }
-              : {}),
-            ...(command.associatedWorktreeBranch !== undefined
-              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
-              : {}),
-            ...(command.associatedWorktreeRef !== undefined
-              ? { associatedWorktreeRef: command.associatedWorktreeRef }
-              : {}),
-          }),
-          ...(command.createBranchFlowCompleted !== undefined
-            ? { createBranchFlowCompleted: command.createBranchFlowCompleted }
-            : {}),
+          ...resolveThreadWorkspaceMetadataPatch(project?.kind, command, thread),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
@@ -1410,11 +1488,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.runtime-mode.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      yield* validateAutoRuntimeMode(command, thread.modelSelection, command.runtimeMode);
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -1468,6 +1547,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      yield* validateAutoRuntimeMode(
+        command,
+        command.modelSelection ?? targetThread.modelSelection,
+        command.runtimeMode,
+      );
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
             readModel,
@@ -1596,6 +1680,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: checkpointRevertInProgressDetail(command.threadId),
         });
       }
+      yield* validateAutoRuntimeMode(
+        command,
+        command.modelSelection ?? thread.modelSelection,
+        command.runtimeMode,
+      );
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1866,6 +1955,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: checkpointRevertInProgressDetail(command.threadId),
         });
       }
+      yield* validateAutoRuntimeMode(
+        command,
+        command.modelSelection ?? thread.modelSelection,
+        command.runtimeMode,
+      );
       const editTarget = resolveTailUserMessageEditTarget({
         messages: thread.messages,
         messageId: command.messageId,

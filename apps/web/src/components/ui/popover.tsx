@@ -20,11 +20,11 @@ function PopoverTrigger({ className, children, ...props }: PopoverPrimitive.Trig
 function PopoverPopup({
   children,
   className,
-  side = "bottom",
-  align = "center",
-  sideOffset = 4,
-  alignOffset = 0,
-  tooltipStyle = false,
+  side: sideProp,
+  align: alignProp,
+  sideOffset: sideOffsetProp,
+  alignOffset: alignOffsetProp,
+  tooltipStyle: tooltipStyleProp,
   anchor,
   ...props
 }: PopoverPrimitive.Popup.Props & {
@@ -35,6 +35,11 @@ function PopoverPopup({
   tooltipStyle?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
 }) {
+  const side = sideProp ?? "bottom";
+  const align = alignProp ?? "center";
+  const sideOffset = sideOffsetProp ?? 4;
+  const alignOffset = alignOffsetProp ?? 0;
+  const tooltipStyle = tooltipStyleProp ?? false;
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner

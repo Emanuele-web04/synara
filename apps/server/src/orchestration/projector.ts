@@ -106,12 +106,36 @@ function settleLatestTurnForSessionStatus(
   };
 }
 
+// Every projected event patches exactly one thread, and streaming assistant
+// deltas run this on the dispatch hot path, so patch the single affected slot
+// instead of mapping a closure over every thread.
 function updateThread(
   threads: ReadonlyArray<OrchestrationThread>,
   threadId: ThreadId,
   patch: ThreadPatch,
 ): OrchestrationThread[] {
-  return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+  const nextThreads = threads.slice();
+  const index = nextThreads.findIndex((thread) => thread.id === threadId);
+  if (index === -1) {
+    return nextThreads;
+  }
+  nextThreads[index] = { ...nextThreads[index]!, ...patch };
+  return nextThreads;
+}
+
+// Message ids are unique within a thread and streamed deltas land on the newest
+// message, so searching backwards finds the target in one step instead of
+// scanning the whole (capped at MAX_THREAD_MESSAGES) transcript.
+function findMessageIndexFromEnd(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  messageId: string,
+): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]!.id === messageId) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function decodeForEvent<A>(
@@ -453,6 +477,8 @@ export function projectEvent(
           event.type,
           "payload",
         );
+        const isStudio =
+          nextBase.projects.find((project) => project.id === payload.projectId)?.kind === "studio";
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -462,13 +488,16 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
-            envMode: payload.envMode,
-            branch: payload.branch,
-            worktreePath: payload.worktreePath,
-            associatedWorktreePath: payload.associatedWorktreePath,
-            associatedWorktreeBranch: payload.associatedWorktreeBranch,
-            associatedWorktreeRef: payload.associatedWorktreeRef,
-            createBranchFlowCompleted: payload.createBranchFlowCompleted,
+            envMode: isStudio ? "local" : payload.envMode,
+            branch: isStudio ? null : payload.branch,
+            worktreePath: isStudio ? null : payload.worktreePath,
+            workingDirectory: isStudio
+              ? (payload.workingDirectory ?? payload.worktreePath)
+              : payload.workingDirectory,
+            associatedWorktreePath: isStudio ? null : payload.associatedWorktreePath,
+            associatedWorktreeBranch: isStudio ? null : payload.associatedWorktreeBranch,
+            associatedWorktreeRef: isStudio ? null : payload.associatedWorktreeRef,
+            createBranchFlowCompleted: isStudio ? false : payload.createBranchFlowCompleted,
             isPinned: payload.isPinned,
             parentThreadId: payload.parentThreadId,
             creationSource: payload.creationSource ?? null,
@@ -549,6 +578,9 @@ export function projectEvent(
         Effect.map((payload) => {
           const existingThread =
             nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          const isStudio =
+            nextBase.projects.find((project) => project.id === existingThread?.projectId)?.kind ===
+            "studio";
           const nextCreateBranchFlowCompleted =
             payload.createBranchFlowCompleted !== undefined
               ? payload.createBranchFlowCompleted
@@ -564,9 +596,30 @@ export function projectEvent(
               ...(payload.modelSelection !== undefined
                 ? { modelSelection: payload.modelSelection }
                 : {}),
-              ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
-              ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
-              ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+              ...(isStudio
+                ? {
+                    envMode: "local" as const,
+                    branch: null,
+                    worktreePath: null,
+                    workingDirectory:
+                      payload.workingDirectory !== undefined
+                        ? payload.workingDirectory
+                        : payload.worktreePath !== undefined
+                          ? payload.worktreePath
+                          : (existingThread?.workingDirectory ??
+                            existingThread?.worktreePath ??
+                            null),
+                  }
+                : {
+                    ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
+                    ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+                    ...(payload.worktreePath !== undefined
+                      ? { worktreePath: payload.worktreePath }
+                      : {}),
+                    ...(payload.workingDirectory !== undefined
+                      ? { workingDirectory: payload.workingDirectory }
+                      : {}),
+                  }),
               ...(payload.associatedWorktreePath !== undefined
                 ? { associatedWorktreePath: payload.associatedWorktreePath }
                 : {}),
@@ -578,6 +631,14 @@ export function projectEvent(
                 : {}),
               ...(nextCreateBranchFlowCompleted !== undefined
                 ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
+                : {}),
+              ...(isStudio
+                ? {
+                    associatedWorktreePath: null,
+                    associatedWorktreeBranch: null,
+                    associatedWorktreeRef: null,
+                    createBranchFlowCompleted: false,
+                  }
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               ...(payload.parentThreadId !== undefined
@@ -868,34 +929,42 @@ export function projectEvent(
           "message",
         );
 
-        const existingMessage = thread.messages.find((entry) => entry.id === message.id);
-        const messages = existingMessage
-          ? thread.messages.map((entry) =>
-              entry.id === message.id
-                ? {
-                    ...entry,
-                    text: message.streaming
-                      ? `${entry.text}${message.text}`
-                      : message.text.length > 0
-                        ? message.text
-                        : entry.text,
-                    streaming: message.streaming,
-                    source: message.source,
-                    updatedAt: message.updatedAt,
-                    turnId: resolveStableMessageTurnId({
-                      existingTurnId: entry.turnId,
-                      incomingTurnId: message.turnId,
-                    }),
-                    ...(message.attachments !== undefined
-                      ? { attachments: message.attachments }
-                      : {}),
-                    ...(message.skills !== undefined ? { skills: message.skills } : {}),
-                    ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
-                  }
-                : entry,
-            )
-          : [...thread.messages, message];
-        const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
+        // Hot path: one streamed delta must not cost a full copy-and-rebuild of
+        // the transcript. Update the one affected slot in a single shallow copy
+        // and only re-cap when the transcript actually grew past the limit.
+        const existingIndex = findMessageIndexFromEnd(thread.messages, message.id);
+        let cappedMessages: ReadonlyArray<OrchestrationMessage>;
+        if (existingIndex >= 0) {
+          const entry = thread.messages[existingIndex]!;
+          const nextMessages = thread.messages.slice();
+          nextMessages[existingIndex] = {
+            ...entry,
+            text: message.streaming
+              ? `${entry.text}${message.text}`
+              : message.text.length > 0
+                ? message.text
+                : entry.text,
+            streaming: message.streaming,
+            source: message.source,
+            updatedAt: message.updatedAt,
+            turnId: resolveStableMessageTurnId({
+              existingTurnId: entry.turnId,
+              incomingTurnId: message.turnId,
+            }),
+            ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            ...(message.skills !== undefined ? { skills: message.skills } : {}),
+            ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+          };
+          cappedMessages = nextMessages;
+        } else {
+          cappedMessages =
+            thread.messages.length >= MAX_THREAD_MESSAGES
+              ? [
+                  ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
+                  message,
+                ]
+              : [...thread.messages, message];
+        }
 
         return {
           ...nextBase,

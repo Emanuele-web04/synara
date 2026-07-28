@@ -13,6 +13,7 @@ import {
   resolvePullActionAvailability,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
+  shouldShowEnvironmentPanelPullRow,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
@@ -428,6 +429,25 @@ describe("when: branch is behind upstream", () => {
     assert.deepEqual(availability, { canRun: true, hint: null });
   });
 
+  it("shouldShowEnvironmentPanelPullRow promotes the Pull primary row", () => {
+    const quick = resolveQuickAction(status({ behindCount: 2 }), false);
+    assert.equal(
+      shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
+      true,
+    );
+  });
+
+  it("shouldShowEnvironmentPanelPullRow keeps the Pull row visible while pulling", () => {
+    const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
+    assert.equal(
+      shouldShowEnvironmentPanelPullRow({
+        quickAction: busyQuickAction,
+        isPullRunning: true,
+      }),
+      true,
+    );
+  });
+
   it("buildMenuItems disables push and create PR", () => {
     const items = buildMenuItems(status({ behindCount: 1, pr: null }), false);
     assert.deepEqual(items, [
@@ -494,6 +514,14 @@ describe("when: branch is up to date", () => {
       canRun: false,
       hint: "Branch is already up to date.",
     });
+  });
+
+  it("shouldShowEnvironmentPanelPullRow stays hidden", () => {
+    const quick = resolveQuickAction(status({ aheadCount: 0, behindCount: 0 }), false);
+    assert.equal(
+      shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
+      false,
+    );
   });
 });
 
@@ -1401,6 +1429,15 @@ describe("resolveLiveThreadBranchUpdate", () => {
     });
 
     assert.deepEqual(update, { branch: "feature/new" });
+  });
+
+  it("does not treat pending branch discovery as out-of-sync with status", () => {
+    const update = resolveLiveThreadBranchUpdate({
+      threadBranch: null,
+      gitStatus: status({ branch: "main" }),
+    });
+
+    assert.equal(update, null);
   });
 });
 

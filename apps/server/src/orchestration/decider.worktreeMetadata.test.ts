@@ -20,7 +20,7 @@ const WORKTREE_PATH = "/tmp/worktrees/feature-worktree";
 
 const asEventId = (value: string) => EventId.makeUnsafe(value);
 
-async function createProjectReadModel(now: string) {
+async function createProjectReadModel(now: string, kind: "project" | "studio" = "project") {
   return Effect.runPromise(
     projectEvent(createEmptyReadModel(now), {
       sequence: 1,
@@ -35,8 +35,9 @@ async function createProjectReadModel(now: string) {
       metadata: {},
       payload: {
         projectId: PROJECT_ID,
-        title: "Project",
-        workspaceRoot: "/tmp/project",
+        kind,
+        title: kind === "studio" ? "Studio" : "Project",
+        workspaceRoot: kind === "studio" ? "/tmp/Studio" : "/tmp/project",
         defaultModelSelection: null,
         scripts: [],
         createdAt: now,
@@ -46,8 +47,8 @@ async function createProjectReadModel(now: string) {
   );
 }
 
-async function createWorktreeThreadReadModel(now: string) {
-  const withProject = await createProjectReadModel(now);
+async function createWorktreeThreadReadModel(now: string, kind: "project" | "studio" = "project") {
+  const withProject = await createProjectReadModel(now, kind);
 
   return Effect.runPromise(
     projectEvent(withProject, {
@@ -92,6 +93,151 @@ async function createWorktreeThreadReadModel(now: string) {
 }
 
 describe("decider worktree metadata", () => {
+  it("converts legacy Studio worktreePath input into an ordinary working directory", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createProjectReadModel(now, "studio");
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-studio-thread-create"),
+          threadId: THREAD_ID,
+          projectId: PROJECT_ID,
+          title: "Studio thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          envMode: "worktree",
+          branch: WORKTREE_BRANCH,
+          worktreePath: WORKTREE_PATH,
+          associatedWorktreePath: WORKTREE_PATH,
+          associatedWorktreeBranch: WORKTREE_BRANCH,
+          associatedWorktreeRef: WORKTREE_BRANCH,
+          createBranchFlowCompleted: true,
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.created");
+    if (!event || event.type !== "thread.created") {
+      return;
+    }
+
+    expect(event.payload).toMatchObject({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: WORKTREE_PATH,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+    });
+  });
+
+  it("self-heals legacy Studio workspace metadata on any meta update", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now, "studio");
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-studio-thread-rename"),
+          threadId: THREAD_ID,
+          title: "Renamed Studio thread",
+          workingDirectory: "/tmp/updated-reference-folder",
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.meta-updated");
+    if (!event || event.type !== "thread.meta-updated") {
+      return;
+    }
+
+    expect(event.payload).toMatchObject({
+      title: "Renamed Studio thread",
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: "/tmp/updated-reference-folder",
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+    });
+  });
+
+  it("preserves the Studio folder during legacy branch-only metadata updates", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now, "studio");
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-studio-legacy-branch-update"),
+          threadId: THREAD_ID,
+          branch: "feature/another-branch",
+          worktreePath: null,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.meta-updated");
+    if (!event || event.type !== "thread.meta-updated") {
+      return;
+    }
+
+    expect(event.payload).toMatchObject({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: WORKTREE_PATH,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+    });
+  });
+
+  it("clears the Studio folder only through an explicit working-directory update", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now, "studio");
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-studio-clear-working-directory"),
+          threadId: THREAD_ID,
+          workingDirectory: null,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.meta-updated");
+    if (!event || event.type !== "thread.meta-updated") {
+      return;
+    }
+
+    expect(event.payload.workingDirectory).toBeNull();
+  });
+
   it("derives associated worktree metadata during thread.create when only branch and worktreePath are provided", async () => {
     const now = new Date().toISOString();
     const readModel = await createProjectReadModel(now);

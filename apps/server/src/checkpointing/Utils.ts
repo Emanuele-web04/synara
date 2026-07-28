@@ -12,12 +12,12 @@ import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@s
 export const CHECKPOINT_REFS_PREFIX = "refs/synara/checkpoints";
 
 const MANAGED_CHECKPOINT_REF_PATTERN =
-  /^refs\/([A-Za-z0-9._-]+)\/checkpoints\/([A-Za-z0-9_-]+)\/(turn|message-start|turn-start|turn-live)\/([A-Za-z0-9_-]+)$/;
+  /^refs\/([A-Za-z0-9._-]+)\/checkpoints\/([A-Za-z0-9_-]+)\/(turn|message-start|turn-start|turn-live|revert-rescue)\/([A-Za-z0-9_-]+)$/;
 
 export interface ManagedCheckpointRefParts {
   readonly namespace: string;
   readonly threadToken: string;
-  readonly kind: "turn" | "message-start" | "turn-start" | "turn-live";
+  readonly kind: "turn" | "message-start" | "turn-start" | "turn-live" | "revert-rescue";
   readonly valueToken: string;
   readonly familyPrefix: string;
 }
@@ -94,6 +94,20 @@ export function checkpointRefForThreadTurnLive(threadId: ThreadId, turnId: TurnI
   );
 }
 
+// Throwaway snapshot of the pre-revert working tree. A revert mutates two
+// systems that cannot commit together — the worktree and the provider
+// conversation — so the files are captured here first and restored from here if
+// the conversation rollback fails. Deleted once the revert commits; the token is
+// random so concurrent reverts on the same thread never share one.
+export function checkpointRefForThreadRevertRescue(
+  threadId: ThreadId,
+  token: string,
+): CheckpointRef {
+  return CheckpointRef.makeUnsafe(
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/revert-rescue/${token}`,
+  );
+}
+
 /**
  * Decide whether a project's `workspaceRoot` should be treated as a thread's
  * real, usable working directory.
@@ -123,6 +137,7 @@ export function resolveThreadWorkspaceCwd(input: {
     readonly projectId: ProjectId;
     readonly envMode?: "local" | "worktree" | undefined;
     readonly worktreePath: string | null;
+    readonly workingDirectory?: string | null | undefined;
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
@@ -141,6 +156,7 @@ export function resolveThreadWorkspaceCwd(input: {
       projectCwd,
       envMode: input.thread.envMode,
       worktreePath: input.thread.worktreePath,
+      workingDirectory: input.thread.workingDirectory,
     }) ?? undefined
   );
 }

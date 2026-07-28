@@ -51,6 +51,14 @@ export const SetAutomationDefinitionNextRunAtInput = Schema.Struct({
 export type SetAutomationDefinitionNextRunAtInput =
   typeof SetAutomationDefinitionNextRunAtInput.Type;
 
+export const AttachAutomationDefinitionThreadInput = Schema.Struct({
+  id: AutomationId,
+  threadId: ThreadId,
+  updatedAt: Schema.String,
+});
+export type AttachAutomationDefinitionThreadInput =
+  typeof AttachAutomationDefinitionThreadInput.Type;
+
 export const RestartAutomationDefinitionLoopInput = Schema.Struct({
   id: AutomationId,
   enabled: Schema.Boolean,
@@ -297,6 +305,14 @@ export interface AutomationRepositoryShape {
   readonly setDefinitionNextRunAt: (
     input: SetAutomationDefinitionNextRunAtInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
+  /**
+   * Claim the thread a dedicated automation owns from now on. Succeeds only while the
+   * definition still has no continuation thread, so two concurrent first runs can never
+   * leave the automation pointing at the loser's thread.
+   */
+  readonly attachDefinitionThread: (
+    input: AttachAutomationDefinitionThreadInput,
+  ) => Effect.Effect<boolean, AutomationRepositoryError>;
   readonly archiveDefinition: (
     input: ArchiveAutomationDefinitionInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;

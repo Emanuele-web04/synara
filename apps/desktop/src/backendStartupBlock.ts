@@ -1,0 +1,52 @@
+// FILE: backendStartupBlock.ts
+// Purpose: Classifies expected backend startup blocks that need user action, not crash retries.
+
+const MAX_STARTUP_OUTPUT_CHARS = 16_384;
+
+export type BackendStartupBlock =
+  | {
+      readonly kind: "database-locked";
+      readonly ownerPid: number | null;
+    }
+  | {
+      readonly kind: "migration-recovery-required";
+    };
+
+export class BackendStartupBlockDetector {
+  private output = "";
+  private block: BackendStartupBlock | null = null;
+
+  push(chunk: unknown): void {
+    if (this.block) return;
+
+    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    this.output = `${this.output}${text.replace(/\r/g, "")}`;
+    if (this.output.length > MAX_STARTUP_OUTPUT_CHARS) {
+      this.output = this.output.slice(-MAX_STARTUP_OUTPUT_CHARS);
+    }
+
+    if (this.output.includes("MigrationRecoveryRequiredError:")) {
+      this.block = { kind: "migration-recovery-required" };
+      return;
+    }
+
+    const lockErrorIndex = this.output.indexOf("DatabaseLifecycleLockedError:");
+    if (lockErrorIndex === -1) {
+      return;
+    }
+    const lockErrorOutput = this.output.slice(lockErrorIndex);
+    const ownerPidMatch = lockErrorOutput.match(/owner pid (\d+) is live/);
+    if (!ownerPidMatch && !lockErrorOutput.includes("\n")) {
+      return;
+    }
+    const parsedOwnerPid = ownerPidMatch?.[1] ? Number.parseInt(ownerPidMatch[1], 10) : Number.NaN;
+    this.block = {
+      kind: "database-locked",
+      ownerPid: Number.isSafeInteger(parsedOwnerPid) && parsedOwnerPid > 0 ? parsedOwnerPid : null,
+    };
+  }
+
+  read(): BackendStartupBlock | null {
+    return this.block;
+  }
+}

@@ -936,7 +936,7 @@ function ComposerPromptEditorInner({
   value,
   cursor,
   terminalContexts,
-  mentionReferences = [],
+  mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
   className,
@@ -947,6 +947,7 @@ function ComposerPromptEditorInner({
   onPaste,
   editorRef,
 }: ComposerPromptEditorInnerProps) {
+  const mentionReferences = mentionReferencesProp ?? [];
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
   const initialCursor = clampCollapsedComposerCursor(value, cursor);
@@ -1042,7 +1043,6 @@ function ComposerPromptEditorInner({
     value,
   ]);
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const focusAt = useCallback(
     (nextCursor: number) => {
       const rootElement = editor.getRootElement();

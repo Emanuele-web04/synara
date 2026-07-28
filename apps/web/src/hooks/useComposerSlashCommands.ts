@@ -142,7 +142,6 @@ export function useComposerSlashCommands(input: {
     providerNativeCommandNames,
   });
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const compactProviderThread = useCallback(async (): Promise<boolean> => {
     const api = readNativeApi();
     if (
@@ -279,6 +278,7 @@ export function useComposerSlashCommands(input: {
         envMode: resolvedTarget.envMode,
         branch: resolvedTarget.branch,
         worktreePath: resolvedTarget.worktreePath,
+        workingDirectory: activeThread.workingDirectory ?? null,
         associatedWorktreePath: resolvedTarget.associatedWorktreePath,
         associatedWorktreeBranch: resolvedTarget.associatedWorktreeBranch,
         associatedWorktreeRef: resolvedTarget.associatedWorktreeRef,
@@ -338,6 +338,7 @@ export function useComposerSlashCommands(input: {
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
+        workingDirectory: activeThread.workingDirectory ?? null,
         associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
         associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
         associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
@@ -430,6 +431,17 @@ export function useComposerSlashCommands(input: {
         associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
       });
 
+      // Hoisted out of the `try` below: React Compiler cannot lower `??`/`?:` inside a try block and
+      // would skip this whole hook, so the composer would lose its memoization on every keystroke.
+      const nextEnvMode =
+        activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local");
+      const nextWorkingDirectory = activeThread.workingDirectory ?? null;
+      const nextLastKnownPr = activeThread.lastKnownPr ?? null;
+      const reviewTarget =
+        target === "base-branch"
+          ? ({ type: "baseBranch", branch: activeRootBranch! } as const)
+          : ({ type: "uncommittedChanges" } as const);
+
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.create",
@@ -440,10 +452,11 @@ export function useComposerSlashCommands(input: {
           modelSelection: selectedModelSelection,
           runtimeMode,
           interactionMode: "default",
-          envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
+          envMode: nextEnvMode,
           branch: activeThread.branch,
           worktreePath: activeThread.worktreePath,
-          lastKnownPr: activeThread.lastKnownPr ?? null,
+          workingDirectory: nextWorkingDirectory,
+          lastKnownPr: nextLastKnownPr,
           ...associatedWorktree,
           createdAt,
         });
@@ -458,15 +471,7 @@ export function useComposerSlashCommands(input: {
             attachments: [],
           },
           modelSelection: selectedModelSelection,
-          reviewTarget:
-            target === "base-branch"
-              ? {
-                  type: "baseBranch",
-                  branch: activeRootBranch!,
-                }
-              : {
-                  type: "uncommittedChanges",
-                },
+          reviewTarget,
           dispatchMode: "queue",
           runtimeMode,
           interactionMode: "default",

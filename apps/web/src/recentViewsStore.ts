@@ -43,11 +43,6 @@ function normalizeRecentView(input: unknown): RecentView | null {
     };
   }
 
-  if (record.kind === "workspace") {
-    const workspaceId = normalizeOptionalId(record.workspaceId);
-    return workspaceId ? { kind: "workspace", workspaceId } : null;
-  }
-
   if (record.kind === "settings") {
     const section = normalizeOptionalId(record.section);
     return { kind: "settings", ...(section ? { section } : {}) };

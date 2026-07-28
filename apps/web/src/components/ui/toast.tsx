@@ -34,6 +34,7 @@ import {
 
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
+  compactContextual?: boolean;
   copyText?: string;
   onClose?: () => void;
   secondaryActionProps?: React.ComponentProps<typeof Button>;
@@ -60,6 +61,9 @@ const TOAST_ICONS = {
 } as const;
 
 function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
+  if (toast.data?.compactContextual) {
+    return true;
+  }
   return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
 }
 
@@ -128,7 +132,7 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
 function ThreadToastVisibleAutoDismiss({
   toastId,
   dismissAfterVisibleMs,
-  paused = false,
+  paused: pausedProp,
 }: {
   toastId: ToastId;
   dismissAfterVisibleMs: number | undefined;
@@ -136,6 +140,7 @@ function ThreadToastVisibleAutoDismiss({
   // toast can't auto-dismiss out from under an action the user just triggered.
   paused?: boolean;
 }) {
+  const paused = pausedProp ?? false;
   useEffect(() => {
     if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) return;
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -266,7 +271,7 @@ function ToastActions({
 }
 
 function ToastCloseButton({
-  compact = false,
+  compact: compactProp,
   onDismiss,
   onClose,
 }: {
@@ -274,6 +279,7 @@ function ToastCloseButton({
   onDismiss: () => void;
   onClose?: (() => void) | undefined;
 }) {
+  const compact = compactProp ?? false;
   return (
     <button
       type="button"
@@ -394,13 +400,17 @@ function ToastSurface({
   onDismiss: () => void;
 }) {
   const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
+  const compactContextual = compact && toast.data?.compactContextual === true;
 
   return (
     <Toast.Content
       className={cn(
         "pointer-events-auto relative flex overflow-hidden transition-opacity duration-250 data-expanded:opacity-100",
         compact
-          ? "items-center gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal"
+          ? cn(
+              "gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal",
+              compactContextual ? "items-start py-2" : "items-center",
+            )
           : "items-start gap-2 px-3.5 py-3 pr-10 text-sm",
         hideCollapsedContent && "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
       )}
@@ -409,7 +419,9 @@ function ToastSurface({
         <div
           className={cn(
             "shrink-0 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-            compact ? "[&>svg]:size-3.5" : "[&>svg]:h-lh [&>svg]:w-4",
+            compact
+              ? cn("[&>svg]:size-3.5", compactContextual && "pt-0.5")
+              : "[&>svg]:h-lh [&>svg]:w-4",
           )}
           data-slot="toast-icon"
         >
@@ -418,18 +430,28 @@ function ToastSurface({
       ) : null}
 
       <div
-        className={cn("min-w-0 flex-1", compact ? "flex items-center" : "flex flex-col gap-0.5")}
+        className={cn(
+          "min-w-0 flex-1",
+          compact && !compactContextual ? "flex items-center" : "flex flex-col gap-0.5",
+        )}
       >
         <Toast.Title
           className={cn(
             "min-w-0 font-normal",
-            compact ? "truncate whitespace-nowrap" : "break-words",
+            compact && !compactContextual
+              ? "truncate whitespace-nowrap"
+              : compactContextual
+                ? "truncate whitespace-nowrap font-medium"
+                : "break-words",
           )}
           data-slot="toast-title"
         />
-        {!compact ? (
+        {!compact || compactContextual ? (
           <Toast.Description
-            className="min-w-0 break-words text-[var(--notification-fg)]/72"
+            className={cn(
+              "min-w-0 text-[var(--notification-fg)]/72",
+              compactContextual ? "line-clamp-2 max-w-80 break-words leading-snug" : "break-words",
+            )}
             data-slot="toast-description"
           />
         ) : null}
@@ -442,12 +464,25 @@ function ToastSurface({
         ) : null}
       </div>
 
+      {compactContextual && toast.actionProps ? (
+        <Toast.Action
+          {...toast.actionProps}
+          className={cn(
+            "mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-[var(--notification-fg)]/76 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
+            toast.actionProps.className,
+          )}
+          data-slot="toast-action"
+        >
+          {toast.actionProps.children}
+        </Toast.Action>
+      ) : null}
       <ToastCloseButton compact={compact} onClose={toast.data?.onClose} onDismiss={onDismiss} />
     </Toast.Content>
   );
 }
 
-function ToastProvider({ children, position = "top-center", ...props }: ToastProviderProps) {
+function ToastProvider({ children, position: positionProp, ...props }: ToastProviderProps) {
+  const position = positionProp ?? "top-center";
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
       {children}
@@ -456,7 +491,8 @@ function ToastProvider({ children, position = "top-center", ...props }: ToastPro
   );
 }
 
-function Toasts({ position = "top-center" }: { position: ToastPosition }) {
+function Toasts({ position: positionProp }: { position: ToastPosition }) {
+  const position = positionProp ?? "top-center";
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const visibleThreadIds = useVisibleThreadIdsFromRoute();
   const isTop = position.startsWith("top");

@@ -21,12 +21,12 @@ interface ComposerStackedPanelRowProps extends HTMLAttributes<HTMLDivElement> {
   compact?: boolean;
 }
 
-// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const ComposerStackedPanelRow = memo(function ComposerStackedPanelRow({
-  compact = false,
+  compact: compactProp,
   className,
   ...rest
 }: ComposerStackedPanelRowProps) {
+  const compact = compactProp ?? false;
   return (
     <div
       className={cn(
@@ -63,8 +63,9 @@ interface ComposerStackedPanelRowLabelProps {
 export const ComposerStackedPanelRowLabel = memo(function ComposerStackedPanelRowLabel({
   children,
   className,
-  tone = "primary",
+  tone: toneProp,
 }: ComposerStackedPanelRowLabelProps) {
+  const tone = toneProp ?? "primary";
   return (
     <span
       className={cn(

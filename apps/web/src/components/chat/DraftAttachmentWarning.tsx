@@ -30,7 +30,8 @@ type DraftAttachmentWarningIconProps = ComponentPropsWithoutRef<"span"> & {
 export const DraftAttachmentWarningIcon = forwardRef<
   HTMLSpanElement,
   DraftAttachmentWarningIconProps
->(function DraftAttachmentWarningIcon({ variant = "inline", className, ...rest }, ref) {
+>(function DraftAttachmentWarningIcon({ variant: variantProp, className, ...rest }, ref) {
+  const variant = variantProp ?? "inline";
   return (
     <span
       ref={ref}

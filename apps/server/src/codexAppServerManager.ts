@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -32,6 +32,7 @@ import {
   ProviderInteractionMode,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
+  type UserInputQuestion,
 } from "@synara/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
@@ -39,8 +40,10 @@ import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
+  compareCodexCliVersions,
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
+  MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import {
@@ -55,6 +58,7 @@ import {
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
+import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -92,7 +96,8 @@ interface PendingApprovalRequest {
   method:
     | "item/commandExecution/requestApproval"
     | "item/fileChange/requestApproval"
-    | "item/fileRead/requestApproval";
+    | "item/fileRead/requestApproval"
+    | "item/permissions/requestApproval";
   requestKind: ProviderRequestKind;
   threadId: ThreadId;
   turnId?: TurnId;
@@ -100,6 +105,11 @@ interface PendingApprovalRequest {
   itemId?: ProviderItemId;
   providerThreadId?: string;
   providerParentThreadId?: string;
+  requestedPermissions?: Record<string, unknown>;
+}
+
+function isPermissionApprovalRequest(request: PendingApprovalRequest): boolean {
+  return request.method === "item/permissions/requestApproval";
 }
 
 interface PendingUserInputRequest {
@@ -125,12 +135,14 @@ interface CodexUserInputAnswer {
 }
 
 type CodexApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
+type CodexApprovalsReviewer = "user" | "auto_review";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexTurnSandboxPolicy = {
   readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
 };
 type CodexSessionApprovalOverride = {
   readonly approvalPolicy: "never";
+  readonly approvalsReviewer: "user";
   readonly sandboxPolicy: {
     readonly type: "dangerFullAccess";
   };
@@ -271,6 +283,14 @@ export interface CodexThreadSnapshot {
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
+/**
+ * How long a successful `codex --version` verdict stays valid. Session start and
+ * resume both gate on it, so without memoization every one of those paths spawned a
+ * fresh Codex process. Failures are never cached, so installing or upgrading Codex
+ * takes effect immediately.
+ */
+const CODEX_VERSION_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -292,6 +312,18 @@ const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
+const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
+
+// Bounds the best-effort answers written to parked server requests: a child that
+// stopped draining stdin must never hold session teardown hostage.
+function withCodexPendingSettleDeadline(settle: Promise<unknown>): Promise<void> {
+  return Promise.race([
+    settle.then(() => undefined),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, CODEX_PENDING_SETTLE_DEADLINE_MS).unref();
+    }),
+  ]);
+}
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -534,18 +566,27 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 // Maps Synara's simple runtime toggle to Codex thread-level permission overrides.
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexApprovalPolicy;
+  readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandbox: CodexSandboxMode;
 } {
   switch (runtimeMode) {
     case "approval-required":
       return {
         approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
         sandbox: "read-only",
+      };
+    case "auto":
+      return {
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        sandbox: "workspace-write",
       };
     case "full-access":
     default:
       return {
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandbox: "danger-full-access",
       };
   }
@@ -554,18 +595,27 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
 // turn/start uses sandboxPolicy objects, so keep this separate from thread/start.
 function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexApprovalPolicy;
+  readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
   switch (runtimeMode) {
     case "approval-required":
       return {
         approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
         sandboxPolicy: { type: "readOnly" },
+      };
+    case "auto":
+      return {
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        sandboxPolicy: { type: "workspaceWrite" },
       };
     case "full-access":
     default:
       return {
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandboxPolicy: { type: "dangerFullAccess" },
       };
   }
@@ -573,6 +623,7 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
 
 const CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES: CodexSessionApprovalOverride = {
   approvalPolicy: "never",
+  approvalsReviewer: "user",
   sandboxPolicy: { type: "dangerFullAccess" },
 };
 
@@ -580,6 +631,7 @@ const CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES: CodexSessionApprovalOverride = 
 // as live session state instead of relying on one native approval reply.
 function resolveCodexTurnOverrides(context: CodexSessionContext): {
   readonly approvalPolicy: CodexApprovalPolicy;
+  readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
   return (
@@ -708,6 +760,61 @@ function toCodexUserInputAnswers(
       toCodexUserInputAnswer(value),
     ]),
   );
+}
+
+/**
+ * Canonical parse of an `item/tool/requestUserInput` payload into renderable
+ * questions. This is the single source of truth shared by the manager (which
+ * must refuse — and answer — requests it cannot surface) and `CodexAdapter`
+ * (which projects them into `user-input.requested`); if the two ever disagree,
+ * codex parks forever on a question nobody can see.
+ *
+ * Deliberately lenient: an option carries its label as its description when
+ * codex sends none (the UI hides a description identical to the label), and a
+ * question with no options is kept as a free-text prompt.
+ */
+export function parseCodexUserInputQuestions(
+  payload: Record<string, unknown> | undefined,
+): UserInputQuestion[] | undefined {
+  const questions = payload?.questions;
+  if (!Array.isArray(questions)) {
+    return undefined;
+  }
+
+  const parsedQuestions = questions.flatMap((entry): UserInputQuestion[] => {
+    const question = asObject(entry);
+    if (!question) {
+      return [];
+    }
+    const id = asString(question.id)?.trim();
+    const header = asString(question.header)?.trim();
+    const prompt = asString(question.question)?.trim();
+    if (!id || !header || !prompt) {
+      return [];
+    }
+    const options = (Array.isArray(question.options) ? question.options : []).flatMap(
+      (option): Array<{ label: string; description: string }> => {
+        const optionRecord = asObject(option);
+        const label = asString(optionRecord?.label)?.trim();
+        if (!label) {
+          return [];
+        }
+        const description = asString(optionRecord?.description)?.trim();
+        return [{ label, description: description || label }];
+      },
+    );
+    return [
+      {
+        id,
+        header,
+        question: prompt,
+        options,
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
+      },
+    ];
+  });
+
+  return parsedQuestions.length > 0 ? parsedQuestions : undefined;
 }
 
 export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
@@ -883,6 +990,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
+        ...(input.runtimeMode === "auto"
+          ? { minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION }
+          : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
@@ -1112,6 +1222,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       effort?: string;
       summary: "auto" | "none";
       approvalPolicy?: CodexApprovalPolicy;
+      approvalsReviewer?: CodexApprovalsReviewer;
       sandboxPolicy?: CodexTurnSandboxPolicy;
       collaborationMode?: {
         mode: "default" | "plan";
@@ -1359,6 +1470,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(threadId);
     const effectiveTurnId = turnId ?? context.session.activeTurnId;
 
+    // Stop must also unpark codex from any question/approval it is blocked on;
+    // turn/interrupt alone does not settle server-initiated requests.
+    await this.settlePendingHumanRequests(context, "turn interrupted");
+
     const providerThreadId =
       providerThreadIdOverride ??
       readResumeThreadId({
@@ -1495,6 +1610,81 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  /** True while `turnId` is still the session's live turn. */
+  isTurnActive(threadId: ThreadId, turnId: TurnId): boolean {
+    const context = this.sessions.get(threadId);
+    return (
+      context !== undefined &&
+      !context.stopping &&
+      context.session.status === "running" &&
+      context.session.activeTurnId === turnId
+    );
+  }
+
+  /** True while the session is legitimately blocked on a human decision. */
+  isAwaitingHumanResponse(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && this.hasPendingHumanRequests(context);
+  }
+
+  /**
+   * Force-settles a turn whose app-server went silent. Best-effort interrupt
+   * first — a child that is merely slow settles itself and emits its own
+   * terminal notification — then a synthetic `turn/aborted` so a wedged child
+   * cannot leave the session "running" forever.
+   */
+  async abandonTurn(threadId: ThreadId, turnId: TurnId, detail: string): Promise<void> {
+    const context = this.sessions.get(threadId);
+    if (!context || !this.isTurnActive(threadId, turnId)) {
+      return;
+    }
+
+    log.warn("abandoning stalled codex turn", { threadId, turnId, detail });
+    try {
+      await this.interruptTurn(threadId, turnId);
+    } catch (error) {
+      log.warn("turn/interrupt failed while abandoning a stalled codex turn", {
+        threadId,
+        turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (!this.isTurnActive(threadId, turnId)) {
+      return;
+    }
+
+    this.clearTaskCompleteFallback(context);
+    context.collabReceiverTurns.clear();
+    context.collabReceiverParents.clear();
+    context.reviewTurnIds.delete(turnId);
+    this.updateSession(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: detail,
+    });
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      ...(context.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+      method: "turn/aborted",
+      turnId,
+      message: detail,
+      payload: {
+        turn: {
+          id: turnId,
+          status: "aborted",
+        },
+        abandonedBy: "turnIdleWatchdog",
+      },
+    });
+  }
+
   async readThread(threadId: ThreadId): Promise<CodexThreadSnapshot> {
     const context = this.requireSession(threadId);
     const providerThreadId = readResumeThreadId({
@@ -1568,6 +1758,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
+        ...(input.runtimeMode === "auto"
+          ? { minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION }
+          : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
@@ -1717,9 +1910,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       activeTurnId: context.session.activeTurnId ?? null,
     }).pipe(this.runPromise);
 
-    this.updateSession(context, {
-      status: "running",
-    });
+    // Compaction outside a turn must not claim "running": there is no turn id to
+    // reconcile it against, so the session could never be settled back to ready.
+    if (context.session.activeTurnId !== undefined) {
+      this.updateSession(context, {
+        status: "running",
+      });
+    }
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
       kind: "notification",
@@ -1764,11 +1961,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     pendingRequest: PendingApprovalRequest,
     decision: ProviderApprovalDecision,
   ): Promise<void> {
+    const requestedPermissions = pendingRequest.requestedPermissions ?? {};
+    const grantedPermissions = {
+      ...(requestedPermissions.network !== null && requestedPermissions.network !== undefined
+        ? { network: requestedPermissions.network }
+        : {}),
+      ...(requestedPermissions.fileSystem !== null && requestedPermissions.fileSystem !== undefined
+        ? { fileSystem: requestedPermissions.fileSystem }
+        : {}),
+    };
+    const result =
+      pendingRequest.method === "item/permissions/requestApproval"
+        ? {
+            permissions:
+              decision === "accept" || decision === "acceptForSession" ? grantedPermissions : {},
+            scope: decision === "acceptForSession" ? ("session" as const) : ("turn" as const),
+          }
+        : { decision };
     await this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
-      result: {
-        decision,
-      },
+      result,
     });
 
     this.emitEvent({
@@ -1799,9 +2011,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveRemainingSessionApprovalRequests(
     context: CodexSessionContext,
   ): Promise<void> {
-    const remainingRequests = Array.from(context.pendingApprovals.values());
-    context.pendingApprovals.clear();
+    const remainingRequests = Array.from(context.pendingApprovals.values()).filter(
+      (request) => !isPermissionApprovalRequest(request),
+    );
     for (const pendingRequest of remainingRequests) {
+      context.pendingApprovals.delete(pendingRequest.requestId);
       await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
     }
   }
@@ -1818,11 +2032,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.pendingApprovals.delete(requestId);
-    if (decision === "acceptForSession") {
+    const isPermissionRequest = isPermissionApprovalRequest(pendingRequest);
+    if (decision === "acceptForSession" && !isPermissionRequest) {
       context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
     }
     await this.resolveApprovalRequest(context, pendingRequest, decision);
-    if (decision === "acceptForSession") {
+    if (decision === "cancel" && isPermissionRequest) {
+      await this.interruptTurn(threadId, pendingRequest.turnId, pendingRequest.providerThreadId);
+    }
+    if (decision === "acceptForSession" && !isPermissionRequest) {
       await this.resolveRemainingSessionApprovalRequests(context);
     }
   }
@@ -1835,17 +2053,27 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(threadId);
     const pendingRequest = context.pendingUserInputs.get(requestId);
     if (!pendingRequest) {
-      throw new Error(`Unknown pending user input request: ${requestId}`);
+      throw new Error(`Unknown pending user-input request: ${requestId}`);
     }
 
-    context.pendingUserInputs.delete(requestId);
+    await this.resolveUserInputRequest(context, pendingRequest, answers);
+  }
+
+  private async resolveUserInputRequest(
+    context: CodexSessionContext,
+    pendingRequest: PendingUserInputRequest,
+    answers: ProviderUserInputAnswers,
+  ): Promise<void> {
     const codexAnswers = toCodexUserInputAnswers(answers);
+    // The pending entry survives a failed write so the request stays answerable;
+    // dropping it first would strand codex on an id nobody can respond to.
     await this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
       result: {
         answers: codexAnswers,
       },
     });
+    context.pendingUserInputs.delete(pendingRequest.requestId);
 
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
@@ -1868,6 +2096,65 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         answers: codexAnswers,
       },
     });
+  }
+
+  private hasPendingHumanRequests(context: CodexSessionContext): boolean {
+    return context.pendingApprovals.size > 0 || context.pendingUserInputs.size > 0;
+  }
+
+  /**
+   * Answers every outstanding human-facing server request so an abnormal exit
+   * (stop, interrupt, process exit, idle timeout) can never leave codex parked
+   * on a JSON-RPC id nobody will ever respond to.
+   *
+   * Abnormal paths only: unlike the human-driven responses, an entry is dropped
+   * even when its write fails, because the request is being abandoned and a
+   * surviving entry would only leak into the next turn.
+   */
+  private async settlePendingHumanRequests(
+    context: CodexSessionContext,
+    reason: string,
+  ): Promise<void> {
+    const pendingApprovals = Array.from(context.pendingApprovals.values());
+    const pendingUserInputs = Array.from(context.pendingUserInputs.values());
+    if (pendingApprovals.length === 0 && pendingUserInputs.length === 0) {
+      return;
+    }
+
+    log.info("settling pending codex human requests", {
+      threadId: context.session.threadId,
+      reason,
+      pendingApprovals: pendingApprovals.length,
+      pendingUserInputs: pendingUserInputs.length,
+    });
+
+    for (const pendingRequest of pendingApprovals) {
+      try {
+        await this.resolveApprovalRequest(context, pendingRequest, "cancel");
+      } catch (error) {
+        log.warn("failed to settle pending codex approval request", {
+          threadId: context.session.threadId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        context.pendingApprovals.delete(pendingRequest.requestId);
+      }
+    }
+
+    for (const pendingRequest of pendingUserInputs) {
+      try {
+        await this.resolveUserInputRequest(context, pendingRequest, {});
+      } catch (error) {
+        log.warn("failed to settle pending codex user-input request", {
+          threadId: context.session.threadId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        context.pendingUserInputs.delete(pendingRequest.requestId);
+      }
+    }
   }
 
   private async teardownContextProcess(context: CodexSessionContext): Promise<void> {
@@ -1899,38 +2186,76 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return context.stopPromise;
     }
 
-    context.stopping = true;
-    this.clearTaskCompleteFallback(context);
-    context.gatewaySessionLease?.release();
+    let settleBeforeTeardown: Promise<void> | undefined;
+    if (!context.stopping) {
+      context.stopping = true;
+      this.clearTaskCompleteFallback(context);
+      context.gatewaySessionLease?.release();
 
-    this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
-    context.pendingApprovals.clear();
-    context.pendingUserInputs.clear();
+      this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
+      if (this.hasPendingHumanRequests(context)) {
+        // Answer parked server requests while stdin is still writable, then close.
+        // Time-boxed so a child that stopped reading stdin cannot stall teardown.
+        settleBeforeTeardown = withCodexPendingSettleDeadline(
+          this.settlePendingHumanRequests(context, "session stopped"),
+        ).finally(() => {
+          context.stdinWriter?.close(new Error("Codex session stopped"));
+        });
+      } else {
+        context.stdinWriter?.close(new Error("Codex session stopped"));
+      }
 
-    context.detachStdout?.();
-    context.stdinWriter?.close(new Error("Codex session stopped"));
-    const stopPromise = this.teardownContextProcess(context).then(() => {
+      context.detachStdout?.();
+
+      // The session becomes unroutable immediately, but remains in the map as a
+      // replacement barrier until teardown proves the old process tree exited.
+      // Otherwise a failed proof could let startSession spawn a second provider
+      // process for the same thread.
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
       });
       this.emitLifecycleEvent(context, "session/closed", "Session stopped");
-      if (this.sessions.get(threadId) === context) {
-        this.sessions.delete(threadId);
-      }
-    });
+    }
+    let stopPromise: Promise<void>;
+    // Teardown starts synchronously unless parked requests still need answering,
+    // so a stop with nothing parked stays as prompt as it was before settling.
+    const teardown = settleBeforeTeardown
+      ? settleBeforeTeardown.then(() => this.teardownContextProcess(context))
+      : this.teardownContextProcess(context);
+    stopPromise = teardown.then(
+      () => {
+        if (this.sessions.get(threadId) === context) {
+          this.sessions.delete(threadId);
+        }
+      },
+      (error: unknown) => {
+        log.error("codex app-server teardown did not prove process-tree exit", {
+          threadId,
+          error,
+        });
+        // A later stop/start may retry proof after the process has exited.
+        if (context.stopPromise === stopPromise) {
+          delete context.stopPromise;
+        }
+        throw error;
+      },
+    );
     context.stopPromise = stopPromise;
     return stopPromise;
   }
 
   listSessions(): ProviderSession[] {
-    return Array.from(this.sessions.values(), ({ session }) => ({
-      ...session,
-    }));
+    return Array.from(this.sessions.values())
+      .filter((context) => this.isContextRoutable(context))
+      .map(({ session }) => ({
+        ...session,
+      }));
   }
 
   hasSession(threadId: ThreadId): boolean {
-    return this.sessions.has(threadId);
+    const context = this.sessions.get(threadId);
+    return context !== undefined && this.isContextRoutable(context);
   }
 
   async stopAll(): Promise<void> {
@@ -2111,11 +2436,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error(`Unknown session for thread: ${threadId}`);
     }
 
-    if (context.session.status === "closed") {
+    // "Session is closed" is the phrase CodexAdapter maps to the typed
+    // recoverable session error. A failed turn may leave a healthy process with
+    // status "error", so only transport/process health controls routability.
+    if (!this.isContextRoutable(context)) {
       throw new Error(`Session is closed for thread: ${threadId}`);
     }
 
     return context;
+  }
+
+  private isContextRoutable(context: CodexSessionContext): boolean {
+    const stdin = context.child.stdin;
+    return (
+      !context.stopping &&
+      context.session.status !== "closed" &&
+      context.child.exitCode === null &&
+      context.child.signalCode === null &&
+      !context.child.killed &&
+      stdin.writable &&
+      !stdin.writableEnded &&
+      !stdin.destroyed
+    );
   }
 
   private async resolveContextForDiscovery(
@@ -2138,17 +2480,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
-        if (
-          !activeSession.stopping &&
-          !activeSession.child.killed &&
-          activeSession.session.cwd === normalizedCwd
-        ) {
+        if (this.isContextRoutable(activeSession) && activeSession.session.cwd === normalizedCwd) {
           return activeSession;
         }
       }
       return this.getOrCreateDiscoverySession(normalizedCwd);
     }
-    const firstActive = this.sessions.values().next().value;
+    const firstActive = Array.from(this.sessions.values()).find((context) =>
+      this.isContextRoutable(context),
+    );
     if (firstActive) {
       return firstActive;
     }
@@ -2316,11 +2656,25 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
     context.detachStdout?.();
     context.stdinWriter?.close(new Error("Codex discovery session stopped"));
-    const stopPromise = this.teardownContextProcess(context).then(() => {
-      if (this.discoverySessions.get(discoveryKey) === context) {
-        this.discoverySessions.delete(discoveryKey);
-      }
-    });
+    // Keep a non-routable replacement barrier until exit is proven.
+    let stopPromise: Promise<void>;
+    stopPromise = this.teardownContextProcess(context).then(
+      () => {
+        if (this.discoverySessions.get(discoveryKey) === context) {
+          this.discoverySessions.delete(discoveryKey);
+        }
+      },
+      (error: unknown) => {
+        log.error("codex discovery teardown did not prove process-tree exit", {
+          discoveryKey,
+          error,
+        });
+        if (context.stopPromise === stopPromise) {
+          delete context.stopPromise;
+        }
+        throw error;
+      },
+    );
     context.stopPromise = stopPromise;
     return stopPromise;
   }
@@ -2391,8 +2745,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);
       this.rejectPendingRequests(context, exitError);
-      context.pendingApprovals.clear();
-      context.pendingUserInputs.clear();
+      // The child is gone, so the responses cannot land; settling still clears
+      // the maps and emits the resolutions that close the pending UI cards.
+      void this.settlePendingHumanRequests(context, "session exited");
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
@@ -2574,6 +2929,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
+    if (notification.method === "thread/compacted") {
+      // Compaction is the only work that can hold the session "running" without
+      // a turn; settle it here so the status cannot stay stuck once it lands.
+      if (
+        !isChildConversation &&
+        context.session.activeTurnId === undefined &&
+        context.session.status === "running"
+      ) {
+        this.updateSession(context, { status: "ready" });
+      }
+      return;
+    }
+
     if (notification.method === "turn/started") {
       if (isChildConversation) {
         return;
@@ -2718,9 +3086,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         message !== undefined && !willRetry && isNonFatalCodexErrorMessage(message);
 
       if (willRetry) {
-        this.updateSession(context, {
-          status: "running",
-        });
+        // Only a live turn may restore "running"; otherwise a retryable error
+        // arriving between turns would strand the session with no turn to
+        // reconcile against.
+        if (context.session.activeTurnId !== undefined) {
+          this.updateSession(context, {
+            status: "running",
+          });
+        }
         return;
       }
 
@@ -2751,15 +3124,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let requestId: ApprovalRequestId | undefined;
     if (requestKind) {
       requestId = ApprovalRequestId.makeUnsafe(randomUUID());
+      const requestedPermissions =
+        request.method === "item/permissions/requestApproval"
+          ? this.readObject(request.params, "permissions")
+          : undefined;
       const pendingRequest: PendingApprovalRequest = {
         requestId,
         jsonRpcId: request.id,
-        method:
-          requestKind === "command"
-            ? "item/commandExecution/requestApproval"
-            : requestKind === "file-read"
-              ? "item/fileRead/requestApproval"
-              : "item/fileChange/requestApproval",
+        method: request.method as PendingApprovalRequest["method"],
         requestKind,
         threadId: context.session.threadId,
         ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
@@ -2767,15 +3139,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
         ...(providerThreadId ? { providerThreadId } : {}),
         ...(providerParentThreadId ? { providerParentThreadId } : {}),
+        ...(requestedPermissions ? { requestedPermissions } : {}),
       };
-      if (context.sessionApprovalOverride) {
+      if (context.sessionApprovalOverride && !isPermissionApprovalRequest(pendingRequest)) {
         await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
         return;
       }
       context.pendingApprovals.set(requestId, pendingRequest);
     }
 
-    if (request.method === "item/tool/requestUserInput") {
+    const isUserInputRequest = request.method === "item/tool/requestUserInput";
+    // Parsed up front: a request whose questions cannot be rendered must never
+    // become a pending entry, because nothing would ever answer its JSON-RPC id.
+    const userInputQuestions = isUserInputRequest
+      ? parseCodexUserInputQuestions(asObject(request.params))
+      : undefined;
+    if (isUserInputRequest && userInputQuestions) {
       requestId = ApprovalRequestId.makeUnsafe(randomUUID());
       context.pendingUserInputs.set(requestId, {
         requestId,
@@ -2813,7 +3192,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    if (request.method === "item/tool/requestUserInput") {
+    if (isUserInputRequest) {
+      if (userInputQuestions) {
+        // Intentionally unanswered: a human replies through respondToUserInput.
+        return;
+      }
+
+      const detail = "Codex asked a question Synara could not render, so it was declined.";
+      this.emitErrorEvent(context, "item/tool/requestUserInput/unrenderable", detail);
+      await this.writeMessage(context, {
+        id: request.id,
+        error: {
+          code: -32602,
+          message: "item/tool/requestUserInput did not include a renderable question.",
+        },
+      });
       return;
     }
 
@@ -3049,6 +3442,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
+    readonly minimumVersion?: string;
   }): Promise<void> {
     await assertSupportedCodexCliVersion(input);
   }
@@ -3072,6 +3466,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     if (method === "item/fileChange/requestApproval") {
       return "file-change";
+    }
+
+    if (method === "item/permissions/requestApproval") {
+      return "permissions";
     }
 
     return undefined;
@@ -3174,7 +3572,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.readString(this.readObject(params, "msg"), "turnId"),
     );
     const itemId = toProviderItemId(
-      this.readString(params, "itemId") ?? this.readString(this.readObject(params, "item"), "id"),
+      this.readString(params, "itemId") ??
+        this.readString(params, "targetItemId") ??
+        this.readString(this.readObject(params, "item"), "id"),
     );
 
     if (turnId) {
@@ -3449,32 +3849,130 @@ function isMissingExecutableSpawnError(error: Error): boolean {
   );
 }
 
-async function assertSupportedCodexCliVersion(input: {
+interface CodexVersionCommandResult {
+  readonly error?: Error;
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Run `codex --version` asynchronously.
+ *
+ * This intentionally mirrors `spawnSync`'s result shape (`error` / `status` /
+ * `stdout` / `stderr`) so the version-gate semantics below stay byte-for-byte
+ * identical, but without blocking the event loop: a synchronous spawn froze the
+ * WebSocket fanout, PTY drains, and every provider's stdio for the duration of the
+ * probe (measured ~80-97 ms, up to the 4 s timeout when the binary hangs).
+ */
+function runCodexVersionCommand(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): Promise<CodexVersionCommandResult> {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
+    cwd: input.cwd,
+    env: input.env,
+  });
+
+  return new Promise<CodexVersionCommandResult>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(prepared.command, prepared.args, {
+        cwd: input.cwd,
+        env: input.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: prepared.shell,
+        windowsHide: prepared.windowsHide,
+        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+      });
+    } catch (error) {
+      resolve({
+        error: error instanceof Error ? error : new Error(String(error)),
+        status: null,
+        stdout: "",
+        stderr: "",
+      });
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: CodexVersionCommandResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+    // Bound captured output the same way spawnSync's maxBuffer did; `codex
+    // --version` prints a single line, so truncation only affects pathological
+    // output and never the parsed version.
+    const append = (buffer: string, chunk: string) =>
+      buffer.length >= CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES
+        ? buffer
+        : (buffer + chunk).slice(0, CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES);
+
+    timer = setTimeout(() => {
+      // SIGKILL (rather than spawnSync's SIGTERM) because the promise settles here
+      // regardless: a binary that ignores SIGTERM would otherwise linger forever.
+      child.kill("SIGKILL");
+      finish({
+        error: new Error(
+          `Codex CLI version check timed out after ${CODEX_VERSION_CHECK_TIMEOUT_MS}ms.`,
+        ),
+        status: null,
+        stdout,
+        stderr,
+      });
+    }, CODEX_VERSION_CHECK_TIMEOUT_MS);
+    timer.unref?.();
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout = append(stdout, chunk);
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = append(stderr, chunk);
+    });
+    child.on("error", (error) => {
+      finish({ error, status: null, stdout, stderr });
+    });
+    child.on("close", (code, signal) => {
+      finish({ status: code ?? (signal ? -1 : 0), stdout, stderr });
+    });
+  });
+}
+
+/** What the probe observed about the file it actually ran, so a later swap can be detected. */
+interface CodexCliBinaryFingerprint {
+  readonly path: string;
+  readonly identity: string;
+}
+
+async function runCodexCliVersionGate(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
-}): Promise<void> {
-  // Prefer an explicit cwd check before spawning. A missing working directory
-  // produces ENOENT that is otherwise misreported as a missing Codex binary.
-  assertCodexWorkingDirectoryExists(input.cwd);
-
+  readonly minimumVersion?: string;
+}): Promise<CodexCliBinaryFingerprint | null> {
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
+  // Resolved against the env the spawn below uses, never `process.env`. On macOS and Linux
+  // `buildCodexProcessEnv` can replace PATH with the login shell's, so resolving through the
+  // process environment could fingerprint a different `codex` than the one being probed — or
+  // none at all — and the staleness check would then be watching the wrong file.
+  const resolvedPath = resolveExecutable(input.binaryPath, { env });
+  const identity = resolvedPath ? executableIdentity(resolvedPath) : null;
+  const result = await runCodexVersionCommand({
+    binaryPath: input.binaryPath,
     cwd: input.cwd,
     env,
-  });
-  const result = spawnSync(prepared.command, prepared.args, {
-    cwd: input.cwd,
-    env,
-    encoding: "utf8",
-    shell: prepared.shell,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-    windowsHide: prepared.windowsHide,
-    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 
   if (result.error) {
@@ -3488,18 +3986,132 @@ async function assertSupportedCodexCliVersion(input: {
     );
   }
 
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
+  const { stdout, stderr } = result;
   if (result.status !== 0) {
     const detail = stderr.trim() || stdout.trim() || `Command exited with code ${result.status}.`;
     throw new Error(`Codex CLI version check failed. ${detail}`);
   }
 
   const parsedVersion = parseCodexCliVersion(`${stdout}\n${stderr}`);
-  if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
-    throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
+  const minimumVersion = input.minimumVersion;
+  if (minimumVersion && !parsedVersion) {
+    throw new Error(
+      `Could not determine the installed Codex CLI version. Auto mode requires v${minimumVersion} or newer.`,
+    );
   }
+  if (
+    parsedVersion &&
+    (minimumVersion
+      ? compareCodexCliVersions(parsedVersion, minimumVersion) < 0
+      : !isCodexCliVersionSupported(parsedVersion))
+  ) {
+    throw new Error(formatCodexCliUpgradeMessage(parsedVersion, minimumVersion));
+  }
+
+  return resolvedPath && identity ? { path: resolvedPath, identity } : null;
 }
+
+interface CodexCliVersionGateEntry {
+  promise: Promise<void>;
+  /** 0 until the probe resolves successfully; failed verdicts are never reused. */
+  expiresAt: number;
+  /**
+   * The file the successful probe ran, or null when it could not be located.
+   *
+   * The path alone does not identify a binary: `npm i -g @openai/codex`, a downgrade or a local
+   * rebuild all leave the path untouched, so a purely path-keyed cache would keep serving the
+   * pre-upgrade verdict for the rest of the TTL — long enough to swallow a downgrade below the
+   * supported floor. Re-stat'ing this exact file on a cache hit costs one syscall and needs no
+   * environment, which is why the fingerprint lives on the entry instead of in the key.
+   */
+  fingerprint: CodexCliBinaryFingerprint | null;
+}
+
+const codexCliVersionGates = new Map<string, CodexCliVersionGateEntry>();
+
+function codexCliVersionGateKey(
+  binaryPath: string,
+  homePath: string | undefined,
+  minimumVersion: string | undefined,
+): string {
+  // The installed version depends only on which binary runs and which CODEX_HOME
+  // shapes its environment. The required floor is part of the verdict, while the
+  // caller's cwd is not. JSON encoding keeps the components unambiguous, since a
+  // path may contain any separator we'd pick.
+  return JSON.stringify([binaryPath, homePath ?? "", minimumVersion ?? ""]);
+}
+
+/** True when the file behind a cached verdict is no longer the one that was probed. */
+function isCodexCliVersionGateStale(entry: CodexCliVersionGateEntry): boolean {
+  if (!entry.fingerprint) {
+    // Nothing was located at probe time, so there is nothing to compare against. The probe is
+    // what reports that failure, and failures are never cached, so no stale pass can hide here.
+    return false;
+  }
+  return executableIdentity(entry.fingerprint.path) !== entry.fingerprint.identity;
+}
+
+async function assertSupportedCodexCliVersion(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly homePath?: string;
+  readonly minimumVersion?: string;
+}): Promise<void> {
+  // Prefer an explicit cwd check before spawning. A missing working directory
+  // produces ENOENT that is otherwise misreported as a missing Codex binary. This
+  // is per-call state, so it must run even when the version verdict is cached.
+  assertCodexWorkingDirectoryExists(input.cwd);
+
+  const key = codexCliVersionGateKey(input.binaryPath, input.homePath, input.minimumVersion);
+  const now = Date.now();
+  const existing = codexCliVersionGates.get(key);
+  if (existing) {
+    // expiresAt === 0 means the probe is still in flight: concurrent session
+    // starts share it instead of each spawning their own Codex process.
+    if (existing.expiresAt === 0) {
+      await existing.promise;
+      return;
+    }
+    if (existing.expiresAt > now && !isCodexCliVersionGateStale(existing)) {
+      await existing.promise;
+      return;
+    }
+    codexCliVersionGates.delete(key);
+  }
+
+  for (const [otherKey, entry] of codexCliVersionGates) {
+    if (entry.expiresAt !== 0 && entry.expiresAt <= now) {
+      codexCliVersionGates.delete(otherKey);
+    }
+  }
+
+  const entry: CodexCliVersionGateEntry = {
+    promise: Promise.resolve(),
+    expiresAt: 0,
+    fingerprint: null,
+  };
+  entry.promise = runCodexCliVersionGate(input).then(
+    (fingerprint) => {
+      entry.fingerprint = fingerprint;
+      entry.expiresAt = Date.now() + CODEX_VERSION_CHECK_CACHE_TTL_MS;
+    },
+    (error: unknown) => {
+      // Never cache a failure: the user may install or upgrade Codex at any time.
+      if (codexCliVersionGates.get(key) === entry) {
+        codexCliVersionGates.delete(key);
+      }
+      throw error;
+    },
+  );
+  codexCliVersionGates.set(key, entry);
+  await entry.promise;
+}
+
+export const __codexCliVersionGateTesting = {
+  assertSupportedCodexCliVersion,
+  reset: () => codexCliVersionGates.clear(),
+  cacheTtlMs: CODEX_VERSION_CHECK_CACHE_TTL_MS,
+};
 
 function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {

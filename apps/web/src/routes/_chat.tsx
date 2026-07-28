@@ -30,13 +30,13 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { isOrdinarySpaceProject } from "../lib/spaces";
-import { resolveShortcutCommand } from "../keybindings";
+import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
@@ -231,9 +231,9 @@ function ChatRouteGlobalShortcuts() {
   });
   const { handleNewChat } = useHandleNewChat();
   const { handleNewStudioChat } = useHandleNewStudioChat();
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
@@ -339,13 +339,7 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      const isShortcutsHelpShortcut =
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        !event.altKey &&
-        !event.repeat &&
-        (event.key === "/" || event.code === "Slash");
-      if (isShortcutsHelpShortcut) {
+      if (isKeyboardShortcutsHelpShortcut(event, platform)) {
         event.preventDefault();
         event.stopPropagation();
         setShortcutsDialogOpen(true);

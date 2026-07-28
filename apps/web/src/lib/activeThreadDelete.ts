@@ -5,7 +5,6 @@
 
 import type { ThreadId } from "@synara/contracts";
 
-import { terminalRuntimeRegistry } from "../components/terminal/terminalRuntimeRegistry";
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -14,6 +13,24 @@ import type { Thread } from "../types";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { reconcileDeletedThreadFromClient } from "./deletedThreadClientReconciliation";
 import { newCommandId } from "./utils";
+
+// The terminal runtime pulls in xterm and its addons (~223 KB gzip). Importing it
+// statically here anchored the whole terminal stack into the eager sidebar/router
+// graph, so every page load paid for it. Deleting a thread is a rare, already
+// async user action, so the chunk is fetched on demand instead. The import is
+// awaited (never fire-and-forget) so disposal cannot race the rest of the delete
+// sequence, and the resolved module is cached by the module system afterwards.
+async function disposeThreadTerminalRuntimes(threadId: ThreadId): Promise<void> {
+  try {
+    const { terminalRuntimeRegistry } =
+      await import("../components/terminal/terminalRuntimeRegistry");
+    terminalRuntimeRegistry.disposeThread(threadId);
+  } catch (error) {
+    // A failed chunk fetch must not abort the delete sequence: the durable delete
+    // already landed server-side and the server owns provider/terminal teardown.
+    console.error("Failed to dispose terminal runtimes for deleted thread", { threadId, error });
+  }
+}
 
 export async function deleteActiveThreadFromClient<TPrepared = undefined>(input: {
   readonly threadId: ThreadId;
@@ -72,7 +89,7 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
   // Provider and terminal cleanup are owned by the server-side lifecycle
   // reactor. Dispose only the local renderer after the durable delete intent
   // was accepted, so a rejected delete never tears down a live client session.
-  terminalRuntimeRegistry.disposeThread(input.threadId);
+  await disposeThreadTerminalRuntimes(input.threadId);
   if (input.reconcileDeletedThread ?? true) {
     void reconcileDeletedThreadFromClient({
       threadId: input.threadId,

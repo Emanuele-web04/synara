@@ -11,8 +11,8 @@ import {
   type DiffPanelMode,
 } from "../DiffPanelShell";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
-import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "./chatHeaderControls";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
+import { Spinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
@@ -78,43 +78,20 @@ export function LazyDiffPanel(props: {
   );
 }
 
-export function ChatMountSkeleton() {
+export function ChatMountLoader() {
   return (
     <div
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col text-foreground [contain:layout_style_paint]",
+        "flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]",
         CHAT_BACKGROUND_CLASS_NAME,
       )}
     >
-      <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-3 px-4")}>
-        <div className="size-5 rounded-full bg-muted" />
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="h-3.5 w-44 max-w-[48%] rounded-full bg-muted" />
-          <div className="h-2 w-24 max-w-[32%] rounded-full bg-muted/65" />
-        </div>
-        <div className="hidden items-center gap-1.5 sm:flex">
-          <div className="size-7 rounded-md border border-[color:var(--color-border-light)] bg-muted/35" />
-          <div className="size-7 rounded-md border border-[color:var(--color-border-light)] bg-muted/35" />
-        </div>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 px-5 py-4">
-        <div className="max-w-[82%] space-y-2 rounded-2xl border border-[color:var(--color-border-light)] bg-muted/22 p-3">
-          <div className="h-2.5 w-11/12 rounded-full bg-muted/75" />
-          <div className="h-2.5 w-7/12 rounded-full bg-muted/60" />
-        </div>
-        <div className="ml-auto max-w-[70%] space-y-2 rounded-2xl bg-muted/45 p-3">
-          <div className="h-2.5 w-48 max-w-full rounded-full bg-muted-foreground/14" />
-          <div className="h-2.5 w-32 max-w-[78%] rounded-full bg-muted-foreground/12" />
-        </div>
-      </div>
-      <div className="shrink-0 border-t border-[color:var(--color-border-light)] p-3">
-        <div className="rounded-2xl border border-[color:var(--color-border-light)] bg-background p-3 shadow-xs">
-          <div className="h-3 w-40 max-w-[50%] rounded-full bg-muted" />
-          <div className="mt-8 flex items-center justify-between">
-            <div className="h-2.5 w-24 rounded-full bg-muted/65" />
-            <div className="size-7 rounded-full bg-muted" />
-          </div>
-        </div>
+      {/* Inline @keyframes so the delayed fade needs no global stylesheet; the
+          delay keeps the common fast mount (a couple of frames) from flashing a
+          spinner — short waits show only the plain chat background. */}
+      <style>{`@keyframes chat-mount-loader-in { from { opacity: 0; } to { opacity: 1; } }`}</style>
+      <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
+        <Spinner className="size-5 text-muted-foreground" />
       </div>
     </div>
   );
@@ -155,7 +132,7 @@ export function DeferredChatView(props: {
       return;
     }
     // readyMountKey is keyed by mountKey, so a changed mountKey already makes
-    // canMountChatView false (skeleton) without an eager reset here; the double
+    // canMountChatView false (loader) without an eager reset here; the double
     // rAF then stamps the new key once the paint has settled.
     let firstFrame = 0;
     let secondFrame = 0;
@@ -175,7 +152,7 @@ export function DeferredChatView(props: {
   }, [canMountChatView, onMounted]);
 
   if (!canMountChatView) {
-    return <ChatMountSkeleton />;
+    return <ChatMountLoader />;
   }
 
   return (

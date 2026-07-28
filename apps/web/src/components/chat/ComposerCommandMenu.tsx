@@ -331,6 +331,7 @@ export function ComposerCommandMenu(props: {
     props.triggerKind,
     props.groupSlashCommandSections ?? true,
   );
+  const shouldRenderList = props.items.length > 0 || props.triggerKind === "mention";
 
   useEffect(() => {
     if (!props.activeItemId) {
@@ -353,52 +354,63 @@ export function ComposerCommandMenu(props: {
       }}
     >
       <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
-        <CommandList className="max-h-72 scroll-py-1 p-1">
-          {groups.map((group, groupIndex) => (
-            <div key={group.id}>
-              {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
-              <CommandGroup>
-                {group.label ? (
-                  <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
-                    {group.label}
-                  </CommandGroupLabel>
-                ) : null}
-                {group.items.map((item) => (
-                  <ComposerCommandMenuItem
-                    key={item.id}
-                    item={item}
-                    resolvedTheme={props.resolvedTheme}
-                    isActive={props.activeItemId === item.id}
-                    itemRef={(node) => storeCommandItemNode(itemRefs, item.id, node)}
-                    onHighlight={props.onHighlightedItemChange}
-                    onSelect={props.onSelect}
-                  />
-                ))}
-              </CommandGroup>
-            </div>
-          ))}
-          {props.triggerKind === "mention" ? (
-            <>
-              {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
-              {/* This footer is informational copy, not a selectable result group. */}
-              <div className="pt-0.5 pb-2">
-                <p
-                  className={cn(
-                    COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
-                    "px-2 py-0 font-medium text-muted-foreground text-xs",
-                  )}
-                >
-                  Files
-                </p>
-                <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
-                  Type to search for files
-                </p>
+        {shouldRenderList ? (
+          <CommandList className="max-h-72 scroll-py-1 p-1">
+            {groups.map((group, groupIndex) => (
+              <div key={group.id}>
+                {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
+                <CommandGroup>
+                  {group.label ? (
+                    <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
+                      {group.label}
+                    </CommandGroupLabel>
+                  ) : null}
+                  {group.items.map((item) => (
+                    <ComposerCommandMenuItem
+                      key={item.id}
+                      item={item}
+                      resolvedTheme={props.resolvedTheme}
+                      isActive={props.activeItemId === item.id}
+                      itemRef={(node) => {
+                        itemRefs.current[item.id] = node;
+                      }}
+                      onHighlight={props.onHighlightedItemChange}
+                      onSelect={props.onSelect}
+                    />
+                  ))}
+                </CommandGroup>
               </div>
-            </>
-          ) : null}
-        </CommandList>
+            ))}
+            {props.triggerKind === "mention" ? (
+              <>
+                {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
+                {/* This footer is informational copy, not a selectable result group. */}
+                <div className="pt-0.5 pb-2">
+                  <p
+                    className={cn(
+                      COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
+                      "px-2 py-0 font-medium text-muted-foreground text-xs",
+                    )}
+                  >
+                    Files
+                  </p>
+                  <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
+                    Type to search for files
+                  </p>
+                </div>
+              </>
+            ) : null}
+          </CommandList>
+        ) : null}
         {props.items.length === 0 && (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p
+            className={cn(
+              "text-muted-foreground/50 text-[11px]",
+              props.isLoading
+                ? "flex h-[calc(1.625rem+0.5rem)] items-center px-2 text-left"
+                : "px-2 py-1.5",
+            )}
+          >
             {props.isLoading
               ? props.triggerKind === "mention"
                 ? "Searching mentions..."
@@ -523,8 +535,19 @@ function ComposerCommandItemIcon(props: {
   );
 }
 
-// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
-const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
+// Props are destructured rather than read off a `props` object: `itemRef` lands on a JSX `ref`,
+// which makes React Compiler treat it as a ref — and through `props.itemRef` that verdict spreads
+// to the whole `props` object, so every later `props.x` read looks like a ref access during render
+// and the component bails out of compilation entirely. Separate bindings keep the verdict on
+// `itemRef` alone. Do not collapse these back into a `props` parameter.
+const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem({
+  item,
+  resolvedTheme,
+  isActive,
+  itemRef,
+  onHighlight,
+  onSelect,
+}: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
   isActive: boolean;
@@ -532,38 +555,34 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onHighlight: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  const secondaryText = commandMenuSecondaryText(props.item);
-  const trailingMeta = commandMenuTrailingMeta(props.item);
+  const secondaryText = commandMenuSecondaryText(item);
+  const trailingMeta = commandMenuTrailingMeta(item);
 
   return (
     <CommandItem
-      ref={props.itemRef}
-      value={props.item.id}
+      ref={itemRef}
+      value={item.id}
       className={cn(
         COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
-        props.isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
+        isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
       )}
       onMouseMove={() => {
-        if (!props.isActive) props.onHighlight(props.item.id);
+        if (!isActive) onHighlight(item.id);
       }}
       onMouseDown={(event) => {
         event.preventDefault();
       }}
       onClick={() => {
-        props.onSelect(props.item);
+        onSelect(item);
       }}
     >
-      <ComposerCommandItemIcon
-        item={props.item}
-        resolvedTheme={props.resolvedTheme}
-        isActive={props.isActive}
-      />
+      <ComposerCommandItemIcon item={item} resolvedTheme={resolvedTheme} isActive={isActive} />
       <div className="min-w-0 flex flex-1 items-center gap-3">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
           <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
-            {props.item.type === "slash-command" || props.item.type === "provider-native-command"
-              ? commandMenuTitle(props.item)
-              : props.item.label}
+            {item.type === "slash-command" || item.type === "provider-native-command"
+              ? commandMenuTitle(item)
+              : item.label}
           </span>
           {secondaryText ? (
             <span className="truncate text-[11px] text-muted-foreground/55">{secondaryText}</span>
@@ -578,14 +597,3 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     </CommandItem>
   );
 });
-
-// Ref-callback body kept out of the compiled component: React Compiler cannot
-// tell a custom `itemRef` prop is a ref callback and would reject the render-
-// scoped mutation otherwise.
-function storeCommandItemNode(
-  refs: { current: Record<string, HTMLElement | null> },
-  itemId: string,
-  node: HTMLElement | null,
-): void {
-  refs.current[itemId] = node;
-}

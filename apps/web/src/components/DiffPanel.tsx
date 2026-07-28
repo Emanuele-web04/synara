@@ -12,6 +12,7 @@ import {
   gitBranchesQueryOptions,
   gitStatusQueryOptions,
   gitWorkingTreeDiffQueryOptions,
+  gitWorkingTreeDiffStatsQueryOptions,
 } from "~/lib/gitReactQuery";
 import {
   checkpointDiffQueryOptions,
@@ -25,7 +26,6 @@ import {
   getRenderablePatch,
   resolveDiffCopyText,
   sortFileDiffsByPath,
-  summarizePatchTotals,
   summarizeRenderablePatchStats,
 } from "../lib/diffRendering";
 import {
@@ -57,6 +57,8 @@ import {
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
+  resolveDiffSelectAllArmed,
+  resolveDiffSelectAllWithinViewport,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
   type DiffPanelTurnScopeIntent,
@@ -363,17 +365,21 @@ interface DiffPanelProps {
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({
-  mode = "inline",
+  mode: modeProp,
   threadId: controlledThreadId,
   panelState,
   onUpdatePanelState,
   onClosePanel,
-  liveRefreshEnabled = true,
-  queriesEnabled = true,
-  hideHeader = false,
+  liveRefreshEnabled: liveRefreshEnabledProp,
+  queriesEnabled: queriesEnabledProp,
+  hideHeader: hideHeaderProp,
   onRenderableFilesChange,
   onEditorDiffOptionsChange,
 }: DiffPanelProps) {
+  const mode = modeProp ?? "inline";
+  const liveRefreshEnabled = liveRefreshEnabledProp ?? true;
+  const queriesEnabled = queriesEnabledProp ?? true;
+  const hideHeader = hideHeaderProp ?? false;
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
@@ -401,6 +407,11 @@ export default function DiffPanel({
     setFileTreeOpen(false);
   }, []);
   const patchViewportRef = useRef<HTMLDivElement>(null);
+  const diffSelectAllArmedRef = useRef(false);
+  // Cmd/Ctrl+A keydown targets document.activeElement; clicks on non-focusable diff
+  // chrome leave focus outside the viewport. Remember the last pointer hit so a
+  // subsequent select-all still counts as "inside the diff".
+  const lastPointerInDiffViewportRef = useRef(false);
   const previousDiffOpenRef = useRef(false);
   const routeThreadId = useParams({
     strict: false,
@@ -622,22 +633,25 @@ export default function DiffPanel({
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
-  const unstagedDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
+  // The scope picker shows a file count per scope. Counts come from the stats endpoint rather
+  // than four full patches: only the selected scope's patch is ever rendered, so fetching the
+  // other three in full moved megabytes per refresh on a large working tree for four integers.
+  const unstagedDiffStatsQuery = useQuery(
+    gitWorkingTreeDiffStatsQueryOptions({
       cwd: activeCwd ?? null,
       scope: "unstaged",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
-  const stagedDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
+  const stagedDiffStatsQuery = useQuery(
+    gitWorkingTreeDiffStatsQueryOptions({
       cwd: activeCwd ?? null,
       scope: "staged",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
     }),
   );
-  const branchDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
+  const branchDiffStatsQuery = useQuery(
+    gitWorkingTreeDiffStatsQueryOptions({
       cwd: activeCwd ?? null,
       scope: "branch",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
@@ -698,12 +712,12 @@ export default function DiffPanel({
     diffViewKind === "repo" ? repoDiffQuery.isLoading : isLoadingCheckpointDiff;
   const activeReviewHasNoChanges = diffViewKind === "repo" ? hasNoRepoChanges : hasNoNetChanges;
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
-  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   // The parsed patch is structural and theme-agnostic — theming is applied
   // separately via the themed row key and buildDiffPanelUnsafeCSS (cached per
   // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
   // avoids re-parsing the whole patch on every light/dark toggle.
   const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
+  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
       return [];
@@ -713,12 +727,77 @@ export default function DiffPanel({
   useEffect(() => {
     onRenderableFilesChange?.(renderableFiles, activeReviewIsLoading);
   }, [activeReviewIsLoading, onRenderableFilesChange, renderableFiles]);
+
+  // Virtualized shadow-DOM diffs only mount ~150 rows. Arm on Cmd/Ctrl+A inside
+  // the viewport, then hijack the document `copy` event to write the full raw patch.
+  useEffect(() => {
+    const isEventWithinDiffViewport = (event: Event) => {
+      const viewport = patchViewportRef.current;
+      return viewport ? event.composedPath().includes(viewport) : false;
+    };
+    const isTextEditingEvent = (event: Event) =>
+      event
+        .composedPath()
+        .some(
+          (target) =>
+            target instanceof HTMLInputElement ||
+            target instanceof HTMLTextAreaElement ||
+            (target instanceof HTMLElement &&
+              (target.isContentEditable || target.getAttribute("role") === "textbox")),
+        );
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isWithinDiffViewport = resolveDiffSelectAllWithinViewport(
+        isEventWithinDiffViewport(event),
+        lastPointerInDiffViewportRef.current,
+        isTextEditingEvent(event),
+      );
+      diffSelectAllArmedRef.current = resolveDiffSelectAllArmed(
+        diffSelectAllArmedRef.current,
+        event,
+        isWithinDiffViewport,
+      );
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      lastPointerInDiffViewportRef.current = isEventWithinDiffViewport(event);
+      diffSelectAllArmedRef.current = false;
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isEventWithinDiffViewport(event)) {
+        return;
+      }
+      lastPointerInDiffViewportRef.current = false;
+      diffSelectAllArmedRef.current = false;
+    };
+    const handleCopy = (event: ClipboardEvent) => {
+      if (!diffSelectAllArmedRef.current) {
+        return;
+      }
+      diffSelectAllArmedRef.current = false;
+      if (!diffCopyText || !event.clipboardData) {
+        return;
+      }
+      event.preventDefault();
+      event.clipboardData.setData("text/plain", diffCopyText);
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("focusin", handleFocusIn, true);
+    document.addEventListener("copy", handleCopy, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("focusin", handleFocusIn, true);
+      document.removeEventListener("copy", handleCopy, true);
+    };
+  }, [diffCopyText]);
+
   const activePatchStat = useMemo(
     () => summarizeRenderablePatchStats(renderablePatch),
     [renderablePatch],
   );
-  const workingTreeDiffQuery = useQuery(
-    gitWorkingTreeDiffQueryOptions({
+  const workingTreeDiffStatsQuery = useQuery(
+    gitWorkingTreeDiffStatsQueryOptions({
       cwd: activeCwd ?? null,
       scope: "workingTree",
       enabled: scopeCountQueriesEnabled && !diffEnvironmentPending,
@@ -726,20 +805,20 @@ export default function DiffPanel({
   );
   const pickerScopeFileCounts = useMemo(() => {
     const counts: Partial<Record<RepoDiffScope, number>> = {};
-    const workingTreeCount = summarizePatchTotals(workingTreeDiffQuery.data?.patch)?.fileCount;
-    const unstagedCount = summarizePatchTotals(unstagedDiffQuery.data?.patch)?.fileCount;
-    const stagedCount = summarizePatchTotals(stagedDiffQuery.data?.patch)?.fileCount;
-    const branchCount = summarizePatchTotals(branchDiffQuery.data?.patch)?.fileCount;
+    const workingTreeCount = workingTreeDiffStatsQuery.data?.fileCount;
+    const unstagedCount = unstagedDiffStatsQuery.data?.fileCount;
+    const stagedCount = stagedDiffStatsQuery.data?.fileCount;
+    const branchCount = branchDiffStatsQuery.data?.fileCount;
     if (typeof workingTreeCount === "number") counts.workingTree = workingTreeCount;
     if (typeof unstagedCount === "number") counts.unstaged = unstagedCount;
     if (typeof stagedCount === "number") counts.staged = stagedCount;
     if (typeof branchCount === "number") counts.branch = branchCount;
     return counts;
   }, [
-    branchDiffQuery.data?.patch,
-    stagedDiffQuery.data?.patch,
-    unstagedDiffQuery.data?.patch,
-    workingTreeDiffQuery.data?.patch,
+    branchDiffStatsQuery.data?.fileCount,
+    stagedDiffStatsQuery.data?.fileCount,
+    unstagedDiffStatsQuery.data?.fileCount,
+    workingTreeDiffStatsQuery.data?.fileCount,
   ]);
   const scopeFileCounts = useMemo(
     () =>

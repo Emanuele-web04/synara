@@ -149,5 +149,14 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: buildSourcemap,
+    // The largest chunks are intentionally lazy-loaded editor grammars,
+    // terminal runtime code, and the chat route—not initial-load bundles.
+    chunkSizeWarningLimit: 850,
+    rolldownOptions: {
+      checks: {
+        // React Compiler is expected to dominate transform time in this app.
+        pluginTimings: false,
+      },
+    },
   },
 });

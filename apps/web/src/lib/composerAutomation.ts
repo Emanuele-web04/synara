@@ -21,7 +21,8 @@ import {
   isFormSubmittable,
   type AutomationFormState,
 } from "./automationForm";
-import { stopWhenFromCompletionPolicy } from "./automationCompletionPolicy";
+import { stopWhenFromCompletionPolicy } from "@synara/shared/automationCompletionPolicy";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   buildAutomationDraftWarnings,
@@ -273,11 +274,15 @@ export function buildComposerAutomationDraft(input: {
       worktreeMode: automationIntent.executionScope === "worktree" ? "worktree" : "auto",
       mode: automationMode,
       targetThreadId:
-        automationMode === "heartbeat" && input.targetThreadId ? input.targetThreadId : "",
+        automationRequiresTargetThread(automationMode) && input.targetThreadId
+          ? input.targetThreadId
+          : "",
       maxIterations:
         automationIntent.maxIterations === null ? "" : String(automationIntent.maxIterations),
       stopOnError: true,
-      stopWhen: automationMode === "heartbeat" ? automationStopWhen : "",
+      // Stop clauses are mode-independent: a standalone or dedicated automation retires
+      // itself on the same condition a heartbeat would.
+      stopWhen: automationStopWhen,
     },
     automationIntent.schedule,
   );

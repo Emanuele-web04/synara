@@ -1495,6 +1495,14 @@ export function makeDroidAdapter(
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
         const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
+        const runtimeMode = ctx.session.runtimeMode;
+        if (runtimeMode === "auto") {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Auto runtime mode is available only to Codex and Claude.",
+          });
+        }
         // Selection changes normally arrive via a session restart, but a turn
         // can still carry an explicit selection; re-assert it over ACP (the
         // shared runtime skips the RPC when the value already matches).
@@ -1511,7 +1519,7 @@ export function makeDroidAdapter(
           yield* applyDroidAcpInteractionMode({
             runtime: ctx.acp,
             interactionMode,
-            runtimeMode: ctx.session.runtimeMode,
+            runtimeMode,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -2029,10 +2037,7 @@ export function makeDroidAdapter(
             yield* sessionTeardownGate.awaitPending(threadId);
             return;
           }
-          return yield* new ProviderAdapterSessionNotFoundError({
-            provider: PROVIDER,
-            threadId,
-          });
+          return;
         }),
       );
 

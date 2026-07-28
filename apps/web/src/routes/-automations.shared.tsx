@@ -16,8 +16,9 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@synara/contracts";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import type { Thread } from "~/types";
@@ -26,6 +27,7 @@ import {
   ComposerPickerMenuSubPopup,
 } from "~/components/chat/ComposerPickerMenuPopup";
 import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
+import { RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
@@ -64,8 +66,8 @@ import {
   formatNextRun,
   formatSchedule,
   formFromDefinition,
-  groupHeartbeatAutomationsByTargetThread,
-  heartbeatAutomationsForThread,
+  groupAutomationsByContinuedThread,
+  automationsForThread,
   isFormSubmittable,
   isoFromDatetimeLocal,
   modelSelectionForProjectChange,
@@ -87,7 +89,14 @@ import {
 } from "~/lib/automationForm";
 import { SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
 import { CentralIcon } from "~/lib/central-icons";
+import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
+import {
+  normalizeRuntimeModeForProvider,
+  providerModelSupportsAutoRuntimeMode,
+  providerSupportsAutoRuntimeMode,
+} from "~/lib/runtimeMode";
+import { findProviderStatus } from "~/lib/providerAvailability";
 import { cn } from "~/lib/utils";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
@@ -119,8 +128,8 @@ export {
   formatNextRun,
   formatSchedule,
   formFromDefinition,
-  groupHeartbeatAutomationsByTargetThread,
-  heartbeatAutomationsForThread,
+  groupAutomationsByContinuedThread,
+  automationsForThread,
   isFormSubmittable,
   isoFromDatetimeLocal,
   modelSelectionForProjectChange,
@@ -372,6 +381,54 @@ export function automationAttentionLabel(run: AutomationRun): string | null {
     default:
       return null;
   }
+}
+
+type LiveAutomationRun = AutomationRun & {
+  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
+};
+
+export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
+  return (
+    run?.status === "pending" ||
+    run?.status === "claimed" ||
+    run?.status === "running" ||
+    run?.status === "waiting-for-approval"
+  );
+}
+
+/**
+ * Icon + tint for an automation list row's leading status glyph.
+ * - Live runs spin with a circular loading glyph.
+ * - Completed successful runs show a checkmark circle.
+ * - Failed/cancelled/interrupted runs keep the warning exclamation.
+ * - Scheduled (enabled with a future next run) shows a clock.
+ * - Paused automations show a pause glyph.
+ */
+export function automationListRowIcon(
+  definition: AutomationDefinition,
+  latestRun: AutomationRun | null,
+): { readonly name: string; readonly className: string } {
+  // Pausing prevents future dispatches but does not cancel an in-flight run, so the
+  // active run state must take precedence over the definition's enabled flag.
+  if (isLiveRun(latestRun)) {
+    return {
+      name: "loading-circle",
+      className: "size-4 animate-spin text-blue-500 motion-reduce:animate-none",
+    };
+  }
+  if (!definition.enabled) {
+    return { name: "pause", className: "size-4 text-muted-foreground/40" };
+  }
+  if (latestRun?.status === "succeeded") {
+    return { name: "circle-check", className: "size-4 text-green-500" };
+  }
+  if (latestRun && automationAttentionLabel(latestRun) !== null) {
+    return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+  }
+  if (definition.nextRunAt) {
+    return { name: "clock", className: "size-4 text-foreground/70" };
+  }
+  return { name: "circle-placeholder-on", className: "size-4 text-foreground/70" };
 }
 
 /**
@@ -780,10 +837,12 @@ export function AutomationModelPicker({
   value,
   projectCwd,
   onChange,
+  onAutoModeSupportChange,
 }: {
   readonly value: ModelSelection;
   readonly projectCwd: string | null;
   readonly onChange: (value: ModelSelection) => void;
+  readonly onAutoModeSupportChange?: (supported: boolean) => void;
 }) {
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -797,12 +856,34 @@ export function AutomationModelPicker({
     activeProjectCwd: projectCwd,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider, loadingModelProviders } = useProviderModelCatalog({
+  const {
+    modelOptionsByProvider,
+    loadingModelProviders,
+    runtimeModelsByProvider,
+    selectedRuntimeModel,
+  } = useProviderModelCatalog({
     selectedProvider: value.provider,
     discoveryEnabled: open,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
   });
+  const providerStatus = findProviderStatus(providerStatuses, value.provider);
+  const persistedRuntimeModel =
+    value.provider === "claudeAgent" && typeof value.supportsAutoMode === "boolean"
+      ? {
+          slug: value.model,
+          name: value.model,
+          supportsAutoMode: value.supportsAutoMode,
+        }
+      : undefined;
+  const autoModeSupported = providerModelSupportsAutoRuntimeMode(
+    value.provider,
+    selectedRuntimeModel ?? persistedRuntimeModel,
+    providerStatus,
+  );
+  useEffect(() => {
+    onAutoModeSupportChange?.(autoModeSupported);
+  }, [autoModeSupported, onAutoModeSupportChange]);
 
   return (
     <ProviderModelPicker
@@ -817,9 +898,32 @@ export function AutomationModelPicker({
       providerOrder={settings.providerOrder}
       open={open}
       onOpenChange={setOpen}
-      onProviderModelChange={(provider, model) => onChange(buildModelSelection(provider, model))}
+      onProviderModelChange={(provider, model) => {
+        const runtimeModel = resolveRuntimeModelDescriptor({
+          provider,
+          model,
+          runtimeModels: runtimeModelsByProvider[provider],
+        });
+        onChange(buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode));
+      }}
     />
   );
+}
+
+export function reconcileAutomationFormAutoModeSupport(
+  form: AutomationFormState,
+  supported: boolean,
+): AutomationFormState {
+  const modelSelection =
+    form.modelSelection.provider === "claudeAgent" &&
+    form.modelSelection.supportsAutoMode !== supported
+      ? { ...form.modelSelection, supportsAutoMode: supported }
+      : form.modelSelection;
+  const runtimeMode =
+    !supported && form.runtimeMode === "auto" ? "approval-required" : form.runtimeMode;
+  return modelSelection !== form.modelSelection || runtimeMode !== form.runtimeMode
+    ? { ...form, modelSelection, runtimeMode }
+    : form;
 }
 
 export function AutomationDialog({
@@ -828,8 +932,8 @@ export function AutomationDialog({
   form,
   projects,
   threads,
-  warnings = [],
-  acknowledgedWarningIds = new Set(),
+  warnings: warningsProp,
+  acknowledgedWarningIds: acknowledgedWarningIdsProp,
   onOpenChange,
   onFormChange,
   onToggleWarning,
@@ -849,10 +953,28 @@ export function AutomationDialog({
   readonly onSubmit: () => void;
   readonly busy: boolean;
 }) {
+  const warnings: readonly AutomationDraftWarning[] = warningsProp ?? [];
+  const acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId> =
+    acknowledgedWarningIdsProp ?? new Set<AutomationDraftWarningId>();
   const setField = <K extends keyof AutomationFormState>(key: K, value: AutomationFormState[K]) =>
     onFormChange({ ...form, [key]: value });
   const projectThreads = threads.filter((thread) => thread.projectId === form.projectId);
   const selectedProject = projects.find((project) => project.id === form.projectId);
+  const [selectedModelSupportsAuto, setSelectedModelSupportsAuto] = useState(() =>
+    form.modelSelection.provider === "claudeAgent"
+      ? form.modelSelection.supportsAutoMode !== false
+      : providerSupportsAutoRuntimeMode(form.modelSelection.provider),
+  );
+  const handleAutoModeSupportChange = useCallback(
+    (supported: boolean) => {
+      setSelectedModelSupportsAuto(supported);
+      const reconciled = reconcileAutomationFormAutoModeSupport(form, supported);
+      if (reconciled !== form) {
+        onFormChange(reconciled);
+      }
+    },
+    [form, onFormChange],
+  );
   const schedule = scheduleFromForm(form);
   const fastIntervalLimitMessage = automationFastIntervalLimitMessage(form);
   const hasBlockingWarning = hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);
@@ -879,15 +1001,17 @@ export function AutomationDialog({
     const targetStillMatches =
       form.targetThreadId.length > 0 &&
       threads.some((thread) => thread.id === form.targetThreadId && thread.projectId === projectId);
+    const modelSelection = modelSelectionForProjectChange(
+      projects,
+      form.projectId,
+      projectId,
+      form.modelSelection,
+    );
     onFormChange({
       ...form,
       projectId,
-      modelSelection: modelSelectionForProjectChange(
-        projects,
-        form.projectId,
-        projectId,
-        form.modelSelection,
-      ),
+      modelSelection,
+      runtimeMode: normalizeRuntimeModeForProvider(form.runtimeMode, modelSelection.provider),
       targetThreadId: targetStillMatches ? form.targetThreadId : "",
     });
   };
@@ -1008,7 +1132,9 @@ export function AutomationDialog({
 
         <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pt-1">
           <div className="flex flex-1 flex-wrap items-center gap-0.5">
-            {form.mode === "standalone" ? (
+            {/* Heartbeat runs inherit the target thread's environment; every other mode
+                opens its own thread and therefore picks one. */}
+            {automationRequiresTargetThread(form.mode) ? null : (
               <Menu>
                 <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
                   <WorktreeIcon className="size-4" />
@@ -1030,7 +1156,7 @@ export function AutomationDialog({
                   </MenuRadioGroup>
                 </ComposerPickerMenuPopup>
               </Menu>
-            ) : null}
+            )}
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
@@ -1054,7 +1180,14 @@ export function AutomationDialog({
             <AutomationModelPicker
               value={form.modelSelection}
               projectCwd={selectedProject?.cwd ?? null}
-              onChange={(value) => setField("modelSelection", value)}
+              onChange={(value) => {
+                onFormChange({
+                  ...form,
+                  modelSelection: value,
+                  runtimeMode: normalizeRuntimeModeForProvider(form.runtimeMode, value.provider),
+                });
+              }}
+              onAutoModeSupportChange={handleAutoModeSupportChange}
             />
 
             <Menu>
@@ -1226,10 +1359,13 @@ export function AutomationDialog({
                     onValueChange={(value) => setField("mode", value as AutomationMode)}
                   >
                     <MenuRadioItem value="standalone">Standalone</MenuRadioItem>
+                    <MenuRadioItem value="dedicated">Dedicated thread</MenuRadioItem>
                     <MenuRadioItem value="heartbeat">Heartbeat</MenuRadioItem>
                   </MenuRadioGroup>
                 </MenuGroup>
-                {form.mode === "heartbeat" ? (
+                {/* Only heartbeat continues a thread the user picks; a dedicated automation
+                    creates and keeps its own. */}
+                {automationRequiresTargetThread(form.mode) ? (
                   <>
                     <MenuSeparator />
                     <MenuGroup>
@@ -1251,27 +1387,27 @@ export function AutomationDialog({
                         </MenuRadioGroup>
                       )}
                     </MenuGroup>
-                    <MenuSeparator />
-                    <MenuGroup>
-                      <MenuGroupLabel>Stop when</MenuGroupLabel>
-                      <div className="px-2 py-1">
-                        <input
-                          value={form.stopWhen}
-                          onChange={(event) => setField("stopWhen", event.target.value)}
-                          placeholder="PR is ready to merge"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        />
-                      </div>
-                    </MenuGroup>
-                    <MenuSeparator />
-                    <MenuCheckboxItem
-                      checked={form.stopOnError}
-                      onCheckedChange={(checked) => setField("stopOnError", checked)}
-                    >
-                      Stop on error
-                    </MenuCheckboxItem>
                   </>
                 ) : null}
+                <MenuSeparator />
+                <MenuGroup>
+                  <MenuGroupLabel>Stop when</MenuGroupLabel>
+                  <div className="px-2 py-1">
+                    <input
+                      value={form.stopWhen}
+                      onChange={(event) => setField("stopWhen", event.target.value)}
+                      placeholder="PR is ready to merge"
+                      className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                </MenuGroup>
+                <MenuSeparator />
+                <MenuCheckboxItem
+                  checked={form.stopOnError}
+                  onCheckedChange={(checked) => setField("stopOnError", checked)}
+                >
+                  Stop on error
+                </MenuCheckboxItem>
                 <MenuSeparator />
                 <MenuGroup>
                   <MenuGroupLabel>Max iterations</MenuGroupLabel>
@@ -1314,7 +1450,19 @@ export function AutomationDialog({
                   />
                 }
               >
-                <CentralIcon name="brain" className="size-4" />
+                <CentralIcon
+                  name={
+                    form.runtimeMode === "auto"
+                      ? "shield-code"
+                      : form.runtimeMode === "full-access"
+                        ? "shield-access"
+                        : "brain"
+                  }
+                  className={cn(
+                    "size-4",
+                    form.runtimeMode === "auto" && RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME,
+                  )}
+                />
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" className="w-48">
                 <MenuRadioGroup
@@ -1322,6 +1470,15 @@ export function AutomationDialog({
                   onValueChange={(value) => setField("runtimeMode", value as RuntimeMode)}
                 >
                   <MenuRadioItem value="approval-required">Approval required</MenuRadioItem>
+                  {selectedModelSupportsAuto ? (
+                    <MenuRadioItem value="auto">
+                      <CentralIcon
+                        name="shield-code"
+                        className={cn("size-4", RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME)}
+                      />
+                      Auto
+                    </MenuRadioItem>
+                  ) : null}
                   <MenuRadioItem value="full-access">Full access</MenuRadioItem>
                 </MenuRadioGroup>
               </ComposerPickerMenuPopup>

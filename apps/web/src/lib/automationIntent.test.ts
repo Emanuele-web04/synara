@@ -592,7 +592,7 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
-  it("requires review instead of auto-submitting explicit standalone stop clauses", () => {
+  it("keeps explicit standalone stop clauses on standalone", () => {
     const deterministicIntent = parseChatAutomationIntent(
       "/automation standalone every 5m check CI until it is green",
     );
@@ -605,7 +605,7 @@ describe("parseChatAutomationIntent", () => {
     });
 
     expect(resolved).toMatchObject({
-      mode: "heartbeat",
+      mode: "standalone",
       requiresReview: true,
       intent: {
         completionPolicy: {
@@ -616,7 +616,7 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
-  it("keeps generated standalone stop clauses behind review", () => {
+  it("keeps generated standalone stop clauses on standalone, behind review", () => {
     const resolved = resolveChatAutomationIntent({
       deterministicIntent: null,
       generatedIntent: {
@@ -642,7 +642,7 @@ describe("parseChatAutomationIntent", () => {
 
     expect(resolved).toMatchObject({
       source: "generated",
-      mode: "heartbeat",
+      mode: "standalone",
       requiresReview: true,
       intent: {
         executionScope: "standalone",
@@ -651,6 +651,35 @@ describe("parseChatAutomationIntent", () => {
           stopWhen: "CI is green",
         },
       },
+    });
+  });
+
+  it("keeps a generated dedicated mode instead of flattening it to standalone", () => {
+    // Outside the current thread there are two shapes, not one: a fresh thread per run
+    // (standalone) and one thread the automation reuses (dedicated).
+    const resolved = resolveChatAutomationIntent({
+      deterministicIntent: null,
+      generatedIntent: {
+        isAutomation: true,
+        confidence: 0.95,
+        language: "en",
+        name: "Watch the release branch",
+        taskPrompt: "watch the release branch",
+        schedule: { type: "interval", everySeconds: 3_600 },
+        mode: "dedicated",
+        completionPolicy: { type: "none" },
+        missingFields: [],
+        needsConfirmation: false,
+        reason: null,
+      },
+      defaultMode: "heartbeat",
+      executionScope: "thread",
+    });
+
+    expect(resolved).toMatchObject({
+      source: "generated",
+      mode: "dedicated",
+      intent: { executionScope: "standalone" },
     });
   });
 

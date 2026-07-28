@@ -473,6 +473,16 @@ export function resolvePullActionAvailability(input: {
   return { canRun: true, hint: null };
 }
 
+/** Environment panel should promote Pull while it is available or already running. */
+export function shouldShowEnvironmentPanelPullRow(input: {
+  quickAction: GitQuickAction;
+  isPullRunning: boolean;
+}): boolean {
+  return (
+    input.isPullRunning || (input.quickAction.kind === "run_pull" && !input.quickAction.disabled)
+  );
+}
+
 export function shouldOfferCreateBranchPrompt(input: {
   activeWorktreePath: string | null;
   gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;
@@ -540,6 +550,12 @@ export function resolveLiveThreadBranchUpdate(input: {
   gitStatus: GitStatusResult | null;
 }): { branch: string | null } | null {
   if (!input.gitStatus) {
+    return null;
+  }
+
+  // Branch list not ready yet — don't treat "status arrived first" as out-of-sync
+  // or we permanently invalidate and show "Refreshing git status...".
+  if (input.threadBranch === null) {
     return null;
   }
 

@@ -3,8 +3,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import {
-  requireNoPendingMigrationRecovery,
+  inspectPendingMigrationRecovery,
+  reclaimOrphanedMigrationArtifacts,
+  resumeMarkedMigration,
   runWithPreMigrationBackup,
+  type MigrationRecoveryMarker,
 } from "../MigrationBackup.ts";
 import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
 import { ServerConfig } from "../../config.ts";
@@ -50,10 +53,29 @@ const repairSqliteFilePermissions = (dbPath: string) =>
     }
   });
 
-const makeSetup = (dbPath?: string) =>
+const makeSetup = (dbPath?: string, pendingRecovery: MigrationRecoveryMarker | null = null) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      if (dbPath) {
+        // The runtime owns this database for its entire lifetime (enforced by
+        // DatabaseLifecycleLock), so make SQLite enforce the same boundary.
+        // This must happen before the first WAL access: SQLite then keeps its
+        // WAL index in heap memory instead of memory-mapping a shared `-shm`
+        // file that an unrelated sqlite client could truncate or rebuild.
+        const lockingModeRows = yield* sql<{ readonly locking_mode: string }>`
+          PRAGMA locking_mode = EXCLUSIVE;
+        `;
+        const lockingMode = lockingModeRows[0]?.locking_mode;
+        if (lockingMode?.toLowerCase() !== "exclusive") {
+          return yield* Effect.fail(
+            new Error(
+              `SQLite exclusive locking mode could not be enabled (result: ${lockingMode ?? "unknown"})`,
+            ),
+          );
+        }
+      }
+      yield* sql`PRAGMA busy_timeout = 5000;`;
       const journalModeRows = yield* sql<{ readonly journal_mode: string }>`
         PRAGMA journal_mode = WAL;
       `;
@@ -71,10 +93,21 @@ const makeSetup = (dbPath?: string) =>
       // on every commit is too costly, and losing the last few events on a hard
       // power loss is acceptable.
       yield* sql`PRAGMA synchronous = NORMAL;`;
-      yield* sql`PRAGMA busy_timeout = 5000;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
+      if (dbPath) {
+        // Setting locking_mode changes connection policy; this transaction
+        // actually acquires and retains the database lock before startup
+        // continues, closing the window where another client could attach.
+        yield* sql`BEGIN EXCLUSIVE;`;
+        yield* sql`COMMIT;`;
+      }
+      // A pending marker means an earlier startup was interrupted mid-migration.
+      // Resuming reuses that attempt's snapshot instead of taking a second one,
+      // so the fallback stays the last known-good database.
       const migrations = dbPath
-        ? runWithPreMigrationBackup(dbPath, runMigrations())
+        ? pendingRecovery
+          ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
+          : runWithPreMigrationBackup(dbPath, runMigrations())
         : runMigrations();
       yield* migrations;
     }),
@@ -89,7 +122,11 @@ export const makeSqlitePersistenceLive = (dbPath: string) =>
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-        yield* requireNoPendingMigrationRecovery(dbPath);
+        // Ahead of the guard on purpose: a database that fails closed below
+        // never reaches the backup path, so this is the only opportunity to
+        // reclaim artifacts stranded by an earlier failed startup or restore.
+        yield* reclaimOrphanedMigrationArtifacts(dbPath);
+        const pendingRecovery = yield* inspectPendingMigrationRecovery(dbPath);
         // Set the mode before SQLite opens the database. Never reopen the
         // database, WAL, or SHM merely to chmod them while this connection is
         // live: closing any descriptor for the same inode releases POSIX
@@ -98,7 +135,10 @@ export const makeSqlitePersistenceLive = (dbPath: string) =>
         yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
         yield* repairSqliteFilePermissions(dbPath);
 
-        return Layer.provideMerge(makeSetup(dbPath), makeRuntimeSqliteLayer({ filename: dbPath }));
+        return Layer.provideMerge(
+          makeSetup(dbPath, pendingRecovery),
+          makeRuntimeSqliteLayer({ filename: dbPath }),
+        );
       }),
     ),
     Layer.unwrap,

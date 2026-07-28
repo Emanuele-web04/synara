@@ -86,6 +86,38 @@ describe("composerDraftStore persisted-state hydration", () => {
       },
     ]);
   });
+
+  it("preserves AI-reviewed auto mode during hydration", () => {
+    const projectId = ProjectId.makeUnsafe("project-auto-mode");
+    const threadId = ThreadId.makeUnsafe("thread-auto-mode");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "",
+          attachments: [],
+          runtimeMode: "auto",
+        },
+      },
+      draftThreadsByThreadId: {
+        [threadId]: {
+          projectId,
+          createdAt: "2026-07-25T00:00:00.000Z",
+          runtimeMode: "auto",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    expect(hydrated.draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
+    expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
+  });
 });
 
 describe("composerDraftStore restored source proposed plan", () => {

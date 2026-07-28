@@ -322,6 +322,7 @@ export function buildModelSelection(
   provider: "claudeAgent",
   model: string,
   options?: ClaudeModelOptions | null | undefined,
+  supportsAutoMode?: boolean | undefined,
 ): ClaudeModelSelection;
 export function buildModelSelection(
   provider: "cursor",
@@ -362,11 +363,13 @@ export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
+  supportsAutoMode?: boolean | undefined,
 ): ModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
+  supportsAutoMode?: boolean | undefined,
 ): ModelSelection {
   switch (provider) {
     case "antigravity":
@@ -386,13 +389,12 @@ export function buildModelSelection(
           }
         : { provider, model };
     case "claudeAgent":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as ClaudeModelOptions,
-          }
-        : { provider, model };
+      return {
+        provider,
+        model,
+        ...(options ? { options: options as ClaudeModelOptions } : {}),
+        ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
+      };
     case "cursor":
       return options
         ? {

@@ -124,6 +124,42 @@ describe("derivePendingApprovals", () => {
     ]);
   });
 
+  it("preserves the requested permission profile for approval rendering", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "permission-approval-open",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Permission approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "permission-request-1",
+          requestKind: "permissions",
+          detail: "Needs package metadata",
+          sessionApprovalAvailable: false,
+          permissionProfile: {
+            network: { enabled: true },
+            fileSystem: { read: ["/tmp/example"] },
+          },
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "permission-request-1",
+        requestKind: "permissions",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        detail: "Needs package metadata",
+        sessionApprovalAvailable: false,
+        permissionProfile: {
+          network: { enabled: true },
+          fileSystem: { read: ["/tmp/example"] },
+        },
+      },
+    ]);
+  });
+
   it("clears stale pending approvals when provider reports unknown pending request", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

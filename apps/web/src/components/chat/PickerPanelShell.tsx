@@ -37,17 +37,23 @@ export function PickerPanelShell(props: {
   listMaxHeightClassName?: string;
 }) {
   const {
-    searchPlaceholder = "Search",
-    query = "",
+    searchPlaceholder: searchPlaceholderProp,
+    query: queryProp,
     onQueryChange,
-    stopSearchKeyPropagation = false,
-    autoFocusSearch = false,
+    stopSearchKeyPropagation: stopSearchKeyPropagationProp,
+    autoFocusSearch: autoFocusSearchProp,
     children,
     footer,
-    widthClassName = "w-72",
-    bleedParentPadding = false,
+    widthClassName: widthClassNameProp,
+    bleedParentPadding: bleedParentPaddingProp,
     listMaxHeightClassName,
   } = props;
+  const searchPlaceholder = searchPlaceholderProp ?? "Search";
+  const query = queryProp ?? "";
+  const stopSearchKeyPropagation = stopSearchKeyPropagationProp ?? false;
+  const autoFocusSearch = autoFocusSearchProp ?? false;
+  const widthClassName = widthClassNameProp ?? "w-72";
+  const bleedParentPadding = bleedParentPaddingProp ?? false;
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {

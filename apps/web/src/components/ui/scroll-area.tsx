@@ -7,15 +7,18 @@ import { cn } from "~/lib/utils";
 function ScrollArea({
   className,
   children,
-  scrollFade = false,
-  scrollbarGutter = false,
-  hideScrollbars = false,
+  scrollFade: scrollFadeProp,
+  scrollbarGutter: scrollbarGutterProp,
+  hideScrollbars: hideScrollbarsProp,
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
   scrollFade?: boolean;
   scrollbarGutter?: boolean;
   hideScrollbars?: boolean;
 }) {
+  const scrollFade = scrollFadeProp ?? false;
+  const scrollbarGutter = scrollbarGutterProp ?? false;
+  const hideScrollbars = hideScrollbarsProp ?? false;
   return (
     <ScrollAreaPrimitive.Root className={cn("size-full min-h-0", className)} {...props}>
       <ScrollAreaPrimitive.Viewport
@@ -44,9 +47,10 @@ function ScrollArea({
 
 function ScrollBar({
   className,
-  orientation = "vertical",
+  orientation: orientationProp,
   ...props
 }: ScrollAreaPrimitive.Scrollbar.Props) {
+  const orientation = orientationProp ?? "vertical";
   return (
     <ScrollAreaPrimitive.Scrollbar
       className={cn(

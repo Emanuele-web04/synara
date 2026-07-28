@@ -42,9 +42,10 @@ const emptyMediaVariants = cva(
 
 function EmptyMedia({
   className,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof emptyMediaVariants>) {
+  const variant = variantProp === undefined ? "default" : variantProp;
   return (
     <div
       className={cn("relative mb-6", className)}

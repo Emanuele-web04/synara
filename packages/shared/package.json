@@ -8,6 +8,10 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./runtimeMode": {
+      "types": "./src/runtimeMode.ts",
+      "import": "./src/runtimeMode.ts"
+    },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"
@@ -31,6 +35,14 @@
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
+    },
+    "./loginShellEnvironment": {
+      "types": "./src/loginShellEnvironment.ts",
+      "import": "./src/loginShellEnvironment.ts"
+    },
+    "./synaraHome": {
+      "types": "./src/synaraHome.ts",
+      "import": "./src/synaraHome.ts"
     },
     "./staticSnapshot": {
       "types": "./src/staticSnapshot.ts",
@@ -136,6 +148,14 @@
       "types": "./src/agentMentions.ts",
       "import": "./src/agentMentions.ts"
     },
+    "./automationCompletionPolicy": {
+      "types": "./src/automationCompletionPolicy.ts",
+      "import": "./src/automationCompletionPolicy.ts"
+    },
+    "./automationMode": {
+      "types": "./src/automationMode.ts",
+      "import": "./src/automationMode.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"
@@ -219,6 +239,14 @@
     "./browserAutomationMcpError": {
       "types": "./src/browserAutomationMcpError.ts",
       "import": "./src/browserAutomationMcpError.ts"
+    },
+    "./unifiedPatchStats": {
+      "types": "./src/unifiedPatchStats.ts",
+      "import": "./src/unifiedPatchStats.ts"
+    },
+    "./providerDeliveryBlock": {
+      "types": "./src/providerDeliveryBlock.ts",
+      "import": "./src/providerDeliveryBlock.ts"
     }
   },
   "scripts": {

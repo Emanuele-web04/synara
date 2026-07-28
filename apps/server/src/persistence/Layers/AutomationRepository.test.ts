@@ -964,21 +964,22 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("coerces standalone completion policies to none on create", () =>
+  it.effect("keeps a standalone completion policy and drops only its thread", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
 
+      const policy = {
+        type: "ai-evaluated" as const,
+        stopWhen: "the PR is ready",
+        confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+      };
       const created = yield* repository.createDefinition({
         id: AutomationId.makeUnsafe("automation-standalone-stop-policy"),
         input: {
           ...createInputForProject("project-standalone-stop-policy"),
           mode: "standalone",
-          completionPolicy: {
-            type: "ai-evaluated",
-            stopWhen: "the PR is ready",
-            confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
-          },
+          completionPolicy: policy,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -988,9 +989,49 @@ layer("AutomationRepository", (it) => {
           id: AutomationId.makeUnsafe("automation-standalone-stop-policy"),
         }),
       );
-      assert.deepStrictEqual(created.completionPolicy, { type: "none" });
-      assert.deepStrictEqual(reloaded.completionPolicy, { type: "none" });
+      // Stop conditions are mode-independent; only the continuation thread is mode-gated.
+      assert.deepStrictEqual(created.completionPolicy, policy);
+      assert.deepStrictEqual(reloaded.completionPolicy, policy);
       assert.strictEqual(reloaded.targetThreadId, null);
+    }),
+  );
+
+  it.effect("gives a dedicated definition its thread exactly once", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      const id = AutomationId.makeUnsafe("automation-dedicated-thread");
+      const firstThreadId = ThreadId.makeUnsafe("dedicated-thread-first");
+      const secondThreadId = ThreadId.makeUnsafe("dedicated-thread-second");
+      const created = yield* repository.createDefinition({
+        id,
+        input: {
+          ...createInputForProject("project-dedicated-thread"),
+          mode: "dedicated",
+          // A caller-supplied thread belongs to heartbeat only.
+          targetThreadId: ThreadId.makeUnsafe("someone-elses-thread"),
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      assert.strictEqual(created.targetThreadId, null);
+
+      const attached = yield* repository.attachDefinitionThread({
+        id,
+        threadId: firstThreadId,
+        updatedAt: "2026-06-16T10:05:00.000Z",
+      });
+      // A concurrent first run must not repoint the automation at the loser's thread.
+      const reattached = yield* repository.attachDefinitionThread({
+        id,
+        threadId: secondThreadId,
+        updatedAt: "2026-06-16T10:05:01.000Z",
+      });
+
+      const reloaded = Option.getOrThrow(yield* repository.getDefinitionById({ id }));
+      assert.isTrue(attached);
+      assert.isFalse(reattached);
+      assert.strictEqual(reloaded.targetThreadId, firstThreadId);
     }),
   );
 

@@ -24,7 +24,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { collectStudioProjectIds, findStudioDraftThreadId } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
-import { useWorkspaceStore } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 
 // How long the splash below waits for the welcome's Studio root before surfacing an error —
 // generous next to a normal welcome round-trip, mirroring the home route's eventual error+retry.
@@ -40,9 +40,9 @@ function StudioIndexRouteView() {
   const projectDraftThreadIdByProjectId = useComposerDraftStore(
     (state) => state.projectDraftThreadIdByProjectId,
   );
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
 
   const studioProjectIds = collectStudioProjectIds(projects, {
     homeDir,

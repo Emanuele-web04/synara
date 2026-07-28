@@ -12,7 +12,6 @@ import {
   PinFilledIcon,
   PluginIcon,
   SettingsIcon,
-  WindowIcon,
 } from "../lib/icons";
 import { cn } from "../lib/utils";
 import type { RecentViewDisplayEntry } from "../recentViews.logic";
@@ -75,8 +74,6 @@ function EntryIcon(props: { entry: RecentViewDisplayEntry }) {
       return <ProviderIcon provider={props.entry.icon.provider} className={className} />;
     case "chat":
       return <MessageCircleIcon className={className} aria-hidden="true" />;
-    case "workspace":
-      return <WindowIcon className={className} aria-hidden="true" />;
     case "settings":
       return <SettingsIcon className={className} aria-hidden="true" />;
     case "plugins":

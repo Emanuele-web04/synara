@@ -708,6 +708,28 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("runs the idempotent adapter cleanup barrier for an inactive binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-explicit-stop-inactive");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      routing.codex.stopSession.mockClear();
+      routing.codex.hasSession.mockReturnValueOnce(Effect.succeed(false));
+
+      yield* provider.stopSession({ threadId });
+
+      assert.deepEqual(routing.codex.stopSession.mock.calls, [[threadId]]);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
   it.effect("serializes lifecycle mutations and persists a fresh generation per start", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -3624,6 +3646,110 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         "idle runtime stop after background task settlement",
       );
       assert.deepEqual(idleCleanup.claude.stopSession.mock.calls[0]?.[0], session.threadId);
+    }),
+  );
+
+  it.effect("keeps routing runtime events after a superseded idle stop no-ops", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-idle-superseded-generation");
+
+      idleCleanup.codex.stopSession.mockClear();
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(typeof binding?.lifecycleGeneration, "string");
+      const lifecycleGeneration = String(binding?.lifecycleGeneration);
+
+      // Park the idle stop inside its lifecycle run, right where it re-checks
+      // whether new work displaced it.
+      const defaultHasSession = idleCleanup.codex.hasSession.getMockImplementation();
+      if (!defaultHasSession) assert.fail("Expected the fake adapter hasSession implementation");
+      let releaseIdleStop: () => void = () => undefined;
+      const parkedIdleStop = new Promise<void>((resolve) => {
+        releaseIdleStop = resolve;
+      });
+      let idleStopParked = false;
+      idleCleanup.codex.hasSession.mockImplementationOnce((probedThreadId) =>
+        Effect.suspend(() => {
+          idleStopParked = true;
+          return Effect.promise(() => parkedIdleStop).pipe(
+            Effect.andThen(defaultHasSession(probedThreadId)),
+          );
+        }),
+      );
+
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-idle-superseded-complete"),
+        provider: "codex",
+        createdAt: "2026-07-21T09:00:00.000Z",
+        threadId,
+        lifecycleGeneration,
+        payload: { state: "completed" },
+      });
+
+      yield* waitUntil(() => idleStopParked, 2000, 10, "idle stop reaching the session probe");
+
+      // New runtime work displaces the idle stop while it is parked, so the
+      // stop must abandon itself without touching the still-live session.
+      idleCleanup.codex.emit({
+        type: "task.started",
+        eventId: asEventId("runtime-idle-superseded-task"),
+        provider: "codex",
+        createdAt: "2026-07-21T09:00:01.000Z",
+        threadId,
+        payload: { taskId: "task-superseding-idle-stop" },
+      });
+      assert.equal(typeof provider.hasLiveRuntimeTasks, "function");
+      yield* waitUntilEffect(
+        () => provider.hasLiveRuntimeTasks!({ threadId }),
+        500,
+        10,
+        "live runtime task registration",
+      );
+
+      releaseIdleStop();
+      yield* sleep(50);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+      assert.equal(yield* idleCleanup.codex.hasSession(threadId), true);
+
+      // The abandoned stop must leave the live runtime's generation intact:
+      // otherwise every later event from that runtime is silently dropped.
+      const turnId = asTurnId("turn-after-superseded-idle-stop");
+      idleCleanup.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("runtime-idle-superseded-turn-started"),
+        provider: "codex",
+        createdAt: "2026-07-21T09:00:02.000Z",
+        threadId,
+        turnId,
+        lifecycleGeneration,
+        payload: { state: "running" },
+      });
+
+      yield* waitUntilEffect(
+        () =>
+          runtimeRepository.getByThreadId({ threadId }).pipe(
+            Effect.map((runtime) => {
+              if (Option.isNone(runtime)) {
+                return false;
+              }
+              return (
+                asRuntimePayloadRecord(runtime.value.runtimePayload).activeTurnId === String(turnId)
+              );
+            }),
+          ),
+        500,
+        20,
+        "runtime turn routed after the superseded idle stop",
+      );
     }),
   );
 

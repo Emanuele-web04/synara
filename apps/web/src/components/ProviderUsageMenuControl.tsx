@@ -62,7 +62,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
 export function ProviderUsageMenuPopup({
   provider,
   model,
-  align = "end",
+  align: alignProp,
   children,
 }: {
   provider: ProviderKind;
@@ -70,6 +70,7 @@ export function ProviderUsageMenuPopup({
   align?: "start" | "end";
   children: ReactNode;
 }) {
+  const align = alignProp ?? "end";
   return (
     <Menu modal={false}>
       {children}

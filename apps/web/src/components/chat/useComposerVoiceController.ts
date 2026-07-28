@@ -77,10 +77,11 @@ export function useComposerVoiceController(
     pendingUserInputCount,
     onTranscriptReady,
     refreshVoiceStatus,
-    actionArmDelayMs = 0,
+    actionArmDelayMs: actionArmDelayMsProp,
     failureCopy: failureCopyOverrides,
     onGuardWarning,
   } = options;
+  const actionArmDelayMs = actionArmDelayMsProp ?? 0;
   const {
     isRecording: isVoiceRecording,
     durationMs: voiceRecordingDurationMs,

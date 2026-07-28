@@ -14,6 +14,7 @@ import type {
 } from "@synara/contracts";
 import {
   AutomationId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   EventId,
   MessageId,
   ModelSelection,
@@ -272,6 +273,12 @@ function makeHarnessLayer(
       readonly id: string;
       readonly automationId: AutomationDefinition["id"];
     }>;
+    /** The automation run that dispatched the caller's active turn, if any. */
+    readonly callerAutomationRun?: {
+      readonly callerThreadId: string;
+      readonly id: string;
+      readonly automationId: AutomationDefinition["id"];
+    };
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -615,6 +622,16 @@ function makeHarnessLayer(
           .filter((run) => run.automationId === input.automationId)
           .slice(0, input.limit),
       ),
+    resolveCallerRun: (input: { callerThreadId: string; callerTurnId: string | null }) => {
+      const callerRun = options.callerAutomationRun;
+      return Effect.succeed(
+        callerRun &&
+          input.callerTurnId !== null &&
+          callerRun.callerThreadId === input.callerThreadId
+          ? Option.some(callerRun)
+          : Option.none(),
+      );
+    },
     getMemory: () => Effect.succeed(null),
     updateMemory: (input: { automationId: string | null; content: string }) =>
       Effect.sync(() => {
@@ -752,7 +769,12 @@ function makeHarnessLayer(
             ],
           },
         ],
-        claudeAgent: [{ slug: "claude-sonnet-5", name: "Claude Sonnet 5" }],
+        claudeAgent: [
+          {
+            slug: "claude-sonnet-5",
+            name: "Claude Sonnet 5",
+          },
+        ],
         cursor: [{ slug: "auto", name: "Auto" }],
         antigravity: [
           {
@@ -1417,6 +1439,24 @@ describe("AgentGateway", () => {
       assert.property(createThreadProperties, "baseRef");
       assert.notProperty(createThreadProperties, "baseBranch");
       assert.notProperty(createThreadProperties, "branchName");
+      assert.deepEqual(
+        (createThreadProperties?.runtimeMode as { enum?: string[] } | undefined)?.enum,
+        ["approval-required", "full-access"],
+      );
+      const createThreadsTool = tools.find((tool) => tool.name === "synara_create_threads");
+      const createThreadsItems = (
+        createThreadsTool?.inputSchema.properties?.threads as
+          | {
+              items?: {
+                properties?: Record<string, unknown>;
+              };
+            }
+          | undefined
+      )?.items;
+      assert.deepEqual(
+        (createThreadsItems?.properties?.runtimeMode as { enum?: string[] } | undefined)?.enum,
+        ["approval-required", "full-access"],
+      );
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");
@@ -1929,6 +1969,50 @@ describe("AgentGateway", () => {
       if (turn.type === "thread.turn.start") {
         assert.equal(turn.dispatchOrigin, "agent");
         assert.equal(turn.message.text, "analyze the feature");
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("starts explicit OpenCode and Kilo plan-agent targets in plan mode", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_threads",
+        args: {
+          requestId: "create-provider-plan-agents",
+          threads: [
+            {
+              prompt: "plan the OpenCode work",
+              target: {
+                provider: "opencode",
+                model: "openai/gpt-5",
+                options: { agent: "plan" },
+              },
+            },
+            {
+              prompt: "plan the Kilo work",
+              target: {
+                provider: "kilo",
+                model: "kilo/kilo-auto/free",
+                options: { agent: "plan" },
+              },
+            },
+          ],
+        },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+
+      const creates = harness.dispatched.filter((command) => command.type === "thread.create");
+      const turns = harness.dispatched.filter((command) => command.type === "thread.turn.start");
+      assert.lengthOf(creates, 2);
+      assert.lengthOf(turns, 2);
+      for (const command of [...creates, ...turns]) {
+        assert.equal(command.interactionMode, "plan");
+        assert.deepInclude(command.modelSelection ?? {}, {
+          options: { agent: "plan" },
+        });
       }
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -4194,6 +4278,54 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("creates dedicated automations that own their thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Release watch",
+          prompt: "Track the release branch.",
+          mode: "dedicated",
+          schedule: { type: "interval", everySeconds: 3600 },
+          worktreeMode: "worktree",
+          completionPolicy: { type: "ai-evaluated", stopWhen: "the release is out" },
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const created = harness.automationCreates[0]!;
+      assert.equal(created.mode, "dedicated");
+      // The server assigns the thread on the first run, so creation carries none.
+      assert.isNull(created.targetThreadId);
+      assert.equal(created.worktreeMode, "worktree");
+      assert.equal(created.completionPolicy?.type, "ai-evaluated");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects a target thread for dedicated automations", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Release watch",
+          prompt: "Track the release branch.",
+          mode: "dedicated",
+          targetThreadId: "thread-parent",
+        },
+      });
+
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "targetThreadId");
+      assert.lengthOf(harness.automationCreates, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects standalone automations targeting another project", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -4358,6 +4490,98 @@ describe("AgentGateway", () => {
       assert.deepEqual(harness.automationUpdates, [
         { id: AutomationId.makeUnsafe("automation-1"), enabled: false },
       ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("lets a standalone run cancel the automation that dispatched it", () => {
+    // A standalone run executes in a per-run thread: it owns neither the source nor a
+    // target thread, so run context is the only authority it can present.
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      baseThreads,
+      [
+        makeAutomationDefinition({
+          id: AutomationId.makeUnsafe("automation-standalone"),
+          mode: "standalone",
+          sourceThreadId: ThreadId.makeUnsafe("thread-creator"),
+          targetThreadId: null,
+        }),
+      ],
+      {
+        callerAutomationRun: {
+          callerThreadId: "thread-parent",
+          id: "run-standalone-1",
+          automationId: AutomationId.makeUnsafe("automation-standalone"),
+        },
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_cancel_automation",
+        args: { automationId: "automation-standalone" },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(harness.automationUpdates, [
+        { id: AutomationId.makeUnsafe("automation-standalone"), enabled: false },
+      ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects cancelling a standalone automation from an unrelated run", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      baseThreads,
+      [
+        makeAutomationDefinition({
+          id: AutomationId.makeUnsafe("automation-standalone"),
+          mode: "standalone",
+          sourceThreadId: ThreadId.makeUnsafe("thread-creator"),
+          targetThreadId: null,
+        }),
+      ],
+      {
+        callerAutomationRun: {
+          callerThreadId: "thread-parent",
+          id: "run-other-1",
+          automationId: AutomationId.makeUnsafe("automation-unrelated"),
+        },
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_cancel_automation",
+        args: { automationId: "automation-standalone" },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.deepEqual(harness.automationUpdates, []);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("accepts a stop clause on a standalone automation", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "Watch PR 142 CI",
+          prompt: "Watch PR 142 and report when CI finishes.",
+          mode: "standalone",
+          schedule: { type: "interval", everySeconds: 300 },
+          completionPolicy: { type: "ai-evaluated", stopWhen: "PR 142 is merged" },
+        },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(harness.automationCreates[0]?.completionPolicy, {
+        type: "ai-evaluated",
+        stopWhen: "PR 142 is merged",
+        confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+      });
+      assert.strictEqual(harness.automationCreates[0]?.mode, "standalone");
     }).pipe(Effect.provide(gatewayLayer));
   });
 

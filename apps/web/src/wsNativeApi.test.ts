@@ -69,6 +69,9 @@ vi.mock("./wsTransport", () => {
       onCompatibilityIssue() {
         return () => undefined;
       }
+      onThreadStreamFailure() {
+        return () => undefined;
+      }
       getLatestPush(channel: string) {
         return latestPushByChannel.get(channel) ?? null;
       }

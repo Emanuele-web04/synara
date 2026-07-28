@@ -177,12 +177,15 @@ describe("prefetchProviderModelsForNewThread", () => {
       cwd: "/tmp/project",
     });
 
-    expect(prefetchQuery).toHaveBeenCalledTimes(2);
+    expect(prefetchQuery).toHaveBeenCalledTimes(3);
     expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
       providerDiscoveryQueryKeys.models("kilo", "/bin/kilo", null, null, "/tmp/project"),
     );
     expect(prefetchQuery.mock.calls[1]?.[0].queryKey).toEqual(
       providerDiscoveryQueryKeys.agents("kilo", "/bin/kilo", "/tmp/project"),
+    );
+    expect(prefetchQuery.mock.calls[2]?.[0].queryKey).toEqual(
+      providerDiscoveryQueryKeys.composerCapabilities("kilo"),
     );
   });
 
@@ -195,9 +198,12 @@ describe("prefetchProviderModelsForNewThread", () => {
       settings: makeSettings({ cursorBinaryPath: "/bin/agent" }),
     });
 
-    expect(prefetchQuery).toHaveBeenCalledTimes(1);
+    expect(prefetchQuery).toHaveBeenCalledTimes(2);
     expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
       providerDiscoveryQueryKeys.models("cursor", "/bin/agent", null, null, null),
+    );
+    expect(prefetchQuery.mock.calls[1]?.[0].queryKey).toEqual(
+      providerDiscoveryQueryKeys.composerCapabilities("cursor"),
     );
   });
 });

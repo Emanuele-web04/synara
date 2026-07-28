@@ -31,10 +31,6 @@ import {
   setActiveTerminalInGroupLayout,
   splitTerminalGroupLayout,
 } from "./terminalPaneLayout";
-import {
-  createWorkspaceTerminalGroupFromPreset,
-  type WorkspaceLayoutPresetId,
-} from "./workspaceTerminalLayoutPresets";
 
 export interface ThreadTerminalState {
   entryPoint: ThreadPrimarySurface;
@@ -479,6 +475,11 @@ export function sanitizePersistedTerminalStateByThreadId(
 ): Record<ThreadId, ThreadTerminalState> {
   const next: Record<ThreadId, ThreadTerminalState> = {};
   for (const [threadId, state] of Object.entries(terminalStateByThreadId ?? {})) {
+    // Dedicated Workspace pages used synthetic `workspace:*` terminal scopes.
+    // Drop those retired entries while hydrating the shared terminal store.
+    if (threadId.startsWith("workspace:")) {
+      continue;
+    }
     const sanitized = stripVolatileTerminalRuntimeState(state);
     if (!isDefaultThreadTerminalState(sanitized)) {
       next[threadId as ThreadId] = sanitized;
@@ -1137,63 +1138,6 @@ function setThreadTerminalActivity(
   };
 }
 
-function applyThreadWorkspaceLayoutPreset(
-  state: ThreadTerminalState,
-  presetId: WorkspaceLayoutPresetId,
-  terminalIds: readonly string[],
-): ThreadTerminalState {
-  const normalized = normalizeThreadTerminalState(state);
-  const nextTerminalIds = normalizeTerminalIds([...terminalIds]);
-  const activeTerminalId = nextTerminalIds.includes(normalized.activeTerminalId)
-    ? normalized.activeTerminalId
-    : (nextTerminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID);
-  const terminalLabelsById = ensureTerminalLabels({
-    terminalCliKindsById: normalizeTerminalCliKinds(
-      normalized.terminalCliKindsById,
-      nextTerminalIds,
-    ),
-    terminalIds: nextTerminalIds,
-    terminalLabelsById: normalizeTerminalLabels(normalized.terminalLabelsById, nextTerminalIds),
-    terminalTitleOverridesById: normalizeTerminalTitleOverrides(
-      normalized.terminalTitleOverridesById,
-      nextTerminalIds,
-    ),
-  });
-  const terminalTitleOverridesById = normalizeTerminalTitleOverrides(
-    normalized.terminalTitleOverridesById,
-    nextTerminalIds,
-  );
-  const terminalCliKindsById = normalizeTerminalCliKinds(
-    normalized.terminalCliKindsById,
-    nextTerminalIds,
-  );
-  const terminalGroup = createWorkspaceTerminalGroupFromPreset({
-    presetId,
-    terminalIds: nextTerminalIds,
-    activeTerminalId,
-  });
-
-  return normalizeThreadTerminalState({
-    ...normalized,
-    terminalOpen: true,
-    presentationMode: "workspace",
-    workspaceLayout: "terminal-only",
-    workspaceActiveTab: "terminal",
-    terminalIds: nextTerminalIds,
-    terminalLabelsById,
-    terminalTitleOverridesById,
-    terminalCliKindsById,
-    terminalAttentionStatesById: normalizeTerminalAttentionStates(
-      normalized.terminalAttentionStatesById,
-      nextTerminalIds,
-    ),
-    runningTerminalIds: normalizeRunningTerminalIds(normalized.runningTerminalIds, nextTerminalIds),
-    activeTerminalId,
-    terminalGroups: [terminalGroup],
-    activeTerminalGroupId: terminalGroup.id,
-  });
-}
-
 export function selectThreadTerminalState(
   terminalStateByThreadId: Record<ThreadId, ThreadTerminalState>,
   threadId: ThreadId,
@@ -1279,11 +1223,6 @@ interface TerminalStateStoreState {
     threadId: ThreadId,
     terminalId: string,
     activity: { agentState: TerminalActivityState | null; hasRunningSubprocess: boolean },
-  ) => void;
-  applyWorkspaceLayoutPreset: (
-    threadId: ThreadId,
-    presetId: WorkspaceLayoutPresetId,
-    terminalIds: readonly string[],
   ) => void;
   clearTerminalState: (threadId: ThreadId) => void;
   removeOrphanedTerminalStates: (activeThreadIds: Set<ThreadId>) => void;
@@ -1389,10 +1328,6 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
         setTerminalActivity: (threadId, terminalId, activity) =>
           updateTerminal(threadId, (state) =>
             setThreadTerminalActivity(state, terminalId, activity),
-          ),
-        applyWorkspaceLayoutPreset: (threadId, presetId, terminalIds) =>
-          updateTerminal(threadId, (state) =>
-            applyThreadWorkspaceLayoutPreset(state, presetId, terminalIds),
           ),
         clearTerminalState: (threadId) =>
           updateTerminal(threadId, () => createDefaultThreadTerminalState()),

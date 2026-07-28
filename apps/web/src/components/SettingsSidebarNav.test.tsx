@@ -30,6 +30,11 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
   });
 
+  it("indexes the follow-up Queue and Steer preference", () => {
+    const results = rankSettingsSearchEntries("steer", 12);
+    expect(results.some((entry) => entry.id === "behavior:follow-up-behavior")).toBe(true);
+  });
+
   it("includes the activity toasts notification row", () => {
     const results = rankSettingsSearchEntries("toasts", 12);
     expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);
@@ -73,5 +78,25 @@ describe("SettingsSidebarNav", () => {
     expect(markup).toContain('aria-label="Search settings"');
     expect(markup).toContain('aria-label="Settings sections"');
     expect(markup).toContain("Back to app");
+  });
+
+  it("groups settings by user intent instead of implementation ownership", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />,
+    );
+
+    expect(markup).toContain("Personal");
+    expect(markup).toContain("Integrations");
+    expect(markup).toContain("Coding");
+    expect(markup).toContain("System");
+    expect(markup).toContain("Archived");
+    expect(markup).toContain("Chat behavior");
+    expect(markup).toContain("MCP connections");
+    expect(markup).toContain("Agent providers");
+    expect(markup).toContain("Managed worktrees");
+    expect(markup).toContain("System tools");
+    expect(markup).toContain("Archived threads");
+    expect(markup).not.toContain(">App<");
+    expect(markup).not.toContain(">Synara<");
   });
 });

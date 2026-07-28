@@ -22,11 +22,12 @@ type DebouncedSettingTextInputProps = Omit<
 export function DebouncedSettingTextInput({
   value,
   onCommit,
-  debounceMs = 200,
+  debounceMs: debounceMsProp,
   onBlur,
   onFocus,
   ...inputProps
 }: DebouncedSettingTextInputProps) {
+  const debounceMs = debounceMsProp ?? 200;
   const [draft, setDraft] = useState(value);
   const focusedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,7 +51,6 @@ export function DebouncedSettingTextInput({
     }
   }, [value]);
 
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);

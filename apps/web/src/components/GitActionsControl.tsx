@@ -39,6 +39,7 @@ import {
   resolveCreatePrActionAvailability,
   resolveQuickAction,
   resolvePullActionAvailability,
+  shouldShowEnvironmentPanelPullRow,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
@@ -104,8 +105,8 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadId: ThreadId | null;
   hideQuickActionLabel?: boolean;
-  // `header` renders the split quick-action button; `panel` collapses every git
-  // action into a single "Commit and Push" Environment panel row + dropdown.
+  // `header` renders the split quick-action button; `panel` collapses git actions into
+  // an Environment row + dropdown, promoting Pull as the primary row when behind upstream.
   variant?: "header" | "panel";
   // Lets a parent capture "run commit & push for this instance's repo" so a global
   // keyboard shortcut can trigger it without duplicating the action logic. Called with
@@ -326,10 +327,12 @@ function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
 export default function GitActionsControl({
   gitCwd,
   activeThreadId,
-  hideQuickActionLabel = false,
-  variant = "header",
+  hideQuickActionLabel: hideQuickActionLabelProp,
+  variant: variantProp,
   onRegisterCommitAndPushTrigger,
 }: GitActionsControlProps) {
+  const hideQuickActionLabel = hideQuickActionLabelProp ?? false;
+  const variant = variantProp ?? "header";
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
@@ -374,13 +377,20 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const { data: gitStatus = null, error: gitStatusError } = useQuery(gitStatusQueryOptions(gitCwd));
-
-  const { data: branchList = null } = useQuery(gitBranchesQueryOptions(gitCwd));
+  const { data: branchListData, isSuccess: branchListReady } = useQuery(
+    gitBranchesQueryOptions(gitCwd),
+  );
+  const branchList = branchListData ?? null;
   // Default to true while loading so we don't flash init controls.
   const isRepo = branchList?.isRepo ?? true;
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
+  // Only poll status after branch discovery confirms a repo — avoids non-repo
+  // cwds feeding a permanent "Refreshing git status..." invalidation loop.
+  const { data: gitStatusData, error: gitStatusError } = useQuery(
+    gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true),
+  );
+  const gitStatus = gitStatusData ?? null;
   const liveThreadBranchUpdate = useMemo(
     () =>
       resolveLiveThreadBranchUpdate({
@@ -667,15 +677,18 @@ export default function GitActionsControl({
     async function runGitActionWithToast({
       action,
       commitMessage,
-      forcePushOnlyProgress = false,
+      forcePushOnlyProgress: forcePushOnlyProgressProp,
       onConfirmed,
-      skipDefaultBranchPrompt = false,
+      skipDefaultBranchPrompt: skipDefaultBranchPromptProp,
       statusOverride,
-      featureBranch = false,
+      featureBranch: featureBranchProp,
       isDefaultBranchOverride,
       progressToastId,
       filePaths,
     }: RunGitActionWithToastInput) {
+      const forcePushOnlyProgress = forcePushOnlyProgressProp ?? false;
+      const skipDefaultBranchPrompt = skipDefaultBranchPromptProp ?? false;
+      const featureBranch = featureBranchProp ?? false;
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.branch ?? null;
       const actionIsDefaultBranch =
@@ -1654,6 +1667,59 @@ export default function GitActionsControl({
   );
 
   if (isPanel) {
+    const showPanelPullRow = shouldShowEnvironmentPanelPullRow({
+      quickAction,
+      isPullRunning,
+    });
+    const panelGitActionsMenu = (
+      <Menu
+        onOpenChange={(open) => {
+          if (open) void invalidateGitQueries(queryClient);
+        }}
+      >
+        <MenuTrigger
+          render={
+            <button
+              type="button"
+              className={cn(
+                ENVIRONMENT_ROW_CLASS_NAME,
+                showPanelPullRow
+                  ? "w-auto shrink-0 px-1.5"
+                  : shouldDimPanelCommitPushRow && "opacity-55",
+              )}
+              aria-label={
+                showPanelPullRow
+                  ? "Git action options"
+                  : shouldDimPanelCommitPushRow
+                    ? "Commit and Push unavailable; open Git actions menu"
+                    : "Commit and Push"
+              }
+              title={
+                showPanelPullRow
+                  ? "More Git actions"
+                  : shouldDimPanelCommitPushRow
+                    ? "Commit and Push unavailable. Open for more Git actions."
+                    : "Commit and Push"
+              }
+            />
+          }
+        >
+          {showPanelPullRow ? (
+            <EnvironmentRowChevron />
+          ) : (
+            <EnvironmentRowBody
+              icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+              label="Commit and Push"
+              trailing={<EnvironmentRowChevron />}
+            />
+          )}
+        </MenuTrigger>
+        <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
+          {gitMenuContent}
+        </ComposerPickerMenuPopup>
+      </Menu>
+    );
+
     return (
       <>
         {!isRepo ? (
@@ -1663,43 +1729,25 @@ export default function GitActionsControl({
             disabled={initMutation.isPending}
             onClick={() => initMutation.mutate()}
           />
-        ) : (
-          <Menu
-            onOpenChange={(open) => {
-              if (open) void invalidateGitQueries(queryClient);
-            }}
-          >
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  className={cn(
-                    ENVIRONMENT_ROW_CLASS_NAME,
-                    shouldDimPanelCommitPushRow && "opacity-55",
-                  )}
-                  aria-label={
-                    shouldDimPanelCommitPushRow
-                      ? "Commit and Push unavailable; open Git actions menu"
-                      : "Commit and Push"
-                  }
-                  title={
-                    shouldDimPanelCommitPushRow
-                      ? "Commit and Push unavailable. Open for more Git actions."
-                      : "Commit and Push"
-                  }
-                />
-              }
+        ) : showPanelPullRow ? (
+          <div className="flex w-full items-center">
+            <button
+              type="button"
+              className={cn(ENVIRONMENT_ROW_CLASS_NAME, "min-w-0 flex-1")}
+              aria-label="Pull"
+              title="Pull"
+              disabled={isGitActionRunning}
+              onClick={runQuickAction}
             >
               <EnvironmentRowBody
-                icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                label="Commit and Push"
-                trailing={<EnvironmentRowChevron />}
+                icon={<GitActionGlyph name="sync" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+                label={isPullRunning ? "Pulling..." : "Pull"}
               />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
-              {gitMenuContent}
-            </ComposerPickerMenuPopup>
-          </Menu>
+            </button>
+            {panelGitActionsMenu}
+          </div>
+        ) : (
+          panelGitActionsMenu
         )}
         {gitActionDialogs}
       </>

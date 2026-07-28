@@ -49,6 +49,7 @@ import {
 } from "electron-updater";
 
 import type { ContextMenuItem } from "@synara/contracts";
+import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
@@ -56,14 +57,17 @@ import {
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
+import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { RotatingFileSink } from "@synara/shared/logging";
 import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import {
+  retainLiveBackendAfterShutdownFailure,
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
   shouldDeferDesktopWindowClose,
+  stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
 } from "./backendShutdown";
 import {
@@ -81,9 +85,13 @@ import {
 } from "./updateInstallPreparation";
 import {
   hasPendingDesktopMigrationRecovery,
+  requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
   resolveDesktopMigrationRecoveryPaths,
   restoreDesktopMigrationBackup,
+  type DesktopMigrationRecoveryDecision,
+  type DesktopMigrationRecoveryOutcome,
+  type DesktopMigrationRecoveryPaths,
 } from "./desktopMigrationRecovery";
 import {
   LSREGISTER_PATH,
@@ -102,7 +110,20 @@ import {
 } from "./resumableUpdateDownload";
 import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
+import { BackendStartupBlockDetector, type BackendStartupBlock } from "./backendStartupBlock";
+import {
+  BACKEND_MAX_CONSECUTIVE_START_FAILURES,
+  BackendOutputTailDetector,
+  BackendSupervisionPolicy,
+  summarizeBackendFailureOutput,
+} from "./backendSupervisionPolicy";
+import { captureBackendProcessOutput } from "./backendProcessOutput";
 import { syncShellEnvironment } from "./syncShellEnvironment";
+import {
+  RENDERER_MAX_AUTOMATIC_RELOADS,
+  RendererCrashPolicy,
+  type RendererCrashResponse,
+} from "./rendererCrashRecovery";
 import {
   type DownloadProgressSample,
   getAutoUpdateDisabledReason,
@@ -115,7 +136,9 @@ import {
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
+  applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
+  resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -195,7 +218,18 @@ import {
 // baseline, so a replacement during startup cannot silently become "normal."
 const startupBundleIdentity = captureStartupBundleIdentity();
 
-syncShellEnvironment();
+// Deliberately still on the pre-`whenReady()` path. On posix it is normally a cache read
+// (see `createCachedLoginShellEnvironmentReader`); only a first launch, a changed shell
+// startup file, or an aged-out entry pays the ~1s login-shell probe again.
+// The reads a few lines below decide where this install's data lives, and two of them
+// depend on what this probe brings in: `resolveUserDataPath()` takes the Electron profile
+// directory from XDG_CONFIG_HOME on Linux, which the login-shell probe captures, and
+// `BASE_DIR` prefers SYNARA_HOME, which the Windows registry read hydrates whenever the
+// user set it persistently. Resolving either against an unhydrated environment would
+// silently relocate an existing user's profile and data directory.
+// (The probe also carries PATH, SSH_AUTH_SOCK and HOMEBREW_* for later provider spawns.
+// APPDATA on Windows is inherited from the process env, not hydrated here.)
+const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
@@ -217,6 +251,8 @@ const APP_USER_MODEL_ID = desktopIdentity.bundleId;
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
+const DESKTOP_LOG_FILE_NAME = "desktop-main.log";
+const BACKEND_LOG_FILE_NAME = "server-child.log";
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
@@ -244,6 +280,9 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 // install dir, blocked NSIS run) and surface the manual-download fallback.
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
+// User-driven like the menu and renderer reasons, so it must not be filtered
+// out by the automatic-activity suppression a previous install failure arms.
+const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
 const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -266,8 +305,16 @@ let backendHttpUrl = "";
 let backendWsUrl = "";
 let backendReadinessAbortController: AbortController | null = null;
 let backendInitialWindowOpenInFlight: Promise<void> | null = null;
+// Guards every blocking backend-lifecycle dialog (startup block, give-up) so a
+// crash loop can never stack modal windows on top of each other.
+let backendLifecycleDialogInFlight: Promise<void> | null = null;
 let backendListeningDetector: ServerListeningDetector | null = null;
-let restartAttempt = 0;
+const backendSupervision = new BackendSupervisionPolicy();
+// Survives window recreation on purpose: a renderer that keeps dying must not refill
+// its reload budget just because the crash produced a new window.
+const rendererCrashPolicy = new RendererCrashPolicy();
+let rendererCrashDialogInFlight: Promise<void> | null = null;
+let lastBackendFailureDetail: string | null = null;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
 let isUpdaterInstallPreparing = false;
@@ -284,10 +331,37 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
-const browserManager = new DesktopBrowserManager();
+const browserManager = new DesktopBrowserManager({
+  beforeInputEvent: (event, input) => {
+    if (
+      isKeyboardShortcutsHelpChord(
+        {
+          type: input.type,
+          key: input.key,
+          code: input.code,
+          meta: input.meta,
+          ctrl: input.control,
+          shift: input.shift,
+          alt: input.alt,
+          repeat: input.isAutoRepeat,
+        },
+        {
+          isMac: process.platform === "darwin",
+          isWindows: process.platform === "win32",
+        },
+      )
+    ) {
+      event.preventDefault();
+      dispatchMenuAction("show-shortcuts");
+      return true;
+    }
+
+    const target = resolveMenuTargetWindow()?.webContents;
+    return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
+  },
+});
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
-let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
@@ -609,12 +683,12 @@ function initializePackagedLogging(): void {
   if (!app.isPackaged) return;
   try {
     desktopLogSink = new RotatingFileSink({
-      filePath: Path.join(LOG_DIR, "desktop-main.log"),
+      filePath: Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME),
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
     });
     backendLogSink = new RotatingFileSink({
-      filePath: Path.join(LOG_DIR, "server-child.log"),
+      filePath: Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME),
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
     });
@@ -624,19 +698,6 @@ function initializePackagedLogging(): void {
     // Logging setup should never block app startup.
     console.error("[desktop] failed to initialize packaged logging", error);
   }
-}
-
-function captureBackendOutput(child: ChildProcess.ChildProcess): void {
-  const attachStream = (stream: NodeJS.ReadableStream | null | undefined): void => {
-    stream?.on("data", (chunk: unknown) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-      backendLogSink?.write(buffer);
-      backendListeningDetector?.push(buffer);
-    });
-  };
-
-  attachStream(child.stdout);
-  attachStream(child.stderr);
 }
 
 initializePackagedLogging();
@@ -667,6 +728,9 @@ let updatePollTimer: ReturnType<typeof setInterval> | null = null;
 let updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckInFlight = false;
 let updateDownloadInFlight = false;
+let activeUpdateCheck: Promise<void> | null = null;
+let settleActiveUpdateCheck: (() => void) | null = null;
+let activeUpdatePreparation: Promise<void> | null = null;
 let updaterConfigured = false;
 let updateState: DesktopUpdateState = initialUpdateState();
 let updateBackgroundedAtMs: number | null = null;
@@ -938,34 +1002,116 @@ function resolveBackendCwd(): string {
   return OS.homedir();
 }
 
-async function handleDesktopMigrationRecovery(): Promise<
-  "continue" | "restart-requested" | "quit-requested"
-> {
-  const paths = resolveDesktopMigrationRecoveryPaths({
+function desktopMigrationRecoveryPaths(): DesktopMigrationRecoveryPaths {
+  return resolveDesktopMigrationRecoveryPaths({
     baseDir: BASE_DIR,
     appRoot: resolveAppRoot(),
     isDevelopment,
   });
+}
+
+function isDesktopMigrationRecoveryPending(): boolean {
+  try {
+    // Deliberately not "a marker exists": while the backend still has resume
+    // attempts left, a failed start is an ordinary restart, not a recovery
+    // prompt. Escalating early would bury the self-heal under a dialog.
+    return requiresDesktopMigrationRecovery(desktopMigrationRecoveryPaths());
+  } catch (error) {
+    // An unreadable marker path must not break crash supervision.
+    writeDesktopLogHeader(
+      `migration recovery marker check failed message=${formatErrorMessage(error)}`,
+    );
+    return false;
+  }
+}
+
+/** Joins user-facing options as "a, b or c". */
+function formatRecoveryOptionList(options: ReadonlyArray<string>): string {
+  if (options.length <= 1) return options[0] ?? "";
+  return `${options.slice(0, -1).join(", ")} or ${options[options.length - 1]}`;
+}
+
+async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecoveryOutcome> {
+  const paths = desktopMigrationRecoveryPaths();
   desktopStartupBlockedForMigrationRecovery = true;
   const outcome = await recoverDesktopMigrationIfRequired({
-    markerExists: () => hasPendingDesktopMigrationRecovery(paths),
+    // The gate opens only once the backend has spent its resume budget, while
+    // the post-restore verification checks the marker file itself.
+    requiresRecovery: () => requiresDesktopMigrationRecovery(paths),
+    markerRemains: () => hasPendingDesktopMigrationRecovery(paths),
     choose: async ({ previousFailure }) => {
-      const failed = previousFailure !== null;
+      // The user is here because Synara cannot open its database, so the
+      // in-app update button is unreachable by definition. A newer build is
+      // often the actual fix, and this dialog is the only surface left to
+      // offer it from: installing it in place when the updater can reach the
+      // feed, and handing over the download page otherwise.
+      const releaseUrl = updateState.releaseUrl;
+      const canInstallUpdate = canInstallUpdateFromRecovery();
+      const restoreFailed = previousFailure?.attempt === "restore";
+      const choices: Array<{
+        readonly label: string;
+        readonly detail: string;
+        readonly decision: DesktopMigrationRecoveryDecision;
+      }> = [
+        restoreFailed
+          ? {
+              label: "Try restore again",
+              detail: "retry the verified backup restore",
+              decision: "restore",
+            }
+          : {
+              label: "Restore backup and restart",
+              detail: "restore the verified pre-migration backup and restart",
+              decision: "restore",
+            },
+      ];
+      if (canInstallUpdate) {
+        choices.push({
+          label: "Update Synara and restart",
+          detail: "install the newest Synara release, which may already contain the fix",
+          decision: "install-update",
+        });
+      }
+      if (releaseUrl !== null) {
+        choices.push({
+          label: "Download latest release",
+          detail: `${canInstallUpdate ? "download that release" : "download the latest Synara release"} in a browser`,
+          decision: "open-release-page",
+        });
+      }
+      choices.push({
+        label: "Quit",
+        detail: "quit without opening the database",
+        decision: "quit",
+      });
+
+      const options = formatRecoveryOptionList(choices.map((choice) => choice.detail));
       const result = await dialog.showMessageBox({
-        type: failed ? "error" : "warning",
-        title: failed ? "Migration recovery failed" : "Synara needs to recover its database",
-        message: failed
-          ? "The saved database backup could not be restored."
-          : "Synara stopped a database migration before it could finish safely.",
-        detail: failed
-          ? `${previousFailure}\n\nYou can retry the verified backup restore or quit without opening the database.`
-          : "Restore the verified pre-migration backup and restart Synara. No provider or chat process will start until recovery succeeds.",
-        buttons: [failed ? "Try restore again" : "Restore backup and restart", "Quit"],
+        type: previousFailure === null ? "warning" : "error",
+        title:
+          previousFailure === null
+            ? "Synara needs to recover its database"
+            : restoreFailed
+              ? "Migration recovery failed"
+              : "Synara could not update itself",
+        message:
+          previousFailure === null
+            ? "Synara stopped a database migration before it could finish safely."
+            : restoreFailed
+              ? "The saved database backup could not be restored."
+              : "The newest Synara release could not be installed.",
+        detail: `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}You can ${options}. No provider or chat process will start until recovery succeeds.`,
+        buttons: choices.map((choice) => choice.label),
         defaultId: 0,
-        cancelId: 1,
+        cancelId: choices.length - 1,
         noLink: true,
       });
-      return result.response === 0 ? "restore" : "quit";
+      return choices[result.response]?.decision ?? "quit";
+    },
+    installUpdate: installLatestUpdateForMigrationRecovery,
+    openReleasePage: () => {
+      const releaseUrl = updateState.releaseUrl;
+      if (releaseUrl !== null) void shell.openExternal(releaseUrl);
     },
     restore: () =>
       restoreDesktopMigrationBackup({
@@ -1208,6 +1354,35 @@ function attachDesktopZoomFactorSync(window: BrowserWindow): void {
   window.webContents.on("did-finish-load", notify);
 }
 
+function adjustWebContentsZoom(webContents: Electron.WebContents, multiplier: number): void {
+  const nextZoomFactor = Math.min(
+    DESKTOP_MENU_MAX_ZOOM_FACTOR,
+    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
+  );
+  webContents.setZoomFactor(nextZoomFactor);
+}
+
+function handleDesktopPhysicalZoomShortcut(
+  event: Electron.Event,
+  input: Electron.Input,
+  target: Electron.WebContents,
+): boolean {
+  const action = resolveDesktopPhysicalZoomAction(process.platform, input);
+  if (!action || target.isDestroyed()) {
+    return false;
+  }
+
+  event.preventDefault();
+  applyDesktopPhysicalZoomAction(target, action);
+  return true;
+}
+
+function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
+  window.webContents.on("before-input-event", (event, input) => {
+    handleDesktopPhysicalZoomShortcut(event, input, window.webContents);
+  });
+}
+
 function resetWindowZoomFromMenu(): void {
   resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
 }
@@ -1215,11 +1390,7 @@ function resetWindowZoomFromMenu(): void {
 function adjustWindowZoomFromMenu(multiplier: number): void {
   const webContents = resolveMenuTargetWindow()?.webContents;
   if (!webContents) return;
-  const nextZoomFactor = Math.min(
-    DESKTOP_MENU_MAX_ZOOM_FACTOR,
-    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
-  );
-  webContents.setZoomFactor(nextZoomFactor);
+  adjustWebContentsZoom(webContents, multiplier);
 }
 
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
@@ -1894,7 +2065,9 @@ function scheduleUpdatePoll(): void {
 }
 
 function isExplicitUpdateCheckReason(reason: string): boolean {
-  return reason === "menu" || reason === "renderer";
+  return (
+    reason === "menu" || reason === "renderer" || reason === UPDATE_CHECK_REASON_MIGRATION_RECOVERY
+  );
 }
 
 function emitUpdateState(): void {
@@ -2078,6 +2251,9 @@ function armUpdateCheckTimeout(reason: string): void {
       return;
     }
     updateCheckInFlight = false;
+    // electron-updater may never settle its own promise, so this is also where
+    // anyone awaiting the check has to be released.
+    settleActiveUpdateCheck?.();
     setUpdateState(
       reduceDesktopUpdateStateOnCheckFailure(
         updateState,
@@ -2197,6 +2373,33 @@ function handleDesktopAppForegrounded(): void {
   void checkForUpdates("foreground");
 }
 
+/**
+ * Publishes the running check so a caller that needs its *outcome* — migration
+ * recovery — can join it. `checkForUpdates` is a deliberate no-op while another
+ * check holds the lock, and without this the caller would read the intermediate
+ * "checking" state as a failed download.
+ *
+ * The returned finish is idempotent and only clears state it still owns, so the
+ * check-timeout path can settle a stuck check without stranding a later one.
+ */
+function beginActiveUpdateCheck(): () => void {
+  // Assigned by the executor, which runs before the constructor returns.
+  let settle!: () => void;
+  const check = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  const finish = (): void => {
+    settle();
+    if (activeUpdateCheck === check) {
+      activeUpdateCheck = null;
+      settleActiveUpdateCheck = null;
+    }
+  };
+  activeUpdateCheck = check;
+  settleActiveUpdateCheck = finish;
+  return finish;
+}
+
 async function checkForUpdates(reason: string): Promise<void> {
   if (isQuitting || isUpdaterInstallPreparing || !updaterConfigured || updateCheckInFlight) return;
   if (automaticUpdateActivitySuppressed) {
@@ -2223,6 +2426,7 @@ async function checkForUpdates(reason: string): Promise<void> {
     return;
   }
   updateCheckInFlight = true;
+  const finishCheck = beginActiveUpdateCheck();
   setUpdateState(reduceDesktopUpdateStateOnCheckStart(updateState, new Date().toISOString()));
   armUpdateCheckTimeout(reason);
   console.info(`[desktop-updater] Checking for updates (${reason})...`);
@@ -2238,6 +2442,7 @@ async function checkForUpdates(reason: string): Promise<void> {
     console.error(`[desktop-updater] Failed to check for updates: ${message}`);
   } finally {
     updateCheckInFlight = false;
+    finishCheck();
   }
 }
 
@@ -2344,7 +2549,7 @@ function prepareAvailableUpdateInBackground(reason: string): void {
   if (updateDownloadInFlight || updateState.status !== "available") {
     return;
   }
-  void downloadAvailableUpdate()
+  const preparation = downloadAvailableUpdate()
     .then((result) => {
       if (result.accepted && result.completed) {
         console.info(`[desktop-updater] Background update download completed (${reason}).`);
@@ -2354,7 +2559,94 @@ function prepareAvailableUpdateInBackground(reason: string): void {
       console.error(
         `[desktop-updater] Background update download crashed (${reason}): ${formatErrorMessage(error)}`,
       );
+    })
+    .finally(() => {
+      if (activeUpdatePreparation === preparation) {
+        activeUpdatePreparation = null;
+      }
     });
+  // Published so a caller that needs the download finished — migration
+  // recovery — can await this one instead of racing a second download
+  // against it.
+  activeUpdatePreparation = preparation;
+}
+
+/**
+ * Whether the recovery prompt can offer an in-place update.
+ *
+ * Deliberately permissive about the current status: the check has usually not
+ * run yet at this point in startup, so "we do not know of an update" is not a
+ * reason to hide the option. Only a completed check that found nothing newer
+ * is, because then updating provably cannot repair anything.
+ */
+function canInstallUpdateFromRecovery(): boolean {
+  return updaterConfigured && updateState.status !== "up-to-date";
+}
+
+/**
+ * Drives check → download → install for an install whose database is wedged.
+ *
+ * This is the only recovery option that needs nothing from the user afterwards,
+ * so it runs the whole updater sequence rather than stopping at "an update is
+ * available". Resolves to a message to show in the next prompt when the update
+ * could not be installed, or to null once the install handoff has started.
+ */
+async function installLatestUpdateForMigrationRecovery(): Promise<string | null> {
+  if (!updaterConfigured) {
+    return resolveAutoUpdateDisabledReason() ?? "Automatic updates are not available.";
+  }
+
+  if (updateState.status !== "downloaded") {
+    // The automatic startup check is armed before this prompt appears, so one
+    // may already be running. Joining it is what gets a real answer: starting a
+    // second check here would return without doing anything and leave the
+    // status at "checking", which reads as a download failure below.
+    const inFlightCheck = activeUpdateCheck;
+    if (inFlightCheck === null) {
+      await checkForUpdates(UPDATE_CHECK_REASON_MIGRATION_RECOVERY);
+    } else {
+      await inFlightCheck;
+    }
+    // A successful check starts the download itself; await that one rather
+    // than starting a competing transfer.
+    const preparation = activeUpdatePreparation;
+    if (preparation !== null) {
+      await preparation;
+    } else if (updateState.status === "available") {
+      await downloadAvailableUpdate();
+    }
+  }
+
+  if (updateState.status === "up-to-date") {
+    return `Synara ${app.getVersion()} is already the newest release, so updating cannot repair this database.`;
+  }
+  if (updateState.status !== "downloaded") {
+    return updateState.message ?? "The update could not be downloaded.";
+  }
+
+  await installDownloadedUpdate();
+  // quitAndInstall never resolves — the process exits under it. A handoff that
+  // silently fails is cleared by the install watchdog instead, and waiting for
+  // that verdict is what keeps a failed install from leaving a live app with
+  // no window and no way back to this prompt.
+  await waitForMigrationRecoveryInstallHandoff();
+  if (isUpdaterQuitAndInstallInFlight) {
+    return null;
+  }
+  return updateState.message ?? "The downloaded update could not be installed.";
+}
+
+/**
+ * Waits out the install watchdog window, which is the earliest a failed handoff
+ * can be known: nothing else clears `isUpdaterQuitAndInstallInFlight`, so there
+ * is nothing to poll for. A successful handoff exits the process well before
+ * this resolves.
+ */
+async function waitForMigrationRecoveryInstallHandoff(): Promise<void> {
+  if (!isUpdaterQuitAndInstallInFlight) return;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, AUTO_UPDATE_INSTALL_WATCHDOG_MS + 2_000).unref();
+  });
 }
 
 async function runDownloadedUpdateInstall(
@@ -2514,15 +2806,18 @@ async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Prom
 function configureAutoUpdater(): void {
   const appUpdateYml = readAppUpdateYml();
   configuredUpdaterCacheDirName = resolveElectronUpdaterCacheDirName(appUpdateYml, app.getName());
+  const githubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
+  const releaseUrl =
+    githubUpdateSource === null ? null : buildGitHubReleasesPageUrl(githubUpdateSource);
   const enabled = shouldEnableAutoUpdates();
   setUpdateState({
     ...createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo),
     enabled,
     status: enabled ? "idle" : "disabled",
+    releaseUrl,
   });
   processInstallMarkerOnStartup();
   if (!enabled) {
-    configuredGitHubUpdateSource = null;
     configuredUpdaterCacheDirName = null;
     return;
   }
@@ -2533,11 +2828,6 @@ function configureAutoUpdater(): void {
     process.platform,
     app.isPackaged ? resolveEmbeddedWindowsPublisherSubjects() : null,
   );
-  configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
-  if (configuredGitHubUpdateSource !== null) {
-    // The updater itself uses app-update.yml; this URL is only the human fallback.
-    setUpdateState({ releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource) });
-  }
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -2705,7 +2995,7 @@ function backendNodeArgs(): string[] {
 
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
       browserHostPipeServer ? SYNARA_BROWSER_HOST_PIPE_PATH : null,
@@ -2721,24 +3011,200 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
   };
+  // The backend runs the same login-shell probe at startup and does not begin listening
+  // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.
+  // Written explicitly in both directions: an inherited marker must never suppress a
+  // probe when our own hydration failed and the child's PATH is the raw launch one.
+  return applyShellEnvironmentHydrationMarker(env, shellEnvironmentSync.pathHydrated);
 }
 
 function scheduleBackendRestart(reason: string): void {
-  if (isQuitting || restartTimer) return;
+  const response = backendSupervision.respondToStartFailure({
+    quitting: isQuitting,
+    restartPending: restartTimer !== null,
+    migrationRecoveryMarkerPresent: isDesktopMigrationRecoveryPending(),
+  });
 
-  const delayMs = Math.min(500 * 2 ** restartAttempt, 10_000);
-  restartAttempt += 1;
-  safeConsoleError(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
-
-  restartTimer = setTimeout(() => {
-    restartTimer = null;
-    void restartBackendAfterCrash(reason);
-  }, delayMs);
+  switch (response.kind) {
+    case "ignore":
+      return;
+    case "recover-migration":
+      // The marker is written mid-session by the migration that just killed the
+      // backend, so bootstrap's one-shot check never saw it. Recovery owns the
+      // process from here; respawning would only repeat the failed migration.
+      writeDesktopLogHeader(
+        `migration recovery marker detected after backend failure reason=${sanitizeLogValue(reason)}`,
+      );
+      safeConsoleError(
+        `[desktop] backend failed with a pending migration recovery (${reason}); opening recovery`,
+      );
+      void runMidSessionMigrationRecovery(reason);
+      return;
+    case "give-up":
+      writeDesktopLogHeader(
+        `backend supervision gave up failures=${response.failures} reason=${sanitizeLogValue(reason)}`,
+      );
+      safeConsoleError(
+        `[desktop] backend failed to start ${response.failures} times in a row (${reason}); no further restarts will be attempted`,
+      );
+      presentBackendStartupGiveUp(reason);
+      return;
+    case "retry":
+      safeConsoleError(
+        `[desktop] backend exited unexpectedly (${reason}); restarting in ${response.delayMs}ms (attempt ${response.attempt}/${BACKEND_MAX_CONSECUTIVE_START_FAILURES})`,
+      );
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        void restartBackendAfterCrash(reason);
+      }, response.delayMs);
+      return;
+  }
 }
 
-async function restartBackendAfterCrash(reason: string): Promise<void> {
+// Runs the same recovery flow bootstrap uses, but for a marker that appeared while
+// the app was already running. Shown once per app run — the policy owns that latch.
+async function runMidSessionMigrationRecovery(reason: string): Promise<void> {
+  const outcome = await handleDesktopMigrationRecovery();
+  if (outcome !== "continue") return;
+
+  // The marker vanished between the crash check and the recovery run (another
+  // process cleared it), so fall back to the normal supervised restart.
+  await restartBackendAfterCrash(reason);
+}
+
+function backendFailureDialogDetail(reason: string): string {
+  const summary = summarizeBackendFailureOutput(lastBackendFailureDetail ?? "");
+  const cause = summary.length > 0 ? summary : reason;
+  return [
+    cause,
+    "Synara paused automatic restarts so a failing backend can't keep respawning in the background.",
+    `Log file:\n${Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)}`,
+  ].join("\n\n");
+}
+
+async function openDesktopLogDirectory(): Promise<void> {
+  try {
+    await FS.promises.mkdir(LOG_DIR, { recursive: true });
+    const errorMessage = await shell.openPath(LOG_DIR);
+    if (errorMessage.trim().length > 0) {
+      throw new Error(errorMessage);
+    }
+  } catch (error) {
+    safeConsoleError(`[desktop] failed to open log directory: ${formatErrorMessage(error)}`);
+  }
+}
+
+/**
+ * Replaces the eternal loading skeleton with a blocking, actionable window once
+ * supervision stops respawning the backend.
+ */
+function presentBackendStartupGiveUp(reason: string): void {
+  if (isQuitting || backendLifecycleDialogInFlight) return;
+
+  const detail = backendFailureDialogDetail(reason);
+  const task = (async () => {
+    for (;;) {
+      const result = await dialog.showMessageBox({
+        type: "error",
+        title: "Synara's backend didn't start",
+        message: `Synara's backend failed to start ${BACKEND_MAX_CONSECUTIVE_START_FAILURES} times in a row.`,
+        detail,
+        buttons: ["Try again", "Open logs", "Quit"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+
+      if (result.response === 1) {
+        await openDesktopLogDirectory();
+        continue;
+      }
+
+      if (result.response === 0) {
+        // A user-driven retry is a fresh lifecycle start, not another crash cycle.
+        backendLifecycleDialogInFlight = null;
+        await restartBackendAfterCrash("manual retry after backend startup failure", "lifecycle");
+        return;
+      }
+
+      requestGracefulAppQuit("backend failed to start");
+      return;
+    }
+  })().finally(() => {
+    if (backendLifecycleDialogInFlight === task) {
+      backendLifecycleDialogInFlight = null;
+    }
+  });
+  backendLifecycleDialogInFlight = task;
+}
+
+function handleBackendStartupBlock(block: BackendStartupBlock): void {
+  if (isQuitting || backendLifecycleDialogInFlight) return;
+
+  const task = (async () => {
+    if (block.kind === "migration-recovery-required") {
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Synara needs to recover its database",
+        message: "A database migration did not finish safely.",
+        detail:
+          "Restart Synara to open the verified backup recovery flow. Provider and chat processes will remain stopped until recovery completes.",
+        buttons: ["Restart and recover", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (result.response === 0) {
+        app.relaunch();
+        requestGracefulAppQuit("migration recovery required");
+      } else {
+        requestGracefulAppQuit("migration recovery declined");
+      }
+      return;
+    }
+
+    const processDetail =
+      block.ownerPid === null
+        ? "Another Synara server is already using this database."
+        : `Another Synara server (process ${block.ownerPid}) is already using this database.`;
+    const result = await dialog.showMessageBox({
+      type: "warning",
+      title: "Synara is already running elsewhere",
+      message: "Your local Synara data is in use by another process.",
+      detail: `${processDetail}\n\nStop the other Synara app or development server, then try again. Your data has not been changed.`,
+      buttons: ["Try again", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (result.response === 0) {
+      // Let a fast failed retry present the block again instead of racing this
+      // dialog task's finalizer and leaving the window inert.
+      backendLifecycleDialogInFlight = null;
+      await restartBackendAfterCrash("database lifecycle lock retry", "lifecycle");
+    } else {
+      requestGracefulAppQuit("database lifecycle lock");
+    }
+  })().finally(() => {
+    if (backendLifecycleDialogInFlight === task) {
+      backendLifecycleDialogInFlight = null;
+    }
+  });
+  backendLifecycleDialogInFlight = task;
+}
+
+async function restartBackendAfterCrash(
+  reason: string,
+  trigger: BackendStartTrigger = "crash-restart",
+): Promise<void> {
   if (isQuitting || backendProcess) {
     return;
+  }
+
+  if (trigger === "lifecycle") {
+    // Reset before reserving the port so a user-driven retry gets a full restart
+    // budget even when the retry itself fails before the process is spawned.
+    backendSupervision.reset();
   }
 
   cancelBackendReadinessWait();
@@ -2751,12 +3217,30 @@ async function restartBackendAfterCrash(reason: string): Promise<void> {
     return;
   }
 
-  startBackend();
+  startBackend(trigger);
   ensureInitialBackendWindowOpen(backendHttpUrl);
 }
 
-function startBackend(): void {
+/**
+ * "lifecycle" covers every deliberate start — bootstrap, a failed update install
+ * handing the backend back, or a user-driven retry — and clears the crash backoff
+ * and circuit breaker. Only the supervised crash path keeps the failure count.
+ */
+type BackendStartTrigger = "lifecycle" | "crash-restart";
+
+function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   if (isQuitting || backendProcess) return;
+  // Recovery owns the database until it clears the marker. Callers that restart
+  // the backend after an unrelated failure — a given-up update install, say —
+  // must not hand it a database the user is being asked how to repair.
+  if (desktopStartupBlockedForMigrationRecovery) {
+    writeDesktopLogHeader("backend start suppressed while migration recovery is pending");
+    return;
+  }
+
+  if (trigger === "lifecycle") {
+    backendSupervision.reset();
+  }
 
   const backendEntry = resolveBackendEntry();
   if (!FS.existsSync(backendEntry)) {
@@ -2764,7 +3248,6 @@ function startBackend(): void {
     return;
   }
 
-  const captureBackendLogs = app.isPackaged && backendLogSink !== null;
   const child = ChildProcess.spawn(process.execPath, [...backendNodeArgs(), backendEntry], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
@@ -2774,9 +3257,10 @@ function startBackend(): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
     },
-    stdio: captureBackendLogs
-      ? ["ignore", "pipe", "pipe", "pipe"]
-      : ["inherit", "inherit", "inherit", "pipe"],
+    // Keep output piped in every environment so startup blockers and readiness
+    // are observable even when packaged log setup is unavailable. The fourth
+    // pipe carries the browser-host capability and must never be inherited.
+    stdio: ["ignore", "pipe", "pipe", "pipe"],
   });
   const capabilityPipe = child.stdio[DESKTOP_BROWSER_HOST_CAPABILITY_FD];
   if (capabilityPipe && "end" in capabilityPipe) {
@@ -2792,6 +3276,8 @@ function startBackend(): void {
     return;
   }
   const listeningDetector = new ServerListeningDetector();
+  const startupBlockDetector = new BackendStartupBlockDetector();
+  const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
   let backendSessionClosed = false;
@@ -2804,11 +3290,31 @@ function startBackend(): void {
     "START",
     `pid=${child.pid ?? "unknown"} port=${backendPort} cwd=${resolveBackendCwd()}`,
   );
-  captureBackendOutput(child);
-
-  child.once("spawn", () => {
-    restartAttempt = 0;
+  const backendLogDestination = backendLogSink;
+  const backendOutputCapture = captureBackendProcessOutput({
+    stdout: child.stdout,
+    stderr: child.stderr,
+    ...(backendLogDestination ? { writeLog: (chunk) => backendLogDestination.write(chunk) } : {}),
+    writeStdout: (chunk) => {
+      process.stdout.write(chunk);
+    },
+    writeStderr: (chunk) => {
+      process.stderr.write(chunk);
+    },
+    detectors: [listeningDetector, startupBlockDetector, outputTailDetector],
   });
+
+  // A successful spawn only proves that Electron created the process. Reset the
+  // crash backoff and the circuit breaker after the backend actually listens;
+  // otherwise a startup error becomes a permanent 500 ms restart loop.
+  void listeningDetector.promise.then(
+    () => {
+      if (backendListeningDetector === listeningDetector) {
+        backendSupervision.recordReadiness();
+      }
+    },
+    () => undefined,
+  );
 
   child.on("error", (error) => {
     if (backendListeningDetector === listeningDetector) {
@@ -2819,6 +3325,7 @@ function startBackend(): void {
       backendProcess = null;
     }
     closeBackendSession(`pid=${child.pid ?? "unknown"} error=${error.message}`);
+    lastBackendFailureDetail = error.message;
     scheduleBackendRestart(error.message);
   });
 
@@ -2834,12 +3341,20 @@ function startBackend(): void {
     if (backendProcess === child) {
       backendProcess = null;
     }
-    closeBackendSession(
-      `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
-    );
-    if (isQuitting) return;
-    const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
-    scheduleBackendRestart(reason);
+    void backendOutputCapture.drained.then(() => {
+      closeBackendSession(
+        `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
+      );
+      if (isQuitting) return;
+      const startupBlock = startupBlockDetector.read();
+      if (startupBlock) {
+        handleBackendStartupBlock(startupBlock);
+        return;
+      }
+      const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
+      lastBackendFailureDetail = outputTailDetector.read();
+      scheduleBackendRestart(reason);
+    });
   });
 }
 
@@ -2888,56 +3403,23 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
       });
       requireWindowsBackendExit(result);
     } catch (error) {
-      if (
-        backendProcess === null &&
-        backendChild.exitCode === null &&
-        backendChild.signalCode === null
-      ) {
-        backendProcess = backendChild;
-      }
+      backendProcess = retainLiveBackendAfterShutdownFailure(backendProcess, backendChild);
       throw error;
     }
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
-    let exitTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function settle(): void {
-      if (settled) return;
-      settled = true;
-      backendChild.off("exit", onExit);
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-      }
-      if (exitTimeoutTimer) {
-        clearTimeout(exitTimeoutTimer);
-      }
-      resolve();
-    }
-
-    function onExit(): void {
-      settle();
-    }
-
-    backendChild.once("exit", onExit);
-    backendChild.kill("SIGTERM");
-
-    const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(1, timeoutMs - 500));
-    forceKillTimer = setTimeout(() => {
-      if (backendChild.exitCode === null && backendChild.signalCode === null) {
-        backendChild.kill("SIGKILL");
-      }
-    }, forceKillDelayMs);
-    forceKillTimer.unref();
-
-    exitTimeoutTimer = setTimeout(() => {
-      settle();
-    }, timeoutMs);
-    exitTimeoutTimer.unref();
-  });
+  const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(0, timeoutMs - 500));
+  try {
+    await stopPosixBackendAndWait({
+      child: backendChild,
+      forceKillDelayMs,
+      timeoutMs,
+    });
+  } catch (error) {
+    backendProcess = retainLiveBackendAfterShutdownFailure(backendProcess, backendChild);
+    throw error;
+  }
 }
 
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
@@ -2962,19 +3444,23 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
 
   isQuitting = true;
   writeDesktopLogHeader(`${reason} shutdown start`);
-  const shutdown = runAfterDesktopShutdown(stopBackendAndWaitForExit(), async () => {
-    clearUpdateBackgroundBlurTimer();
-    clearUpdateCheckTimeoutTimer();
-    clearUpdatePollTimer();
-    cancelBackendReadinessWait();
-    appSnapManager?.dispose();
-    appSnapManager = null;
-    await disposeBrowserHostPipeServerForShutdown(reason);
-    browserManager.dispose();
-    restoreStdIoCapture?.();
-    desktopShutdownComplete = true;
-    writeDesktopLogHeader(`${reason} shutdown complete`);
-  });
+  const shutdown = runAfterDesktopShutdown(
+    stopBackendAndWaitForExit(),
+    async () => {
+      clearUpdateBackgroundBlurTimer();
+      clearUpdateCheckTimeoutTimer();
+      clearUpdatePollTimer();
+      cancelBackendReadinessWait();
+      appSnapManager?.dispose();
+      appSnapManager = null;
+      await disposeBrowserHostPipeServerForShutdown(reason);
+      browserManager.dispose();
+      restoreStdIoCapture?.();
+      desktopShutdownComplete = true;
+      writeDesktopLogHeader(`${reason} shutdown complete`);
+    },
+    { runAfterShutdownFailure: true },
+  );
   desktopShutdownPromise = shutdown;
 
   try {
@@ -2983,7 +3469,6 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
     if (desktopShutdownPromise === shutdown) {
       desktopShutdownPromise = null;
     }
-    isQuitting = false;
     throw error;
   }
 }
@@ -2999,6 +3484,7 @@ function requestGracefulAppQuit(reason: string): void {
       const message = formatErrorMessage(error);
       writeDesktopLogHeader(`${reason} shutdown failed message=${message}`);
       console.warn(`[desktop] Shutdown failed during ${reason}: ${message}`);
+      app.exit(1);
     },
   );
 }
@@ -3405,6 +3891,8 @@ function createWindow(): BrowserWindow {
   });
   browserManager.setWindow(window);
   attachDesktopZoomFactorSync(window);
+  attachRendererCrashRecovery(window);
+  attachDesktopPhysicalZoomShortcuts(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();
@@ -3513,6 +4001,129 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+/**
+ * Renderer crashes used to be entirely invisible to the main process: no listener, no
+ * log line, no telemetry, and no way back — a renderer OOM kill just left the user
+ * staring at a blank window. Recovery is deliberately narrow: only reasons the renderer
+ * can actually come back from reload, and only a few times, because a deterministic
+ * crash reloading forever is worse than one blank window.
+ */
+function attachRendererCrashRecovery(window: BrowserWindow): void {
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearReloadTimer = (): void => {
+    if (reloadTimer === null) return;
+    clearTimeout(reloadTimer);
+    reloadTimer = null;
+  };
+
+  window.webContents.on("render-process-gone", (_event, details) => {
+    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
+    writeDesktopLogHeader(`renderer process gone ${description}`);
+    safeConsoleError(`[desktop] renderer process gone (${description})`);
+
+    const response = rendererCrashPolicy.respondToCrash({
+      reason: details.reason,
+      quitting: isQuitting,
+      nowMs: Date.now(),
+    });
+
+    switch (response.kind) {
+      case "ignore":
+        return;
+      case "reload":
+        writeDesktopLogHeader(
+          `renderer reload scheduled attempt=${response.attempt}/${RENDERER_MAX_AUTOMATIC_RELOADS} delayMs=${response.delayMs}`,
+        );
+        clearReloadTimer();
+        reloadTimer = setTimeout(() => {
+          reloadTimer = null;
+          if (isQuitting || window.isDestroyed()) return;
+          window.webContents.reload();
+        }, response.delayMs);
+        return;
+      case "prompt":
+        writeDesktopLogHeader(
+          `renderer recovery prompt cause=${response.cause} crashes=${response.crashes}`,
+        );
+        presentRendererCrashRecovery(window, details.reason, response);
+        return;
+    }
+  });
+
+  // A hung renderer is not a crash — Chromium keeps the process alive — so it never
+  // reaches the listener above. Logging both edges makes a freeze that the user
+  // reports as "the app died" distinguishable from an actual crash in the same log.
+  window.webContents.on("unresponsive", () => {
+    writeDesktopLogHeader("renderer unresponsive");
+  });
+  window.webContents.on("responsive", () => {
+    writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.on("closed", clearReloadTimer);
+}
+
+/**
+ * Replaces the blank window with a blocking, actionable one once automatic recovery
+ * stops (or was never allowed for this crash reason).
+ */
+function presentRendererCrashRecovery(
+  window: BrowserWindow,
+  reason: string,
+  response: Extract<RendererCrashResponse, { kind: "prompt" }>,
+): void {
+  if (isQuitting || rendererCrashDialogInFlight) return;
+
+  const message =
+    response.cause === "reload-budget-exhausted"
+      ? `Synara's window crashed ${response.crashes} times in a row.`
+      : "Synara's window stopped unexpectedly.";
+  const detail = [
+    `The window's renderer process exited (${reason}).`,
+    response.cause === "reload-budget-exhausted"
+      ? "Synara paused automatic reloads so a repeating crash can't keep reloading in the background."
+      : "This exit reason repeats on reload, so Synara did not retry automatically.",
+    `Log file:\n${Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)}`,
+  ].join("\n\n");
+
+  const task = (async () => {
+    for (;;) {
+      const result = await dialog.showMessageBox({
+        type: "error",
+        title: "Synara's window stopped",
+        message,
+        detail,
+        buttons: ["Reload", "Open logs", "Quit"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+
+      if (result.response === 1) {
+        await openDesktopLogDirectory();
+        continue;
+      }
+
+      if (result.response === 0) {
+        // A user-driven reload is a fresh start, not a continuation of the streak.
+        rendererCrashPolicy.reset();
+        if (!window.isDestroyed()) {
+          window.webContents.reload();
+        }
+        return;
+      }
+
+      requestGracefulAppQuit("renderer crashed");
+      return;
+    }
+  })().finally(() => {
+    if (rendererCrashDialogInFlight === task) {
+      rendererCrashDialogInFlight = null;
+    }
+  });
+  rendererCrashDialogInFlight = task;
+}
+
 function configureMediaPermissions(): void {
   const trustedMainRenderer = () => {
     const renderer = mainWindow?.webContents ?? null;
@@ -3593,12 +4204,18 @@ if (!hasSingleInstanceLock) {
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
+  // Ahead of the recovery gate on purpose. A startup that blocks below returns
+  // early, and every path that could ship the fix for whatever blocked it lives
+  // after that return: an install wedged on a bad migration would be unable to
+  // update out of it, which is exactly how 0.6.0 stranded its users. The
+  // updater touches no database state, so configuring it first is safe.
+  configureAutoUpdater();
+
   const migrationRecoveryOutcome = await handleDesktopMigrationRecovery();
   if (migrationRecoveryOutcome !== "continue") {
     return;
   }
 
-  configureAutoUpdater();
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
 
@@ -3759,6 +4376,23 @@ if (hasSingleInstanceLock) {
       handleFatalStartupError("whenReady", error);
     });
 }
+
+// GPU, utility, and pepper process failures never reach the window's renderer listener,
+// so without this they are invisible too. Chromium respawns these itself — the value is
+// the log line that explains a sudden loss of GPU acceleration or a dead audio/network
+// service. Clean exits are routine teardown, so they stay out of the log.
+app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit") return;
+  const attributes = [
+    `type=${details.type}`,
+    `reason=${details.reason}`,
+    `exitCode=${details.exitCode}`,
+    ...(details.serviceName ? [`service=${details.serviceName}`] : []),
+    ...(details.name ? [`name=${sanitizeLogValue(details.name)}`] : []),
+  ].join(" ");
+  writeDesktopLogHeader(`child process gone ${attributes}`);
+  safeConsoleError(`[desktop] child process gone (${attributes})`);
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

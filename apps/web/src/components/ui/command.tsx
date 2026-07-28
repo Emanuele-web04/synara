@@ -73,10 +73,12 @@ function CommandDialogPopup({ className, children, ...props }: CommandDialogPrim
 }
 
 function Command({
-  autoHighlight = "always",
-  keepHighlight = true,
+  autoHighlight: autoHighlightProp,
+  keepHighlight: keepHighlightProp,
   ...props
 }: React.ComponentProps<typeof Autocomplete>) {
+  const autoHighlight = autoHighlightProp ?? "always";
+  const keepHighlight = keepHighlightProp ?? true;
   return (
     <Autocomplete
       autoHighlight={autoHighlight}
@@ -90,7 +92,7 @@ function Command({
 
 function CommandInput({
   className,
-  placeholder = undefined,
+  placeholder,
   ...props
 }: React.ComponentProps<typeof AutocompleteInput>) {
   return (

@@ -13,6 +13,7 @@ import {
   ProjectId,
   TurnId,
 } from "@synara/contracts";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
@@ -25,6 +26,7 @@ import {
 import {
   AcquireAutomationSchedulerLeaseInput,
   ArchiveAutomationDefinitionInput,
+  AttachAutomationDefinitionThreadInput,
   AutomationRepository,
   type AutomationRepositoryShape,
   CountActiveAutomationRunsByThreadInput,
@@ -469,6 +471,20 @@ const makeAutomationRepository = Effect.gen(function* () {
         SET next_run_at = ${nextRunAt},
             updated_at = ${updatedAt}
         WHERE automation_id = ${id}
+      `,
+  });
+
+  const attachDefinitionThreadRow = SqlSchema.findAll({
+    Request: AttachAutomationDefinitionThreadInput,
+    Result: Schema.Struct({ id: AutomationDefinition.fields.id }),
+    execute: ({ id, threadId, updatedAt }) =>
+      sql`
+        UPDATE automation_definitions
+        SET target_thread_id = ${threadId},
+            updated_at = ${updatedAt}
+        WHERE automation_id = ${id}
+          AND target_thread_id IS NULL
+        RETURNING automation_id AS "id"
       `,
   });
 
@@ -1385,10 +1401,7 @@ const makeAutomationRepository = Effect.gen(function* () {
         ? null
         : now;
     const mode = input.mode ?? "standalone";
-    const completionPolicy =
-      mode === "standalone"
-        ? { type: "none" as const }
-        : (input.completionPolicy ?? { type: "none" as const });
+    const completionPolicy = input.completionPolicy ?? { type: "none" as const };
     const definition: AutomationDefinition = {
       id,
       projectId: input.projectId,
@@ -1404,7 +1417,9 @@ const makeAutomationRepository = Effect.gen(function* () {
       interactionMode: input.interactionMode ?? "default",
       worktreeMode: input.worktreeMode ?? "auto",
       mode,
-      targetThreadId: mode === "heartbeat" ? (input.targetThreadId ?? null) : null,
+      // Only heartbeat takes a caller-supplied thread. A dedicated automation starts
+      // without one and claims the thread its first run creates.
+      targetThreadId: automationRequiresTargetThread(mode) ? (input.targetThreadId ?? null) : null,
       proposalState: input.proposalState ?? null,
       notificationPolicy: input.notificationPolicy ?? "all",
       heartbeatCooldownSeconds: input.heartbeatCooldownSeconds ?? 60,
@@ -1477,6 +1492,12 @@ const makeAutomationRepository = Effect.gen(function* () {
   const setDefinitionNextRunAt: AutomationRepositoryShape["setDefinitionNextRunAt"] = (input) =>
     setDefinitionNextRunAtRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.setDefinitionNextRunAt:update")),
+    );
+
+  const attachDefinitionThread: AutomationRepositoryShape["attachDefinitionThread"] = (input) =>
+    attachDefinitionThreadRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.attachDefinitionThread:update")),
+      Effect.map((rows) => rows.length > 0),
     );
 
   const archiveDefinition: AutomationRepositoryShape["archiveDefinition"] = (input) =>
@@ -1942,6 +1963,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     getDefinitionById,
     listDueDefinitions,
     setDefinitionNextRunAt,
+    attachDefinitionThread,
     archiveDefinition,
     list,
     createRun,

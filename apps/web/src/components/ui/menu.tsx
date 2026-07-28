@@ -20,7 +20,12 @@ type MenuProps = MenuPrimitive.Root.Props & {
   keepOpenOnSubmenuInteraction?: boolean;
 };
 
-function Menu({ keepOpenOnSubmenuInteraction = false, onOpenChange, ...props }: MenuProps) {
+function Menu({
+  keepOpenOnSubmenuInteraction: keepOpenOnSubmenuInteractionProp,
+  onOpenChange,
+  ...props
+}: MenuProps) {
+  const keepOpenOnSubmenuInteraction = keepOpenOnSubmenuInteractionProp ?? false;
   const handleOpenChange: NonNullable<MenuPrimitive.Root.Props["onOpenChange"]> = (
     nextOpen,
     eventDetails,
@@ -55,12 +60,12 @@ function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Pr
 function MenuPopupBase({
   children,
   className,
-  surface = "default",
+  surface: surfaceProp,
   pickerSize,
-  sideOffset = 4,
-  align = "center",
+  sideOffset: sideOffsetProp,
+  align: alignProp,
   alignOffset,
-  side = "bottom",
+  side: sideProp,
   anchor,
   ...props
 }: MenuPrimitive.Popup.Props & {
@@ -72,6 +77,10 @@ function MenuPopupBase({
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal" | undefined;
 }) {
+  const surface = surfaceProp ?? "default";
+  const sideOffset = sideOffsetProp ?? 4;
+  const align = alignProp ?? "center";
+  const side = sideProp ?? "bottom";
   const popupSurfaceClassName =
     surface === "composer"
       ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
@@ -127,12 +136,13 @@ function MenuGroup(props: MenuPrimitive.Group.Props) {
 function MenuItem({
   className,
   inset,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: MenuPrimitive.Item.Props & {
   inset?: boolean;
   variant?: "default" | "destructive";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <MenuPrimitive.Item
       className={cn(
@@ -154,11 +164,12 @@ function MenuCheckboxItem({
   className,
   children,
   checked,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: MenuPrimitive.CheckboxItem.Props & {
   variant?: "default" | "switch";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <MenuPrimitive.CheckboxItem
       checked={checked}
@@ -225,13 +236,14 @@ function MenuRadioGroup(props: MenuPrimitive.RadioGroup.Props) {
 function MenuRadioItem({
   className,
   children,
-  preserveChildLayout = false,
+  preserveChildLayout: preserveChildLayoutProp,
   trailing,
   ...props
 }: MenuPrimitive.RadioItem.Props & {
   preserveChildLayout?: boolean;
   trailing?: React.ReactNode;
 }) {
+  const preserveChildLayout = preserveChildLayoutProp ?? false;
   return (
     <MenuPrimitive.RadioItem
       className={cn(
@@ -374,7 +386,8 @@ function FocusStableMenuSub({
   );
 }
 
-function MenuSub({ keepOpenOnFocusOut = false, ...props }: MenuSubProps) {
+function MenuSub({ keepOpenOnFocusOut: keepOpenOnFocusOutProp, ...props }: MenuSubProps) {
+  const keepOpenOnFocusOut = keepOpenOnFocusOutProp ?? false;
   return keepOpenOnFocusOut ? (
     <FocusStableMenuSub {...props} />
   ) : (
@@ -411,11 +424,11 @@ function MenuSubTrigger({
 
 function MenuSubPopup({
   className,
-  surface = "default",
+  surface: surfaceProp,
   pickerSize,
-  sideOffset = 0,
+  sideOffset: sideOffsetProp,
   alignOffset,
-  align = "start",
+  align: alignProp,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -424,6 +437,9 @@ function MenuSubPopup({
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal";
 }) {
+  const surface = surfaceProp ?? "default";
+  const sideOffset = sideOffsetProp ?? 0;
+  const align = alignProp ?? "start";
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
   return (

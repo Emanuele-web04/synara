@@ -24,8 +24,9 @@ export function ComposerActiveTaskListCard({
   compact,
   onCompactChange,
   onOpenSidebar,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: ComposerActiveTaskListCardProps) {
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   return (
     <ComposerStackedPanel
       passthroughSideMargins

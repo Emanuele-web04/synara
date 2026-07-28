@@ -38,10 +38,10 @@ function TooltipPopup({
   className,
   positionerClassName,
   viewportClassName,
-  variant = "default",
-  align = "center",
-  sideOffset = 4,
-  side = "top",
+  variant: variantProp,
+  align: alignProp,
+  sideOffset: sideOffsetProp,
+  side: sideProp,
   anchor,
   children,
   ...props
@@ -60,6 +60,10 @@ function TooltipPopup({
   // cards that bring their own padding can zero it here so they don't double up.
   viewportClassName?: string;
 }) {
+  const variant = variantProp ?? "default";
+  const align = alignProp ?? "center";
+  const sideOffset = sideOffsetProp ?? 4;
+  const side = sideProp ?? "top";
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner

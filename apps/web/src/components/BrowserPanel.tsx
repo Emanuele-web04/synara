@@ -505,9 +505,12 @@ export function BrowserPanel({
   mode,
   threadId,
   onClosePanel,
-  runtimeMode = "live",
+  runtimeMode: runtimeModeProp,
   onRequestLive,
 }: BrowserPanelProps) {
+  // Defaults belong in the body, never in the destructuring pattern: React Compiler cannot lower an
+  // AssignmentPattern there and silently drops the whole component's memoization.
+  const runtimeMode = runtimeModeProp ?? "live";
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
   const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));

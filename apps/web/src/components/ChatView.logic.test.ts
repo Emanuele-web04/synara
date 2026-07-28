@@ -1,10 +1,20 @@
-import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  ThreadId,
+  TurnId,
+  type ModelSlug,
+  type RuntimeMode,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
+  commitAfterRuntimeModePersistence,
+  createRuntimeModePersistenceQueue,
+  persistModelSelectionBeforeRuntimeMode,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
@@ -35,6 +45,7 @@ import {
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  resolveThreadDetailHydration,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
@@ -87,7 +98,7 @@ describe("transcript auto-follow signal", () => {
 describe("file undo completion", () => {
   const pending = {
     threadId: ThreadId.makeUnsafe("thread-file-undo"),
-    turnCount: 2,
+    turnCounts: [2],
     existingFailureActivityIds: [],
   };
   const summary = {
@@ -114,6 +125,38 @@ describe("file undo completion", () => {
         thread: {
           ...baseThread,
           turnDiffSummaries: [{ ...summary, files: [] }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("stays pending until every merged turn in the card has been reverted", () => {
+    const olderSummary = {
+      ...summary,
+      turnId: TurnId.makeUnsafe("turn-1"),
+      checkpointTurnCount: 1,
+      checkpointTurnCounts: [1],
+      files: [],
+    };
+    const multiTurnPending = { ...pending, turnCounts: [2, 1] };
+
+    expect(
+      hasFileUndoSettled({
+        pending: multiTurnPending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [olderSummary, summary],
+          activities: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasFileUndoSettled({
+        pending: multiTurnPending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [olderSummary, { ...summary, files: [] }],
+          activities: [],
         },
       }),
     ).toBe(true);
@@ -1858,9 +1901,172 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("full-access", "acceptForSession")).toBeNull();
   });
 
+  it("keeps Auto as the durable policy after a session-scoped approval", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession")).toBeNull();
+  });
+
   it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
+  });
+
+  it("does not widen a permission-profile grant to full access", () => {
+    expect(
+      resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession", "permissions"),
+    ).toBeNull();
+  });
+});
+
+describe("commitAfterRuntimeModePersistence", () => {
+  it("does not commit an incompatible model when the canonical downgrade fails", async () => {
+    const calls: Array<string> = [];
+
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return false;
+      },
+      commit: () => calls.push("commit"),
+    });
+
+    expect(committed).toBe(false);
+    expect(calls).toEqual(["persist"]);
+  });
+
+  it("commits the model only after the canonical downgrade succeeds", async () => {
+    const calls: Array<string> = [];
+
+    const committed = await commitAfterRuntimeModePersistence({
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistRuntimeMode: async () => {
+        calls.push("persist");
+        return true;
+      },
+      commit: () => calls.push("commit"),
+    });
+
+    expect(committed).toBe(true);
+    expect(calls).toEqual(["persist", "commit"]);
+  });
+});
+
+describe("createRuntimeModePersistenceQueue", () => {
+  it("persists the final rapid selection after an opposite update is already in flight", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const calls: Array<[RuntimeMode, RuntimeMode]> = [];
+    const queue = createRuntimeModePersistenceQueue("auto");
+    const persist = async (currentMode: RuntimeMode, nextMode: RuntimeMode) => {
+      calls.push([currentMode, nextMode]);
+      if (calls.length === 1) {
+        await firstBlocked;
+      }
+      return true;
+    };
+
+    const fullAccess = queue.persist("full-access", persist);
+    await Promise.resolve();
+    const auto = queue.persist("auto", persist);
+    expect(calls).toEqual([["auto", "full-access"]]);
+
+    releaseFirst?.();
+    await expect(Promise.all([fullAccess, auto])).resolves.toEqual([true, true]);
+    expect(calls).toEqual([
+      ["auto", "full-access"],
+      ["full-access", "auto"],
+    ]);
+  });
+
+  it("keeps the acknowledged mode when an earlier queued write fails", async () => {
+    const calls: Array<[RuntimeMode, RuntimeMode]> = [];
+    const queue = createRuntimeModePersistenceQueue("auto");
+    const failed = queue.persist("full-access", async (currentMode, nextMode) => {
+      calls.push([currentMode, nextMode]);
+      return false;
+    });
+    const finalAuto = queue.persist("auto", async (currentMode, nextMode) => {
+      calls.push([currentMode, nextMode]);
+      return true;
+    });
+
+    await expect(Promise.all([failed, finalAuto])).resolves.toEqual([false, true]);
+    expect(calls).toEqual([["auto", "full-access"]]);
+  });
+});
+
+describe("persistModelSelectionBeforeRuntimeMode", () => {
+  const previousModel = {
+    provider: "droid",
+    model: "claude-opus-4-8",
+  } as const;
+  const autoCapableModel = {
+    provider: "codex",
+    model: "gpt-5.6-sol",
+  } as const;
+
+  it("persists a newly selected model before enabling Auto", async () => {
+    const calls: Array<string> = [];
+
+    await persistModelSelectionBeforeRuntimeMode({
+      currentModelSelection: previousModel,
+      nextModelSelection: autoCapableModel,
+      currentRuntimeMode: "approval-required",
+      nextRuntimeMode: "auto",
+      persistModelSelection: async () => {
+        calls.push("model");
+      },
+      persistRuntimeMode: async () => {
+        calls.push("runtime");
+      },
+    });
+
+    expect(calls).toEqual(["model", "runtime"]);
+  });
+
+  it("does not enable Auto when persisting the selected model fails", async () => {
+    const calls: Array<string> = [];
+
+    await expect(
+      persistModelSelectionBeforeRuntimeMode({
+        currentModelSelection: previousModel,
+        nextModelSelection: autoCapableModel,
+        currentRuntimeMode: "approval-required",
+        nextRuntimeMode: "auto",
+        persistModelSelection: async () => {
+          calls.push("model");
+          throw new Error("model persistence failed");
+        },
+        persistRuntimeMode: async () => {
+          calls.push("runtime");
+        },
+      }),
+    ).rejects.toThrow("model persistence failed");
+
+    expect(calls).toEqual(["model"]);
+  });
+
+  it("downgrades from Auto before persisting an incompatible model", async () => {
+    const calls: Array<string> = [];
+
+    await persistModelSelectionBeforeRuntimeMode({
+      currentModelSelection: autoCapableModel,
+      nextModelSelection: previousModel,
+      currentRuntimeMode: "auto",
+      nextRuntimeMode: "approval-required",
+      persistModelSelection: async () => {
+        calls.push("model");
+      },
+      persistRuntimeMode: async () => {
+        calls.push("runtime");
+      },
+    });
+
+    expect(calls).toEqual(["runtime", "model"]);
   });
 });
 
@@ -1984,5 +2190,64 @@ describe("resolveQueuedSteerGateTransition", () => {
         now,
       }),
     ).toEqual({ kind: "clear" });
+  });
+});
+
+describe("thread detail hydration", () => {
+  it("keeps local drafts on the empty landing even if a stale failure flag lingers", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: false,
+        hasTimelineEntries: false,
+        detailSyncState: null,
+      }),
+    ).toBe("ready");
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: false,
+        hasTimelineEntries: false,
+        detailSyncState: "failed",
+      }),
+    ).toBe("ready");
+  });
+
+  it("renders existing timeline entries without waiting for a snapshot", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: true,
+        detailSyncState: null,
+      }),
+    ).toBe("ready");
+  });
+
+  it("treats a synced empty thread as genuinely empty", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: false,
+        detailSyncState: "synced",
+      }),
+    ).toBe("ready");
+  });
+
+  it("shows loading for a server thread whose detail has not synced yet", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: false,
+        detailSyncState: null,
+      }),
+    ).toBe("loading");
+  });
+
+  it("surfaces a failed state when the detail stream died without data", () => {
+    expect(
+      resolveThreadDetailHydration({
+        isServerThread: true,
+        hasTimelineEntries: false,
+        detailSyncState: "failed",
+      }),
+    ).toBe("failed");
   });
 });

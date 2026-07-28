@@ -4,11 +4,16 @@
 
 import {
   ArchiveIcon,
+  BookIcon,
+  ChatBubbleIcon,
+  CircleQuestionIcon,
   ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
+  GiftIcon,
   KanbanIcon,
+  KeyboardIcon,
   type LucideIcon,
   NewThreadIcon,
   PencilIcon,
@@ -155,7 +160,7 @@ import {
   automationAttentionCount,
   automationQueryKey,
   formatCadence,
-  groupHeartbeatAutomationsByTargetThread,
+  groupAutomationsByContinuedThread,
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
@@ -199,6 +204,7 @@ import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import { openExternalLink } from "~/lib/linkChips";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import {
@@ -350,14 +356,13 @@ import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
-import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
 import type {
   SidebarSearchAction,
   SidebarSearchProject,
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
-import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { waitForRecoverableProjectInReadModel } from "../lib/projectCreateRecovery";
 import {
   createOrRecoverProjectFromPath,
@@ -378,9 +383,7 @@ import {
   SidebarContextMenuIcon,
 } from "./sidebarContextMenuStyles";
 import {
-  VOID_SPACE_ICON,
   VOID_SPACE_KEY,
-  VOID_SPACE_NAME,
   spaceDisplayIcon,
   spaceDisplayName,
   spaceKey,
@@ -422,7 +425,6 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
   threads: "Projects",
   studio: "Studio",
-  workspace: "Workspace",
 };
 /** Snap the optimistic segment selection back if the navigation never lands. */
 const SIDEBAR_SEGMENT_PENDING_RESET_MS = 2000;
@@ -872,6 +874,61 @@ function ProjectSortMenu({
   );
 }
 
+const SYNARA_CHANGELOG_URL = "https://trysynara.com/changelog";
+const SYNARA_DOCS_URL = "https://trysynara.com/docs";
+
+// Footer help menu; swapped out for the desktop-update pill while an update is
+// available (see SidebarFooter).
+function SidebarHelpMenu({
+  onOpenShortcuts,
+  onOpenFeedback,
+}: {
+  onOpenShortcuts: () => void;
+  onOpenFeedback: () => void;
+}) {
+  return (
+    <Menu>
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={CircleQuestionIcon}
+        label="Help"
+        tooltip="Help"
+      />
+      <ComposerPickerMenuPopup
+        align="end"
+        side="top"
+        className={SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME}
+      >
+        <MenuGroup>
+          <MenuItem
+            className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+            onClick={() => openExternalLink(SYNARA_CHANGELOG_URL)}
+          >
+            <SidebarContextMenuIcon icon={GiftIcon} />
+            <span>What’s new</span>
+          </MenuItem>
+          <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenShortcuts}>
+            <SidebarContextMenuIcon icon={KeyboardIcon} />
+            <span>Keyboard shortcuts</span>
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
+            <SidebarContextMenuIcon icon={ChatBubbleIcon} />
+            <span>Send feedback</span>
+          </MenuItem>
+          <MenuItem
+            className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+            onClick={() => openExternalLink(SYNARA_DOCS_URL)}
+          >
+            <SidebarContextMenuIcon icon={BookIcon} />
+            <span>Docs</span>
+          </MenuItem>
+        </MenuGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
+
 function ThreadSortMenuItems({
   threadSortOrder,
   onThreadSortOrderChange,
@@ -932,8 +989,8 @@ function SidebarPrimaryAction({
   onClick,
   onMouseEnter,
   onFocus,
-  active = false,
-  disabled = false,
+  active: activeProp,
+  disabled: disabledProp,
   shortcutLabel,
   badge,
 }: {
@@ -948,6 +1005,10 @@ function SidebarPrimaryAction({
   shortcutLabel?: string | null;
   badge?: SidebarActionBadge | null;
 }) {
+  // Defaults live in the body, not the destructuring pattern: an AssignmentPattern in
+  // the parameter list makes React Compiler bail out on the whole component.
+  const active = activeProp ?? false;
+  const disabled = disabledProp ?? false;
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
 
   return (
@@ -997,13 +1058,15 @@ function SidebarPrimaryAction({
 
 function SortableProjectItem({
   projectId,
-  disabled = false,
+  disabled: disabledProp,
   children,
 }: {
   projectId: ProjectId;
   disabled?: boolean;
   children: (handleProps: SortableProjectHandleProps) => React.ReactNode;
 }) {
+  // Default resolved in the body — see SidebarPrimaryAction.
+  const disabled = disabledProp ?? false;
   const {
     attributes,
     listeners,
@@ -1048,7 +1111,7 @@ export function SidebarSegmentedPicker({
   // sit still for the whole switch and the click would feel dead. Drive the thumb
   // from the clicked segment immediately (the navigation itself runs in a
   // transition, see navigateToBackTarget) and let the route catch up; the timeout
-  // snaps back if the navigation never lands (e.g. Workspace with no pages).
+  // snaps back if the navigation never lands.
   // Stamp an optimistic selection with the route it started from. When the route
   // changes, synchronously replace that state before React commits the new props.
   // Merely hiding a mismatched key is insufficient: browser Back can return to the
@@ -1098,7 +1161,7 @@ export function SidebarSegmentedPicker({
   };
   // displayedView can name a hidden view (e.g. a Studio thread is open while the Studio section is
   // toggled off) — show no selection then, instead of parking the thumb on the wrong segment.
-  const activeIndex = views.indexOf(displayedView);
+  const activeIndex = displayedView === null ? -1 : views.indexOf(displayedView);
   const segmentCount = views.length;
   const activeSegment = Math.max(0, activeIndex);
   const isFirstActive = activeSegment === 0;
@@ -1172,42 +1235,6 @@ export function SidebarSegmentedPicker({
   );
 }
 
-function SortableWorkspaceItem({
-  workspaceId,
-  children,
-}: {
-  workspaceId: string;
-  children: (handleProps: SortableProjectHandleProps) => React.ReactNode;
-}) {
-  const {
-    attributes,
-    listeners,
-    setActivatorNodeRef,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-    isOver,
-  } = useSortable({ id: workspaceId });
-
-  return (
-    <li
-      ref={setNodeRef}
-      style={{
-        transform: CSS.Translate.toString(transform),
-        transition,
-      }}
-      className={`group/menu-item relative rounded-md ${
-        isDragging ? "z-20 opacity-80" : ""
-      } ${isOver && !isDragging ? "ring-1 ring-primary/40" : ""}`}
-      data-sidebar="menu-item"
-      data-slot="sidebar-menu-item"
-    >
-      {children({ attributes, listeners, setActivatorNodeRef })}
-    </li>
-  );
-}
-
 export default function Sidebar() {
   const [showDebugFeatureFlagsMenu, setShowDebugFeatureFlagsMenu] = useState(
     readDebugFeatureFlagsMenuVisibility,
@@ -1245,21 +1272,15 @@ export default function Sidebar() {
   const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
   const unpinProject = usePinnedProjectsStore((store) => store.unpinProject);
   const prunePinnedProjects = usePinnedProjectsStore((store) => store.prunePinnedProjects);
-  const workspacePages = useWorkspaceStore((store) => store.workspacePages);
-  const createWorkspace = useWorkspaceStore((store) => store.createWorkspace);
-  const renameWorkspace = useWorkspaceStore((store) => store.renameWorkspace);
-  const deleteWorkspace = useWorkspaceStore((store) => store.deleteWorkspace);
-  const reorderWorkspace = useWorkspaceStore((store) => store.reorderWorkspace);
-  const homeDir = useWorkspaceStore((store) => store.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((store) => store.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((store) => store.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
-  const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnStudioRoute = pathname.startsWith("/studio");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
@@ -1308,15 +1329,14 @@ export default function Sidebar() {
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
-    () => groupHeartbeatAutomationsByTargetThread(automationListQuery.data?.definitions ?? []),
+    () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
   const { settings: appSettings, updateSettings } = useAppSettings();
-  // Threads is always available; Studio, Workspace, and the standalone Chats footer
-  // can be hidden independently from Settings.
+  // Projects is always available; Studio and the standalone Chats footer can be hidden
+  // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
   const studioSectionVisible = appSettings.showStudioSection;
-  const workspaceSectionVisible = appSettings.showWorkspaceSection;
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewStudioChat } = useHandleNewStudioChat();
@@ -1324,10 +1344,6 @@ export default function Sidebar() {
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
-  });
-  const routeWorkspaceId = useParams({
-    strict: false,
-    select: (params) => (typeof params.workspaceId === "string" ? params.workspaceId : null),
   });
   const routeProjectId = useParams({
     strict: false,
@@ -1415,14 +1431,39 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
-  const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
+  // Query defaults are applied after destructuring: a default inside the destructuring
+  // pattern makes React Compiler bail out on the whole Sidebar component.
+  const keybindingsQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
-  const { data: serverCwd = null } = useQuery({
+  const keybindings = keybindingsQuery.data ?? EMPTY_KEYBINDINGS;
+  const serverCwdQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.cwd ?? null,
   });
+  const serverCwd = serverCwdQuery.data ?? null;
+  // Declared next to `keybindings` (rather than further down) because the project-row render
+  // helpers above read these labels. A const declared after the closure that captures it
+  // widens its inferred mutable range and makes React Compiler drop the memoization of every
+  // hook that depends on it. See Sidebar.compiler.test.ts.
+  const newThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.new") ??
+    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
+  const newChatShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.newChat") ??
+    shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
+  const searchShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.search") ??
+    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const importThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
+    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
+  const addProjectShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
+    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
+  const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
@@ -1460,8 +1501,6 @@ export default function Sidebar() {
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
-  const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
-  const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
   const [optimisticPinnedStateByProjectId, setOptimisticPinnedStateByProjectId] = useState<
     ReadonlyMap<ProjectId, boolean>
@@ -1869,25 +1908,6 @@ export default function Sidebar() {
     }, 0);
     return () => window.clearTimeout(settle);
   }, [optimisticPinnedStateByProjectId, projects]);
-  const workspaceRows = useMemo(
-    () =>
-      workspacePages.map((workspace) => {
-        const terminalState = selectThreadTerminalState(
-          terminalStateByThreadId,
-          workspaceThreadId(workspace.id),
-        );
-        return {
-          ...workspace,
-          terminalCount: terminalState.terminalOpen ? terminalState.terminalIds.length : 0,
-          terminalStatus: terminalStatusFromThreadState({
-            runningTerminalIds: terminalState.runningTerminalIds,
-            terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
-          }),
-          runningTerminalIds: terminalState.runningTerminalIds,
-        };
-      }),
-    [terminalStateByThreadId, workspacePages],
-  );
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
       const latestThread = sortThreadsForSidebar(
@@ -2083,16 +2103,6 @@ export default function Sidebar() {
     ],
   );
 
-  const navigateToWorkspace = useCallback(
-    (workspaceId: string, options?: { replace?: boolean }) => {
-      void navigate({
-        to: "/workspace/$workspaceId",
-        params: { workspaceId },
-        ...(options?.replace ? { replace: true } : {}),
-      });
-    },
-    [navigate],
-  );
   // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the
   // settings-back path below) — differs only in which segment's thread list and draft ids are
   // passed in.
@@ -2236,14 +2246,6 @@ export default function Sidebar() {
 
   const handleSidebarViewChange = useCallback(
     (view: SidebarView) => {
-      if (view === "workspace") {
-        const fallbackWorkspaceId = workspacePages[0]?.id;
-        if (!fallbackWorkspaceId) {
-          return;
-        }
-        navigateToWorkspace(routeWorkspaceId ?? fallbackWorkspaceId);
-        return;
-      }
       if (view === "studio") {
         // Remembered route first — it already treats the stored Studio draft as a valid target
         // (resolveBackToStudioTarget includes studioDraftThreadIds), so switching back to Studio
@@ -2265,12 +2267,9 @@ export default function Sidebar() {
     [
       handleNewChat,
       navigateToBackTarget,
-      navigateToWorkspace,
       openStudioChatFallback,
       resolveBackToStudioTarget,
       resolveBackToThreadsTarget,
-      routeWorkspaceId,
-      workspacePages,
     ],
   );
 
@@ -2285,22 +2284,7 @@ export default function Sidebar() {
       handleSidebarViewChange("threads");
       return;
     }
-    if (isOnWorkspace && !workspaceSectionVisible) {
-      handleSidebarViewChange("threads");
-    }
-  }, [
-    handleSidebarViewChange,
-    isOnSettings,
-    isOnStudio,
-    isOnWorkspace,
-    studioSectionVisible,
-    workspaceSectionVisible,
-  ]);
-
-  const handleCreateWorkspace = useCallback(() => {
-    const workspaceId = createWorkspace();
-    navigateToWorkspace(workspaceId);
-  }, [createWorkspace, navigateToWorkspace]);
+  }, [handleSidebarViewChange, isOnSettings, isOnStudio, studioSectionVisible]);
 
   useEffect(() => {
     // Same hydration gate as the Studio prewarm below: persisted paths make homeDir truthy
@@ -2326,67 +2310,6 @@ export default function Sidebar() {
     await handleNewStudioChat({ fresh: true });
   }, [handleNewStudioChat]);
 
-  const beginWorkspaceRename = useCallback((workspaceId: string, title: string) => {
-    setRenamingWorkspaceId(workspaceId);
-    setRenamingWorkspaceTitle(title);
-  }, []);
-
-  const commitWorkspaceRename = useCallback(() => {
-    if (!renamingWorkspaceId) {
-      return;
-    }
-    renameWorkspace(renamingWorkspaceId, renamingWorkspaceTitle);
-    setRenamingWorkspaceId(null);
-  }, [renameWorkspace, renamingWorkspaceId, renamingWorkspaceTitle]);
-
-  const handleDeleteWorkspace = useCallback(
-    async (workspaceId: string) => {
-      const workspaceThread = workspaceThreadId(workspaceId);
-      const api = readNativeApi();
-      const terminalState = selectThreadTerminalState(
-        useTerminalStateStore.getState().terminalStateByThreadId,
-        workspaceThread,
-      );
-
-      if (api && typeof api.terminal.close === "function") {
-        terminalRuntimeRegistry.disposeThread(workspaceThread);
-        await Promise.allSettled(
-          terminalState.terminalIds.map((terminalId) =>
-            api.terminal.close({
-              threadId: workspaceThread,
-              terminalId,
-              deleteHistory: true,
-            }),
-          ),
-        );
-      }
-
-      clearTerminalState(workspaceThread);
-      deleteWorkspace(workspaceId);
-
-      const nextWorkspaceId = useWorkspaceStore.getState().workspacePages[0]?.id ?? null;
-      if (routeWorkspaceId === workspaceId && nextWorkspaceId) {
-        navigateToWorkspace(nextWorkspaceId, { replace: true });
-      }
-    },
-    [clearTerminalState, deleteWorkspace, navigateToWorkspace, routeWorkspaceId],
-  );
-
-  const handleWorkspaceDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) {
-        return;
-      }
-      const nextIndex = workspacePages.findIndex((workspace) => workspace.id === String(over.id));
-      if (nextIndex < 0) {
-        return;
-      }
-      reorderWorkspace(String(active.id), nextIndex);
-    },
-    [reorderWorkspace, workspacePages],
-  );
-
   const addProjectFromPath = useCallback(
     async (
       rawCwd: string,
@@ -2409,7 +2332,13 @@ export default function Sidebar() {
         setIsAddingProject(false);
       };
 
-      try {
+      // The flow lives in a nested function that the `try` below merely awaits: React
+      // Compiler's BuildHIR cannot lower a `throw` or a value block (`?.`, `??`, ternary,
+      // conditional spread) that sits directly inside a try block, and a single one of them
+      // makes the entire Sidebar bail out of compilation — silently, since `panicThreshold`
+      // is unset. Nested function bodies are lowered separately and are unaffected, and the
+      // catch below still sees every rejection. See Sidebar.compiler.test.ts.
+      const runAddProject = async () => {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
         const existingRecovery = await recoverExistingAddProjectTarget({
           existingProjectId: existing?.id,
@@ -2475,7 +2404,10 @@ export default function Sidebar() {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
         finishAddingProject();
-        return;
+      };
+
+      try {
+        await runAddProject();
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
@@ -3155,13 +3087,15 @@ export default function Sidebar() {
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
     activeSpace,
-    editedSpace,
+    voidSpace,
     spaceEditorOpen,
     spaceEditorMode,
+    spaceEditorInitialValue,
     spaceEditorExistingNames,
     spaceProjectPickerTarget,
     openSpaceCreator,
     openSpaceEditor,
+    openVoidEditor,
     closeSpaceEditor,
     openSpaceProjectPicker,
     closeSpaceProjectPicker,
@@ -3169,6 +3103,8 @@ export default function Sidebar() {
     handleSelectSpaceForIncomingProject,
     handleReorderSpaces,
     handleRenameSpace,
+    handleRenameVoid,
+    resetVoidSpace,
     handleDeleteSpace,
     handleMoveProjectToSpace,
     handleSpaceEditorSubmit,
@@ -3299,7 +3235,9 @@ export default function Sidebar() {
       );
       if (!confirmed) return;
 
-      try {
+      // Nested function so the `try` body stays free of value blocks — see the comment on
+      // `runAddProject` above for why React Compiler requires this shape.
+      const runRemoveProject = async () => {
         // `project.delete` refuses non-empty folders, so `Remove` clears threads first.
         const deletionResult = await deleteProjectThreads(projectId, {
           confirmMessage: null,
@@ -3333,6 +3271,10 @@ export default function Sidebar() {
               ? `Deleted ${deletionResult.deletedCount} ${pluralize(deletionResult.deletedCount, "thread")} and removed the project.`
               : "Project removed.",
         });
+      };
+
+      try {
+        await runRemoveProject();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
         console.error("Failed to remove project", { projectId, error });
@@ -3738,7 +3680,7 @@ export default function Sidebar() {
   ]);
 
   useEffect(() => {
-    if (isOnWorkspace || isOnSettings || routeThreadId === null) {
+    if (isOnSettings || routeThreadId === null) {
       return;
     }
 
@@ -3758,7 +3700,7 @@ export default function Sidebar() {
       });
     }, 0);
     return () => window.clearTimeout(settle);
-  }, [isOnSettings, isOnWorkspace, routeSearch.splitViewId, routeThreadId]);
+  }, [isOnSettings, routeSearch.splitViewId, routeThreadId]);
 
   const handleThreadClick = useCallback(
     (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
@@ -4961,7 +4903,7 @@ export default function Sidebar() {
         return;
       }
       if (command === "space.previous" || command === "space.next") {
-        if (!isProjectsSidebarSurface({ isOnSettings, isOnStudio, isOnWorkspace })) return;
+        if (!isProjectsSidebarSurface({ isOnSettings, isOnStudio })) return;
         event.preventDefault();
         event.stopPropagation();
         const orderedSpaceIds: ReadonlyArray<SpaceId | null> = [
@@ -4976,7 +4918,7 @@ export default function Sidebar() {
       }
       const spaceJumpIndex = spaceJumpIndexFromCommand(command ?? "");
       if (spaceJumpIndex !== null) {
-        if (!isProjectsSidebarSurface({ isOnSettings, isOnStudio, isOnWorkspace })) return;
+        if (!isProjectsSidebarSurface({ isOnSettings, isOnStudio })) return;
         // Index 0 is Void, then spaces in strip order — the chord addresses what you see.
         const orderedSpaceIds: ReadonlyArray<SpaceId | null> = [
           null,
@@ -5062,7 +5004,6 @@ export default function Sidebar() {
     homeDir,
     isOnSettings,
     isOnStudio,
-    isOnWorkspace,
     navigate,
     searchPaletteMode,
     spaces,
@@ -5198,23 +5139,6 @@ export default function Sidebar() {
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
-  const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.new") ??
-    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
-  const newChatShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.newChat") ??
-    shortcutLabelForCommand(keybindings, "chat.newLocal");
-  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
-  const searchShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.search") ??
-    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
-  const importThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
-    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
-  const addProjectShortcutLabel =
-    shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
-    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
-  const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
     () =>
       projects.map((project) => ({
@@ -5230,12 +5154,12 @@ export default function Sidebar() {
           chatWorkspaceRoot,
           studioWorkspaceRoot,
         })
-          ? spaceDisplayName(project.spaceId, spaces)
+          ? spaceDisplayName(project.spaceId, spaces, voidSpace)
           : "Global",
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),
-    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot],
+    [chatWorkspaceRoot, homeDir, projects, spaces, studioWorkspaceRoot, voidSpace],
   );
   const searchPaletteActions = useMemo<SidebarSearchAction[]>(
     () => [
@@ -5302,13 +5226,15 @@ export default function Sidebar() {
         ? [
             {
               id: "switch-space-void",
-              label: `Switch to ${VOID_SPACE_NAME}`,
+              label: `Switch to ${voidSpace.name}`,
               description: "Jump to unassigned projects.",
-              keywords: ["space", "switch", "void", "unassigned"],
+              // "void" stays a keyword after a rename: it is what the palette answered to
+              // before, and it is still the only word for this group in the docs.
+              keywords: ["space", "switch", "void", "unassigned", voidSpace.name],
               requiresQuery: true,
               run: () => handleSelectSpace(null),
               icon: ({ className }: { className?: string }) => (
-                <SpaceIcon icon={VOID_SPACE_ICON} className={className} />
+                <SpaceIcon icon={voidSpace.icon} className={className} />
               ),
             } satisfies SidebarSearchAction,
           ]
@@ -5346,6 +5272,7 @@ export default function Sidebar() {
       openSpaceCreator,
       spaces,
       usageSettingsShortcutLabel,
+      voidSpace,
     ],
   );
 
@@ -5666,33 +5593,18 @@ export default function Sidebar() {
         ) : (
           <>
             <SidebarSegmentedPicker
-              views={[
-                ...(studioSectionVisible ? (["studio"] as const) : []),
-                "threads",
-                ...(workspaceSectionVisible ? (["workspace"] as const) : []),
-              ]}
-              activeView={isOnStudio ? "studio" : isOnWorkspace ? "workspace" : "threads"}
+              views={[...(studioSectionVisible ? (["studio"] as const) : []), "threads"]}
+              activeView={isOnStudio ? "studio" : "threads"}
               onSelectView={handleSidebarViewChange}
               onPrewarmView={prewarmSidebarViewTarget}
             />
-            {/* Keyed per segment so switching surfaces (Studio <-> Projects <->
-                Workspace) remounts the content with a short enter animation
-                instead of a hard cut. The picker above stays outside the key so
-                its thumb can glide across the switch. */}
-            <div
-              key={isOnWorkspace ? "workspace" : isOnStudio ? "studio" : "threads"}
-              className="sidebar-surface-enter"
-            >
+            {/* The keyed content remounts with a short enter animation while the picker
+                stays mounted so its thumb can glide between Projects and Studio. */}
+            <div key={isOnStudio ? "studio" : "threads"} className="sidebar-surface-enter">
               {/* Primary sidebar actions stay limited to features we currently ship. */}
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <SidebarMenu className="gap-0.5">
-                  {isOnWorkspace ? (
-                    <SidebarPrimaryAction
-                      icon={TerminalIcon}
-                      label="New workspace"
-                      onClick={handleCreateWorkspace}
-                    />
-                  ) : isOnStudio ? (
+                  {isOnStudio ? (
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
@@ -5761,121 +5673,7 @@ export default function Sidebar() {
                 </SidebarMenu>
               </SidebarGroup>
 
-              {isOnWorkspace ? (
-                <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-                  <div className="my-2 h-px w-full bg-border" />
-                  <div className="mb-1.5 flex items-center px-2">
-                    <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Workspace</span>
-                  </div>
-
-                  <DndContext
-                    sensors={projectDnDSensors}
-                    collisionDetection={closestCorners}
-                    modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                    onDragEnd={handleWorkspaceDragEnd}
-                  >
-                    <SidebarMenu className="gap-0.5">
-                      <SortableContext
-                        items={workspaceRows.map((workspace) => workspace.id)}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {workspaceRows.map((workspace) => {
-                          const isActive = routeWorkspaceId === workspace.id;
-                          const isRenaming = renamingWorkspaceId === workspace.id;
-                          return (
-                            <SortableWorkspaceItem key={workspace.id} workspaceId={workspace.id}>
-                              {(dragHandleProps) =>
-                                isRenaming ? (
-                                  <div className="px-1.5 py-0.5">
-                                    <input
-                                      autoFocus
-                                      value={renamingWorkspaceTitle}
-                                      onChange={(event) => {
-                                        setRenamingWorkspaceTitle(event.target.value);
-                                      }}
-                                      onBlur={commitWorkspaceRename}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.preventDefault();
-                                          commitWorkspaceRename();
-                                        }
-                                        if (event.key === "Escape") {
-                                          event.preventDefault();
-                                          setRenamingWorkspaceId(null);
-                                          setRenamingWorkspaceTitle(workspace.title);
-                                        }
-                                      }}
-                                      className="h-7 w-full rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none focus:border-[color:var(--color-border-focus)]"
-                                    />
-                                  </div>
-                                ) : (
-                                  <>
-                                    <SidebarMenuButton
-                                      size="sm"
-                                      isActive={isActive}
-                                      className="h-8 gap-2 rounded-lg pl-2 pr-8 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/89 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
-                                      onClick={() => {
-                                        navigateToWorkspace(workspace.id);
-                                      }}
-                                      onContextMenu={(event) => {
-                                        event.preventDefault();
-                                        beginWorkspaceRename(workspace.id, workspace.title);
-                                      }}
-                                    >
-                                      <SidebarLeadingIcon
-                                        ref={dragHandleProps.setActivatorNodeRef}
-                                        {...dragHandleProps.attributes}
-                                        {...dragHandleProps.listeners}
-                                        size="sm"
-                                        tone="text-muted-foreground/65"
-                                        className="cursor-grab active:cursor-grabbing"
-                                      >
-                                        <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-                                      </SidebarLeadingIcon>
-                                      <span className="min-w-0 flex-1 truncate">
-                                        {workspace.title}
-                                      </span>
-                                      {workspace.terminalStatus && (
-                                        <span
-                                          className={cn(
-                                            "inline-flex size-1.5 shrink-0 rounded-full",
-                                            workspace.terminalStatus.label ===
-                                              "Terminal input needed"
-                                              ? "bg-amber-500 dark:bg-amber-300/90"
-                                              : workspace.terminalStatus.label ===
-                                                  "Terminal process running"
-                                                ? "bg-teal-500 dark:bg-teal-300/90"
-                                                : "bg-emerald-500 dark:bg-emerald-300/90",
-                                          )}
-                                        />
-                                      )}
-                                      {workspace.terminalCount > 0 && (
-                                        <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] tabular-nums text-muted-foreground/50">
-                                          {workspace.terminalCount}
-                                        </span>
-                                      )}
-                                    </SidebarMenuButton>
-                                    <SidebarIconButton
-                                      icon={Trash2}
-                                      label="Delete workspace"
-                                      glyph="meta"
-                                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        void handleDeleteWorkspace(workspace.id);
-                                      }}
-                                    />
-                                  </>
-                                )
-                              }
-                            </SortableWorkspaceItem>
-                          );
-                        })}
-                      </SortableContext>
-                    </SidebarMenu>
-                  </DndContext>
-                </SidebarGroup>
-              ) : isOnStudio ? (
+              {isOnStudio ? (
                 // Studio is "just chats": a labeled Studio block holding a flat list of threads
                 // rooted at the Studio workspace (no project-folder chrome).
                 <SidebarGroup className="px-1.5 py-1.5">
@@ -5916,12 +5714,16 @@ export default function Sidebar() {
                     spaces={spaces}
                     activeSpaceId={activeSpaceId}
                     activityBySpaceId={spaceActivityById}
+                    voidSpace={voidSpace}
                     onSelect={handleSelectSpace}
                     onCreate={() => openSpaceCreator()}
                     onEdit={(space) => openSpaceEditor(space.id)}
                     onDelete={(space) => void handleDeleteSpace(space.id)}
                     onReorder={handleReorderSpaces}
                     onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
+                    onEditVoid={openVoidEditor}
+                    onRenameVoid={handleRenameVoid}
+                    onResetVoid={resetVoidSpace}
                     onDropProject={(projectId, spaceId) =>
                       void handleMoveProjectToSpace(projectId, spaceId)
                     }
@@ -6215,7 +6017,14 @@ export default function Sidebar() {
                     />
                     <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
                   </Tooltip>
-                ) : null}
+                ) : (
+                  <SidebarHelpMenu
+                    onOpenShortcuts={() =>
+                      void navigate({ to: "/settings", search: { section: "shortcuts" } })
+                    }
+                    onOpenFeedback={openFeedbackDialog}
+                  />
+                )}
               </div>
             </div>
           </SidebarMenuItem>
@@ -6233,9 +6042,7 @@ export default function Sidebar() {
       <SpaceEditorDialog
         open={spaceEditorOpen}
         mode={spaceEditorMode}
-        {...(editedSpace
-          ? { initialValue: { name: editedSpace.name, icon: editedSpace.icon } }
-          : {})}
+        {...(spaceEditorInitialValue ? { initialValue: spaceEditorInitialValue } : {})}
         existingNames={spaceEditorExistingNames}
         onOpenChange={(open) => {
           if (!open) closeSpaceEditor();
@@ -6359,7 +6166,9 @@ export default function Sidebar() {
                       read-out of where it lives today. It wears the same secondary tone
                       as every other leading glyph in this menu. */}
                   <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                    <SpaceIcon icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces)} />
+                    <SpaceIcon
+                      icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces, voidSpace)}
+                    />
                   </span>
                   <span>Move to space</span>
                 </MenuSubTrigger>
@@ -6374,8 +6183,8 @@ export default function Sidebar() {
                     }}
                   >
                     <MenuRadioItem value={VOID_SPACE_KEY}>
-                      <SpaceIcon icon={VOID_SPACE_ICON} className="size-3.5" />
-                      <span className="min-w-0 truncate">Void</span>
+                      <SpaceIcon icon={voidSpace.icon} className="size-3.5" />
+                      <span className="min-w-0 truncate">{voidSpace.name}</span>
                     </MenuRadioItem>
                     {spaces.map((space) => (
                       <MenuRadioItem key={space.id} value={space.id}>

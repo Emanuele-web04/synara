@@ -79,7 +79,17 @@ export interface ReconcilableThread {
  * stopped/error with no active turn and no open turn) is left untouched.
  */
 function needsRestartReconciliation(thread: ReconcilableThread): boolean {
-  return threadHasInFlightTurn(thread);
+  return threadHasInFlightTurn(thread) || hasDanglingActiveTurn(thread);
+}
+
+/**
+ * A session that already reports a terminal status while still naming an active
+ * turn is invisible to `threadHasInFlightTurn` (its turn has been settled), but
+ * the dangling `activeTurnId` keeps every "is this thread busy?" check true, so
+ * the composer stays blocked and Stop stays armed with nothing to stop.
+ */
+function hasDanglingActiveTurn(thread: ReconcilableThread): boolean {
+  return thread.session?.activeTurnId != null && !threadHasInFlightTurn(thread);
 }
 
 function planStalePendingRequestCommands(input: {
@@ -202,6 +212,26 @@ export function planRestartTurnReconciliation(input: {
       commands.push(staleCheckpointRevertCommand);
     }
     if (!hasInFlightTurn) {
+      if (!hasDanglingActiveTurn(thread)) {
+        continue;
+      }
+      // Preserve the terminal status (and its banner) - only the stale active
+      // turn pointer is wrong here.
+      commands.push({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe(`restart-reconcile-active-turn:${thread.id}:${input.now}`),
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: thread.session?.status ?? "interrupted",
+          providerName: thread.session?.providerName ?? null,
+          runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
+          activeTurnId: null,
+          lastError: thread.session?.lastError ?? null,
+          updatedAt: input.now,
+        },
+        createdAt: input.now,
+      });
       continue;
     }
     commands.push({
@@ -229,11 +259,16 @@ export function planRestartTurnReconciliation(input: {
 /**
  * Reconcile restart-orphaned turns once at boot.
  *
- * Reads the command read model (post-bootstrap projection state), hydrates only
- * stuck thread details to discover stale human requests, and dispatches the
- * resulting cleanup commands. Every failure mode is contained and logged: a
- * failed snapshot read or a failed individual dispatch must never block the
- * server from coming up.
+ * Reads the engine's in-memory command read model (post-bootstrap projection
+ * state, kept current as commands commit), hydrates only stuck thread details to
+ * discover stale human requests, and dispatches the resulting cleanup commands.
+ * Every failure mode is contained and logged: a failed thread-detail read or a
+ * failed individual dispatch must never block the server from coming up.
+ *
+ * Deliberately not a second `getCommandReadModel()` load. That query costs ~150ms
+ * on a large database and this runs on the blocking startup path, after several
+ * reactors have already started — so re-reading it would be both slower and
+ * staler than the model the engine is already maintaining.
  */
 export const reconcileRestartStuckTurns: Effect.Effect<
   void,
@@ -243,16 +278,7 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
 
-  const readModel = yield* snapshotQuery.getCommandReadModel().pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("restart turn reconciliation skipped: failed to read command snapshot", {
-        cause,
-      }).pipe(Effect.as(null)),
-    ),
-  );
-  if (readModel === null) {
-    return;
-  }
+  const readModel = yield* engine.getReadModel();
 
   const now = new Date().toISOString();
   const threadsNeedingRestartCleanup = readModel.threads.filter(

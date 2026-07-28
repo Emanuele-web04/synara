@@ -34,6 +34,16 @@ describe("Antigravity model options", () => {
   });
 });
 
+describe("Claude model selections", () => {
+  it("preserves the discovered Auto capability with the selected model", () => {
+    expect(buildModelSelection("claudeAgent", "claude-haiku-4-5", undefined, false)).toEqual({
+      provider: "claudeAgent",
+      model: "claude-haiku-4-5",
+      supportsAutoMode: false,
+    });
+  });
+});
+
 describe("formatProviderModelOptionName", () => {
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
     expect(

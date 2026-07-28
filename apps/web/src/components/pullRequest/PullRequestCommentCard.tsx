@@ -35,7 +35,7 @@ export function PullRequestCommentCard({
   comment,
   prUrl,
   workspaceRoot,
-  defaultOpen = true,
+  defaultOpen: defaultOpenProp,
 }: {
   comment: PullRequestComment;
   prUrl: string;
@@ -44,6 +44,7 @@ export function PullRequestCommentCard({
    *  dozens of markdown trees. */
   defaultOpen?: boolean;
 }) {
+  const defaultOpen = defaultOpenProp ?? true;
   const [open, setOpen] = useState(defaultOpen);
   const finding = parseFindingComment(comment.body);
   const replyUrl = comment.url ?? prUrl;

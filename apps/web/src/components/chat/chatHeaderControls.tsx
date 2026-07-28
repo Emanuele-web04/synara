@@ -341,7 +341,8 @@ type ChatHeaderButtonBaseProps = Omit<ComponentProps<typeof Button>, "variant" |
  * Menu/Tooltip `render` target since it forwards the ref and spreads props.
  */
 export const ChatHeaderButton = forwardRef<HTMLButtonElement, ChatHeaderButtonBaseProps>(
-  function ChatHeaderButton({ tone = "outline", className, ...props }, ref) {
+  function ChatHeaderButton({ tone: toneProp, className, ...props }, ref) {
+    const tone = toneProp ?? "outline";
     return (
       <Button
         {...props}
@@ -372,7 +373,8 @@ type ChatHeaderIconButtonBaseProps = Omit<
  * so it composes with the existing Tooltip/Menu `render` wrappers used in the header.
  */
 export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIconButtonBaseProps>(
-  function ChatHeaderIconButton({ label, tone = "plain", className, children, ...props }, ref) {
+  function ChatHeaderIconButton({ label, tone: toneProp, className, children, ...props }, ref) {
+    const tone = toneProp ?? "plain";
     return (
       <Button
         {...props}

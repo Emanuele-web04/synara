@@ -1,5 +1,5 @@
 import { ProjectId } from "@synara/contracts";
-import type { OrchestrationProject, OrchestrationReadModel } from "@synara/contracts";
+import type { OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -62,10 +62,6 @@ function makeBatch(
   return { entries, rawCount };
 }
 
-function makeSnapshot(projects: OrchestrationProject[]): OrchestrationReadModel {
-  return { snapshotSequence: 1, spaces: [], projects, threads: [], updatedAt: now };
-}
-
 function makePins(
   rows: ReadonlyArray<{ projectId: ProjectId; repositoryKey: string; number: number }> = [],
   onSetPinned?: (input: {
@@ -92,7 +88,7 @@ function makeDependencies(input: {
     homeDir: "/tmp",
     github: input.github,
     pins: input.pins ?? makePins(),
-    getSnapshot: () => Effect.succeed(makeSnapshot(input.projects)),
+    listProjects: () => Effect.succeed(input.projects),
     resolveRepositories: (project: OrchestrationProject) => {
       const repository = input.repositories.get(project.id);
       return Effect.succeed({

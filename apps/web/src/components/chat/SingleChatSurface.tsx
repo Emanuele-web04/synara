@@ -68,7 +68,7 @@ import {
 import { sortThreadsForSidebar } from "../Sidebar.logic";
 import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import {
-  ChatMountSkeleton,
+  ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
   LazyDiffPanel,
@@ -193,8 +193,8 @@ export function SingleChatSurface(props: {
   );
   // A registered-but-unpromoted draft is the freeze case: landing a brand-new
   // chat commits the whole ChatView subtree synchronously. Defer that mount
-  // behind the composer skeleton so the paint is never blocked. Opening an
-  // existing thread keeps today's immediate mount (no draft -> no skeleton).
+  // behind the chat mount loader so the paint is never blocked. Opening an
+  // existing thread keeps today's immediate mount (no draft -> no loader).
   const isBrandNewDraftThread = draftThread !== null;
   // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
   // worktree-backed threads resolve links against their materialized worktree.
@@ -202,6 +202,8 @@ export function SingleChatSurface(props: {
     projectCwd: activeProject?.cwd ?? null,
     threadEnvMode: threadWorkspaceMetadata.envMode ?? draftThread?.envMode ?? null,
     threadWorktreePath: threadWorkspaceMetadata.worktreePath ?? draftThread?.worktreePath ?? null,
+    threadWorkingDirectory:
+      threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
   const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();
@@ -857,7 +859,7 @@ export function SingleChatSurface(props: {
         <div
           className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
         >
-          <Suspense fallback={<ChatMountSkeleton />}>
+          <Suspense fallback={<ChatMountLoader />}>
             <EditorWorkspaceView
               workspaceRoot={workspaceRoot}
               projectName={activeProject?.name ?? null}

@@ -71,6 +71,49 @@ describe("buildAutomationRunEnvelope", () => {
     expect(envelope.endsWith("---\n\nInspect the latest build.")).toBe(true);
   });
 
+  it("offers self-cancellation to standalone runs too", () => {
+    // Standalone runs are the ones that most need it: their per-run thread owns nothing,
+    // so run-scoped authorization is their only way to retire the automation.
+    const envelope = buildAutomationRunEnvelope({
+      definition: definition({ mode: "standalone" }),
+      run: run(),
+      memoryContent: "",
+      lastRunAt: null,
+    });
+
+    expect(envelope).toContain("synara_cancel_automation");
+    expect(envelope).toContain('decision "notify"');
+  });
+
+  it("tells each mode who else writes in the thread it runs in", () => {
+    const dedicated = buildAutomationRunEnvelope({
+      definition: definition({ mode: "dedicated" }),
+      run: run(),
+      memoryContent: "",
+      lastRunAt: null,
+    });
+    const heartbeat = buildAutomationRunEnvelope({
+      definition: definition(),
+      run: run(),
+      memoryContent: "",
+      lastRunAt: null,
+    });
+    const standalone = buildAutomationRunEnvelope({
+      definition: definition({ mode: "standalone" }),
+      run: run(),
+      memoryContent: "",
+      lastRunAt: null,
+    });
+
+    expect(dedicated).toContain(
+      "this thread belongs to this automation and is reused by every run",
+    );
+    // A dedicated run reports like a heartbeat: its work stays visible in the thread.
+    expect(dedicated).toContain('decision "silent"');
+    expect(heartbeat).toContain("it may also carry the user's own turns");
+    expect(standalone).not.toContain("Thread scope:");
+  });
+
   it("uses an explicit empty-memory placeholder and unbounded iteration label", () => {
     const envelope = buildAutomationRunEnvelope({
       definition: definition({ mode: "standalone", maxIterations: null }),

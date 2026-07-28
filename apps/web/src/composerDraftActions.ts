@@ -2,9 +2,10 @@
 // Purpose: Constructs the ComposerDraftStoreState actions while preserving granular thread identity.
 // Exports: Zustand state creator consumed by the public facade.
 
-import { type ModelSelection, type ProviderKind, ThreadId } from "@synara/contracts";
+import { type ModelSelection, type ProviderKind, RuntimeMode, ThreadId } from "@synara/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import * as Equal from "effect/Equal";
+import * as Schema from "effect/Schema";
 import type { StateCreator } from "zustand";
 
 import {
@@ -202,6 +203,7 @@ export const createComposerDraftStoreState =
           entryPoint: options.entryPoint ?? "chat",
           branch: options.branch ?? null,
           worktreePath,
+          workingDirectory: options.workingDirectory ?? null,
           lastKnownPr: null,
           envMode: options.envMode ?? (worktreePath ? "worktree" : "local"),
           ...(options.isTemporary ? { isTemporary: true } : {}),
@@ -806,10 +808,20 @@ export const createComposerDraftStoreState =
           if (opts) {
             const model = current?.model ?? getDefaultModel(provider);
             if (!model) continue;
-            nextMap[provider] = makeModelSelection(provider, model, opts);
+            nextMap[provider] = makeModelSelection(
+              provider,
+              model,
+              opts,
+              current?.provider === "claudeAgent" ? current.supportsAutoMode : undefined,
+            );
           } else if (current?.options) {
             // Remove options but keep the selection
-            nextMap[provider] = buildModelSelection(provider, current.model);
+            nextMap[provider] = buildModelSelection(
+              provider,
+              current.model,
+              undefined,
+              current.provider === "claudeAgent" ? current.supportsAutoMode : undefined,
+            );
           }
         }
         if (Equal.equals(base.modelSelectionByProvider, nextMap)) {
@@ -862,11 +874,18 @@ export const createComposerDraftStoreState =
             normalizedProvider,
             nextModel,
             providerOpts,
+            currentForProvider?.provider === "claudeAgent"
+              ? currentForProvider.supportsAutoMode
+              : undefined,
           );
         } else if (currentForProvider?.options) {
           nextMap[normalizedProvider] = buildModelSelection(
             normalizedProvider,
             currentForProvider.model,
+            undefined,
+            currentForProvider.provider === "claudeAgent"
+              ? currentForProvider.supportsAutoMode
+              : undefined,
           );
         }
 
@@ -884,12 +903,19 @@ export const createComposerDraftStoreState =
           }
           if (providerOpts) {
             nextStickyMap[normalizedProvider] = stripNonStickyModelOptions(
-              makeModelSelection(normalizedProvider, stickyBase.model, providerOpts),
+              makeModelSelection(
+                normalizedProvider,
+                stickyBase.model,
+                providerOpts,
+                stickyBase.provider === "claudeAgent" ? stickyBase.supportsAutoMode : undefined,
+              ),
             );
           } else if (stickyBase.options) {
             nextStickyMap[normalizedProvider] = buildModelSelection(
               normalizedProvider,
               stickyBase.model,
+              undefined,
+              stickyBase.provider === "claudeAgent" ? stickyBase.supportsAutoMode : undefined,
             );
           }
           nextStickyActiveProvider = base.activeProvider ?? normalizedProvider;
@@ -929,8 +955,7 @@ export const createComposerDraftStoreState =
       if (threadId.length === 0) {
         return;
       }
-      const nextRuntimeMode =
-        runtimeMode === "approval-required" || runtimeMode === "full-access" ? runtimeMode : null;
+      const nextRuntimeMode = Schema.is(RuntimeMode)(runtimeMode) ? runtimeMode : null;
       set((state) => {
         const existing = state.draftsByThreadId[threadId];
         if (!existing && nextRuntimeMode === null) {

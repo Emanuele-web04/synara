@@ -37,6 +37,9 @@ export const ProjectionThread = Schema.Struct({
   envMode: ThreadEnvironmentMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workingDirectory: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.NullOr(Schema.String),
   associatedWorktreeBranch: Schema.NullOr(Schema.String),
   associatedWorktreeRef: Schema.NullOr(Schema.String),

@@ -853,7 +853,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(gateway.revoked).toEqual(["gateway-token-1", "gateway-token-2"]);
   });
 
-  it("serializes shared external OpenCode turns and scrubs each thread token before unlock", async () => {
+  it("keeps shared external OpenCode servers identity-only and never installs a token", async () => {
     const runtime = createMockOpenCodeRuntime();
     const gateway = makeGatewayCredentials();
     const firstThread = asThreadId("thread-external-gateway-a");
@@ -888,12 +888,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           })
           .pipe(Effect.forkChild);
         yield* Effect.sleep(20);
-        expect(runtime.promptCalls).toHaveLength(1);
+        expect(runtime.promptCalls).toHaveLength(2);
         expect(
           runtime.mcpAddCalls.filter(
             (call) => (call.config as { enabled?: boolean } | undefined)?.enabled !== false,
           ),
-        ).toHaveLength(1);
+        ).toHaveLength(0);
 
         yield* adapter.interruptTurn(firstThread);
         yield* Fiber.join(secondTurn);
@@ -901,8 +901,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         yield* adapter.interruptTurn(secondThread);
         yield* adapter.stopSession(firstThread);
         expect(gateway.ownerByToken.has("gateway-token-1")).toBe(false);
-        // Interrupt revokes each turn's browser bearer immediately; stopping
-        // an unrelated session must not be required to retire that authority.
         expect(gateway.ownerByToken.has("gateway-token-2")).toBe(false);
         yield* adapter.stopSession(secondThread);
       }).pipe(
@@ -934,26 +932,47 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     for (const clientInput of runtime.createClientCalls) {
       expect(clientInput).not.toHaveProperty("workspaceId");
     }
-    expect(runtime.mcpAddCalls).toHaveLength(4);
-    expect(runtime.mcpAddCalls[0]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-1" },
-    });
-    expect(runtime.mcpAddCalls[1]?.config).toMatchObject({ enabled: false });
-    expect(runtime.mcpAddCalls[1]?.config).not.toHaveProperty("headers");
-    expect(runtime.mcpAddCalls[2]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-2" },
-    });
-    expect(runtime.mcpAddCalls[3]?.config).toMatchObject({ enabled: false });
-    expect(runtime.mcpAddCalls[3]?.config).not.toHaveProperty("headers");
+    expect(runtime.mcpAddCalls).toEqual([]);
     expect(gateway.ownerByToken.size).toBe(0);
-    expect(gateway.revoked).toEqual(["gateway-token-1", "gateway-token-2"]);
+    expect(gateway.revoked).toEqual([]);
     expect(runtime.promptCalls).toHaveLength(2);
     for (const prompt of runtime.promptCalls) {
-      expect(JSON.stringify(prompt)).toContain("Use the synara_* tools");
+      expect(JSON.stringify(prompt)).toContain("Synara MCP control is unavailable");
     }
   });
 
-  it("scrubs and releases an external OpenCode registry when MCP setup fails", async () => {
+  it("treats missing and repeated session stops as successful cleanup", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-idempotent-stop");
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: "/repo",
+        });
+        yield* adapter.stopSession(threadId);
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.abortCalls).toHaveLength(1);
+  });
+
+  it("does not touch an external OpenCode MCP registry when its setup hook would fail", async () => {
     let activeSetupAttempts = 0;
     const runtime = createMockOpenCodeRuntime({
       mcpAdd: async (input) => {
@@ -991,8 +1010,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             modelSelection: { provider: "opencode", model: "openai/gpt-5" },
           })
           .pipe(Effect.exit);
-        expect(Exit.isFailure(failed)).toBe(true);
-        expect(runtime.promptCalls).toHaveLength(0);
+        expect(Exit.isFailure(failed)).toBe(false);
+        expect(runtime.promptCalls).toHaveLength(1);
 
         yield* adapter.sendTurn({
           threadId,
@@ -1000,7 +1019,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: { provider: "opencode", model: "openai/gpt-5" },
         });
-        expect(runtime.promptCalls).toHaveLength(1);
+        expect(runtime.promptCalls).toHaveLength(2);
         yield* adapter.interruptTurn(threadId);
         yield* adapter.stopSession(threadId);
       }).pipe(
@@ -1016,19 +1035,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ),
     );
 
-    expect(runtime.mcpAddCalls).toHaveLength(4);
-    expect(runtime.mcpAddCalls[0]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-1" },
-    });
-    expect(runtime.mcpAddCalls[1]?.config).toMatchObject({ enabled: false });
-    expect(runtime.mcpAddCalls[1]?.config).not.toHaveProperty("headers");
-    expect(runtime.mcpAddCalls[2]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-1" },
-    });
-    expect(runtime.mcpAddCalls[3]?.config).toMatchObject({ enabled: false });
-    expect(runtime.mcpAddCalls[3]?.config).not.toHaveProperty("headers");
-    expect(JSON.stringify(runtime.promptCalls[0])).toContain("Use the synara_* tools");
-    expect(gateway.revoked).toEqual(["gateway-token-1"]);
+    expect(activeSetupAttempts).toBe(0);
+    expect(runtime.mcpAddCalls).toEqual([]);
+    expect(JSON.stringify(runtime.promptCalls[0])).toContain("Synara MCP control is unavailable");
+    expect(gateway.revoked).toEqual([]);
   });
 
   it("keeps managed sessions identity-only and revokes credentials when MCP setup is not connected", async () => {
@@ -1105,7 +1115,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(gateway.revoked).toEqual(["gateway-token-1"]);
   });
 
-  it("serializes shared external Kilo turns and scrubs each thread token before unlock", async () => {
+  it("keeps shared external Kilo servers identity-only and never installs a token", async () => {
     const runtime = createMockOpenCodeRuntime();
     const gateway = makeGatewayCredentials();
     const firstThread = asThreadId("thread-kilo-external-a");
@@ -1140,12 +1150,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           })
           .pipe(Effect.forkChild);
         yield* Effect.sleep(20);
-        expect(runtime.promptCalls).toHaveLength(1);
+        expect(runtime.promptCalls).toHaveLength(2);
         expect(
           runtime.mcpAddCalls.filter(
             (call) => (call.config as { enabled?: boolean } | undefined)?.enabled !== false,
           ),
-        ).toHaveLength(1);
+        ).toHaveLength(0);
 
         yield* adapter.stopSession(firstThread);
         yield* Fiber.join(secondTurn);
@@ -1183,19 +1193,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     for (const clientInput of runtime.createClientCalls) {
       expect(clientInput).not.toHaveProperty("workspaceId");
     }
-    expect(runtime.mcpAddCalls).toHaveLength(4);
-    expect(runtime.mcpAddCalls[0]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-1" },
-    });
-    expect(runtime.mcpAddCalls[1]?.config).toMatchObject({ enabled: false });
-    expect(runtime.mcpAddCalls[1]?.config).not.toHaveProperty("headers");
-    expect(runtime.mcpAddCalls[2]?.config).toMatchObject({
-      headers: { Authorization: "Bearer gateway-token-2" },
-    });
-    expect(runtime.mcpAddCalls[3]?.config).toMatchObject({ enabled: false });
-    expect(runtime.mcpAddCalls[3]?.config).not.toHaveProperty("headers");
+    expect(runtime.mcpAddCalls).toEqual([]);
     expect(gateway.ownerByToken.size).toBe(0);
-    expect(gateway.revoked).toEqual(["gateway-token-1", "gateway-token-2"]);
+    expect(gateway.revoked).toEqual([]);
+    for (const prompt of runtime.promptCalls) {
+      expect(JSON.stringify(prompt)).toContain("Synara MCP control is unavailable");
+    }
   });
 
   it("revokes a managed gateway lease exactly once when the server exits unexpectedly", async () => {
@@ -2332,6 +2335,49 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.promptCalls[0]).toMatchObject({
       agent: "plan",
+    });
+  });
+
+  it("ignores a stale plan agent option when Synara interaction mode is default", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-stale-plan-agent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-stale-plan-agent"),
+          input: "implement this",
+          interactionMode: "default",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+            options: {
+              agent: "plan",
+            },
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.promptCalls[0]).toMatchObject({
+      agent: "build",
     });
   });
 

@@ -743,6 +743,27 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         false,
       );
     });
+
+    it("detects Auto capability and probe-binary changes", () => {
+      const readyCodex = {
+        ...readyCursor,
+        provider: "codex",
+        supportsAutoRuntimeMode: true,
+        autoRuntimeModeBinaryPath: "codex",
+      } satisfies ServerProviderStatus;
+
+      assert.strictEqual(
+        providerStatusesEqual([readyCodex], [{ ...readyCodex, supportsAutoRuntimeMode: false }]),
+        false,
+      );
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCodex],
+          [{ ...readyCodex, autoRuntimeModeBinaryPath: "/custom/bin/codex" }],
+        ),
+        false,
+      );
+    });
   });
 
   // ── checkCodexProviderStatus tests ────────────────────────────────
@@ -887,6 +908,25 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 0.36.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("reports Auto unavailable for a supported but older Codex CLI", () =>
+      Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* checkCodexProviderStatus;
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.supportsAutoRuntimeMode, false);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 0.123.0\n", stderr: "", code: 0 };
+            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -1228,10 +1268,38 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("fails closed for Auto when the Claude CLI version is unparseable", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeProviderStatus;
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.supportsAutoRuntimeMode, false);
+        assert.strictEqual(status.autoRuntimeModeBinaryPath, "claude");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "Claude Code development build\n", stderr: "", code: 0 };
+            }
+            if (joined === "auth status") {
+              return {
+                stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                stderr: "",
+                code: 0,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("uses configured claude binary for version and auth probes", () =>
       Effect.gen(function* () {
         const status = yield* makeCheckClaudeProviderStatus(undefined, "/custom/bin/claude");
         assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.autoRuntimeModeBinaryPath, "/custom/bin/claude");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {

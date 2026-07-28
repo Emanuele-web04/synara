@@ -266,6 +266,7 @@ const PersistedDraftThreadState = Schema.Struct({
   entryPoint: DraftThreadEntryPointSchema.pipe(Schema.withDecodingDefault(() => "chat")),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workingDirectory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
   isTemporary: Schema.optionalKey(Schema.Boolean),
@@ -521,10 +522,9 @@ function normalizePersistedQueuedTurns(
     )
       ? candidate.sourceProposedPlan
       : undefined;
-    const runtimeMode =
-      candidate.runtimeMode === "approval-required" || candidate.runtimeMode === "full-access"
-        ? candidate.runtimeMode
-        : null;
+    const runtimeMode = Schema.is(RuntimeMode)(candidate.runtimeMode)
+      ? candidate.runtimeMode
+      : null;
     if (
       id.length === 0 ||
       createdAt.length === 0 ||
@@ -673,6 +673,7 @@ function normalizePersistedDraftThreads(
       const createdAt = candidateDraftThread.createdAt;
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
+      const workingDirectory = candidateDraftThread.workingDirectory;
       let lastKnownPr: OrchestrationThreadPullRequest | null = null;
       if (
         candidateDraftThread.lastKnownPr &&
@@ -702,11 +703,9 @@ function normalizePersistedDraftThreads(
           typeof createdAt === "string" && createdAt.length > 0
             ? createdAt
             : new Date().toISOString(),
-        runtimeMode:
-          candidateDraftThread.runtimeMode === "approval-required" ||
-          candidateDraftThread.runtimeMode === "full-access"
-            ? candidateDraftThread.runtimeMode
-            : DEFAULT_RUNTIME_MODE,
+        runtimeMode: Schema.is(RuntimeMode)(candidateDraftThread.runtimeMode)
+          ? candidateDraftThread.runtimeMode
+          : DEFAULT_RUNTIME_MODE,
         interactionMode:
           candidateDraftThread.interactionMode === "plan" ||
           candidateDraftThread.interactionMode === "default"
@@ -715,6 +714,7 @@ function normalizePersistedDraftThreads(
         entryPoint: normalizeDraftThreadEntryPoint(candidateDraftThread.entryPoint),
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
+        workingDirectory: typeof workingDirectory === "string" ? workingDirectory : null,
         ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         ...(isTemporary ? { isTemporary: true } : {}),
@@ -749,6 +749,7 @@ function normalizePersistedDraftThreads(
             entryPoint,
             branch: null,
             worktreePath: null,
+            workingDirectory: null,
             envMode: "local",
           };
         } else if (draftThreadsByThreadId[threadId as ThreadId]?.projectId !== projectId) {
@@ -827,11 +828,9 @@ function normalizePersistedDraftsByThreadId(
       ? draftCandidate.mentions.filter(Schema.is(ProviderMentionReference))
       : [];
     const queuedTurns = normalizePersistedQueuedTurns(draftCandidate.queuedTurns);
-    const runtimeMode =
-      draftCandidate.runtimeMode === "approval-required" ||
-      draftCandidate.runtimeMode === "full-access"
-        ? draftCandidate.runtimeMode
-        : null;
+    const runtimeMode = Schema.is(RuntimeMode)(draftCandidate.runtimeMode)
+      ? draftCandidate.runtimeMode
+      : null;
     const interactionMode =
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode

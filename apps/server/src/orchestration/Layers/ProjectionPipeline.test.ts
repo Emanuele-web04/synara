@@ -2366,6 +2366,304 @@ it.layer(
       yield* sql`DROP TRIGGER IF EXISTS fail_thread_messages_projection_state_update`;
     }),
   );
+
+  it.effect("streams assistant deltas into one byte-identical message row", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const projectId = ProjectId.makeUnsafe("project-stream-append");
+      const threadId = ThreadId.makeUnsafe("thread-stream-append");
+      const messageId = MessageId.makeUnsafe("message-stream-append");
+      const turnId = TurnId.makeUnsafe("turn-stream-append");
+      const otherTurnId = TurnId.makeUnsafe("turn-stream-append-other");
+      const createdAt = "2026-04-01T10:00:00.000Z";
+      const iso = (offsetSeconds: number) =>
+        new Date(Date.parse(createdAt) + offsetSeconds * 1_000).toISOString();
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-stream-append-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-stream-append-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stream-append-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Stream Append Project",
+          workspaceRoot: "/tmp/project-stream-append",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-stream-append-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-stream-append-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stream-append-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Stream Append Thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      // Deltas deliberately include multi-byte characters, empty chunks and
+      // trailing whitespace: the appended text must match a plain JS join.
+      const deltas = Array.from({ length: 64 }, (_, index) =>
+        index % 8 === 3 ? "" : `δ${index}-${"x".repeat(index % 5)}${index % 4 === 0 ? "\n" : " "}`,
+      );
+
+      for (const [index, delta] of deltas.entries()) {
+        yield* appendAndProject({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(`evt-stream-append-delta-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: iso(index + 1),
+          commandId: CommandId.makeUnsafe(`cmd-stream-append-delta-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-stream-append-delta-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: delta,
+            // The first delta creates the row without a turn; the next one binds
+            // it, and a later conflicting turn must not steal the binding.
+            turnId: index === 0 ? null : index === 40 ? otherTurnId : turnId,
+            streaming: true,
+            ...(index === 1 ? { dispatchOrigin: "agent" as const } : {}),
+            createdAt: iso(index + 1),
+            updatedAt: iso(index + 1),
+          },
+        });
+      }
+
+      const streamedRows = yield* sql<{
+        readonly text: string;
+        readonly turnId: string | null;
+        readonly dispatchOrigin: string | null;
+        readonly isStreaming: unknown;
+        readonly sequence: number;
+        readonly createdAt: string;
+        readonly updatedAt: string;
+      }>`
+        SELECT
+          text,
+          turn_id AS "turnId",
+          dispatch_origin AS "dispatchOrigin",
+          is_streaming AS "isStreaming",
+          sequence,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId} AND message_id = ${messageId}
+      `;
+      const streamed = streamedRows[0];
+      assert.lengthOf(streamedRows, 1);
+      assert.equal(streamed?.text, deltas.join(""));
+      assert.equal(streamed?.turnId, turnId);
+      assert.equal(streamed?.dispatchOrigin, "agent");
+      assert.isTrue(Boolean(streamed?.isStreaming));
+      assert.equal(streamed?.createdAt, iso(1));
+      assert.equal(streamed?.updatedAt, iso(deltas.length));
+
+      const firstDeltaSequence = yield* sql<{ readonly sequence: number }>`
+        SELECT sequence FROM orchestration_events
+        WHERE event_id = 'evt-stream-append-delta-0'
+      `;
+      assert.equal(streamed?.sequence, firstDeltaSequence[0]?.sequence);
+
+      // Every phase cursor must stay exactly at the last projected event: the
+      // client snapshot sequence is their minimum, and a lagging cursor makes
+      // clients replay deltas they already applied.
+      const lastDeltaSequence = yield* sql<{ readonly sequence: number }>`
+        SELECT sequence FROM orchestration_events
+        WHERE event_id = ${`evt-stream-append-delta-${deltas.length - 1}`}
+      `;
+      const shellCursor = yield* sql<{ readonly lastAppliedSequence: number }>`
+        SELECT last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+      `;
+      assert.equal(shellCursor[0]?.lastAppliedSequence, lastDeltaSequence[0]?.sequence);
+
+      // Non-streaming writes replace the accumulated text instead of appending.
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-stream-append-final"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: iso(500),
+        commandId: CommandId.makeUnsafe("cmd-stream-append-final"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stream-append-final"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "assistant",
+          text: "replaced final text",
+          turnId,
+          streaming: false,
+          createdAt: iso(500),
+          updatedAt: iso(500),
+        },
+      });
+
+      // An empty non-streaming write keeps the stored text.
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-stream-append-complete"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: iso(501),
+        commandId: CommandId.makeUnsafe("cmd-stream-append-complete"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stream-append-complete"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "assistant",
+          text: "",
+          turnId,
+          streaming: false,
+          createdAt: iso(501),
+          updatedAt: iso(501),
+        },
+      });
+
+      const settledRows = yield* sql<{
+        readonly text: string;
+        readonly isStreaming: unknown;
+        readonly sequence: number;
+        readonly createdAt: string;
+      }>`
+        SELECT text, is_streaming AS "isStreaming", sequence, created_at AS "createdAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId} AND message_id = ${messageId}
+      `;
+      assert.equal(settledRows[0]?.text, "replaced final text");
+      assert.isFalse(Boolean(settledRows[0]?.isStreaming));
+      assert.equal(settledRows[0]?.sequence, firstDeltaSequence[0]?.sequence);
+      assert.equal(settledRows[0]?.createdAt, iso(1));
+    }),
+  );
+
+  it.effect("keeps streaming appends and message rebuilds consistent after a rollback", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+      const projectId = ProjectId.makeUnsafe("project-stream-restart");
+      const threadId = ThreadId.makeUnsafe("thread-stream-restart");
+      const messageId = MessageId.makeUnsafe("message-stream-restart");
+      const createdAt = "2026-04-02T10:00:00.000Z";
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-stream-restart-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-stream-restart-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stream-restart-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Stream Restart Project",
+          workspaceRoot: "/tmp/project-stream-restart",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-stream-restart-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-stream-restart-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stream-restart-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Stream Restart Thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      for (const [index, delta] of ["first ", "second ", "third"].entries()) {
+        yield* appendAndProject({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(`evt-stream-restart-delta-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe(`cmd-stream-restart-delta-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-stream-restart-delta-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: delta,
+            turnId: null,
+            streaming: true,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+      }
+
+      // Replaying the journal from scratch must land on the same text: the
+      // append path is only correct if it is driven by the event log alone.
+      yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{ readonly text: string }>`
+        SELECT text FROM projection_thread_messages
+        WHERE thread_id = ${threadId} AND message_id = ${messageId}
+      `;
+      assert.lengthOf(rows, 1);
+      assert.equal(rows[0]?.text, "first second third");
+    }),
+  );
 });
 
 it.layer(

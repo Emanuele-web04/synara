@@ -406,6 +406,52 @@ describe("composerAutomation", () => {
     expect(Array.from(draft.acknowledgedWarningIds)).toEqual([]);
   });
 
+  it("keeps a stop clause and its own thread on a dedicated draft", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.95,
+      language: "en",
+      name: "Watch the release branch",
+      taskPrompt: "Watch the release branch and report regressions.",
+      schedule: { type: "interval" as const, everySeconds: 3_600 },
+      mode: "dedicated" as const,
+      completionPolicy: {
+        type: "ai-evaluated" as const,
+        stopWhen: "the release is out",
+        confidenceThreshold: 0.8,
+      },
+      missingFields: [],
+      needsConfirmation: false,
+      reason: null,
+    }));
+
+    const decision = await resolveComposerAutomationRequest({
+      message: "/automation watch the release branch every hour until the release is out",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    if (decision.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    const draft = buildComposerAutomationDraft({
+      resolution: decision.resolution,
+      projectId: PROJECT_ID,
+      projectModelSelection: MODEL_SELECTION,
+      selectedModelSelection: MODEL_SELECTION,
+      targetThreadId: THREAD_ID,
+      hasEphemeralContext: false,
+    });
+
+    expect(draft.form).toMatchObject({
+      mode: "dedicated",
+      // The automation opens its own thread, so the caller's thread is never borrowed.
+      targetThreadId: "",
+      // Stop clauses are mode-independent; they used to be dropped outside heartbeat.
+      stopWhen: "the release is out",
+    });
+  });
+
   it("asks for clarification when an automation request is missing its task and schedule", async () => {
     const generateIntent = vi.fn(async () => ({
       isAutomation: true,

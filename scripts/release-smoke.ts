@@ -262,7 +262,7 @@ function verifyReleaseWorkflowSafety(): void {
   );
 
   const desktopBuildConfig = readFileSync(
-    resolve(repoRoot, "apps/desktop/tsdown.config.ts"),
+    resolve(repoRoot, "apps/desktop/tsdown.config.mts"),
     "utf8",
   );
   assertContains(

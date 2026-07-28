@@ -102,11 +102,7 @@ export interface EnvironmentPanelProps {
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
    */
   isStudioChat: boolean;
-  /**
-   * Folder a Studio chat picked via the composer's "Use a folder" (null when none). Rendered
-   * as its own desktop-only panel row that opens the platform file manager, replacing the git
-   * rows Studio chats do not show.
-   */
+  /** Ordinary cwd selected for this Studio chat; this is not a Git worktree. */
   studioFolderPath?: string | null;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
@@ -213,22 +209,22 @@ export function EnvironmentPanel({
   variant,
   gitCwd,
   openInTarget,
-  githubRepository = null,
-  githubRepositories = [],
+  githubRepository: githubRepositoryProp,
+  githubRepositories: githubRepositoriesProp,
   isGitRepo,
   keybindings,
   availableEditors,
   activeThreadId,
   activeProvider,
   isStudioChat,
-  studioFolderPath = null,
+  studioFolderPath: studioFolderPathProp,
   showGitActions,
   diffOpen,
   threadAutomations,
-  diffDisabledReason = null,
+  diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
-  recap = null,
+  recap: recapProp,
   pinnedMessages,
   threadMarkers,
   pinnedMessageTextById,
@@ -251,10 +247,16 @@ export function EnvironmentPanel({
   onRemoveThreadMarker,
   onRenameThreadMarker,
   onNotesChange,
-  onOpenEditorView = null,
+  onOpenEditorView: onOpenEditorViewProp,
   onClose,
   onRegisterCommitAndPushTrigger,
 }: EnvironmentPanelProps) {
+  const githubRepository = githubRepositoryProp ?? null;
+  const githubRepositories = githubRepositoriesProp ?? [];
+  const studioFolderPath = studioFolderPathProp ?? null;
+  const diffDisabledReason = diffDisabledReasonProp ?? null;
+  const recap = recapProp ?? null;
+  const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
   const { additions, deletions, hasChanges } = diffTotals;
@@ -326,8 +328,6 @@ export function EnvironmentPanel({
               });
               return;
             }
-            // showInFolder opens directories directly (and reveals plain files), so this
-            // lands the user inside the picked folder in the platform file manager.
             void api.shell
               .showInFolder(studioFolderPath)
               .then(onClose)

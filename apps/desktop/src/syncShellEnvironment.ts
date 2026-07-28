@@ -7,24 +7,29 @@ import {
   listLoginShellCandidates,
   mergePathEntries,
   readPathFromLaunchctl,
-  readEnvironmentFromLoginShell,
   readWindowsPersistentEnvironment,
   type ShellEnvironmentReader,
   type WindowsEnvironmentReader,
 } from "@synara/shared/shell";
-
-const LOGIN_SHELL_ENV_NAMES = [
-  "PATH",
-  "SSH_AUTH_SOCK",
-  "HOMEBREW_PREFIX",
-  "HOMEBREW_CELLAR",
-  "HOMEBREW_REPOSITORY",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-] as const;
+import {
+  createCachedLoginShellEnvironmentReader,
+  LOGIN_SHELL_ENVIRONMENT_NAMES,
+} from "@synara/shared/loginShellEnvironment";
 
 function logShellEnvironmentWarning(message: string, error?: unknown): void {
   console.warn(`[desktop] ${message}`, error instanceof Error ? error.message : (error ?? ""));
+}
+
+/**
+ * Outcome of a hydration pass.
+ *
+ * `pathHydrated` is true only when PATH came from the user's real environment (login
+ * shell, launchctl, or the Windows registry). Merging the inherited PATH with nothing
+ * does not count: child processes use this flag to decide whether they may skip their
+ * own probe, so a failed probe here must let them run theirs.
+ */
+export interface ShellEnvironmentSyncResult {
+  readonly pathHydrated: boolean;
 }
 
 // Windows GUI processes inherit a (possibly stale) environment block instead of a login
@@ -34,7 +39,7 @@ function syncWindowsEnvironment(
   env: NodeJS.ProcessEnv,
   readWindowsEnvironment: WindowsEnvironmentReader,
   logWarning: (message: string, error?: unknown) => void,
-): void {
+): ShellEnvironmentSyncResult {
   try {
     const persisted = readWindowsEnvironment();
 
@@ -49,8 +54,11 @@ function syncWindowsEnvironment(
         env[name] = value;
       }
     }
+
+    return { pathHydrated: Boolean(persisted.PATH) };
   } catch (error) {
     logWarning("Failed to synchronize the desktop Windows environment.", error);
+    return { pathHydrated: false };
   }
 }
 
@@ -64,28 +72,31 @@ export function syncShellEnvironment(
     userShell?: string;
     logWarning?: (message: string, error?: unknown) => void;
   } = {},
-): void {
+): ShellEnvironmentSyncResult {
   const platform = options.platform ?? process.platform;
   const logWarning = options.logWarning ?? logShellEnvironmentWarning;
 
   if (platform === "win32") {
-    syncWindowsEnvironment(
+    return syncWindowsEnvironment(
       env,
       options.readWindowsEnvironment ?? readWindowsPersistentEnvironment,
       logWarning,
     );
-    return;
   }
 
-  if (platform !== "darwin" && platform !== "linux") return;
+  if (platform !== "darwin" && platform !== "linux") return { pathHydrated: false };
 
-  const readEnvironment = options.readEnvironment ?? readEnvironmentFromLoginShell;
+  // Cached by default. The probe is the single most expensive thing on the desktop's
+  // pre-`whenReady()` path, and its answer only changes when the shell, the user, or one
+  // of its startup files does — so it is read from disk instead of recomputed per launch.
+  const readEnvironment =
+    options.readEnvironment ?? createCachedLoginShellEnvironmentReader({ env, platform });
   const shellEnvironment: Partial<Record<string, string>> = {};
 
   try {
     for (const shell of listLoginShellCandidates(platform, env.SHELL, options.userShell)) {
       try {
-        Object.assign(shellEnvironment, readEnvironment(shell, LOGIN_SHELL_ENV_NAMES));
+        Object.assign(shellEnvironment, readEnvironment(shell, LOGIN_SHELL_ENVIRONMENT_NAMES));
         if (shellEnvironment.PATH) {
           break;
         }
@@ -98,7 +109,8 @@ export function syncShellEnvironment(
       platform === "darwin" && !shellEnvironment.PATH
         ? (options.readLaunchctlPath ?? readPathFromLaunchctl)()
         : undefined;
-    const mergedPath = mergePathEntries(shellEnvironment.PATH ?? launchctlPath, env.PATH, platform);
+    const resolvedPath = shellEnvironment.PATH ?? launchctlPath;
+    const mergedPath = mergePathEntries(resolvedPath, env.PATH, platform);
     if (mergedPath) {
       env.PATH = mergedPath;
     }
@@ -118,7 +130,10 @@ export function syncShellEnvironment(
         env[name] = shellEnvironment[name];
       }
     }
+
+    return { pathHydrated: Boolean(resolvedPath) };
   } catch (error) {
     logWarning("Failed to synchronize the desktop shell environment.", error);
+    return { pathHydrated: false };
   }
 }

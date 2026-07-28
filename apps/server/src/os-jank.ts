@@ -2,14 +2,19 @@
 // Purpose: Smooths over shell/path differences between packaged app launches and login shells.
 // Exports: PATH hydration plus base-dir helpers used by server startup.
 
-import * as OS from "node:os";
-import { Effect, Path } from "effect";
+import { Effect } from "effect";
 import {
+  isShellEnvironmentHydrated,
   listLoginShellCandidates,
   mergePathEntries,
   readPathFromLaunchctl,
   readPathFromLoginShell,
 } from "@synara/shared/shell";
+import { createCachedLoginShellPathReader } from "@synara/shared/loginShellEnvironment";
+import {
+  expandHomePath as expandHomePathSync,
+  resolveSynaraHomeDirectory,
+} from "@synara/shared/synaraHome";
 
 function logPathHydrationWarning(message: string, error?: unknown): void {
   console.warn(`[server] ${message}`, error instanceof Error ? error.message : (error ?? ""));
@@ -29,10 +34,28 @@ export function fixPath(
   if (platform !== "darwin" && platform !== "linux") return;
 
   const env = options.env ?? process.env;
+
+  // Startup blocks here: the server does not begin listening until the probe returns,
+  // and `-ilc` sources the user's whole interactive rc (~1s). When the desktop shell
+  // already ran it and handed us the resulting PATH, repeating it buys nothing and
+  // doubles cold start. The marker — not merely a populated PATH — is what proves it.
+  if (isShellEnvironmentHydrated(env)) return;
+
   const logWarning = options.logWarning ?? logPathHydrationWarning;
-  const readPath = options.readPath ?? readPathFromLoginShell;
 
   try {
+    // launchctl stays a last resort, never a fast path: `launchctl getenv PATH` is a
+    // launchd-session value that something published once (often a login-item plist with a
+    // hardcoded string), so it can be arbitrarily stale, while the login-shell probe is the
+    // PATH the user actually has in their terminal. With the probe cached below, preferring
+    // launchctl would trade a sub-millisecond file read for a wrong PATH — and a spawn.
+    const readLaunchctlFallbackPath = (): string | undefined =>
+      platform === "darwin" ? (options.readLaunchctlPath ?? readPathFromLaunchctl)() : undefined;
+
+    // Cached by default: the probe result is persisted under the Synara home and reused
+    // until the shell, the user, or any of its startup files changes.
+    const readPath = options.readPath ?? createCachedLoginShellPathReader({ env, platform });
+
     let shellPath: string | undefined;
     for (const shell of listLoginShellCandidates(platform, env.SHELL, options.userShell)) {
       try {
@@ -46,11 +69,11 @@ export function fixPath(
       }
     }
 
-    const launchctlPath =
-      platform === "darwin" && !shellPath
-        ? (options.readLaunchctlPath ?? readPathFromLaunchctl)()
-        : undefined;
-    const mergedPath = mergePathEntries(shellPath ?? launchctlPath, env.PATH, platform);
+    const mergedPath = mergePathEntries(
+      shellPath || readLaunchctlFallbackPath(),
+      env.PATH,
+      platform,
+    );
     if (mergedPath) {
       env.PATH = mergedPath;
     }
@@ -59,21 +82,8 @@ export function fixPath(
   }
 }
 
-export const expandHomePath = Effect.fn(function* (input: string) {
-  const { join } = yield* Path.Path;
-  if (input === "~") {
-    return OS.homedir();
-  }
-  if (input.startsWith("~/") || input.startsWith("~\\")) {
-    return join(OS.homedir(), input.slice(2));
-  }
-  return input;
-});
+export const expandHomePath = (input: string): Effect.Effect<string> =>
+  Effect.succeed(expandHomePathSync(input));
 
-export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
-  const { join, resolve } = yield* Path.Path;
-  if (!raw || raw.trim().length === 0) {
-    return join(OS.homedir(), ".synara");
-  }
-  return resolve(yield* expandHomePath(raw.trim()));
-});
+export const resolveBaseDir = (raw: string | undefined): Effect.Effect<string> =>
+  Effect.succeed(resolveSynaraHomeDirectory({ configuredHome: raw }));

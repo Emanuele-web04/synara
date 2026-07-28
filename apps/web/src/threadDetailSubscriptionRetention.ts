@@ -9,9 +9,13 @@ import { useStore } from "./store";
 import { getThreadFromState } from "./threadDerivation";
 
 const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
-// Keep one slot of headroom under the server's per-client thread-stream budget so
-// a newly visible thread can be admitted without waiting for a cache eviction.
-const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = WS_STREAM_LIMITS.threadPerClient - 1;
+// This is a client-side memory cache, not a stream budget: concurrent server
+// subscriptions stay capped at `WS_STREAM_LIMITS.threadPerClient` by
+// `resolveThreadDetailSubscriptionLeaseIds`, so a larger cache never widens
+// admission. It must exceed everything that retains at once (sidebar prewarm
+// window + split-view threads + a parent's live subagent children), otherwise the
+// map sits permanently over capacity and evicts warm detail on every store write.
+export const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = 32;
 
 type RetainedThreadEntry = {
   refCount: number;
@@ -21,7 +25,9 @@ type RetainedThreadEntry = {
 
 const retainedThreadEntries = new Map<ThreadId, RetainedThreadEntry>();
 const listeners = new Set<() => void>();
+const evictionListeners = new Set<(threadId: ThreadId) => void>();
 let cachedSnapshot: readonly ThreadId[] = [];
+let visibleThreadIds: ReadonlySet<ThreadId> = new Set();
 
 function emitChange(): void {
   cachedSnapshot = [...retainedThreadEntries.keys()];
@@ -30,7 +36,22 @@ function emitChange(): void {
   }
 }
 
-function isNonIdleThread(threadId: ThreadId): boolean {
+function emitEviction(threadId: ThreadId): void {
+  for (const listener of evictionListeners) {
+    try {
+      listener(threadId);
+    } catch {
+      // Eviction listeners must not break retention bookkeeping.
+    }
+  }
+}
+
+/**
+ * Whether wiping this thread's detail would discard live or actionable state.
+ * Visibility and active retain handles are checked separately; terminal hidden
+ * children must remain evictable so completed subagents cannot leak forever.
+ */
+function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
   const state = useStore.getState();
   const sidebarThread = state.sidebarThreadSummaryById[threadId];
 
@@ -60,7 +81,18 @@ function isNonIdleThread(threadId: ThreadId): boolean {
 
   const thread = getThreadFromState(state, threadId);
   if (!thread) {
-    return false;
+    // Claude subagent children can have detail without a shell/sidebar row.
+    // Their normalized lifecycle slices still tell us whether eviction would
+    // discard live work. Once terminal, the retain timeout and capacity limit
+    // must be allowed to reclaim them or every completed child leaks forever.
+    const hiddenSession = state.threadSessionById?.[threadId];
+    const hiddenTurnState = state.threadTurnStateById?.[threadId];
+    return (
+      hiddenSession?.orchestrationStatus === "starting" ||
+      hiddenSession?.orchestrationStatus === "running" ||
+      hiddenTurnState?.latestTurn?.state === "running" ||
+      hiddenTurnState?.pendingSourceProposedPlan !== undefined
+    );
   }
 
   const orchestrationStatus = thread.session?.orchestrationStatus;
@@ -74,7 +106,27 @@ function isNonIdleThread(threadId: ThreadId): boolean {
 }
 
 function shouldEvictEntry(threadId: ThreadId, entry: RetainedThreadEntry): boolean {
-  return entry.refCount === 0 && !isNonIdleThread(threadId);
+  return (
+    entry.refCount === 0 &&
+    !visibleThreadIds.has(threadId) &&
+    !isThreadDetailEvictionUnsafe(threadId)
+  );
+}
+
+/**
+ * Threads the app is currently rendering. The store keeps a thread's shell row
+ * when its detail is evicted, so evicting a visible thread renders it as an empty
+ * conversation until a fresh snapshot lands — never evict one.
+ */
+export function setVisibleThreadDetailIds(threadIds: readonly ThreadId[]): void {
+  if (
+    visibleThreadIds.size === threadIds.length &&
+    threadIds.every((threadId) => visibleThreadIds.has(threadId))
+  ) {
+    return;
+  }
+  visibleThreadIds = new Set(threadIds);
+  reconcileRetentionEntries();
 }
 
 function clearEvictionTimeout(entry: RetainedThreadEntry): void {
@@ -95,6 +147,7 @@ function evictEntry(
     return;
   }
   useStore.getState().evictThreadDetail(threadId);
+  emitEviction(threadId);
   if (options?.notify !== false) {
     emitChange();
   }
@@ -162,6 +215,12 @@ function reconcileRetentionEntries(): void {
   evictIdleEntriesToCapacity();
 }
 
+// This reconcile is re-entrant by design: it can evict, and eviction writes to the
+// store, which synchronously runs this subscriber again. It stays correct because
+// `evictEntry` deletes its entry before touching the store, and every step re-reads
+// the live map, so a nested pass can only evict entries the outer pass has not
+// claimed. The eviction notice is the one part that must not run inline — lease
+// owners answer it by queueing a stream refresh rather than writing state here.
 useStore.subscribe(() => {
   reconcileRetentionEntries();
 });
@@ -215,8 +274,30 @@ export function subscribeRetainedThreadDetailIds(listener: () => void): () => vo
   };
 }
 
+/**
+ * Fires after a thread's detail slices were evicted from the store. Subscription
+ * owners use this to refresh threads whose stream lease is still active, since an
+ * eviction wipes messages without triggering a new snapshot on its own.
+ */
+export function subscribeThreadDetailEvictions(listener: (threadId: ThreadId) => void): () => void {
+  evictionListeners.add(listener);
+  return () => {
+    evictionListeners.delete(listener);
+  };
+}
+
 export function getRetainedThreadDetailIdsSnapshot(): readonly ThreadId[] {
   return cachedSnapshot;
+}
+
+/**
+ * Whether retention still owns this thread's warm detail. Subscription owners
+ * check this when a stream lease drops: detail that no retention entry owns and
+ * no lease references would otherwise stay in the store for the session's
+ * lifetime, because eviction only ever runs from a retention entry.
+ */
+export function isThreadDetailRetained(threadId: ThreadId): boolean {
+  return retainedThreadEntries.has(threadId);
 }
 
 export function resolveThreadDetailSubscriptionLeaseIds(input: {
@@ -253,5 +334,6 @@ export function resetRetainedThreadDetailSubscriptionsForTests(): void {
     clearEvictionTimeout(entry);
   }
   retainedThreadEntries.clear();
+  visibleThreadIds = new Set();
   emitChange();
 }

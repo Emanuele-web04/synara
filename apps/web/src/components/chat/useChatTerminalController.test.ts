@@ -151,6 +151,9 @@ vi.mock("../ChatView.logic", () => ({
 
 vi.mock("../terminal/terminalSession", () => ({
   disposeAndCloseTerminalSession: terminalSession.disposeAndClose,
+}));
+
+vi.mock("../terminal/terminalIds", () => ({
   randomTerminalId: () => "terminal-new",
 }));
 

@@ -16,7 +16,7 @@ import { isStudioContainerProject } from "../../lib/studioProjects";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { useTerminalStateStore } from "../../terminalStateStore";
-import { useWorkspaceStore } from "../../workspaceStore";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { sortProjectsForSidebar } from "../Sidebar.logic";
 import {
   areKanbanComposerDraftSnapshotsEqual,
@@ -40,9 +40,9 @@ export function useKanbanBoard(): KanbanBoard {
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const homeDir = useWorkspaceStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
+  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
   const { settings } = useAppSettings();
   const projectSortOrder = settings.sidebarProjectSortOrder;
 

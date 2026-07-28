@@ -9,6 +9,7 @@ import {
   type OrchestrationShellSnapshot,
   type ThreadId,
 } from "@synara/contracts";
+import { automationContinuationThreadId } from "@synara/shared/automationMode";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 
@@ -43,12 +44,26 @@ function parseIsoMs(value: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+// Never trust a single timestamp: forked/handoff threads inherit the source
+// conversation's message timestamps, so `latestUserMessageAt` can predate the
+// thread's own creation. The newest signal wins so a thread is only swept when
+// every timestamp we have is past the cutoff.
 function getThreadLastActivityMs(thread: RetentionThread): number | null {
-  return (
-    parseIsoMs(thread.latestUserMessageAt) ??
-    parseIsoMs(thread.updatedAt) ??
-    parseIsoMs(thread.createdAt)
-  );
+  let lastActivityMs: number | null = null;
+  for (const value of [thread.latestUserMessageAt, thread.updatedAt, thread.createdAt]) {
+    const ms = parseIsoMs(value);
+    if (ms === null) continue;
+    if (lastActivityMs === null || ms > lastActivityMs) {
+      lastActivityMs = ms;
+    }
+  }
+  return lastActivityMs;
+}
+
+// Archiving is an explicit "keep this, out of my way" signal, so archived
+// threads are never swept.
+function isThreadArchived(thread: RetentionThread): boolean {
+  return "archivedAt" in thread && (thread.archivedAt ?? null) !== null;
 }
 
 function isThreadBusy(thread: RetentionThread): boolean {
@@ -74,12 +89,11 @@ function listRetentionProtectedThreadIds(
     Effect.map((result) => {
       const protectedThreadIds = new Set<ThreadId>();
       for (const definition of result.definitions) {
-        if (
-          definition.enabled &&
-          definition.mode === "heartbeat" &&
-          definition.targetThreadId !== null
-        ) {
-          protectedThreadIds.add(definition.targetThreadId);
+        // Any thread an enabled automation still continues, whether the user chose it
+        // (heartbeat) or the automation created it for itself (dedicated).
+        const continuationThreadId = automationContinuationThreadId(definition);
+        if (definition.enabled && continuationThreadId !== null) {
+          protectedThreadIds.add(continuationThreadId);
         }
       }
       return protectedThreadIds;
@@ -148,6 +162,7 @@ export function getInactiveThreadIdsForRetention(
     if ("deletedAt" in thread && thread.deletedAt !== null) continue;
     if (protectedThreadIds.has(thread.id)) continue;
     if (thread.isPinned === true) continue;
+    if (isThreadArchived(thread)) continue;
     if (isThreadBusy(thread)) continue;
     const lastActivityMs = getThreadLastActivityMs(thread);
     if (lastActivityMs === null || lastActivityMs > cutoffMs) continue;

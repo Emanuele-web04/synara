@@ -26,9 +26,10 @@ type ComposerPickerMenuPopupProps = Omit<ComponentProps<typeof MenuPopupBase>, "
 export function ComposerPickerMenuPopup({
   className,
   size,
-  fixedWidth = false,
+  fixedWidth: fixedWidthProp,
   ...props
 }: ComposerPickerMenuPopupProps) {
+  const fixedWidth = fixedWidthProp ?? false;
   const resolvedSize = resolveComposerPickerSize(size);
   return (
     <MenuPopupBase
@@ -51,12 +52,14 @@ type ComposerPickerSelectPopupProps = Omit<ComponentProps<typeof SelectPopup>, "
 
 /** Select dropdown panel with the same frosted shell and option rows as picker menus. */
 export function ComposerPickerSelectPopup({
-  align = "end",
-  alignItemWithTrigger = false,
+  align: alignProp,
+  alignItemWithTrigger: alignItemWithTriggerProp,
   size,
   className,
   ...props
 }: ComposerPickerSelectPopupProps) {
+  const align = alignProp ?? "end";
+  const alignItemWithTrigger = alignItemWithTriggerProp ?? false;
   const resolvedSize = resolveComposerPickerSize(size);
   return (
     <SelectPopup
@@ -81,9 +84,10 @@ type ComposerPickerMenuSubPopupProps = Omit<ComponentProps<typeof MenuSubPopup>,
 export function ComposerPickerMenuSubPopup({
   className,
   size,
-  fixedWidth = false,
+  fixedWidth: fixedWidthProp,
   ...props
 }: ComposerPickerMenuSubPopupProps) {
+  const fixedWidth = fixedWidthProp ?? false;
   const resolvedSize = resolveComposerPickerSize(size);
   return (
     <MenuSubPopup

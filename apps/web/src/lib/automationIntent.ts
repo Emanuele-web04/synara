@@ -11,11 +11,8 @@ import type {
   ServerGenerateAutomationIntentResult,
 } from "@synara/contracts";
 
-import {
-  completionPolicyFromStopWhen,
-  modeForCompletionPolicy,
-  requiresCompletionPolicyReview,
-} from "./automationCompletionPolicy";
+import { completionPolicyFromStopWhen } from "@synara/shared/automationCompletionPolicy";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 
 export interface ChatAutomationIntent {
   readonly name: string;
@@ -1005,18 +1002,33 @@ function generatedAutomationIntentToChatIntent(
   };
 }
 
-// Generated mode can recover standalone phrasing the deterministic regexes do not know.
+// Generated mode can recover out-of-thread phrasing the deterministic regexes do not know.
 function executionScopeForGeneratedMode(
   mode: AutomationMode | null,
   fallback: ChatAutomationExecutionScope,
 ): ChatAutomationExecutionScope {
-  if (mode === "heartbeat") {
+  if (mode === null) {
+    return fallback;
+  }
+  // Only heartbeat runs inside the thread the user is looking at; the other modes open a
+  // thread of their own, which is the same execution scope choice standalone always had.
+  if (automationRequiresTargetThread(mode)) {
     return "thread";
   }
-  if (mode === "standalone") {
-    return fallback === "worktree" ? "worktree" : "standalone";
+  return fallback === "worktree" ? "worktree" : "standalone";
+}
+
+// Outside the current thread, keep the generator's choice between one reused thread
+// (dedicated) and a fresh thread per run (standalone) instead of flattening both.
+function modeForExecutionScope(input: {
+  readonly executionScope: ChatAutomationExecutionScope;
+  readonly defaultMode: AutomationMode;
+  readonly generatedMode: AutomationMode | null;
+}): AutomationMode {
+  if (input.executionScope === "thread") {
+    return input.defaultMode;
   }
-  return fallback;
+  return input.generatedMode === "dedicated" ? "dedicated" : "standalone";
 }
 
 export function resolveChatAutomationIntent(input: {
@@ -1030,8 +1042,13 @@ export function resolveChatAutomationIntent(input: {
       input.deterministicIntent.executionScope === "thread"
         ? executionScopeForGeneratedMode(input.generatedIntent?.mode ?? null, input.executionScope)
         : input.deterministicIntent.executionScope;
-    const requestedMode = resolvedExecutionScope === "thread" ? input.defaultMode : "standalone";
-    const mode = modeForCompletionPolicy(requestedMode, input.deterministicIntent.completionPolicy);
+    // A stop clause no longer forces heartbeat: completion policies apply to both modes,
+    // so the requested execution scope is honoured as asked.
+    const mode = modeForExecutionScope({
+      executionScope: resolvedExecutionScope,
+      defaultMode: input.defaultMode,
+      generatedMode: input.generatedIntent?.mode ?? null,
+    });
     const enrichment = generatedAutomationPromptEnrichment(input.generatedIntent);
     const enrichmentNeedsConfirmation =
       enrichment !== null && (input.generatedIntent?.needsConfirmation ?? false);
@@ -1057,9 +1074,7 @@ export function resolveChatAutomationIntent(input: {
         // parsed deterministically (enrichment !== null), so the confirmation must not be
         // skipped. Purely local parses keep their finer gating, including the deliberate
         // bounded-fast-loop auto-submit (which skips generation, so enrichment stays null).
-        enrichment !== null ||
-        resolvedExecutionScope !== "thread" ||
-        requiresCompletionPolicyReview(requestedMode, input.deterministicIntent.completionPolicy),
+        enrichment !== null || resolvedExecutionScope !== "thread",
       generatedConfidence: enrichment ? (input.generatedIntent?.confidence ?? null) : null,
       generatedNeedsConfirmation: enrichmentNeedsConfirmation,
       reason: enrichmentNeedsConfirmation ? (input.generatedIntent?.reason ?? null) : null,
@@ -1078,9 +1093,11 @@ export function resolveChatAutomationIntent(input: {
   const fastRecurringInterval =
     generatedSchedule?.type === "interval" && generatedSchedule.everySeconds < 60;
 
-  const requestedMode =
-    generatedIntent.executionScope === "thread" ? input.defaultMode : "standalone";
-  const mode = modeForCompletionPolicy(requestedMode, generatedIntent.completionPolicy);
+  const mode = modeForExecutionScope({
+    executionScope: generatedIntent.executionScope,
+    defaultMode: input.defaultMode,
+    generatedMode: input.generatedIntent?.mode ?? null,
+  });
   return {
     intent: generatedIntent,
     mode,

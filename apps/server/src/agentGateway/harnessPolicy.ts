@@ -3,7 +3,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-07-24.1";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-07-25.2";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
@@ -30,7 +30,10 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "Provider option keys are not interchangeable: Codex uses options.reasoningEffort and Claude Agent uses options.effort. Follow synara_capabilities.targetConstruction for every provider instead of inspecting Synara source code.",
         "When results are requested, call synara_wait_for_threads for the created thread ids, wait for every requested result, then synthesize all outcomes.",
         "After synara_create_threads returns an operationId, retries must keep the same requestId and exact plan. Report terminal operation failures as outcomes; do not create replacement threads unless the user gives a new instruction.",
-        "Synara automations support heartbeat and standalone modes plus interval, once, daily, weekdays, weekly, and cron schedules. Existing everyMinutes heartbeat calls remain supported. Use fastInterval: true only when the user explicitly accepts a sub-minute bounded loop.",
+        "Synara automations support heartbeat, standalone, and dedicated modes plus interval, once, daily, weekdays, weekly, and cron schedules. Existing everyMinutes heartbeat calls remain supported. Use fastInterval: true only when the user explicitly accepts a sub-minute bounded loop.",
+        "Mode picks where runs execute: heartbeat appends turns to a target thread and waits for it to be idle, so use it to drive that thread forward; standalone opens a fresh thread per run, so use it for independent recurring tasks; dedicated opens one thread the automation owns and reuses it for every run, so use it when the runs should build on each other in a single conversation without writing into somebody else's thread.",
+        "Prefer dedicated over standalone for anything that observes or tracks something over time: a standalone automation creates a new thread on every run and cannot see what its previous runs did beyond its memory, while a dedicated automation keeps one growing thread.",
+        'Mode does not restrict stop conditions. completionPolicy {"type":"ai-evaluated","stopWhen":"..."} works in both modes and disables the automation when the clause matches a successful run; prefer it over encoding the stop condition in the prompt. maxIterations remains the backstop, and an automation-dispatched run may always call synara_cancel_automation on its own automation.',
         AUTOMATION_AUTHORING_GUIDANCE,
         "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
         "Before synara_update_automation, call synara_view_automation and resend the complete mutable configuration, including unchanged fields. Updates are full replacement and partial payloads are rejected.",

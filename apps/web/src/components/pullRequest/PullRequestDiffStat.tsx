@@ -17,7 +17,7 @@ function formatCount(value: number): string {
 export function PullRequestDiffStat({
   additions,
   deletions,
-  tone = "muted",
+  tone: toneProp,
   className,
 }: {
   additions: number;
@@ -25,6 +25,7 @@ export function PullRequestDiffStat({
   tone?: "muted" | "diff";
   className?: string;
 }) {
+  const tone = toneProp ?? "muted";
   return (
     <span
       className={cn(

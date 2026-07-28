@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  applyShellEnvironmentHydrationMarker,
   extractPathFromShellOutput,
+  isShellEnvironmentHydrated,
+  SHELL_ENVIRONMENT_HYDRATED_ENV_NAME,
   listLoginShellCandidates,
   mergePathEntries,
   mergeWindowsScopes,
@@ -31,6 +34,39 @@ describe("extractPathFromShellOutput", () => {
 
   it("returns null when the markers are missing", () => {
     expect(extractPathFromShellOutput("/opt/homebrew/bin /usr/bin")).toBeNull();
+  });
+});
+
+describe("shell environment hydration marker", () => {
+  it("requires both the marker and a populated PATH", () => {
+    expect(
+      isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "/usr/bin" }),
+    ).toBe(true);
+    // An inherited PATH alone must never suppress the probe.
+    expect(isShellEnvironmentHydrated({ PATH: "/usr/bin" })).toBe(false);
+    expect(
+      isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "   " }),
+    ).toBe(false);
+    expect(isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1" })).toBe(false);
+    expect(
+      isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "0", PATH: "/usr/bin" }),
+    ).toBe(false);
+  });
+
+  it("clears an inherited marker when the parent did not hydrate", () => {
+    const env = applyShellEnvironmentHydrationMarker(
+      { [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "/usr/bin" },
+      false,
+    );
+
+    expect(env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]).toBeUndefined();
+    expect(isShellEnvironmentHydrated(env)).toBe(false);
+  });
+
+  it("stamps the marker when the parent did hydrate", () => {
+    const env = applyShellEnvironmentHydrationMarker({ PATH: "/opt/homebrew/bin" }, true);
+
+    expect(isShellEnvironmentHydrated(env)).toBe(true);
   });
 });
 

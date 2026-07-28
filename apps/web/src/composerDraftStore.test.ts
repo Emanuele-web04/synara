@@ -117,6 +117,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       entryPoint: "chat",
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
+      workingDirectory: null,
       envMode: "worktree",
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -128,6 +129,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       entryPoint: "chat",
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
+      workingDirectory: null,
       envMode: "worktree",
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -528,6 +530,14 @@ describe("composerDraftStore runtime and interaction settings", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.runtimeMode).toBe(
       "approval-required",
     );
+  });
+
+  it("stores AI-reviewed auto mode in the composer draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setRuntimeMode(threadId, "auto");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
   });
 
   it("stores interaction mode overrides in the composer draft", () => {

@@ -6,6 +6,7 @@ import {
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
+  omitRoutedSubagentWorkEntries,
 } from "./workLog";
 import { makeActivity } from "./storeTestFixtures";
 
@@ -397,6 +398,184 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.detail)).toEqual([
       "Provider request failed; retrying.",
       "Provider request failed; retrying.",
+    ]);
+  });
+
+  it("hides repeated non-adjacent recovery rows for the same provider turn", () => {
+    const recoveryPayload = {
+      provider: "codex",
+      action: "settle-terminal-projection",
+      projectedTurnId: "turn-stale",
+      runtimeTurnId: null,
+    };
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "recovery-first",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Synara recovered a stale running state",
+        turnId: "turn-stale",
+        payload: recoveryPayload,
+      }),
+      makeActivity({
+        id: "unrelated-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.progress",
+        summary: "Continuing work",
+      }),
+      makeActivity({
+        id: "recovery-repeat",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Synara recovered a stale running state",
+        turnId: "turn-stale",
+        payload: recoveryPayload,
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["recovery-first", "unrelated-progress"]);
+  });
+
+  it("keeps recovery rows for different turns, actions, or runtime turns", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "settle-turn-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered turn A",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+          projectedTurnId: "turn-a",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
+        id: "settle-turn-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered turn B",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
+        id: "error-turn-b",
+        createdAt: "2026-02-23T00:00:02.500Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Errored turn B",
+        payload: {
+          provider: "codex",
+          action: "settle-error",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
+        id: "align-turn-b",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned turn B",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: "turn-live-1",
+        },
+      }),
+      makeActivity({
+        id: "align-turn-b-new-runtime",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned turn B again",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: "turn-live-2",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "settle-turn-a",
+      "settle-turn-b",
+      "error-turn-b",
+      "align-turn-b",
+      "align-turn-b-new-runtime",
+    ]);
+  });
+
+  it("does not collapse recovery rows whose identity payload is incomplete", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "malformed-recovery-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered an unknown turn",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+        },
+      }),
+      makeActivity({
+        id: "malformed-recovery-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered an unknown turn",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "malformed-recovery-1",
+      "malformed-recovery-2",
+    ]);
+  });
+
+  it("keeps reconciliation rows with delimiter-shaped but distinct turn ids", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "recovery-delimited-projected",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned a delimited projected turn",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn:a",
+          runtimeTurnId: "turn-b",
+        },
+      }),
+      makeActivity({
+        id: "recovery-delimited-runtime",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned a delimited runtime turn",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn",
+          runtimeTurnId: "a:turn-b",
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "recovery-delimited-projected",
+      "recovery-delimited-runtime",
     ]);
   });
 
@@ -1223,6 +1402,186 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
   });
 
+  it("retains a filtered Codex command start timestamp after lifecycle correlation", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-start-no-command",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_command_arrives_later",
+              status: "inProgress",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-command-update",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_command_arrives_later",
+              command: "git status --short",
+              status: "inProgress",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-command-complete",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_command_arrives_later",
+              command: "git status --short",
+              status: "completed",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      command: "git status --short",
+      liveActivity: {
+        state: "completed",
+        startedAt: "2026-02-23T00:00:01.000Z",
+        lastActivityAt: "2026-02-23T00:00:06.000Z",
+        elapsedSeconds: 5,
+      },
+    });
+  });
+
+  it("does not correlate placeholder command starts through ambiguous adjacency", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "parallel-placeholder-a",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Ran command started",
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              item: {
+                type: "commandExecution",
+                id: "parallel-call-a",
+                status: "inProgress",
+              },
+            },
+          },
+        }),
+        makeActivity({
+          id: "parallel-placeholder-b",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.started",
+          summary: "Ran command started",
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              item: {
+                type: "commandExecution",
+                id: "parallel-call-b",
+                status: "inProgress",
+              },
+            },
+          },
+        }),
+        makeActivity({
+          id: "ambiguous-command-update",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.updated",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              item: {
+                type: "commandExecution",
+                command: "echo ambiguous",
+                status: "inProgress",
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.command).toBe("echo ambiguous");
+    expect(entries[0]?.liveActivity?.startedAt).toBeUndefined();
+  });
+
+  it("does not revive turnless historical activity during a later active turn", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "historical-turnless-tool",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Historical tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Historical tool",
+            data: {
+              toolCallId: "historical-turnless-call",
+            },
+          },
+        }),
+        makeActivity({
+          id: "current-turnless-tool",
+          createdAt: "2026-02-23T00:00:11.000Z",
+          kind: "tool.started",
+          summary: "Current tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Current tool",
+            data: {
+              toolCallId: "current-turnless-call",
+            },
+          },
+        }),
+      ],
+      undefined,
+      {
+        activeTurnId: TurnId.makeUnsafe("later-turn"),
+        activeTurnStartedAt: "2026-02-23T00:00:10.000Z",
+        latestTurnState: "running",
+      },
+    );
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.liveActivity?.state).toBe("cancelled");
+    expect(entries[1]?.liveActivity?.state).toBe("running_tool");
+  });
+
   it("reads Codex commandActions from the raw data envelope", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1605,6 +1964,497 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("merges provider tool lifecycle updates into one universal live activity", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "activity-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Bash started",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          data: {
+            toolCallId: "install-dependencies",
+            command: "bun install",
+          },
+        },
+      }),
+      makeActivity({
+        id: "activity-progress",
+        createdAt: "2026-02-23T00:02:15.000Z",
+        kind: "tool.updated",
+        summary: "Bash",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          detail: "Resolving packages",
+          data: {
+            toolCallId: "install-dependencies",
+            summary: "Resolving packages",
+            elapsedSeconds: 134,
+            progress: 0.42,
+          },
+        },
+      }),
+      makeActivity({
+        id: "activity-complete",
+        createdAt: "2026-02-23T00:02:16.000Z",
+        kind: "tool.completed",
+        summary: "Bash completed",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          status: "completed",
+          data: {
+            toolCallId: "install-dependencies",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity).toEqual({
+      state: "completed",
+      label: "Bash",
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:02:16.000Z",
+      detail: "Resolving packages",
+      progress: 0.42,
+      elapsedSeconds: 135,
+    });
+  });
+
+  it("correlates Claude progress events by toolUseId with the surrounding lifecycle", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-tool-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Bash started",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          data: {
+            toolCallId: "claude-bash-call",
+            command: "sleep 1",
+          },
+        },
+      }),
+      makeActivity({
+        id: "claude-tool-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Bash",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "Bash",
+          detail: "Still running",
+          data: {
+            toolUseId: "claude-bash-call",
+            toolName: "Bash",
+          },
+        },
+      }),
+      makeActivity({
+        id: "claude-tool-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Bash completed",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          status: "completed",
+          data: {
+            toolCallId: "claude-bash-call",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "completed",
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:00:03.000Z",
+      detail: "Still running",
+      elapsedSeconds: 2,
+    });
+  });
+
+  it("preserves command semantics while a Claude progress placeholder is live", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "claude-command-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Bash started",
+          payload: {
+            itemType: "command_execution",
+            title: "Bash",
+            data: {
+              toolCallId: "claude-live-command",
+              command: "sleep 5",
+            },
+          },
+        }),
+        makeActivity({
+          id: "claude-command-progress",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.updated",
+          summary: "Bash",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "Bash",
+            data: {
+              toolUseId: "claude-live-command",
+              toolName: "Bash",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      itemType: "command_execution",
+      command: "sleep 5",
+      liveActivity: {
+        state: "running_tool",
+      },
+    });
+  });
+
+  it("settles orphaned tool activity when its owning turn completes", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-orphaned-tool");
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "orphaned-command-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Bash started",
+          turnId,
+          payload: {
+            itemType: "command_execution",
+            title: "Bash",
+            data: {
+              toolCallId: "orphaned-command",
+              command: "sleep 5",
+            },
+          },
+        }),
+        makeActivity({
+          id: "owning-turn-complete",
+          createdAt: "2026-02-23T00:00:06.000Z",
+          kind: "turn.completed",
+          summary: "Turn completed",
+          tone: "info",
+          turnId,
+        }),
+      ],
+      turnId,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "completed",
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:00:06.000Z",
+      elapsedSeconds: 5,
+    });
+    expect(entries[0]?.toolStatus).toBe("completed");
+  });
+
+  it("preserves cancellation when an owning turn aborts", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-cancelled-synara-tool");
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "cancelled-synara-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Synara create thread",
+          turnId,
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "Synara create thread",
+            data: {
+              toolCallId: "cancelled-synara-call",
+              toolName: "mcp__synara__synara_create_thread",
+            },
+          },
+        }),
+        makeActivity({
+          id: "owning-turn-aborted",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "turn.aborted",
+          summary: "Turn aborted",
+          tone: "info",
+          turnId,
+        }),
+      ],
+      turnId,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity?.state).toBe("cancelled");
+    expect(entries[0]?.toolStatus).toBe("cancelled");
+  });
+
+  it("treats an explicitly interrupted tool completion as cancelled", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "interrupted-tool",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Synara create thread",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "Synara create thread",
+            status: "interrupted",
+            data: {
+              toolCallId: "interrupted-synara-call",
+              toolName: "mcp__synara__synara_create_thread",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity?.state).toBe("cancelled");
+    expect(entries[0]?.toolStatus).toBe("cancelled");
+  });
+
+  it("does not revive a terminal tool when late progress arrives", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "late-progress-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            data: {
+              toolCallId: "late-progress-call",
+            },
+          },
+        }),
+        makeActivity({
+          id: "late-progress-complete",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.completed",
+          summary: "Deploy completed",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            status: "completed",
+            data: {
+              toolCallId: "late-progress-call",
+            },
+          },
+        }),
+        makeActivity({
+          id: "late-progress-update",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "tool.updated",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            detail: "Late metadata",
+            data: {
+              toolCallId: "late-progress-call",
+              summary: "Late metadata",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.toolStatus).toBe("completed");
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "completed",
+      lastActivityAt: "2026-02-23T00:00:03.000Z",
+      elapsedSeconds: 2,
+      detail: "Late metadata",
+    });
+  });
+
+  it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-reconnect-gap");
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "reconnected-command-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Bash started",
+          turnId,
+          payload: {
+            itemType: "command_execution",
+            title: "Bash",
+            data: {
+              toolCallId: "reconnected-command",
+              command: "sleep 5",
+            },
+          },
+        }),
+      ],
+      turnId,
+      {
+        activeTurnId: null,
+        latestTurnState: "error",
+        latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+      },
+    );
+
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "failed",
+      lastActivityAt: "2026-02-23T00:00:04.000Z",
+      elapsedSeconds: 3,
+    });
+    expect(entries[0]?.toolStatus).toBe("failed");
+  });
+
+  it("advances retained elapsed time across metadata-only updates", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "elapsed-progress",
+          createdAt: "2026-02-23T00:00:10.000Z",
+          kind: "tool.updated",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            data: {
+              toolCallId: "deploy-with-sparse-elapsed",
+              elapsedSeconds: 10,
+            },
+          },
+        }),
+        makeActivity({
+          id: "metadata-only-progress",
+          createdAt: "2026-02-23T00:00:15.000Z",
+          kind: "tool.updated",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            data: {
+              toolCallId: "deploy-with-sparse-elapsed",
+              summary: "Still working",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "running_tool",
+      lastActivityAt: "2026-02-23T00:00:15.000Z",
+      elapsedSeconds: 15,
+    });
+  });
+
+  it("preserves terminal failure detail in live activity metadata", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "failed-tool",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.completed",
+          summary: "Deploy failed",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            status: "failed",
+            detail: "Permission denied",
+            data: {
+              toolCallId: "failed-deploy",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "failed",
+      detail: "Permission denied",
+    });
+  });
+
+  it("leaves completion-only tool duration unknown without start evidence", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "completion-only-tool",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.completed",
+          summary: "Deploy completed",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            status: "completed",
+            data: {
+              toolCallId: "completion-only-deploy",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]?.liveActivity).toEqual({
+      state: "completed",
+      label: "Deploy",
+      lastActivityAt: "2026-02-23T00:00:03.000Z",
+    });
+  });
+
+  it("normalizes canonical declined status and percentage fields", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "activity-declined",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Tool call declined",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "declined",
+          title: "Deploy",
+          data: {
+            toolCallId: "declined-deploy",
+            percent: 1,
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.liveActivity).toMatchObject({
+      state: "cancelled",
+      progress: 0.01,
+    });
+    expect(entry?.toolStatus).toBe("cancelled");
+  });
+
   it("uses MCP tool names from preserved payload data", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1901,7 +2751,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
 
-  it("omits routed collab subagent tool lifecycle rows from the chat work log", () => {
+  it("omits routed collab subagent tool lifecycle rows from the transcript", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "collab-update",
@@ -1946,10 +2796,56 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
-  it("keeps routed collab subagent rows when includeRoutedSubagentActivities is set", () => {
+  // Providers stream the agent tool call before its receivers, so the routed
+  // entry only becomes recognizable once the later update merges into it.
+  it("omits routed collab entries that gain their receivers from a merged update", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "collab-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Agent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Agent",
+          status: "inProgress",
+          data: {
+            toolCallId: "toolu_merge",
+            callId: "toolu_merge",
+            toolName: "Agent",
+            input: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "collab-receivers",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Agent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Agent",
+          status: "inProgress",
+          data: {
+            toolName: "Agent",
+            receiverThreadId: "toolu_merge",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagents).toHaveLength(1);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
+  });
+
+  it("keeps routed collab subagent rows for the composer strip source", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "routed-agent-update",
@@ -1971,15 +2867,12 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
-
-    const entries = deriveWorkLogEntries(activities, undefined, {
-      includeRoutedSubagentActivities: true,
-    });
+    const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.subagents).toEqual([
       expect.objectContaining({ threadId: "toolu_x", providerThreadId: "toolu_x" }),
     ]);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {

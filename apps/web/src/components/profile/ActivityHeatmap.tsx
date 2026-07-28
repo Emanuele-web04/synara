@@ -95,19 +95,28 @@ interface Column {
 
 export function ActivityHeatmap({
   cells,
-  cellSize = 13,
-  gap = 3,
-  radius = 4,
-  intensityClasses = APP_HEATMAP_INTENSITY_CLASSES,
-  showMonths = false,
-  monthsPosition = "top",
+  cellSize: cellSizeProp,
+  gap: gapProp,
+  radius: radiusProp,
+  intensityClasses: intensityClassesProp,
+  showMonths: showMonthsProp,
+  monthsPosition: monthsPositionProp,
   monthLabelClassName,
-  fill = false,
+  fill: fillProp,
   maxCellSize,
-  tooltip = false,
-  tooltipUnit = "prompts",
+  tooltip: tooltipProp,
+  tooltipUnit: tooltipUnitProp,
   className,
 }: ActivityHeatmapProps) {
+  const cellSize = cellSizeProp ?? 13;
+  const gap = gapProp ?? 3;
+  const radius = radiusProp ?? 4;
+  const intensityClasses = intensityClassesProp ?? APP_HEATMAP_INTENSITY_CLASSES;
+  const showMonths = showMonthsProp ?? false;
+  const monthsPosition = monthsPositionProp ?? "top";
+  const fill = fillProp ?? false;
+  const tooltip = tooltipProp ?? false;
+  const tooltipUnit = tooltipUnitProp ?? "prompts";
   const columns: Column[] = [];
   if (cells.length > 0) {
     const slots: Slot[] = [];

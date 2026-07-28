@@ -263,6 +263,7 @@ async function dispatchKanbanDraftThreadOnce(
           envMode: creationState.envMode,
           branch: creationState.branch,
           worktreePath: creationState.worktreePath,
+          workingDirectory: creationState.workingDirectory,
           lastKnownPr: creationState.lastKnownPr,
           createdAt: draftThread?.createdAt ?? createdAt,
         },

@@ -127,6 +127,20 @@ describe("resolveThreadWorkspaceCwd", () => {
     ).toBe("/tmp/studio-root");
   });
 
+  it("prefers an ordinary Studio working directory without treating it as a worktree", () => {
+    expect(
+      resolveThreadWorkspaceCwd({
+        thread: {
+          projectId,
+          envMode: "local",
+          worktreePath: null,
+          workingDirectory: "/tmp/reference-folder",
+        },
+        projects: [{ id: projectId, kind: "studio", workspaceRoot: "/tmp/studio-root" }],
+      }),
+    ).toBe("/tmp/reference-folder");
+  });
+
   it("resolves the materialized worktree path for a studio-kind thread", () => {
     expect(
       resolveThreadWorkspaceCwd({

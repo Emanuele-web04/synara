@@ -143,9 +143,11 @@ export function FileAttachmentChip({
   file,
   onRemove,
   className,
-  nonPersisted = false,
-  variant = "pill",
+  nonPersisted: nonPersistedProp,
+  variant: variantProp,
 }: FileAttachmentChipProps) {
+  const nonPersisted = nonPersistedProp ?? false;
+  const variant = variantProp ?? "pill";
   const detail = fileAttachmentDetail(file);
   const typeLabel = fileAttachmentTypeLabel(file);
   const trigger =

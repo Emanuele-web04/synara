@@ -31,6 +31,7 @@ interface UseKanbanTaskSubmitInput {
   readonly hasSendableContent: boolean;
   readonly selectedProvider: ProviderKind;
   readonly selectedModel: ModelSlug | null;
+  readonly selectedModelSupportsAutoMode: boolean | undefined;
   readonly taskPreview: string;
   readonly trimmedPrompt: string;
   readonly scratchThreadId: ThreadId;
@@ -51,6 +52,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     hasSendableContent,
     selectedProvider,
     selectedModel,
+    selectedModelSupportsAutoMode,
     taskPreview,
     trimmedPrompt,
     scratchThreadId,
@@ -90,9 +92,19 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
-    const modelSelection =
-      scratchState?.modelSelectionByProvider[selectedProvider] ??
-      buildModelSelection(selectedProvider, selectedModel);
+    const storedModelSelection = scratchState?.modelSelectionByProvider[selectedProvider];
+    const storedModelSupportsAutoMode =
+      storedModelSelection?.provider === "claudeAgent"
+        ? storedModelSelection.supportsAutoMode
+        : undefined;
+    const modelSelection = buildModelSelection(
+      selectedProvider,
+      selectedModel,
+      storedModelSelection?.options,
+      selectedProvider === "claudeAgent"
+        ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
+        : undefined,
+    );
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,

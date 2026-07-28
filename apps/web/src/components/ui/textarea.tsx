@@ -11,7 +11,9 @@ type TextareaProps = React.ComponentProps<"textarea"> & {
   unstyled?: boolean;
 };
 
-function Textarea({ className, size = "default", unstyled = false, ...props }: TextareaProps) {
+function Textarea({ className, size: sizeProp, unstyled: unstyledProp, ...props }: TextareaProps) {
+  const size = sizeProp ?? "default";
+  const unstyled = unstyledProp ?? false;
   return (
     <span
       className={

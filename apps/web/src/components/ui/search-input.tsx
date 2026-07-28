@@ -10,9 +10,12 @@ import { cn } from "~/lib/utils";
 import { Input, type InputProps } from "./input";
 
 export const SearchInput = forwardRef<HTMLInputElement, InputProps>(function SearchInput(
-  { className, type = "text", size = "sm", variant = "soft", ...props },
+  { className, type: typeProp, size: sizeProp, variant: variantProp, ...props },
   ref,
 ) {
+  const type = typeProp ?? "text";
+  const size = sizeProp ?? "sm";
+  const variant = variantProp ?? "soft";
   return (
     <div className="relative w-full">
       <Input

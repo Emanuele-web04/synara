@@ -11,6 +11,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderKind,
   ThreadId,
+  type TurnId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import { normalizeModelSlug } from "@synara/shared/model";
@@ -52,7 +53,10 @@ export type ProjectNormalizationInput = Pick<
 >;
 
 export const MAX_THREAD_MESSAGES = 2_000;
-const MAX_THREAD_ACTIVITIES = 500;
+// Matches the server-side activity retention budget: a smaller client cap would
+// silently drop work the server still serves in its snapshots.
+const MAX_THREAD_ACTIVITIES = 2_000;
+const LOCAL_USER_MESSAGE_RETENTION_MS = 10_000;
 const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-input.requested"]);
 
 function basenameOfPath(value: string): string | null {
@@ -155,6 +159,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
+    (left.workingDirectory ?? null) === (right.workingDirectory ?? null) &&
     (left.associatedWorktreePath ?? null) === (right.associatedWorktreePath ?? null) &&
     (left.associatedWorktreeBranch ?? null) === (right.associatedWorktreeBranch ?? null) &&
     (left.associatedWorktreeRef ?? null) === (right.associatedWorktreeRef ?? null) &&
@@ -577,9 +582,6 @@ function shouldRetainLiveAssistantMessageForHotPath(
   previousThread: Thread,
   message: ChatMessage,
 ): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
   if (message.streaming) {
     return true;
   }
@@ -597,13 +599,53 @@ function shouldRetainLiveAssistantMessageForHotPath(
   );
 }
 
+/**
+ * A locally dispatched user message has no server twin until the dispatch is
+ * projected, so a snapshot generated before that projection legitimately lacks
+ * it. Retaining it for a short window keeps what the user just sent on screen,
+ * while still letting a deliberate server-side removal (checkpoint rewind) win
+ * once the window closes.
+ */
+function shouldRetainLiveUserMessageForHotPath(
+  previousThread: Thread,
+  message: ChatMessage,
+): boolean {
+  const latestTurn = previousThread.latestTurn;
+  if (latestTurn && message.turnId != null && message.turnId === latestTurn.turnId) {
+    return (
+      latestTurn.state === "running" || previousThread.session?.orchestrationStatus === "running"
+    );
+  }
+  const createdAtMs = Date.parse(message.createdAt);
+  return (
+    Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= LOCAL_USER_MESSAGE_RETENTION_MS
+  );
+}
+
+function shouldRetainLiveMessageForHotPath(previousThread: Thread, message: ChatMessage): boolean {
+  switch (message.role) {
+    case "assistant":
+      return shouldRetainLiveAssistantMessageForHotPath(previousThread, message);
+    case "user":
+      return shouldRetainLiveUserMessageForHotPath(previousThread, message);
+    default:
+      return false;
+  }
+}
+
 function mergeReadModelMessagesWithLiveHotPath(
   incomingMessages: ReadModelThread["messages"],
   previousThread: Thread | undefined,
+  options?: {
+    // Turn the snapshot has just settled: its message contents are final, so the
+    // "local row looks richer" heuristics must not resurrect mid-stream text.
+    readonly authoritativeTurnId?: TurnId | null;
+  },
 ): ReadModelThread["messages"] {
   if (!previousThread || previousThread.messages.length === 0) {
     return incomingMessages;
   }
+  const authoritativeTurnId = options?.authoritativeTurnId ?? null;
 
   const previousMessageById = new Map(
     previousThread.messages.map((message) => [message.id, message] as const),
@@ -620,10 +662,12 @@ function mergeReadModelMessagesWithLiveHotPath(
 
     const incomingCompletedAt = incomingMessage.streaming ? undefined : incomingMessage.updatedAt;
     const shouldPreferLiveMessage =
-      previousMessage.text.length > incomingMessage.text.length ||
-      (!previousMessage.streaming && incomingMessage.streaming) ||
-      (previousMessage.completedAt !== undefined &&
-        (incomingCompletedAt === undefined || previousMessage.completedAt > incomingCompletedAt));
+      (authoritativeTurnId === null || incomingMessage.turnId !== authoritativeTurnId) &&
+      (previousMessage.text.length > incomingMessage.text.length ||
+        (!previousMessage.streaming && incomingMessage.streaming) ||
+        (previousMessage.completedAt !== undefined &&
+          (incomingCompletedAt === undefined ||
+            previousMessage.completedAt > incomingCompletedAt)));
 
     if (!shouldPreferLiveMessage) {
       mergedById.set(incomingMessage.id, {
@@ -666,7 +710,7 @@ function mergeReadModelMessagesWithLiveHotPath(
     if (mergedById.has(previousMessage.id)) {
       continue;
     }
-    if (!shouldRetainLiveAssistantMessageForHotPath(previousThread, previousMessage)) {
+    if (!shouldRetainLiveMessageForHotPath(previousThread, previousMessage)) {
       continue;
     }
     changed = true;
@@ -677,10 +721,11 @@ function mergeReadModelMessagesWithLiveHotPath(
     return incomingMessages;
   }
 
+  // `toSorted` is stable, so equal `createdAt` values keep insertion order
+  // (incoming order first, then retained local rows). Tie-breaking on the random
+  // message id instead would reshuffle same-millisecond rows on every merge.
   return [...mergedById.values()].toSorted((left, right) =>
-    left.createdAt === right.createdAt
-      ? String(left.id).localeCompare(String(right.id))
-      : left.createdAt.localeCompare(right.createdAt),
+    left.createdAt.localeCompare(right.createdAt),
   );
 }
 
@@ -850,6 +895,21 @@ function mergeReadModelLatestTurnWithLiveHotPath(
   };
 }
 
+function clearSettledTurnStreamingFlags(
+  messages: ReadModelThread["messages"],
+  settledTurnId: TurnId,
+): ReadModelThread["messages"] {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    if (!message.streaming || message.turnId !== settledTurnId) {
+      return message;
+    }
+    changed = true;
+    return { ...message, streaming: false };
+  });
+  return changed ? nextMessages : messages;
+}
+
 export function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
@@ -858,8 +918,30 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     return incoming;
   }
 
-  const preserveRunningTurn = shouldPreserveRunningTurn(previousThread, incoming);
-  const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
+  // A scoped projection refresh is authoritative for a *terminal transition*: the
+  // turn it settles must not keep local streaming flags or a resurrected running
+  // session alive. It is not authoritative for message contents, so the normal
+  // merge still runs — skipping it drops locally streamed assistant text and
+  // locally preserved mentions/skills/attachments the snapshot has not caught up
+  // with yet.
+  const settledLocalTurnId =
+    previousThread.latestTurn?.state === "running" &&
+    incoming.latestTurn !== null &&
+    incoming.latestTurn.turnId === previousThread.latestTurn.turnId &&
+    incoming.latestTurn.state !== "running" &&
+    incoming.latestTurn.completedAt !== null
+      ? incoming.latestTurn.turnId
+      : null;
+
+  const preserveRunningTurn =
+    settledLocalTurnId === null && shouldPreserveRunningTurn(previousThread, incoming);
+  const mergedMessages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread, {
+    authoritativeTurnId: settledLocalTurnId,
+  });
+  const messages =
+    settledLocalTurnId === null
+      ? mergedMessages
+      : clearSettledTurnStreamingFlags(mergedMessages, settledLocalTurnId);
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
     incomingLatestTurn: incoming.latestTurn,
@@ -1010,11 +1092,125 @@ export function normalizeActivities(
   return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
 }
 
+type ThreadActivity = Thread["activities"][number];
+
+/**
+ * Incremental equivalent of repeatedly calling
+ * `normalizeActivities([...previous, activity], previous)` while folding a batch of
+ * `thread.activity-appended` events into one thread write.
+ *
+ * `normalizeActivities` re-dedupes, re-maps and re-caps the whole list for every activity, which
+ * is O(events x activities) inside a batch. The accumulator keeps an id index instead, so each
+ * append is O(1) amortised while staying observationally identical:
+ * - unseen ids append at the end, known ids merge in place via `preferRicherActivity`,
+ * - the cap is applied after every append (not just once at the end), so retention of pending
+ *   approval/user-input requests is decided at exactly the same points,
+ * - `result()` returns `previous` by reference when the batch changed nothing, and `append()`
+ *   reports per-activity change so callers can reproduce the old `updatedAt` bumping rule.
+ */
+export interface ThreadActivityAccumulator {
+  /** Appends one already-sequenced activity. Returns true when the accumulated list changed. */
+  readonly append: (activity: ThreadActivity) => boolean;
+  /** Accumulated activities, reference-identical to `previous` when nothing changed. */
+  readonly result: () => Thread["activities"];
+}
+
+export function createThreadActivityAccumulator(
+  previous: Thread["activities"],
+): ThreadActivityAccumulator {
+  const deduped = dedupeActivitiesById(previous);
+  // `dedupeActivitiesById` only returns a new array when it actually removed a duplicate, so a
+  // different reference here means the first `append()` must report a change even if that append
+  // is itself a no-op (matching `normalizeActivities`, which dedupes `previous` on every call).
+  let pendingDedupeChange = deduped !== previous;
+  let working: ThreadActivity[] = deduped;
+  let owned = pendingDedupeChange;
+  let indexById: Map<string, number> | undefined;
+
+  const ensureIndexById = (): Map<string, number> => {
+    if (!indexById) {
+      const nextIndexById = new Map<string, number>();
+      for (let index = 0; index < working.length; index += 1) {
+        nextIndexById.set(working[index]!.id, index);
+      }
+      indexById = nextIndexById;
+    }
+    return indexById;
+  };
+
+  const ensureOwned = (): void => {
+    if (!owned) {
+      working = [...working];
+      owned = true;
+    }
+  };
+
+  return {
+    append: (activity) => {
+      const activityIndexById = ensureIndexById();
+      const existingIndex = activityIndexById.get(activity.id);
+      let changed = false;
+      if (existingIndex === undefined) {
+        ensureOwned();
+        working.push(activity);
+        activityIndexById.set(activity.id, working.length - 1);
+        changed = true;
+      } else {
+        const existing = working[existingIndex]!;
+        const preferred = preferRicherActivity(existing, activity);
+        if (preferred !== existing) {
+          ensureOwned();
+          working[existingIndex] = preferred;
+          changed = true;
+        }
+      }
+      if (working.length > MAX_THREAD_ACTIVITIES) {
+        const capped = capThreadActivities(working);
+        // `capThreadActivities` only filters, so an unchanged length means unchanged contents.
+        if (capped.length !== working.length) {
+          working = capped;
+          owned = true;
+          indexById = undefined;
+          changed = true;
+        }
+      }
+      if (pendingDedupeChange) {
+        pendingDedupeChange = false;
+        return true;
+      }
+      return changed;
+    },
+    result: () => (arraysShallowEqual(previous, working) ? previous : working),
+  };
+}
+
 export function withOrchestrationEventSequence(
   activity: OrchestrationThreadActivity,
   sequence: number,
 ): OrchestrationThreadActivity {
   return { ...activity, sequence };
+}
+
+/**
+ * How many of the oldest activities to drop so the tail stays under the cap
+ * *without* cutting a turn in half — a half-dropped turn renders as an incomplete
+ * work group. Extends the minimum drop forward to the next turn boundary, unless
+ * that would consume the whole array (a single turn larger than the cap), where
+ * showing a partial turn beats showing nothing.
+ */
+function resolveTurnAlignedDropCount(
+  activities: readonly Thread["activities"][number][],
+  minimumDropCount: number,
+): number {
+  const boundaryTurnId = activities[minimumDropCount - 1]?.turnId ?? null;
+  let dropCount = minimumDropCount;
+  while (
+    dropCount < activities.length &&
+    (activities[dropCount]?.turnId ?? null) === boundaryTurnId
+  ) {
+    dropCount += 1;
+  }
+  return dropCount >= activities.length ? minimumDropCount : dropCount;
 }
 
 export function capThreadActivities<TActivity extends Thread["activities"][number]>(
@@ -1023,9 +1219,11 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
   if (activities.length <= MAX_THREAD_ACTIVITIES) {
     return activities as TActivity[];
   }
-  const retainedIds = new Set(
-    activities.slice(-MAX_THREAD_ACTIVITIES).map((activity) => activity.id),
+  const dropCount = resolveTurnAlignedDropCount(
+    activities,
+    activities.length - MAX_THREAD_ACTIVITIES,
   );
+  const retainedIds = new Set(activities.slice(dropCount).map((activity) => activity.id));
   const pendingRequestIds = pendingInteractionRequestIds(activities);
   for (const activity of activities) {
     const requestId = activityRequestId(activity);
@@ -1297,6 +1495,7 @@ export function normalizeThreadFromReadModel(
       ? incoming.hasActionableProposedPlan
       : undefined;
   const nextWorktreePath = incoming.worktreePath;
+  const nextWorkingDirectory = incoming.workingDirectory ?? null;
   const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
   const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
   const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
@@ -1349,6 +1548,7 @@ export function normalizeThreadFromReadModel(
     previous.envMode === (incoming.envMode ?? "local") &&
     previous.branch === resolvedBranch &&
     previous.worktreePath === nextWorktreePath &&
+    (previous.workingDirectory ?? null) === nextWorkingDirectory &&
     (previous.associatedWorktreePath ?? null) === nextAssociatedWorktreePath &&
     (previous.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
     (previous.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef &&
@@ -1399,6 +1599,7 @@ export function normalizeThreadFromReadModel(
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,
+    workingDirectory: nextWorkingDirectory,
     associatedWorktreePath: nextAssociatedWorktreePath,
     associatedWorktreeBranch: nextAssociatedWorktreeBranch,
     associatedWorktreeRef: nextAssociatedWorktreeRef,
@@ -1452,6 +1653,7 @@ export function normalizeThreadShellSnapshot(
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const nextWorktreePath = incoming.worktreePath;
+  const nextWorkingDirectory = incoming.workingDirectory ?? null;
   const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
   const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
   const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
@@ -1489,6 +1691,7 @@ export function normalizeThreadShellSnapshot(
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,
+    workingDirectory: nextWorkingDirectory,
     associatedWorktreePath: nextAssociatedWorktreePath,
     associatedWorktreeBranch: nextAssociatedWorktreeBranch,
     associatedWorktreeRef: nextAssociatedWorktreeRef,

@@ -11,6 +11,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   PROVIDER_RUNTIME_EVENT_MAX_BYTES,
+  PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED,
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
 } from "../Services/ProviderRuntimeEvents.ts";
@@ -260,6 +261,95 @@ layer("ProviderRuntimeEventRepository", (it) => {
         ["native-task-complete:task.completed:0", "native-task-complete:turn.proposed.completed:1"],
       );
       assert.notStrictEqual(persisted[0]?.sequence, persisted[1]?.sequence);
+    }),
+  );
+});
+
+// Fresh (isolated in-memory) database: retention behaviour is asserted through
+// exact row counts, which only hold when no other test shares the journal.
+const retentionLayer = it.layer(
+  Layer.fresh(ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
+);
+
+retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
+  const threadId = ThreadId.makeUnsafe("thread-retention");
+  const deltaEvent = (turn: string, index: number): ProviderRuntimeEvent => ({
+    type: "content.delta",
+    eventId: EventId.makeUnsafe(`retention-${turn}-${index}`),
+    provider: "codex",
+    createdAt: "2026-07-14T01:00:00.000Z",
+    threadId,
+    turnId: TurnId.makeUnsafe(`turn-retention-${turn}`),
+    payload: { streamKind: "assistant_text", delta: `chunk-${index}` },
+  });
+  const terminalEvent = (turn: string): ProviderRuntimeEvent => ({
+    type: "turn.completed",
+    eventId: EventId.makeUnsafe(`retention-${turn}-terminal`),
+    provider: "codex",
+    createdAt: "2026-07-14T01:00:01.000Z",
+    threadId,
+    turnId: TurnId.makeUnsafe(`turn-retention-${turn}`),
+    payload: { state: "completed" },
+  });
+
+  it.effect("retains open-turn replay while throttling retention scans", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const journalSize = Effect.map(
+        sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+        (rows) => rows[0]?.count ?? 0,
+      );
+      const replayable = Effect.map(
+        repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10_000,
+        }),
+        (rows) => rows.length,
+      );
+      const acceptEvent = (event: ProviderRuntimeEvent) =>
+        Effect.gen(function* () {
+          const persisted = yield* repository.append(event);
+          const accepted = yield* repository.advanceConsumerCursor({
+            consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+            eventSequence: persisted.sequence,
+            updatedAt: event.createdAt,
+          });
+          assert.isTrue(accepted);
+        });
+
+      // A long open turn: every accepted event must stay replayable, including
+      // the ones that crossed a throttled scan boundary.
+      const openTurnEvents = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 88;
+      for (let index = 0; index < openTurnEvents; index += 1) {
+        yield* acceptEvent(deltaEvent("a", index));
+      }
+      assert.strictEqual(yield* replayable, openTurnEvents);
+      assert.strictEqual(yield* journalSize, openTurnEvents);
+
+      // The terminal event settles the turn and forces a scan, leaving exactly
+      // the bounded diagnostic tail behind.
+      yield* acceptEvent(terminalEvent("a"));
+      assert.strictEqual(yield* replayable, 0);
+      assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+
+      // A shorter follow-up turn stays below the scan interval: no scan runs,
+      // which is exactly the quadratic-delete behaviour this throttle removes.
+      const followUpEvents = 300;
+      for (let index = 0; index < followUpEvents; index += 1) {
+        yield* acceptEvent(deltaEvent("b", index));
+      }
+      assert.strictEqual(yield* replayable, followUpEvents);
+      assert.strictEqual(
+        yield* journalSize,
+        PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + followUpEvents,
+      );
+
+      // Settling the follow-up turn releases the deferred backlog immediately.
+      yield* acceptEvent(terminalEvent("b"));
+      assert.strictEqual(yield* replayable, 0);
+      assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
     }),
   );
 });

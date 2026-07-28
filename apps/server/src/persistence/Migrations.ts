@@ -101,6 +101,8 @@ import Migration0082 from "./Migrations/082_AutomationMemory.ts";
 import Migration0083 from "./Migrations/083_AutomationHeartbeatEligibility.ts";
 import Migration0084 from "./Migrations/084_AutomationNotificationPolicy.ts";
 import Migration0085 from "./Migrations/085_AutomationSettings.ts";
+import Migration0086 from "./Migrations/086_NormalizeStudioThreadWorkspaces.ts";
+import Migration0087 from "./Migrations/087_DropUnusedOrchestrationEventIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -201,6 +203,8 @@ export const migrationEntries = [
   [83, "AutomationHeartbeatEligibility", Migration0083],
   [84, "AutomationNotificationPolicy", Migration0084],
   [85, "AutomationSettings", Migration0085],
+  [86, "NormalizeStudioThreadWorkspaces", Migration0086],
+  [87, "DropUnusedOrchestrationEventIndexes", Migration0087],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -217,9 +221,124 @@ export const makeMigrationLoader = (throughId?: number) =>
  * imported lineage. A name mismatch at or below this ID
  * means the database does not come from any known lineage, so re-running
  * migrations could destroy data — refuse to start instead.
+ *
+ * This boundary cannot be raised past 16 today: predecessor-lineage imports
+ * (see `Migrations/032_ReconcileImportedSchemaLineage.ts`) record foreign names
+ * from ID 17 onward and are repaired by the replay path below. Exported because
+ * `MigrationBackup.inspectMigrationBackupPlan` gates the same way when it decides
+ * whether a pre-migration backup is warranted. Renumbering regressions are
+ * prevented at the source instead, by `scripts/check-migration-lineage.ts`.
  */
-const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
+export const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
 const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
+
+const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
+  migrationEntries.map(([id, name]) => [id, name] as const),
+);
+
+/**
+ * First canonical entry whose name is not recorded at the same ID, considering
+ * only IDs the database claims to have applied.
+ *
+ * Shared by the alias pre-check, the replay path, and
+ * `MigrationBackup.inspectMigrationBackupPlan`, so "this database will be
+ * replayed" and "this database needs a backup first" can never disagree.
+ */
+export const findFirstMigrationLineageDivergence = (
+  recordedNamesById: ReadonlyMap<number, string>,
+  highWaterMark: number,
+) =>
+  migrationEntries.find(([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name);
+
+/**
+ * A tracker identity that a *released* Synara build wrote for a migration whose
+ * canonical ID later changed.
+ *
+ * v0.5.5 shipped `[54, "ProjectPullRequestPins"]`; v0.6.0 reserved 54 for the
+ * private-build `DurableProviderCommandDelivery` identity and moved the pins
+ * migration to 69. Without an entry here every v0.5.5 database is misread as a
+ * foreign import, and the replay path wipes and re-runs every tracker row from
+ * the divergence onward — destructive, and fatal on any database whose schema
+ * is already partway into the newer range (migration 56 is a bare
+ * `ALTER TABLE ... ADD COLUMN`, so it dies on `duplicate column name`).
+ *
+ * `historicalSlotRequiresRerun` is the reviewed answer to a single question:
+ * does the migration Synara registers at `historicalId` *today* still need to
+ * run on a database that recorded the historical identity? When it is `false`
+ * the row is renamed to the canonical identity in place and nothing replays;
+ * when it is `true` the row is removed so the migrator re-runs that one ID.
+ *
+ * The alias intentionally does *not* renumber the row to `currentId`: the
+ * migrator gates purely on `max(migration_id)`, so moving the row to 69 would
+ * skip migrations 54–68, which a v0.5.5 database has genuinely never applied.
+ * The migration at `currentId` therefore re-runs, and must be idempotent.
+ */
+export interface MigrationLineageAlias {
+  readonly historicalId: number;
+  readonly historicalName: string;
+  readonly currentId: number;
+  readonly historicalSlotRequiresRerun: boolean;
+}
+
+export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
+  {
+    // Shipped in v0.5.5. Migration 54 is now `Effect.void` (see
+    // `Migrations/054_ReservedDurableProviderCommandDelivery.ts`), so the slot
+    // needs no work on a database that already recorded it.
+    historicalId: 54,
+    historicalName: "ProjectPullRequestPins",
+    currentId: 69,
+    historicalSlotRequiresRerun: false,
+  },
+];
+
+export type MigrationLineageAliasRepair =
+  | { readonly kind: "rename"; readonly migrationId: number; readonly name: string }
+  | { readonly kind: "remove"; readonly migrationId: number };
+
+/**
+ * Metadata-only repairs that turn a recorded tracker carrying known historical
+ * identities into an exact prefix of the canonical lineage.
+ *
+ * Returns an empty list unless *every* remaining (id, name) pair lines up
+ * afterwards, so a tracker that also diverges for unrelated reasons falls
+ * through to the unchanged replay path.
+ */
+export const planMigrationLineageAliasRepairs = (
+  recordedNamesById: ReadonlyMap<number, string>,
+): readonly MigrationLineageAliasRepair[] => {
+  const applicable = MIGRATION_LINEAGE_ALIASES.filter(
+    (alias) =>
+      recordedNamesById.get(alias.historicalId) === alias.historicalName &&
+      // The historical identity must actually be a divergence today...
+      canonicalMigrationNamesById.get(alias.historicalId) !== alias.historicalName &&
+      // ...and the alias must still point at where that migration now lives, so
+      // a stale table degrades to the old behavior instead of corrupting one.
+      canonicalMigrationNamesById.get(alias.currentId) === alias.historicalName,
+  );
+  if (applicable.length === 0) {
+    return [];
+  }
+
+  const repaired = new Map(recordedNamesById);
+  const repairs: MigrationLineageAliasRepair[] = [];
+  for (const alias of applicable) {
+    const canonicalName = canonicalMigrationNamesById.get(alias.historicalId);
+    if (alias.historicalSlotRequiresRerun || canonicalName === undefined) {
+      repaired.delete(alias.historicalId);
+      repairs.push({ kind: "remove", migrationId: alias.historicalId });
+      continue;
+    }
+    repaired.set(alias.historicalId, canonicalName);
+    repairs.push({ kind: "rename", migrationId: alias.historicalId, name: canonicalName });
+  }
+
+  const highWaterMark = Math.max(...repaired.keys(), 0);
+  if (findFirstMigrationLineageDivergence(repaired, highWaterMark) !== undefined) {
+    return [];
+  }
+  return repairs;
+};
 
 /**
  * Repairs the migration tracker of an imported legacy database before the
@@ -239,6 +358,12 @@ const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
  * then re-runs those migrations in order; every migration past
  * {@link LAST_SHARED_LINEAGE_MIGRATION_ID} is idempotent, so re-running them
  * over a legacy-evolved schema is safe and loses no data.
+ *
+ * Divergences caused by Synara renumbering one of its *own* released
+ * migrations are handled first and separately, through
+ * {@link MIGRATION_LINEAGE_ALIASES}: those trackers are repaired in place
+ * rather than truncated, because the rows below the divergence are genuinely
+ * ours and the schema they describe is genuinely applied.
  */
 export const reconcileMigrationLineage = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -277,15 +402,49 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
       SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
     `;
   }
+  // A released Synara build may have recorded a migration under an ID it no
+  // longer occupies. That is a tracker-metadata problem, not a foreign lineage:
+  // repair the affected rows in place and leave every other row untouched, so
+  // the migrator still runs exactly the migrations this database has not seen.
+  const aliasRepairs = planMigrationLineageAliasRepairs(
+    new Map(recorded.map((row) => [row.migration_id, row.name])),
+  );
+  if (aliasRepairs.length > 0) {
+    yield* Effect.logInfo(
+      "Migration tracker records a renumbered Synara migration; repairing tracker metadata in place",
+    ).pipe(
+      Effect.annotateLogs({
+        repairs: aliasRepairs.map((repair) =>
+          repair.kind === "rename"
+            ? `rename ${repair.migrationId} -> ${repair.name}`
+            : `remove ${repair.migrationId}`,
+        ),
+      }),
+    );
+    yield* Effect.forEach(
+      aliasRepairs,
+      (repair) =>
+        repair.kind === "rename"
+          ? sql`
+              UPDATE effect_sql_migrations
+              SET name = ${repair.name}
+              WHERE migration_id = ${repair.migrationId}
+            `
+          : sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${repair.migrationId}`,
+      { discard: true },
+    );
+    recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
+    `;
+  }
+
   const highWaterMark = recorded[recorded.length - 1]?.migration_id;
   if (highWaterMark === undefined) {
     return;
   }
 
   const recordedNamesById = new Map(recorded.map((row) => [row.migration_id, row.name]));
-  const diverged = migrationEntries.find(
-    ([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name,
-  );
+  const diverged = findFirstMigrationLineageDivergence(recordedNamesById, highWaterMark);
   if (diverged === undefined) {
     // An exact known prefix followed by unknown migrations is a database from
     // a newer Synara build. Continuing would expose it to stale writable

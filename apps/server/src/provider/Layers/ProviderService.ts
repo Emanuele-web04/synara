@@ -32,10 +32,15 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@synara/contracts";
+import {
+  providerSupportsAutoRuntimeMode,
+  unsupportedAutoRuntimeModeMessage,
+} from "@synara/shared/runtimeMode";
 import { createHash, randomUUID } from "node:crypto";
 import {
   Array as EffectArray,
   Cause,
+  Duration,
   Effect,
   Exit,
   Layer,
@@ -47,6 +52,7 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
+import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -102,6 +108,21 @@ const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderR
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
 const MAX_TARGETED_CHILD_INTERRUPT_TOMBSTONES = 16_384;
 
+function validateAutoRuntimeMode(
+  operation: string,
+  provider: ProviderSession["provider"],
+  runtimeMode: ProviderSession["runtimeMode"],
+) {
+  return runtimeMode !== "auto" || providerSupportsAutoRuntimeMode(provider)
+    ? Effect.void
+    : Effect.fail(
+        new ProviderValidationError({
+          operation,
+          issue: unsupportedAutoRuntimeModeMessage(provider),
+        }),
+      );
+}
+
 export function summarizeProviderRuntimeQuarantineCause(cause: string): {
   readonly cause: string;
   readonly causeTruncated?: true;
@@ -150,6 +171,15 @@ type InteractionResponse =
   | { readonly kind: "approval"; readonly input: ProviderRespondToRequestInput }
   | { readonly kind: "userInput"; readonly input: ProviderRespondToUserInputInput };
 
+/**
+ * Hard deadlines for provider lifecycle calls. Every caller of these paths
+ * holds a serialized resource (the per-thread lifecycle lock, an orchestration
+ * command slot, or the provider command reactor's delivery lock), so an
+ * unbounded adapter call is a process-wide stall, not a local one.
+ */
+const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
+const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
+
 function toValidationError(
   operation: string,
   issue: string,
@@ -197,8 +227,11 @@ function toRuntimePayloadFromSession(
   return {
     cwd: session.cwd ?? null,
     model: session.model ?? null,
-    activeTurnId: session.activeTurnId ?? null,
-    lastError: session.lastError ?? null,
+    activeTurnId: nonEmptyTrimmed(session.activeTurnId) ?? null,
+    // `thread.session.set` types both as trimmed-non-empty-or-null, so a blank
+    // provider string has to become an explicit "absent" rather than reaching
+    // the schema as "".
+    lastError: nonEmptyTrimmed(session.lastError) ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
@@ -325,9 +358,15 @@ function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean
 }
 
 function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
-  if (event.type === "runtime.error") return event.payload.message;
+  // A blank message must not degrade to `null`: null means "clear the error",
+  // which would erase the very failure being reported. Fall back to an honest
+  // constant instead.
+  if (event.type === "runtime.error")
+    return nonEmptyTrimmed(event.payload.message) ?? "Provider runtime reported an error.";
   if (event.type === "session.state.changed")
-    return event.payload.state === "error" ? (event.payload.reason ?? "Session error") : null;
+    return event.payload.state === "error"
+      ? (nonEmptyTrimmed(event.payload.reason) ?? "Session error")
+      : null;
   if (event.type === "thread.state.changed")
     return event.payload.state === "error" ? "Thread error" : null;
   return event.type === "turn.started" ||
@@ -1319,6 +1358,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedCwd = readPersistedCwd(binding.runtimePayload);
             const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
             const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
+            yield* validateAutoRuntimeMode(
+              input.operation,
+              binding.provider,
+              binding.runtimeMode ?? "full-access",
+            );
 
             const resumed = yield* adapter.startSession({
               threadId,
@@ -1355,6 +1399,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ),
               ),
             );
+            lease.commit();
             yield* analytics.record("provider.session.recovered", {
               provider: resumed.provider,
               strategy: "resume-thread",
@@ -1445,6 +1490,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           threadId,
           provider: parsed.provider ?? "codex",
         };
+        yield* validateAutoRuntimeMode(
+          "ProviderService.startSession",
+          input.provider,
+          input.runtimeMode,
+        );
         // An explicit start is the recovery authority for a failed retirement,
         // but it must never interleave with one still in progress. Capture the
         // exact settled fence so this replacement cannot delete a newer fence
@@ -1468,16 +1518,46 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const adapter = yield* registry.getByProvider(input.provider);
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
-              const session = yield* adapter.startSession({
-                ...input,
-                lifecycleGeneration: lease.generation,
-                ...(effectiveProviderOptions !== undefined
-                  ? { providerOptions: effectiveProviderOptions }
-                  : {}),
-                ...(effectiveResumeCursor !== undefined
-                  ? { resumeCursor: effectiveResumeCursor }
-                  : {}),
-              });
+              // A provider start that never returns holds this thread's
+              // lifecycle lock and the caller's command slot forever. Bound it,
+              // retire whatever the adapter may have half-spawned, and fail
+              // with text the caller can surface as a session error.
+              const started = yield* adapter
+                .startSession({
+                  ...input,
+                  lifecycleGeneration: lease.generation,
+                  ...(effectiveProviderOptions !== undefined
+                    ? { providerOptions: effectiveProviderOptions }
+                    : {}),
+                  ...(effectiveResumeCursor !== undefined
+                    ? { resumeCursor: effectiveResumeCursor }
+                    : {}),
+                })
+                .pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
+              if (Option.isNone(started)) {
+                yield* Effect.logError("provider session start exceeded its deadline", {
+                  threadId,
+                  provider: input.provider,
+                  timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
+                });
+                yield* adapter.stopSession(threadId).pipe(
+                  Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to retire a timed-out provider session start", {
+                      threadId,
+                      provider: input.provider,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                );
+                return yield* toValidationError(
+                  "ProviderService.startSession",
+                  `Provider '${input.provider}' did not finish starting within ${Duration.toMillis(
+                    PROVIDER_START_SESSION_TIMEOUT,
+                  )}ms for thread '${threadId}'.`,
+                );
+              }
+              const session = started.value;
               replacementStarted = true;
 
               if (session.provider !== adapter.provider) {
@@ -1505,6 +1585,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ),
                 ),
               );
+              lease.commit();
               yield* analytics.record("provider.session.started", {
                 provider: session.provider,
                 runtimeMode: input.runtimeMode,
@@ -1584,6 +1665,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           providerOptions: previousProviderOptions,
                         }),
                       );
+                      // The restored runtime stamps its events with the exact
+                      // generation persisted above, so the coordinator must end
+                      // the run owning that generation and not the abandoned
+                      // replacement's.
+                      lease.adopt(previousGeneration);
                     }),
               ),
             );
@@ -1613,6 +1699,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const effectiveProviderOptions =
           input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
+        yield* validateAutoRuntimeMode(
+          "ProviderService.forkThread",
+          sourceBinding.provider,
+          input.runtimeMode,
+        );
 
         const adapter = yield* registry.getByProvider(sourceBinding.provider);
         if (!adapter.forkThread) {
@@ -1864,7 +1955,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
         let rotationStarted = false;
-        const interruptActiveTurn = lifecycle.runCurrent(input.threadId, (currentGeneration) =>
+        // Urgent: an interrupt is the user's only escape hatch from a wedged
+        // turn, so it must not queue behind a lifecycle mutation that hangs.
+        const runInterrupt =
+          input.providerThreadId === undefined ? lifecycle.runCurrentUrgent : lifecycle.runCurrent;
+        const interruptActiveTurn = runInterrupt(input.threadId, (currentGeneration) =>
           Effect.gen(function* () {
             const routed = yield* resolveRoutableSession({
               threadId: input.threadId,
@@ -2235,9 +2330,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               retireRuntimeIdleGeneration(input.threadId);
               return;
             }
-            if (routed.isActive) {
-              yield* routed.adapter.stopSession(input.threadId);
-            }
+            // Adapter stop is an idempotent cleanup barrier. Even when the
+            // routable session is inactive, the adapter may retain ownership
+            // from a teardown whose exit proof previously failed.
+            yield* routed.adapter.stopSession(input.threadId);
             clearLiveRuntimeTasks(input.threadId);
             yield* waitForRuntimeIdleStop(input.threadId);
             yield* withBindingWriteLock(input.threadId, directory.remove(input.threadId));
@@ -2325,6 +2421,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 },
               }),
             );
+            lease.commit();
             yield* analytics.record("provider.session.runtime_stopped", {
               provider: binding.provider,
             });
@@ -2430,20 +2527,28 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (!preserveActive) {
                 clearLiveRuntimeTasks(input.threadId);
               }
+              // A preserved runtime keeps stamping its events with the
+              // generation it was started under, so clearing the cursor must
+              // not re-label the thread with a generation that runtime will
+              // never emit.
+              const effectiveGeneration = preserveActive
+                ? (binding.lifecycleGeneration ?? lease.generation)
+                : lease.generation;
               yield* directory.upsert({
                 threadId: input.threadId,
                 provider: binding.provider,
                 ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
                 ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
                 status: preserveActive ? (binding.status ?? "running") : "stopped",
-                lifecycleGeneration: lease.generation,
+                lifecycleGeneration: effectiveGeneration,
                 resumeCursor: null,
                 runtimePayload: {
                   ...runtimePayloadRecord(binding.runtimePayload),
                   ...(preserveActive ? {} : { activeTurnId: null }),
-                  lifecycleGeneration: lease.generation,
+                  lifecycleGeneration: effectiveGeneration,
                 },
               });
+              lease.adopt(effectiveGeneration);
               return binding.provider;
             }),
           ),

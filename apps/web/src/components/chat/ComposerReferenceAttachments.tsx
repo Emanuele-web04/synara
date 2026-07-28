@@ -36,7 +36,7 @@ interface ComposerReferenceAttachmentsProps {
 export function ComposerReferenceAttachments({
   assistantSelections,
   fileComments,
-  pastedTexts = [],
+  pastedTexts: pastedTextsProp,
   files,
   images,
   nonPersistedImageIdSet,
@@ -48,6 +48,7 @@ export function ComposerReferenceAttachments({
   onRemoveFile,
   onRemoveImage,
 }: ComposerReferenceAttachmentsProps) {
+  const pastedTexts = pastedTextsProp ?? [];
   if (
     assistantSelections.length === 0 &&
     fileComments.length === 0 &&

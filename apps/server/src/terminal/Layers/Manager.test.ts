@@ -18,6 +18,7 @@ import {
   type PtySpawnInput,
 } from "../Services/PTY";
 import {
+  __terminalHistorySanitizeTesting,
   __terminalManagerShellTesting,
   TerminalManagerRuntime,
   type TerminalSubprocessActivity,
@@ -826,6 +827,81 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("abandons a string control sequence that never terminates", () => {
+    const { sanitizeTerminalHistoryChunk, maxPendingControlSequenceLength } =
+      __terminalHistorySanitizeTesting;
+    const chunkLength = 4096;
+
+    // An OSC with no BEL/ST terminator (truncated program, crashed TUI, `cat` on a
+    // binary) used to make every later byte accumulate in the carry-over buffer
+    // forever: nothing reached scrollback and each flush rescanned the whole buffer.
+    let pending = `\u001b]0;${"a".repeat(chunkLength)}`;
+    let emitted = "";
+    let flushes = 0;
+    for (let index = 0; index < 64; index += 1) {
+      const result = sanitizeTerminalHistoryChunk(pending, "b".repeat(chunkLength));
+      pending = result.pendingControlSequence;
+      emitted += result.visibleText;
+      if (result.visibleText.length > 0) {
+        flushes += 1;
+      }
+      expect(pending.length).toBeLessThanOrEqual(maxPendingControlSequenceLength);
+    }
+
+    expect(flushes).toBeGreaterThan(0);
+    expect(emitted.length).toBeGreaterThan(maxPendingControlSequenceLength);
+    // Parser state is reset, so ordinary output flows into history again.
+    const recovered = sanitizeTerminalHistoryChunk(pending, "recovered\n");
+    expect(recovered.visibleText.endsWith("recovered\n")).toBe(true);
+    expect(recovered.pendingControlSequence).toBe("");
+  });
+
+  it("keeps recording terminal history after an unterminated control sequence", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData(
+      `\u001b]0;${"x".repeat(__terminalHistorySanitizeTesting.maxPendingControlSequenceLength + 1)}`,
+    );
+    // Let the runaway sequence flush on its own batch before the next output.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    process.emitData("visible after overflow\n");
+
+    await manager.close({ threadId: "thread-1" });
+
+    const reopened = await manager.open(openInput());
+    expect(reopened.history.endsWith("visible after overflow\n")).toBe(true);
+
+    manager.dispose();
+  });
+
+  it("releases cached history when a thread is closed without deleting history", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("archived output\n");
+    // Archiving closes terminals but keeps their transcripts on disk.
+    await manager.close({ threadId: "thread-1" });
+
+    const persistedHistoryByKey = (
+      manager as unknown as { persistedHistoryByKey: Map<string, string> }
+    ).persistedHistoryByKey;
+    expect(
+      [...persistedHistoryByKey.keys()].filter((key) => key.startsWith("thread-1\u0000")),
+    ).toEqual([]);
+
+    const reopened = await manager.open(openInput());
+    expect(reopened.history).toBe("archived output\n");
+
+    manager.dispose();
+  });
+
   it("strips replay-destructive clears while preserving style sequences", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(openInput());
@@ -1262,6 +1338,51 @@ describe("TerminalManager", () => {
       expect(spawnInput.env.TERM_PROGRAM).toBeUndefined();
       expect(spawnInput.env.TERMINFO).toBeUndefined();
       expect(spawnInput.env.GHOSTTY_RESOURCES_DIR).toBeUndefined();
+
+      manager.dispose();
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("pins COLORTERM and drops inherited color-control env", async () => {
+    const originalValues = new Map<string, string | undefined>();
+    const setEnv = (key: string, value: string) => {
+      if (!originalValues.has(key)) {
+        originalValues.set(key, process.env[key]);
+      }
+      process.env[key] = value;
+    };
+    const restoreEnv = () => {
+      for (const [key, value] of originalValues) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    setEnv("NO_COLOR", "1");
+    setEnv("FORCE_COLOR", "0");
+    setEnv("CLICOLOR", "0");
+    setEnv("CLICOLOR_FORCE", "0");
+    setEnv("COLORFGBG", "0;15");
+    setEnv("COLORTERM", "");
+
+    try {
+      const { manager, ptyAdapter } = makeManager();
+      await manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.env.COLORTERM).toBe("truecolor");
+      expect(spawnInput.env.NO_COLOR).toBeUndefined();
+      expect(spawnInput.env.FORCE_COLOR).toBeUndefined();
+      expect(spawnInput.env.CLICOLOR).toBeUndefined();
+      expect(spawnInput.env.CLICOLOR_FORCE).toBeUndefined();
+      expect(spawnInput.env.COLORFGBG).toBeUndefined();
 
       manager.dispose();
     } finally {

@@ -1219,23 +1219,21 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       );
 
     const stopSession: AntigravityAdapterShape["stopSession"] = (threadId) =>
-      requireSession(threadId).pipe(
-        Effect.flatMap((context) =>
-          Effect.gen(function* () {
-            context.stopped = true;
-            context.interrupted = true;
-            yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-            yield* teardownActiveProcess(context, "session/stop");
-            releaseTurnGatewayLease(context);
-            sessions.delete(threadId);
-            offer({
-              ...base(context, { includeTurn: false }),
-              type: "session.exited",
-              payload: { reason: "stopped", exitKind: "graceful" },
-            } satisfies ProviderRuntimeEvent);
-          }),
-        ),
-      );
+      Effect.gen(function* () {
+        const context = sessions.get(threadId);
+        if (!context) return;
+        context.stopped = true;
+        context.interrupted = true;
+        yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+        yield* teardownActiveProcess(context, "session/stop");
+        releaseTurnGatewayLease(context);
+        sessions.delete(threadId);
+        offer({
+          ...base(context, { includeTurn: false }),
+          type: "session.exited",
+          payload: { reason: "stopped", exitKind: "graceful" },
+        } satisfies ProviderRuntimeEvent);
+      });
 
     const snapshot = (context: AntigravitySessionContext): ProviderThreadSnapshot => ({
       threadId: context.session.threadId,

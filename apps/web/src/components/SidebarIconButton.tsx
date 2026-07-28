@@ -51,15 +51,18 @@ export type SidebarIconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement
 export function SidebarIconButton({
   icon: Icon,
   label,
-  glyph = "chrome",
+  glyph: glyphProp,
   iconClassName,
-  size = "md",
+  size: sizeProp,
   tooltip,
-  tooltipSide = "top",
+  tooltipSide: tooltipSideProp,
   render,
   className,
   ...buttonProps
 }: SidebarIconButtonProps) {
+  const glyph = glyphProp ?? "chrome";
+  const size = sizeProp ?? "md";
+  const tooltipSide = tooltipSideProp ?? "top";
   const triggerElement = (render ?? <button type="button" />) as ReactElement<{
     className?: string;
   }>;
