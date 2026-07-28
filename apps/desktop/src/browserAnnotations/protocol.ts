@@ -338,28 +338,3 @@ export function parseAnnotationGuestMessage(value: unknown): AnnotationGuestMess
   }
   return null;
 }
-
-export function isAnnotationGuestCommand(value: unknown): value is AnnotationGuestCommand {
-  if (!isRecord(value) || value.version !== BROWSER_ANNOTATION_PROTOCOL_VERSION) return false;
-  const documentToken = parseIdentifier(value.documentToken);
-  if (!documentToken) return false;
-  if (value.kind === "start") {
-    return (
-      parseIdentifier(value.sessionId) !== null &&
-      (value.theme === "light" || value.theme === "dark")
-    );
-  }
-  if (value.kind === "cancel") {
-    return parseIdentifier(value.sessionId) !== null;
-  }
-  if (value.kind === "refresh-document") return true;
-  if (value.kind === "sync-markers") {
-    return (
-      typeof value.projectionVersion === "number" &&
-      Number.isSafeInteger(value.projectionVersion) &&
-      value.projectionVersion >= 0 &&
-      parseBrowserAnnotationMarkers(value.markers) !== null
-    );
-  }
-  return false;
-}
