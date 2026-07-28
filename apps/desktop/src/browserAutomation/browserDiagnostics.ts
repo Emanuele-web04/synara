@@ -25,6 +25,8 @@ interface TrackedRequest {
 }
 
 interface DiagnosticsState {
+  readonly threadId: string;
+  readonly tabId: string;
   readonly startedAt: BrowserLogsOutput["startedAt"];
   readonly entries: BrowserLogEntry[];
   readonly requests: Map<string, TrackedRequest>;
@@ -134,9 +136,12 @@ export class BrowserDiagnosticsStore {
     throwIfAborted(signal);
     const existing = this.stateByWebContents.get(runtime.webContents);
     if (existing) {
-      await existing.initialized;
-      throwIfAborted(signal);
-      return;
+      if (existing.threadId === runtime.threadId && existing.tabId === runtime.tabId) {
+        await existing.initialized;
+        throwIfAborted(signal);
+        return;
+      }
+      existing.dispose();
     }
 
     let state!: DiagnosticsState;
@@ -290,6 +295,8 @@ export class BrowserDiagnosticsStore {
       state.requests.clear();
     };
     state = {
+      threadId: runtime.threadId,
+      tabId: runtime.tabId,
       startedAt: nowIso(),
       entries: [],
       requests: new Map(),

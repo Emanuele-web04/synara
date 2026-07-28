@@ -123,7 +123,7 @@ const stateExpression = (body: string): string => String.raw`(() => {
   ${body}
 })()`;
 
-const locatorBody = (target: BrowserNodeTarget): string => {
+export const browserTargetLocatorBody = (target: BrowserNodeTarget): string => {
   if ("ref" in target) {
     return `const entry = state.refs.get(${JSON.stringify(target.ref)}); state.currentTarget = entry?.element || null; const stale = !entry || !state.currentTarget?.isConnected || entry.fingerprint !== state.fingerprint(state.currentTarget); return { count: stale ? 0 : 1, stale };`;
   }
@@ -175,12 +175,16 @@ const locatorBody = (target: BrowserNodeTarget): string => {
     const name = (element) => normalize(element.getAttribute("aria-label") || element.getAttribute("placeholder") ||
       element.getAttribute("alt") || element.textContent || "");
     const locator = ${JSON.stringify(locator)};
+    const textMatches = (element) => equals(element.textContent || "", locator.text, locator.exact === true);
     const matches = all.filter((element) => {
       if (locator.kind === "role") {
         const role = normalize(element.getAttribute("role") || implicitRole(element)).split(" ")[0].toLowerCase();
         return role === locator.role && (locator.name === undefined || equals(name(element), locator.name, locator.exact === true));
       }
-      if (locator.kind === "text") return equals(element.textContent || "", locator.text, locator.exact === true);
+      if (locator.kind === "text") {
+        if (!textMatches(element)) return false;
+        return !Array.from(element.children || []).some(textMatches);
+      }
       if (locator.kind === "placeholder") return equals(element.getAttribute("placeholder") || "", locator.text, locator.exact === true);
       if (locator.kind === "testId") return element.getAttribute("data-testid") === locator.value;
       if (locator.kind === "label") {
@@ -261,7 +265,7 @@ export const resolveBrowserTarget = async (
   try {
     const result = await evaluateInContext<typeof selection>(
       runtime,
-      stateExpression(locatorBody(target)),
+      stateExpression(browserTargetLocatorBody(target)),
       { contextId, signal: options.signal },
     );
     selection = result.value ?? {};

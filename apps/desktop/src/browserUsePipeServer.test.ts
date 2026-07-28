@@ -94,8 +94,10 @@ describe("canonical browser host pipe resolution", () => {
   it("creates a private unguessable Unix socket path", () => {
     const first = resolveDefaultBrowserHostPipePath("darwin", 123);
     const second = resolveDefaultBrowserHostPipePath("darwin", 123);
-    expect(dirname(first)).toBe(`${tmpdir()}/synara-browser-host`);
-    expect(basename(first)).toMatch(/^synara-browser-host-123-[0-9a-f-]{36}\.sock$/);
+    const uidSuffix = process.getuid ? `-${process.getuid()}` : "";
+    expect(dirname(first)).toBe(`/tmp/synara-browser-host${uidSuffix}`);
+    expect(basename(first)).toMatch(/^123-[0-9a-f-]{36}\.sock$/);
+    expect(Buffer.byteLength(first, "utf8")).toBeLessThanOrEqual(103);
     expect(first).not.toBe(second);
   });
 
@@ -159,6 +161,40 @@ describe("canonical browser host pipe resolution", () => {
 });
 
 describe("canonical browser host RPC", () => {
+  it("accepts every client in a maximum-size gateway batch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synara-browser-host-capacity-test-"));
+    const pipePath = join(directory, "browser.sock");
+    const server = new BrowserHostPipeServer({} as never, {
+      pipePath,
+      capability: TEST_CAPABILITY,
+      automationHost: { executeTool: async () => ({}) } as never,
+    });
+    const sockets: Socket[] = [];
+    try {
+      await server.start();
+      sockets.push(...(await Promise.all(Array.from({ length: 50 }, () => connect(pipePath)))));
+      const responses = await Promise.all(
+        sockets.map((socket, index) =>
+          request(socket, {
+            jsonrpc: "2.0",
+            id: index,
+            method: "getInfo",
+            params: {
+              session_id: `batch-session-${index}`,
+              capability: TEST_CAPABILITY,
+            },
+          }),
+        ),
+      );
+      expect(responses).toHaveLength(50);
+      expect(responses.every((response) => "result" in response)).toBe(true);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await server.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a discovered same-user pipe before binding any claimed session", async () => {
     const executeTool = vi.fn(async () => ({ available: true }));
     await withPipeServer({ automationHost: { executeTool } }, async (socket) => {
