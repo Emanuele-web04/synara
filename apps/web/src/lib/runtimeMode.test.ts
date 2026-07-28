@@ -18,11 +18,10 @@ describe("runtime mode provider support", () => {
     expect(normalizeRuntimeModeForProvider("full-access", "opencode")).toBe("full-access");
   });
 
-  it("describes Auto as AI-reviewed rather than unrestricted", () => {
+  it("describes Auto as approval review rather than unrestricted access", () => {
     expect(RUNTIME_MODE_PRESENTATION.auto).toEqual({
-      label: "Auto",
-      description:
-        "An AI reviewer handles routine approvals; higher-risk actions may be blocked or ask you.",
+      label: "Approve for me",
+      description: "Only ask for actions detected as potentially unsafe",
     });
   });
 

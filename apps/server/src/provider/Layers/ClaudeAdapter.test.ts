@@ -4545,6 +4545,78 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect("discovers Claude model capabilities before a session starts", () => {
+    const query = new FakeClaudeQuery();
+    let createQueryCalls = 0;
+    (
+      query as unknown as {
+        supportedModels: () => Promise<
+          Array<{
+            value: string;
+            resolvedModel: string;
+            displayName: string;
+            description: string;
+            supportsAutoMode: boolean;
+          }>
+        >;
+      }
+    ).supportedModels = async () => {
+      assert.ok(query.iteratorNextCalls > 0, "model discovery must drive the SDK handshake");
+      return [
+        {
+          value: "claude-fable-5[1m]",
+          resolvedModel: "claude-fable-5[1m]",
+          displayName: "Fable",
+          description: "Claude Fable 5",
+          supportsAutoMode: true,
+        },
+      ];
+    };
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => {
+        createQueryCalls += 1;
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listModels = adapter.listModels;
+      if (!listModels) {
+        assert.fail("Expected Claude adapter to support model discovery.");
+      }
+
+      const discovered = yield* listModels({
+        provider: "claudeAgent",
+        cwd: "/tmp/project",
+      });
+      assert.deepEqual(discovered, {
+        models: [
+          {
+            slug: "claude-fable-5[1m]",
+            resolvedModel: "claude-fable-5[1m]",
+            name: "Fable",
+            supportsAutoMode: true,
+          },
+        ],
+        source: "sdk",
+        cached: false,
+      });
+      assert.equal(query.closeCalls, 1);
+      assert.equal(createQueryCalls, 1);
+
+      const cached = yield* listModels({
+        provider: "claudeAgent",
+        cwd: "/tmp/project",
+      });
+      assert.equal(cached.cached, true);
+      assert.equal(createQueryCalls, 1);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {
     // The SDK consumes user messages via `for await (... of prompt)`.
     // Stopping a session must end that loop cleanly — not throw an error.

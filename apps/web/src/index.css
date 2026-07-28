@@ -2818,6 +2818,20 @@ diffs-container {
   padding: var(--picker-menu-body-p);
 }
 
+/* Permission mode picker: wider, calmer rows matching the native approval menu. */
+.runtime-mode-menu {
+  width: min(26rem, 92vw);
+  min-width: min(26rem, 92vw);
+  --picker-menu-body-p: 0.375rem;
+  --picker-option-min-h: 3.125rem;
+  --picker-option-px: 0.625rem;
+  --picker-option-py: 0.4375rem;
+}
+
+.runtime-mode-menu-item {
+  align-items: stretch;
+}
+
 /* Thin scrollbar for long model-provider lists inside picker submenus. */
 .composer-picker-scroll {
   scrollbar-width: thin;

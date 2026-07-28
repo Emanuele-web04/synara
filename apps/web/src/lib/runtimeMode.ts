@@ -30,16 +30,15 @@ export const RUNTIME_MODE_PRESENTATION: Record<
   { readonly label: string; readonly description: string }
 > = {
   "approval-required": {
-    label: "Supervised",
-    description: "Ask before commands and file changes.",
+    label: "Ask for approval",
+    description: "Always ask to edit external files and use the internet",
   },
   auto: {
-    label: "Auto",
-    description:
-      "An AI reviewer handles routine approvals; higher-risk actions may be blocked or ask you.",
+    label: "Approve for me",
+    description: "Only ask for actions detected as potentially unsafe",
   },
   "full-access": {
     label: "Full access",
-    description: "Allow commands and edits without prompts.",
+    description: "Unrestricted access to the internet and any file on your computer",
   },
 };

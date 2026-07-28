@@ -1907,30 +1907,30 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       const supervisedTrigger = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[title^="Supervised:"]'),
-        "Unable to find the Supervised access-mode trigger.",
+        () => document.querySelector<HTMLButtonElement>('button[title^="Ask for approval:"]'),
+        "Unable to find the Ask for approval access-mode trigger.",
       );
       supervisedTrigger.click();
       const autoOption = await waitForElement(
         () =>
           Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
-            (item) => item.textContent?.trim().startsWith("Auto"),
+            (item) => item.textContent?.trim().startsWith("Approve for me"),
           ) ?? null,
-        "Unable to find the Auto access-mode option.",
+        "Unable to find the Approve for me access-mode option.",
       );
       autoOption.click();
 
       const autoTrigger = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[title^="Auto:"]'),
-        "Auto did not become the acknowledged composer access mode.",
+        () => document.querySelector<HTMLButtonElement>('button[title^="Approve for me:"]'),
+        "Approve for me did not become the acknowledged composer access mode.",
       );
       autoTrigger.click();
       const supervisedOption = await waitForElement(
         () =>
           Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
-            (item) => item.textContent?.trim().startsWith("Supervised"),
+            (item) => item.textContent?.trim().startsWith("Ask for approval"),
           ) ?? null,
-        "Unable to find the Supervised access-mode option.",
+        "Unable to find the Ask for approval access-mode option.",
       );
       supervisedOption.click();
 
