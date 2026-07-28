@@ -9,10 +9,11 @@ import { BrowserDiagnosticsStore } from "./browserDiagnostics";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-diagnostics");
 const TAB_ID = "025aa711-edf6-4c63-b957-d7c96a3fdabb";
+const OTHER_TAB_ID = "ff0ba38f-6df8-48bf-b419-a0f8185e6e3b";
 
 const createRuntime = () => {
   const events = new EventEmitter();
-  const sendCommand = vi.fn(async () => ({}));
+  const sendCommand = vi.fn(async (_method: string, _params: unknown) => ({}));
   const webContents = {
     isDestroyed: () => false,
     once: vi.fn(),
@@ -175,6 +176,34 @@ describe("browser diagnostics store", () => {
     expect(JSON.stringify(output)).not.toContain("private-fragment");
     expect(sendCommand).toHaveBeenCalledWith("Runtime.enable", {});
     expect(sendCommand).toHaveBeenCalledWith("Network.enable", expect.any(Object));
+  });
+
+  it("resets captured diagnostics when one WebContents is rebound to another tab", async () => {
+    const { runtime, emit, sendCommand } = createRuntime();
+    const diagnostics = new BrowserDiagnosticsStore();
+    await diagnostics.observe(runtime);
+    emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "tab-a-only" }] });
+
+    const reboundRuntime = {
+      ...runtime,
+      tabId: OTHER_TAB_ID,
+    } satisfies BrowserAutomationVisibleRuntime;
+    await diagnostics.observe(reboundRuntime);
+    emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "tab-b-only" }] });
+
+    const output = await diagnostics.read(reboundRuntime, {
+      includeConsole: true,
+      includeNetwork: true,
+      limit: 100,
+    });
+
+    expect(output.tabId).toBe(OTHER_TAB_ID);
+    expect(output.entries).toHaveLength(1);
+    expect(output.entries[0]).toMatchObject({ kind: "console", text: "tab-b-only" });
+    expect(JSON.stringify(output)).not.toContain("tab-a-only");
+    expect(sendCommand.mock.calls.filter(([method]) => method === "Runtime.enable")).toHaveLength(
+      2,
+    );
   });
 
   it("keeps a fixed-size ring and reports dropped entries", async () => {

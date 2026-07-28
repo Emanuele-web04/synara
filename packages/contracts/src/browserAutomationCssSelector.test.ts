@@ -9,6 +9,9 @@ describe("BrowserCssSelector", () => {
     "main > form[data-kind='account'] button.primary",
     "article:has(> h2) a[href^='https://']",
     ":host([data-theme='dark']) .item:nth-child(2)",
+    String.raw`#field\:name`,
+    String.raw`.sm\:block`,
+    String.raw`#field\3a name`,
   ])("accepts bounded native CSS: %s", (selector) => {
     expect(Schema.is(BrowserCssSelector)(selector)).toBe(true);
   });
@@ -23,6 +26,7 @@ describe("BrowserCssSelector", () => {
     "button:text('Save')",
     "button:right-of(label)",
     "button:nth-match(2)",
+    String.raw`button:h\61 s-text('Save')`,
     "/save/i",
     "div/*comment*/span",
     "div:unknown(foo)",

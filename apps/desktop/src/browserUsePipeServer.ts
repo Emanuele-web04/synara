@@ -21,7 +21,10 @@ const FRAME_HEADER_BYTES = 4;
 // 8 MiB PNG sidecars expand to about 10.7 MiB in base64; 12 MiB keeps the
 // contract maximum plus bounded structured content inside one correlated frame.
 const MAX_MESSAGE_BYTES = 12 * 1024 * 1024;
-const MAX_CLIENTS = 8;
+// The gateway accepts JSON-RPC batches of up to 50 messages and currently
+// opens one short-lived pipe connection per browser call. Keep enough room for
+// a full batch plus control traffic while retaining a finite local bound.
+const MAX_CLIENTS = 64;
 const MAX_IN_FLIGHT_REQUESTS = 16;
 const MAX_QUEUED_OUTPUT_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_ROOT_BYTES = 4_096;
@@ -104,7 +107,12 @@ export function resolveDefaultBrowserHostPipePath(
   if (platform === "win32") {
     return `\\\\.\\pipe\\${PIPE_NAME_PREFIX}-${suffix}`;
   }
-  return Path.join(OS.tmpdir(), PIPE_DIR, `${PIPE_NAME_PREFIX}-${suffix}.sock`);
+  // Darwin limits sockaddr_un paths to roughly 104 bytes, while OS.tmpdir()
+  // normally expands to a long /var/folders/... path. /tmp keeps the address
+  // bounded; the per-user directory is still created and verified as 0700.
+  const uid = process.getuid?.();
+  const privateDirectory = uid === undefined ? PIPE_DIR : `${PIPE_DIR}-${uid}`;
+  return Path.join("/tmp", privateDirectory, `${suffix}.sock`);
 }
 
 export function resolveConfiguredBrowserHostPipePath(

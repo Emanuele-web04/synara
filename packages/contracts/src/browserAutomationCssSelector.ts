@@ -209,12 +209,41 @@ class CssSelectorParser {
   }
 
   private parseIdentifier(): string | undefined {
-    if (!isIdentifierStart(this.source[this.index])) return undefined;
     const start = this.index;
-    this.index += 1;
-    while (isIdentifierPart(this.source[this.index])) this.index += 1;
+    if (this.source[this.index] === "\\") {
+      if (!this.consumeEscape()) return undefined;
+    } else {
+      if (!isIdentifierStart(this.source[this.index])) return undefined;
+      this.index += 1;
+    }
+    while (true) {
+      if (isIdentifierPart(this.source[this.index])) {
+        this.index += 1;
+        continue;
+      }
+      if (this.source[this.index] === "\\" && this.consumeEscape()) continue;
+      break;
+    }
     if (!this.token()) return undefined;
-    return this.source.slice(start, this.index).toLowerCase();
+    return decodeCssEscapes(this.source.slice(start, this.index))?.toLowerCase();
+  }
+
+  private consumeEscape(): boolean {
+    if (this.source[this.index] !== "\\") return false;
+    this.index += 1;
+    const next = this.source[this.index];
+    if (next === undefined || next === "\n" || next === "\r" || next === "\f") return false;
+    if (/[0-9a-f]/iu.test(next)) {
+      let digits = 0;
+      while (digits < 6 && /[0-9a-f]/iu.test(this.source[this.index] ?? "")) {
+        this.index += 1;
+        digits += 1;
+      }
+      if (/\s/u.test(this.source[this.index] ?? "")) this.index += 1;
+      return true;
+    }
+    this.index += 1;
+    return true;
   }
 
   private parseAttribute(): boolean {
@@ -332,7 +361,7 @@ export const isBrowserCssSelector = (value: string): boolean => {
   ) {
     return false;
   }
-  return new CssSelectorParser(decoded).parse();
+  return new CssSelectorParser(value).parse();
 };
 
 export const BrowserCssSelector = BoundedUtf8String(4_096, 1)
