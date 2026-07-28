@@ -53,6 +53,7 @@ interface FakeGitTextGeneration {
     commitSummary: string;
     diffSummary: string;
     diffPatch: string;
+    prTemplate?: string | undefined;
     codexHomePath?: string;
     providerOptions?: ProviderStartOptions;
     model?: string;
@@ -1289,8 +1290,22 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const forkDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
       yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "target repository template",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add target PR template"]);
       yield* runGit(repoDir, ["push", "origin", "main"]);
       yield* runGit(repoDir, ["push", "-u", "fork", "main"]);
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "fork-only template",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Change template in fork"]);
+      yield* runGit(repoDir, ["push", "fork", "main"]);
       yield* runGit(repoDir, [
         "config",
         "remote.origin.url",
@@ -1306,8 +1321,18 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       fs.writeFileSync(path.join(repoDir, "cross-repo-pr.txt"), "fork main change\n");
       yield* runGit(repoDir, ["add", "cross-repo-pr.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Cross repo main PR"]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Cross-repository change",
+              body: "Target template body",
+            });
+          },
+        },
         ghScenario: {
           prListByHeadSelector: {
             "octocat:main": "[]",
@@ -1325,6 +1350,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(
         ghCalls.some((call) => call.includes("pr create --base main --head octocat:main")),
       ).toBe(true);
+      expect(generatedPrTemplate).toBe("target repository template");
     }),
   );
 
@@ -1602,16 +1628,35 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "## What changed?\n\n## Verification",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add pull request template"]);
       yield* runGit(repoDir, ["checkout", "-b", "feature-create-pr"]);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "origin", "main"]);
+      yield* runGit(repoDir, ["branch", "-f", "main", "HEAD^"]);
       fs.writeFileSync(path.join(repoDir, "changes.txt"), "change\n");
       yield* runGit(repoDir, ["add", "changes.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature-create-pr"]);
       yield* runGit(repoDir, ["config", "branch.feature-create-pr.gh-merge-base", "main"]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Add stacked git actions",
+              body: "## What changed?\nAdded stacked git actions.",
+            });
+          },
+        },
         ghScenario: {
           prListSequence: [
             "[]",
@@ -1637,6 +1682,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.branch.status).toBe("skipped_not_requested");
       expect(result.pr.status).toBe("created");
       expect(result.pr.number).toBe(88);
+      expect(generatedPrTemplate).toBe("## What changed?\n\n## Verification");
       expect(
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
       ).toBe(true);
@@ -1688,10 +1734,23 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("creates cross-repo PRs with the fork owner selector and default base branch", () =>
+  it.effect("uses the local base template when a cross-repo origin ref is absent", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "local base template",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add local base template"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:example-org/sample-repo.git",
+      ]);
       const forkDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
       yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
@@ -1706,8 +1765,18 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         "remote.fork-seed.url",
         "git@github.com:octocat/sample-repo.git",
       ]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Add stacked git actions",
+              body: "Local base template body",
+            });
+          },
+        },
         ghScenario: {
           prListSequence: [
             JSON.stringify([]),
@@ -1744,6 +1813,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           call.includes("pr create --base statemachine --head octocat:statemachine"),
         ),
       ).toBe(false);
+      expect(generatedPrTemplate).toBe("local base template");
     }),
   );
 
