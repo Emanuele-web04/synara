@@ -41,7 +41,7 @@ import {
   type BranchSelectorVariant,
 } from "./BranchToolbarBranchSelector";
 import {
-  RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME,
+  RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
   COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
@@ -123,6 +123,7 @@ function RuntimeModeMenuItem({
       value={mode}
       className={cn(
         "runtime-mode-menu-item",
+        mode === "auto" && "runtime-mode-menu-item--auto",
         accent &&
           "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
       )}
@@ -130,10 +131,10 @@ function RuntimeModeMenuItem({
       <span className="grid w-full min-w-0 flex-1 grid-cols-[1.25rem_minmax(0,1fr)] items-start gap-x-3">
         <span className="flex h-5 items-center justify-center">{icon}</span>
         <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-sm leading-5 font-medium">{presentation.label}</span>
+          <span>{presentation.label}</span>
           <span
             className={cn(
-              "text-xs leading-4 font-normal",
+              "runtime-mode-menu-description text-xs font-normal",
               accent ? "text-current" : "text-muted-foreground",
             )}
           >
@@ -213,6 +214,7 @@ export function RuntimeUsageControls({
                 className={cn(
                   "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 [&_svg]:mx-0 sm:px-2.5",
                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+                  runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
                 title={`${runtimePresentation.label}: ${runtimePresentation.description}. Click to change permissions.`}
@@ -223,10 +225,7 @@ export function RuntimeUsageControls({
               {runtimeMode === "full-access" ? (
                 <CentralIcon name="shield-access" className="size-3.5 shrink-0" />
               ) : runtimeMode === "auto" ? (
-                <CentralIcon
-                  name="shield-code"
-                  className={cn("size-3.5 shrink-0", RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME)}
-                />
+                <CentralIcon name="shield-code" className="size-3.5 shrink-0" />
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
@@ -263,18 +262,18 @@ export function RuntimeUsageControls({
             >
               <RuntimeModeMenuItem
                 mode="approval-required"
-                icon={<HiOutlineHandRaised className="size-5 shrink-0" />}
+                icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
               />
               {autoModeAvailable ? (
                 <RuntimeModeMenuItem
                   mode="auto"
-                  icon={<CentralIcon name="shield-code" className="size-5 shrink-0" />}
+                  icon={<CentralIcon name="shield-code" className="size-4 shrink-0" />}
                 />
               ) : null}
               <RuntimeModeMenuItem
                 mode="full-access"
                 accent
-                icon={<CentralIcon name="shield-access" className="size-5 shrink-0" />}
+                icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
           </ComposerPickerMenuPopup>
