@@ -897,6 +897,22 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
+              // Cursor resume: a client holding cached detail replays only the
+              // gap. Out-of-range cursors (negative or overflowing gap) fall
+              // back to the snapshot inside the stream factory.
+              resumeFromSequence: input.afterSequence,
+              // A hard-purged thread leaves no rows to replay while the journal
+              // head stays above the cursor, so the gap check alone would
+              // accept the resume and stream nothing. Falling through to the
+              // snapshot path surfaces THREAD_SNAPSHOT_NOT_FOUND instead.
+              resumeSubjectExists: projectionReadModelQuery
+                .getThreadDetailSnapshotById(input.threadId)
+                .pipe(
+                  Effect.map(Option.isSome),
+                  Effect.mapError((cause) =>
+                    toWsRpcError(cause, "Failed to verify thread before cursor resume"),
+                  ),
+                ),
               onResnapshotRequired: (report) =>
                 recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(

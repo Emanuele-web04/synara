@@ -13,7 +13,7 @@ import {
   type OrchestrationShellStreamEvent,
   type ThreadMarker,
 } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   applyShellEvent,
@@ -26,6 +26,11 @@ import {
   syncServerReadModel,
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
+import {
+  hasThreadDetailResumeCursor,
+  resetThreadDetailResumeCursorsForTests,
+  setThreadDetailResumeCursor,
+} from "./threadDetailResumeCursors";
 import type { AppState } from "./storeState";
 import { getThreadFromState } from "./threadDerivation";
 import {
@@ -2057,5 +2062,99 @@ describe("deletion tombstone retirement", () => {
         deletedThreadId
       ],
     ).toBe(31);
+  });
+});
+
+describe("resume cursor lifecycle in projection transitions", () => {
+  const projectId = ProjectId.makeUnsafe("project-1");
+  const threadId = ThreadId.makeUnsafe("thread-1");
+
+  beforeEach(() => {
+    resetThreadDetailResumeCursorsForTests();
+  });
+
+  function makeStateWithCursor() {
+    const state = makeState(makeThread({ id: threadId, projectId }));
+    setThreadDetailResumeCursor(threadId, 42);
+    return state;
+  }
+
+  it("clears the cursor when the thread's detail is evicted", () => {
+    const state = makeStateWithCursor();
+    evictThreadDetailFromClientState(state, threadId);
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when the thread is deleted", () => {
+    const state = makeStateWithCursor();
+    removeDeletedThreadFromClientState(state, threadId);
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when the thread's project is deleted", () => {
+    const state = makeStateWithCursor();
+    removeDeletedProjectFromClientState(state, projectId);
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when a shell thread-removed event drops the thread", () => {
+    const state = makeStateWithCursor();
+    applyShellEvent(state, { kind: "thread-removed", sequence: 50, threadId });
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when a shell snapshot prunes the thread", () => {
+    const state = makeStateWithCursor();
+    syncServerShellSnapshot(state, {
+      snapshotSequence: 60,
+      updatedAt: "2026-02-27T00:10:00.000Z",
+      spaces: [],
+      projects: [],
+      threads: [],
+    });
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when a read-model repair prunes the thread", () => {
+    // The "Repair local state" action feeds a full read model through this
+    // path; a pruned thread's cursor must fall with its wiped detail.
+    const state = makeStateWithCursor();
+    syncServerReadModel(state, {
+      ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
+      snapshotSequence: 60,
+      threads: [],
+    });
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when a full read-model sync replaces retained detail", () => {
+    // A retained thread's detail is replaced wholesale by the read model, so a
+    // cursor ahead of the replacement would resume past history the new detail
+    // does not contain. This path is route recovery and "Repair local state"
+    // only, so the cost is one snapshot on an already-degraded path.
+    const state = makeStateWithCursor();
+    syncServerReadModel(state, {
+      ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
+      snapshotSequence: 60,
+    });
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  });
+
+  it("clears the cursor when a tombstone rejects the thread's detail snapshot", () => {
+    const state = removeDeletedThreadFromClientState(
+      makeState(makeThread({ id: threadId, projectId })),
+      threadId,
+    );
+    setThreadDetailResumeCursor(threadId, 42);
+
+    const next = syncServerThreadDetailHotPath(
+      state,
+      makeReadModelThread({ id: threadId, projectId }),
+    );
+
+    // The tombstone discarded the snapshot instead of applying it, so nothing
+    // may vouch for detail that was never stored.
+    expect(next.threadDetailSyncById?.[threadId]).toBeUndefined();
+    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
   });
 });

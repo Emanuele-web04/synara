@@ -355,6 +355,7 @@ import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
+import { hasThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import type {
@@ -3919,9 +3920,12 @@ export default function Sidebar() {
       visibleThreadIds: visibleSidebarThreadIds,
       activeThreadId: activeSidebarThreadId,
     });
-    const releaseCallbacks = threadIdsToPrewarm.map((threadId) =>
-      retainThreadDetailSubscription(threadId),
-    );
+    // Retaining a thread without cached detail would open a full-history
+    // snapshot stream speculatively; only cursor-resumable threads are cheap
+    // enough to keep warm from scroll position alone.
+    const releaseCallbacks = threadIdsToPrewarm
+      .filter((threadId) => hasThreadDetailResumeCursor(threadId))
+      .map((threadId) => retainThreadDetailSubscription(threadId));
 
     return () => {
       for (const release of releaseCallbacks) {

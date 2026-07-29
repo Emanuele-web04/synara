@@ -2430,10 +2430,17 @@ export type OrchestrationUnsubscribeShellInput = typeof OrchestrationUnsubscribe
 
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  // Cursor of the last event the client already applied. When present and the
+  // gap fits the server's replay limit, the stream replays only the gap and
+  // skips the full-history snapshot. Optional so older clients keep the
+  // snapshot-first behavior unchanged.
+  afterSequence: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
-export const OrchestrationGetThreadDetailSnapshotInput = OrchestrationSubscribeThreadInput;
+export const OrchestrationGetThreadDetailSnapshotInput = Schema.Struct({
+  threadId: ThreadId,
+});
 export type OrchestrationGetThreadDetailSnapshotInput =
   typeof OrchestrationGetThreadDetailSnapshotInput.Type;
 

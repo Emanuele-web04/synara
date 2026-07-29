@@ -26,6 +26,7 @@ import {
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
   makeRequestAbortScope,
+  serverIdentityChanged,
   MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS,
   MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
   resolveStreamAdmissionRetry,
@@ -663,6 +664,16 @@ describe("WsTransport", () => {
     expect(transport.getState()).toBe("connecting");
 
     await transport.dispose();
+  });
+
+  it("detects a server identity change across a failed reconnect", () => {
+    // The negotiated compatibility is cleared on every failed reconnect, so
+    // the comparison must use the last identity actually reached — otherwise a
+    // restore whose downtime outlasts the first retry keeps stale cursors,
+    // which is the case this guard exists for.
+    expect(serverIdentityChanged(null, "instance-a")).toBe(false);
+    expect(serverIdentityChanged("instance-a", "instance-a")).toBe(false);
+    expect(serverIdentityChanged("instance-a", "instance-b")).toBe(true);
   });
 
   it("uses the desktop bridge URL before falling back to the browser location", async () => {

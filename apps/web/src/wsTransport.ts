@@ -35,12 +35,17 @@ import {
   type WsPushChannel,
   type WsPushMessage,
   type WsBootstrapNegotiateResult,
+  ThreadId,
 } from "@synara/contracts";
 import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Schema, Scope, Stream } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
+import {
+  buildThreadSubscribeInput,
+  resetThreadDetailResumeCursors,
+} from "./threadDetailResumeCursors";
 import type { WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -219,6 +224,23 @@ export function isTerminalCompatibilityFailure(error: unknown): boolean {
       "code" in error &&
       typeof error.code === "string" &&
       TERMINAL_COMPATIBILITY_ERROR_CODES.has(error.code))
+  );
+}
+
+/**
+ * True when the server just reached is a different instance than the last one
+ * reached — the signal that cached resume cursors may belong to another event
+ * journal. Compared against the last *successful* identity rather than the
+ * current negotiation, which a failed reconnect clears: an outage longer than
+ * the first retry would otherwise erase the evidence of the change, which is
+ * exactly the restore-with-downtime case this guards against.
+ */
+export function serverIdentityChanged(
+  lastKnownServerInstanceId: string | null,
+  negotiatedServerInstanceId: string,
+): boolean {
+  return (
+    lastKnownServerInstanceId !== null && lastKnownServerInstanceId !== negotiatedServerInstanceId
   );
 }
 
@@ -480,6 +502,11 @@ export class WsTransport {
   private shellSubscribed = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
+  // Survives failed reconnects, unlike `compatibility`, which is cleared on
+  // every failure. Journal identity must be compared against the last server
+  // we actually reached: an outage longer than the first retry would
+  // otherwise erase the evidence that the server came back different.
+  private lastKnownServerInstanceId: string | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
 
   constructor(url?: string) {
@@ -727,13 +754,20 @@ export class WsTransport {
       const client = await featureRuntime.runPromise(Scope.provide(featureScope)(makeRpcClient));
       this.runtimeByClient.set(client, featureRuntime);
       if (!this.disposed && this.sessionVersion === sessionVersion) {
-        if (
-          this.compatibility &&
-          this.compatibility.serverInstanceId !== compatibility.serverInstanceId
-        ) {
+        if (serverIdentityChanged(this.lastKnownServerInstanceId, compatibility.serverInstanceId)) {
           this.latestPushByChannel.clear();
           this.sequence = 0;
+          // A resume cursor is only valid against the journal that issued its
+          // sequences. A new server instance may serve a different journal
+          // (fresh install, restored backup), so every cursor must reset to
+          // force full snapshots. Compared against the last instance actually
+          // reached rather than `compatibility`, which a failed reconnect
+          // clears — the downtime case this exists to catch. Interim tradeoff:
+          // this also drops resume across plain restarts of the same journal,
+          // acceptable until the protocol carries a durable journal epoch.
+          resetThreadDetailResumeCursors();
         }
+        this.lastKnownServerInstanceId = compatibility.serverInstanceId;
         this.compatibility = compatibility;
         this.setCompatibilityIssue(null);
         this.setState("open");
@@ -937,7 +971,11 @@ export class WsTransport {
     if (this.shellSubscribed) {
       this.startShellStream(client);
     }
-    for (const [threadId, input] of this.threadSubscriptions) {
+    // Refreshing only overwrites existing keys, so iterating the live key set
+    // is safe here.
+    for (const threadId of this.threadSubscriptions.keys()) {
+      const input = this.refreshThreadSubscriptionInput(threadId);
+      if (input === undefined) continue;
       await this.startThreadStream(client, threadId, input);
     }
     return client;
@@ -1122,6 +1160,25 @@ export class WsTransport {
     );
   }
 
+  /**
+   * Rebuilds a subscribed thread's stream input from the current resume-cursor
+   * state and stores it as the desired input. Transport-managed restarts
+   * (reconnects, stream retries) must not replay the input captured at
+   * subscribe time: a thread first subscribed without a cursor would keep
+   * requesting full snapshots forever, and a cursor cleared since then would
+   * be resent stale. Returns undefined when the thread is no longer subscribed.
+   */
+  private refreshThreadSubscriptionInput(threadId: string): unknown {
+    if (!this.threadSubscriptions.has(threadId)) return undefined;
+    const existingInput = this.threadSubscriptions.get(threadId);
+    const rebuiltInput: unknown = buildThreadSubscribeInput(ThreadId.makeUnsafe(threadId));
+    const input = threadStreamInputsEqual(existingInput, rebuiltInput)
+      ? existingInput
+      : rebuiltInput;
+    this.threadSubscriptions.set(threadId, input);
+    return input;
+  }
+
   private async startThreadStream(
     client: RpcClientInstance,
     threadId: string,
@@ -1149,7 +1206,7 @@ export class WsTransport {
       return;
     }
     const restartThread = () => {
-      const desiredInput = this.threadSubscriptions.get(threadId);
+      const desiredInput = this.refreshThreadSubscriptionInput(threadId);
       if (desiredInput === undefined) return;
       void this.getClient()
         .then((nextClient) => this.startThreadStream(nextClient, threadId, desiredInput))
