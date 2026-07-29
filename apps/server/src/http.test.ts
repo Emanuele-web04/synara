@@ -1,7 +1,8 @@
 import http from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Exit, Layer, Scope } from "effect";
@@ -331,6 +332,234 @@ describe("production Effect HTTP routes", () => {
       expect(fallback.status).toBe(200);
       expect(fallback.headers.get("content-type")).toContain("text/html");
       await expect(fallback.text()).resolves.toContain("Synara shell");
+    });
+  });
+
+  it("serves precompressed sidecars by Accept-Encoding with identity fallback", async () => {
+    const staticDir = makeTempDir("synara-effect-static-");
+    mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const source = "globalThis.synara = true;".repeat(64);
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js"), source);
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js.gz"), zlib.gzipSync(source));
+    writeFileSync(
+      path.join(staticDir, "assets", "app-abc123.js.br"),
+      zlib.brotliCompressSync(source),
+    );
+    writeFileSync(path.join(staticDir, "assets", "plain-def456.js"), source);
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      const brotli = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "gzip, br" },
+      });
+      expect(brotli.status).toBe(200);
+      expect(brotli.headers.get("content-encoding")).toBe("br");
+      expect(brotli.headers.get("content-type")).toContain("javascript");
+      expect(brotli.headers.get("vary")).toBe("Accept-Encoding");
+      await expect(brotli.text()).resolves.toBe(source);
+
+      const gzipOnly = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "gzip, br;q=0" },
+      });
+      expect(gzipOnly.headers.get("content-encoding")).toBe("gzip");
+      await expect(gzipOnly.text()).resolves.toBe(source);
+
+      const identity = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "identity" },
+      });
+      expect(identity.headers.get("content-encoding")).toBeNull();
+      expect(identity.headers.get("vary")).toBe("Accept-Encoding");
+      await expect(identity.text()).resolves.toBe(source);
+
+      // No sidecar on disk: fall back to identity even when compression is accepted.
+      const noSidecar = await fetch(`${origin}/assets/plain-def456.js`, {
+        headers: { "accept-encoding": "gzip, br" },
+      });
+      expect(noSidecar.status).toBe(200);
+      expect(noSidecar.headers.get("content-encoding")).toBeNull();
+      await expect(noSidecar.text()).resolves.toBe(source);
+
+      // A specific q=0 exclusion outranks the wildcard.
+      const excludedBrotli = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "br;q=0, *" },
+      });
+      expect(excludedBrotli.headers.get("content-encoding")).toBe("gzip");
+      await expect(excludedBrotli.text()).resolves.toBe(source);
+
+      // Sidecars are a negotiation detail, not addressable resources.
+      for (const direct of ["/assets/app-abc123.js.br", "/assets/app-abc123.js.gz"]) {
+        const response = await fetch(`${origin}${direct}`);
+        expect(response.status, direct).toBe(404);
+      }
+    });
+  });
+
+  it("refuses symlinks that escape the static root", async () => {
+    const parentDir = makeTempDir("synara-effect-static-");
+    const staticDir = path.join(parentDir, "static");
+    mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
+    const secretPath = path.join(parentDir, "secret.js");
+    writeFileSync(secretPath, "outside root");
+    writeFileSync(`${secretPath}.gz`, zlib.gzipSync("outside root"));
+    // Lexically inside the root, physically outside it — the guard must
+    // canonicalize before opening rather than trusting the prefix.
+    symlinkSync(secretPath, path.join(staticDir, "assets", "leak.js"));
+    symlinkSync(`${secretPath}.gz`, path.join(staticDir, "assets", "leak-sidecar.js.gz"));
+    writeFileSync(path.join(staticDir, "assets", "leak-sidecar.js"), "inside root");
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      // The escaping source is refused outright — the containment check runs
+      // before any read, so the link target's bytes never reach the response.
+      const escaped = await fetch(`${origin}/assets/leak.js`);
+      const escapedBody = await escaped.text();
+      expect(escaped.status).toBe(500);
+      expect(escapedBody).not.toContain("outside root");
+
+      // A sidecar that escapes is skipped; the in-root source is still served.
+      const sidecarEscape = await fetch(`${origin}/assets/leak-sidecar.js`, {
+        headers: { "accept-encoding": "gzip" },
+      });
+      expect(sidecarEscape.headers.get("content-encoding")).toBeNull();
+      await expect(sidecarEscape.text()).resolves.toBe("inside root");
+    });
+  });
+
+  it("returns 406 when no acceptable encoding exists and identity is excluded", async () => {
+    const staticDir = makeTempDir("synara-effect-static-");
+    mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const source = "globalThis.synara = true;".repeat(64);
+    writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
+    writeFileSync(path.join(staticDir, "assets", "plain-def456.js"), source);
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      // No sidecars on disk and identity refused: nothing is servable.
+      const refused = await fetch(`${origin}/assets/plain-def456.js`, {
+        headers: { "accept-encoding": "identity;q=0" },
+      });
+      expect(refused.status).toBe(406);
+      expect(refused.headers.get("vary")).toBe("Accept-Encoding");
+
+      // Same exclusion, but a sidecar the client accepts exists → 200.
+      writeFileSync(path.join(staticDir, "assets", "plain-def456.js.gz"), zlib.gzipSync(source));
+      const served = await fetch(`${origin}/assets/plain-def456.js`, {
+        headers: { "accept-encoding": "gzip, identity;q=0" },
+      });
+      expect(served.status).toBe(200);
+      expect(served.headers.get("content-encoding")).toBe("gzip");
+    });
+  });
+
+  it("revalidates with ETags and answers matching conditionals with 304", async () => {
+    const staticDir = makeTempDir("synara-effect-static-");
+    mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const source = "globalThis.synara = true;".repeat(64);
+    writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js"), source);
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js.gz"), zlib.gzipSync(source));
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      const first = await fetch(`${origin}/`);
+      const etag = first.headers.get("etag");
+      expect(etag).toMatch(/^W\//);
+
+      const revalidated = await fetch(`${origin}/`, {
+        headers: { "if-none-match": etag! },
+      });
+      expect(revalidated.status).toBe(304);
+      await expect(revalidated.text()).resolves.toBe("");
+
+      // Validators must differ per served encoding: the gzip variant's ETag
+      // cannot satisfy an identity conditional and vice versa.
+      const gzipResponse = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "gzip" },
+      });
+      const gzipEtag = gzipResponse.headers.get("etag");
+      const identityResponse = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "identity" },
+      });
+      expect(gzipEtag).not.toBeNull();
+      expect(identityResponse.headers.get("etag")).not.toBe(gzipEtag);
+
+      const gzipRevalidated = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "gzip", "if-none-match": gzipEtag! },
+      });
+      expect(gzipRevalidated.status).toBe(304);
+    });
+  });
+
+  it("marks hashed assets immutable and keeps index.html revalidating", async () => {
+    const staticDir = makeTempDir("synara-effect-static-");
+    mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js"), "globalThis.synara = true;");
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      const asset = await fetch(`${origin}/assets/app-abc123.js`);
+      expect(asset.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+
+      const index = await fetch(`${origin}/`);
+      expect(index.headers.get("cache-control")).toBe("no-cache");
+      expect(index.headers.get("content-type")).toContain("text/html");
+
+      const spaFallback = await fetch(`${origin}/chat/thread-id`);
+      expect(spaFallback.headers.get("cache-control")).toBe("no-cache");
+    });
+  });
+
+  it("rejects traversal attempts including sidecar-shaped paths", async () => {
+    const parentDir = makeTempDir("synara-effect-static-");
+    const staticDir = path.join(parentDir, "static");
+    mkdirSync(staticDir, { recursive: true });
+    writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
+    writeFileSync(path.join(parentDir, "secret.js"), "outside root");
+    writeFileSync(path.join(parentDir, "secret.js.gz"), zlib.gzipSync("outside root"));
+    writeFileSync(path.join(parentDir, "secret.js.br"), zlib.brotliCompressSync("outside root"));
+
+    // fetch() normalizes dot segments away client-side; send the raw request
+    // path so the server's own guard is what gets exercised.
+    const rawRequest = (origin: string, rawPath: string) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const { hostname, port } = new URL(origin);
+        const request = http.request(
+          { hostname, port, path: rawPath, headers: { "accept-encoding": "gzip, br" } },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.on("end", () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                body: Buffer.concat(chunks).toString("latin1"),
+              }),
+            );
+          },
+        );
+        request.on("error", reject);
+        request.end();
+      });
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      // Dot segments are stripped by URL parsing before the path guard runs,
+      // and percent-encoded separators stay literal filename characters — both
+      // must resolve inside the root (shell fallback) or be rejected outright,
+      // never reach the sibling secret or its sidecars.
+      // Sidecar-shaped request paths 404 outright (they are never addressable),
+      // which also removes them as a traversal target.
+      for (const traversal of [
+        "/../secret.js",
+        "/../secret.js.gz",
+        "/../secret.js.br",
+        "/assets/../../secret.js.gz",
+        "/..%2Fsecret.js.gz",
+        "/assets/..%2f..%2fsecret.js.br",
+        "/%2e%2e/secret.js.br",
+      ]) {
+        const response = await rawRequest(origin, traversal);
+        expect([200, 400, 404], traversal).toContain(response.status);
+        expect(response.body, traversal).not.toContain("outside root");
+        if (response.status === 200) {
+          expect(response.body, traversal).toContain("Synara shell");
+        }
+      }
     });
   });
 
