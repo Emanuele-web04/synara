@@ -11,10 +11,14 @@ const devServerUrl = `http://localhost:${port}`;
 const requiredFiles = [
   "dist-electron/main.js",
   "dist-electron/preload.js",
+  "dist-electron/guestPreload.js",
   "../server/dist/index.mjs",
 ];
 const watchedDirectories = [
-  { directory: "dist-electron", files: new Set(["main.js", "preload.js"]) },
+  {
+    directory: "dist-electron",
+    files: new Set(["main.js", "preload.js", "guestPreload.js"]),
+  },
   { directory: "../server/dist", files: new Set(["index.mjs"]) },
 ];
 const forcedShutdownTimeoutMs = 1_500;

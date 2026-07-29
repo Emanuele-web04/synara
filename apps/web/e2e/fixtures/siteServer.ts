@@ -15,12 +15,32 @@ const APP_HTML = `<!doctype html>
   <head>
     <meta charset="UTF-8" />
     <title>Visible browser fixture</title>
+    <script>
+      window.__annotationHostileCapture = [];
+      window.__annotationUnexpectedKeyups = [];
+      window.addEventListener("keyup", (event) => {
+        window.__annotationUnexpectedKeyups.push(event.key);
+      }, true);
+      for (const type of ["pointerdown", "pointerup", "pointercancel", "pointerrawupdate", "mousedown", "mousemove", "mouseup", "auxclick", "contextmenu", "click", "keydown", "keypress", "keyup", "beforeinput", "input", "paste", "compositionupdate"]) {
+        window.addEventListener(type, (event) => {
+          const picker = document.querySelector("[data-synara-browser-annotations][data-interactive]");
+          if (!picker) return;
+          window.__annotationHostileCapture.push({
+            type,
+            key: typeof event.key === "string" ? event.key : "",
+            data: typeof event.data === "string" ? event.data : "",
+          });
+        }, true);
+      }
+    </script>
     <style>
       body { margin: 0; min-height: 2600px; font: 16px system-ui, sans-serif; }
       main { padding: 20px; }
       label, button { display: block; margin: 0 0 18px; }
       input { width: 280px; height: 28px; }
       #manual { width: 180px; height: 42px; }
+      #private-editor-wrap { width: 320px; padding: 18px; border: 1px solid #444; }
+      #private-editor { width: 240px; padding: 8px; }
       #hover-result { visibility: hidden; }
       #hover-target:hover + #hover-result { visibility: visible; }
       #drag-source, #drop-target { width: 180px; min-height: 36px; padding: 8px; border: 1px solid #444; }
@@ -34,7 +54,10 @@ const APP_HTML = `<!doctype html>
       <label>Shared input <input aria-label="Shared input" /></label>
       <button id="agent" type="button">Commit agent action</button>
       <button id="point" type="button">Commit point action</button>
-      <button id="manual" type="button">Manual Playwright action</button>
+      <input id="manual" type="button" value="Manual Playwright action" />
+      <section id="private-editor-wrap">
+        <div id="private-editor" contenteditable="true">Private draft must not be captured</div>
+      </section>
       <button id="hover-target" type="button">Reveal hover state</button>
       <span id="hover-result">Trusted hover revealed</span>
       <label>Fixture choice
@@ -199,19 +222,20 @@ const HTML_BY_PATH: Readonly<Record<string, string>> = {
 
 export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFixtureSite> {
   const server: Server = createServer((request, response) => {
-    if (request.url === "/redirect") {
+    const requestPath = new URL(request.url ?? "/", "http://fixture.test").pathname;
+    if (requestPath === "/redirect") {
       response.statusCode = 302;
       response.setHeader("Location", "/next");
       response.end();
       return;
     }
-    if (request.url === "/api/fixture") {
+    if (requestPath === "/api/fixture") {
       response.setHeader("Content-Type", "application/json");
       response.setHeader("Cache-Control", "no-store");
       response.end(JSON.stringify({ ok: true }));
       return;
     }
-    if (request.url === "/download") {
+    if (requestPath === "/download") {
       response.setHeader("Content-Type", "application/octet-stream");
       response.setHeader("Content-Disposition", 'attachment; filename="fixture-download.txt"');
       response.setHeader("Cache-Control", "no-store");
@@ -220,7 +244,7 @@ export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFi
     }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
-    response.end(HTML_BY_PATH[request.url ?? ""] ?? INITIAL_HTML);
+    response.end(HTML_BY_PATH[requestPath] ?? INITIAL_HTML);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

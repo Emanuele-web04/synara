@@ -247,6 +247,10 @@
     "./providerDeliveryBlock": {
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"
+    },
+    "./browserAnnotations": {
+      "types": "./src/browserAnnotations.ts",
+      "import": "./src/browserAnnotations.ts"
     }
   },
   "scripts": {

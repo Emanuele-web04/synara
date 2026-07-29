@@ -10,6 +10,7 @@ export { BrowserLoadState } from "./browserAutomationToolCommon";
 export * from "./browserAutomationToolInputs";
 export * from "./browserAutomationToolOutputs";
 export * from "./browserAutomationToolCatalogue";
+export * from "./browserAnnotations";
 export * from "./ipc";
 export * from "./terminal";
 export * from "./provider";

@@ -1,5 +1,10 @@
+import { MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
+import {
+  appendBrowserAnnotationsToPrompt,
+  type BrowserAnnotationDraft,
+} from "../lib/browserAnnotations";
 import { appendPastedTextsToPrompt } from "../lib/composerPastedText";
 import { appendTerminalContextsToPrompt } from "../lib/terminalContext";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
@@ -10,6 +15,46 @@ import {
 } from "./timelineHeight";
 
 describe("estimateTimelineMessageHeight", () => {
+  it("keeps browser annotations to one estimated row regardless of their count", () => {
+    const messageId = MessageId.makeUnsafe("message-with-browser-annotations");
+    const makeAnnotation = (ordinal: number): BrowserAnnotationDraft => ({
+      id: `annotation-${ordinal}`,
+      ordinal,
+      tabId: "tab-1",
+      source: {
+        url: `https://example.test/page-${ordinal}`,
+        pageTitle: `Page ${ordinal}`,
+      },
+      selector: `#target-${ordinal}`,
+      tagName: "button",
+      role: "button",
+      name: `Target ${ordinal}`,
+      text: `Target ${ordinal}`,
+      fingerprint: `button|target-${ordinal}`,
+      comment: "",
+      capturedAt: "2026-07-23T10:00:00.000Z",
+    });
+    const estimateWithAnnotations = (count: number) =>
+      estimateTimelineMessageHeight({
+        id: messageId,
+        role: "user",
+        text: appendBrowserAnnotationsToPrompt(
+          "Update these",
+          Array.from({ length: count }, (_, index) => makeAnnotation(index + 1)),
+          messageId,
+        ),
+      });
+
+    expect(estimateWithAnnotations(8)).toBe(estimateWithAnnotations(1));
+    expect(estimateWithAnnotations(1)).toBeGreaterThan(
+      estimateTimelineMessageHeight({
+        id: messageId,
+        role: "user",
+        text: "Update these",
+      }),
+    );
+  });
+
   it("uses assistant sizing rules for assistant messages", () => {
     expect(
       estimateTimelineMessageHeight({

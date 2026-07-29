@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { BrowserUseOpenPanelRequest, DesktopBridge } from "@synara/contracts";
+import type {
+  BrowserAnnotationEvent,
+  BrowserUseOpenPanelRequest,
+  DesktopBridge,
+} from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 
@@ -23,6 +27,36 @@ function parseBrowserOpenPanelRequest(payload: unknown): BrowserUseOpenPanelRequ
     return null;
   }
   return { threadId: threadId as BrowserUseOpenPanelRequest["threadId"] };
+}
+
+function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent | null {
+  if (!payload || typeof payload !== "object") return null;
+  const event = payload as Record<string, unknown>;
+  if (
+    !["started", "cancelled", "document-changed", "markers-synced", "committed"].includes(
+      String(event.kind),
+    ) ||
+    typeof event.threadId !== "string" ||
+    typeof event.tabId !== "string" ||
+    !event.document ||
+    typeof event.document !== "object" ||
+    !event.source ||
+    typeof event.source !== "object"
+  ) {
+    return null;
+  }
+  const document = event.document as Record<string, unknown>;
+  const source = event.source as Record<string, unknown>;
+  if (
+    typeof document.token !== "string" ||
+    typeof document.key !== "string" ||
+    typeof document.url !== "string" ||
+    typeof source.url !== "string" ||
+    typeof source.pageTitle !== "string"
+  ) {
+    return null;
+  }
+  return payload as BrowserAnnotationEvent;
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
@@ -174,6 +208,19 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     closeTab: (input) => ipcRenderer.invoke(IPC.browser.closeTab, input),
     selectTab: (input) => ipcRenderer.invoke(IPC.browser.selectTab, input),
     openDevTools: (input) => ipcRenderer.invoke(IPC.browser.openDevTools, input),
+    annotations: {
+      start: (input) => ipcRenderer.invoke(IPC.browser.annotations.start, input),
+      cancel: (input) => ipcRenderer.invoke(IPC.browser.annotations.cancel, input),
+      syncMarkers: (input) => ipcRenderer.invoke(IPC.browser.annotations.syncMarkers, input),
+      onEvent: (listener) => {
+        const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+          const annotationEvent = parseBrowserAnnotationEvent(payload);
+          if (annotationEvent) listener(annotationEvent);
+        };
+        ipcRenderer.on(IPC.browser.annotations.event, wrappedListener);
+        return () => ipcRenderer.removeListener(IPC.browser.annotations.event, wrappedListener);
+      },
+    },
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
         if (typeof state !== "object" || state === null) return;
