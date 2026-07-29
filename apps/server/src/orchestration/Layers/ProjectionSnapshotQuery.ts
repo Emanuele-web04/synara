@@ -935,8 +935,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             OR latest_turn.state = 'running'
             OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
           )
-          AND COALESCE(sessions.updated_at, threads.updated_at) <= ${updatedBefore}
-        ORDER BY COALESCE(sessions.updated_at, threads.updated_at) ASC, threads.thread_id ASC
+          -- Later of the session lifecycle timestamp and the thread timestamp:
+          -- threads.updated_at advances on every appended message, so a turn
+          -- that is actively streaming output is not a stale candidate.
+          AND MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) <= ${updatedBefore}
+        ORDER BY MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) ASC, threads.thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}
       `,
   });

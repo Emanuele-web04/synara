@@ -1040,11 +1040,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             event.lifecycleGeneration !== undefined &&
             lifecycle.currentGeneration(event.threadId) !== event.lifecycleGeneration
           ) {
-            return Effect.logDebug("provider.session.stale_generation_event_ignored", {
+            // Warn, not debug: a persistent mismatch silently discards every
+            // runtime event for the thread — the provider runs, the UI shows
+            // nothing, and the runtime reconciler later settles the turn as
+            // interrupted. This log line is the only way to see it happening.
+            return Effect.logWarning("provider.session.stale_generation_event_ignored", {
               threadId: event.threadId,
               provider: event.provider,
               eventType: event.type,
               eventLifecycleGeneration: event.lifecycleGeneration,
+              currentLifecycleGeneration: lifecycle.currentGeneration(event.threadId),
             });
           }
           const canonicalEvent = event;
@@ -1479,38 +1484,53 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const forkedSession = (yield* adapter.listSessions()).find(
           (session) => session.threadId === input.threadId,
         );
-        if (forkedSession) {
-          yield* upsertSessionBinding(forkedSession, input.threadId, {
-            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-            ...(effectiveProviderOptions !== undefined
-              ? { providerOptions: effectiveProviderOptions }
-              : {}),
-            lastRuntimeEvent: "provider.thread.forked",
-            lastRuntimeEventAt: new Date().toISOString(),
-          });
-        } else {
-          yield* directory.upsert({
-            threadId: input.threadId,
-            provider: adapter.provider,
-            runtimeMode: input.runtimeMode,
-            status: "stopped",
-            ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
-            runtimePayload: {
-              cwd: input.cwd ?? null,
-              model: input.modelSelection?.model ?? null,
-              activeTurnId: null,
-              lastError: null,
-              ...(input.modelSelection !== undefined
-                ? { modelSelection: input.modelSelection }
-                : {}),
-              ...(effectiveProviderOptions !== undefined
-                ? { providerOptions: effectiveProviderOptions }
-                : {}),
-              lastRuntimeEvent: "provider.thread.forked",
-              lastRuntimeEventAt: new Date().toISOString(),
-            },
-          });
-        }
+        // Register the fork under a committed lifecycle generation. Writing the
+        // binding outside the coordinator lands it on the directory's "legacy"
+        // default while the coordinator has no entry for the thread at all, and
+        // any later generation adoption from that row (session recovery, the
+        // startup broadcast) diverges from what the live runtime stamps —
+        // silently discarding the thread's runtime events.
+        yield* lifecycle.run(input.threadId, (lease) =>
+          Effect.gen(function* () {
+            if (forkedSession) {
+              yield* upsertSessionBinding(forkedSession, input.threadId, {
+                lifecycleGeneration: lease.generation,
+                ...(input.modelSelection !== undefined
+                  ? { modelSelection: input.modelSelection }
+                  : {}),
+                ...(effectiveProviderOptions !== undefined
+                  ? { providerOptions: effectiveProviderOptions }
+                  : {}),
+                lastRuntimeEvent: "provider.thread.forked",
+                lastRuntimeEventAt: new Date().toISOString(),
+              });
+            } else {
+              yield* directory.upsert({
+                threadId: input.threadId,
+                provider: adapter.provider,
+                runtimeMode: input.runtimeMode,
+                status: "stopped",
+                lifecycleGeneration: lease.generation,
+                ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
+                runtimePayload: {
+                  cwd: input.cwd ?? null,
+                  model: input.modelSelection?.model ?? null,
+                  activeTurnId: null,
+                  lastError: null,
+                  ...(input.modelSelection !== undefined
+                    ? { modelSelection: input.modelSelection }
+                    : {}),
+                  ...(effectiveProviderOptions !== undefined
+                    ? { providerOptions: effectiveProviderOptions }
+                    : {}),
+                  lastRuntimeEvent: "provider.thread.forked",
+                  lastRuntimeEventAt: new Date().toISOString(),
+                },
+              });
+            }
+            lease.commit();
+          }),
+        );
         yield* analytics.record("provider.thread.forked", {
           provider: adapter.provider,
         });

@@ -160,4 +160,64 @@ describe("providerRuntimeEventPump", () => {
       ),
     );
   });
+
+  it("heals a degraded pump after sustained successful processing", async () => {
+    class PermanentEventError extends Error {}
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const queue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+          const completed = yield* Deferred.make<void>();
+          const health = makeProviderRuntimeEventPumpHealthRegistry(["codex"]);
+          const processed: string[] = [];
+
+          const fiber = yield* runProviderRuntimeEventPump({
+            provider: "codex",
+            stream: Stream.fromQueue(queue),
+            processEvent: (event) =>
+              event.eventId === "event-poison"
+                ? Effect.fail(new PermanentEventError("invalid canonical event"))
+                : Effect.sync(() => {
+                    processed.push(event.eventId);
+                  }).pipe(
+                    Effect.andThen(
+                      event.eventId === "event-heal-3"
+                        ? Deferred.succeed(completed, undefined).pipe(Effect.asVoid)
+                        : Effect.void,
+                    ),
+                  ),
+            updateHealth: health.update,
+            isPermanentFailure: (cause) =>
+              Option.match(Cause.findErrorOption(cause), {
+                onNone: () => false,
+                onSome: (error) => error instanceof PermanentEventError,
+              }),
+            quarantineEvent: () => Effect.void,
+            retryBaseDelayMs: 1,
+            retryMaxDelayMs: 2,
+            degradedHealAfterSuccesses: 3,
+          }).pipe(Effect.forkScoped);
+
+          yield* Queue.offerAll(queue, [
+            completedEvent("event-poison"),
+            completedEvent("event-heal-1"),
+            completedEvent("event-heal-2"),
+            completedEvent("event-heal-3"),
+          ]);
+          yield* Deferred.await(completed);
+          yield* Effect.sleep(5);
+          yield* Fiber.interrupt(fiber);
+
+          expect(processed).toEqual(["event-heal-1", "event-heal-2", "event-heal-3"]);
+          // Healed: no longer degraded, but the quarantine forensics survive.
+          expect(health.snapshot()[0]).toMatchObject({
+            status: "healthy",
+            quarantinedEvents: 0,
+            lastQuarantinedEventId: "event-poison",
+          });
+        }),
+      ),
+    );
+  });
 });

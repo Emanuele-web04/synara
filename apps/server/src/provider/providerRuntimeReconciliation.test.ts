@@ -143,8 +143,8 @@ describe("planProviderRuntimeReconciliation", () => {
         pumpHealth: [
           {
             provider: "claudeAgent",
-            status: "recovering",
-            consecutiveFailures: 1,
+            status: "healthy",
+            consecutiveFailures: 0,
             updatedAt: "2026-07-23T20:00:29.000Z",
           },
         ],
@@ -660,7 +660,11 @@ describe("planProviderRuntimeReconciliation", () => {
     });
   });
 
-  it("records degraded pump evidence in the reconciliation reason", () => {
+  it("does not settle while the provider's runtime-event pump is unhealthy", () => {
+    // A quiet projection plus a missing/settled-looking live session is exactly
+    // what a stalled event stream produces for a turn that is in fact
+    // progressing. Settling on evidence the process cannot observe kills live
+    // turns; the abandoned clock is the only escape hatch.
     const plans = planProviderRuntimeReconciliation({
       threads: [threadShell()],
       bindings: [binding(null)],
@@ -677,6 +681,59 @@ describe("planProviderRuntimeReconciliation", () => {
       staleAfterMs: 10_000,
     });
 
+    expect(plans).toEqual([]);
+  });
+
+  it("still settles an abandoned thread despite an unhealthy pump, recording pump evidence", () => {
+    const abandonedAt = "2026-07-23T19:00:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: abandonedAt,
+          session: {
+            ...threadShell().session!,
+            updatedAt: abandonedAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [
+        {
+          provider: "codex",
+          status: "recovering",
+          consecutiveFailures: 2,
+          updatedAt: "2026-07-23T20:00:29.000Z",
+        },
+      ],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+      maxTurnAgeMs: 30 * 60_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        threadId: THREAD_ID,
+        projectedTurnId: OLD_TURN_ID,
+      }),
+    ]);
     expect(plans[0]?.reason).toContain("runtime-event pump is recovering");
+  });
+
+  it("does not treat an actively streaming turn as stale when only the session row is quiet", () => {
+    // thread.updatedAt advances on every appended message. A turn that is
+    // streaming output must never become a settle candidate just because the
+    // session lifecycle row has not moved since the turn started.
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell({ updatedAt: "2026-07-23T20:00:28.000Z" })],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
   });
 });
