@@ -133,7 +133,17 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
 }
 
 function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
-  const observedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
+  // The later of the session lifecycle timestamp and the thread timestamp:
+  // `thread.updatedAt` advances on every appended message, so a turn that is
+  // actively streaming output never counts as stale even though its session
+  // row only moves on lifecycle transitions.
+  const sessionObservedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
+  const threadObservedAt = Date.parse(thread.updatedAt);
+  const observedAt = Number.isFinite(sessionObservedAt)
+    ? Number.isFinite(threadObservedAt)
+      ? Math.max(sessionObservedAt, threadObservedAt)
+      : sessionObservedAt
+    : threadObservedAt;
   return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
 }
 
@@ -234,6 +244,15 @@ export function planProviderRuntimeReconciliation(input: {
       });
       continue;
     }
+
+    // Every plan below settles the projection on the absence of runtime
+    // evidence. A pump that is not healthy means this planner is blind: a
+    // quiet projection and a settled-looking live session are exactly what a
+    // stalled event stream produces for a turn that is in fact progressing.
+    // Never settle on evidence the process admits it cannot observe; the
+    // abandoned clock remains the escape hatch for a pump that never recovers.
+    const pumpHealth = healthByProvider.get(provider);
+    if (pumpHealth !== undefined && pumpHealth.status !== "healthy" && !abandoned) continue;
 
     // Settling a projection is normally only safe when it names a concrete
     // in-flight turn; ProviderCommandReactor owns failures before a start

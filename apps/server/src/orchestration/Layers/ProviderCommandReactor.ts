@@ -3281,6 +3281,13 @@ const make = Effect.gen(function* () {
           if (!thread?.session || thread.session.status === "stopped") {
             return;
           }
+          if (thread.session.activeTurnId !== null) {
+            // Ensuring now would restart the provider session and kill the
+            // in-flight turn. The projected thread already carries the desired
+            // runtime mode; the next turn's ensure compares it against the
+            // session's spawn mode and restarts between turns instead.
+            return;
+          }
           const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
           yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
             ...(cachedProviderOptions !== undefined

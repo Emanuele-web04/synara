@@ -50,6 +50,7 @@ import {
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
+import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -2554,6 +2555,41 @@ const make = Effect.gen(function* () {
   });
   const runtimeJournalDrainLock = yield* Semaphore.make(1);
 
+  // A deterministically failing row would otherwise pin the single global
+  // cursor forever: the drain never advances, the durable poller re-reads the
+  // same head row, and projection freezes for every thread and every provider
+  // — durably, across restarts. Once the poison gate trips (see the module for
+  // why it needs both an attempt and a wall-clock gate), the head row is
+  // dead-lettered: skipped with an error log so the journal flows again.
+  const poisonGate = makeRuntimeJournalPoisonGate();
+
+  const deadLetterPoisonHeadRow = Effect.gen(function* () {
+    const cursor = yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
+    if (!poisonGate.noteBlockedDrain(cursor, Date.now())) return false;
+    const highWater = yield* runtimeEvents.getHighWaterSequence;
+    const page = yield* runtimeEvents.readAfter({
+      sequenceExclusive: cursor,
+      throughSequenceInclusive: highWater,
+      limit: 1,
+    });
+    const poison = page[0];
+    if (poison === undefined) return false;
+    yield* Effect.logError("provider runtime journal dead-lettered a poison event", {
+      sequence: poison.sequence,
+      eventId: poison.event.eventId,
+      eventType: poison.event.type,
+      threadId: poison.event.threadId,
+      provider: poison.event.provider,
+    });
+    const advanced = yield* runtimeEvents.advanceConsumerCursor({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      eventSequence: poison.sequence,
+      updatedAt: new Date().toISOString(),
+    });
+    poisonGate.reset();
+    return advanced;
+  });
+
   const drainRuntimeJournalThrough = (throughSequenceInclusive?: number) =>
     runtimeJournalDrainLock.withPermits(1)(
       Effect.gen(function* () {
@@ -2584,7 +2620,13 @@ const make = Effect.gen(function* () {
             }),
           );
           yield* worker.drain;
-          if (runtimeJournalPageBlocked) return;
+          if (runtimeJournalPageBlocked) {
+            // Either the poison threshold was reached and the head row was
+            // skipped (loop again from the fresh cursor), or the drain yields
+            // to the durable poller, which retries from the exact cursor.
+            if (yield* deadLetterPoisonHeadRow) continue;
+            return;
+          }
 
           const advancedCursor = yield* runtimeEvents.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,
