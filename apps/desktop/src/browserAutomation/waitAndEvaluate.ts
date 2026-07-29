@@ -150,7 +150,6 @@ const conditionSatisfied = async (
   elapsedMs: number,
   observations: {
     page?: Promise<BrowserPageObservation>;
-    visibleText?: Promise<string>;
   },
   signal?: AbortSignal,
 ): Promise<boolean> => {
@@ -159,12 +158,14 @@ const conditionSatisfied = async (
     return targetConditionSatisfied(runtime, condition, snapshot, signal);
   }
   if (condition.kind === "text") {
-    observations.visibleText ??= evaluateInContext<string>(
-      runtime,
-      "document.body?.innerText || ''",
-      { signal },
-    ).then((response) => response.value ?? "");
-    const present = (await observations.visibleText).includes(condition.text);
+    const present =
+      (
+        await evaluateInContext<boolean>(
+          runtime,
+          `(document.body?.innerText || "").includes(${JSON.stringify(condition.text)})`,
+          { signal },
+        )
+      ).value === true;
     return condition.state === "present" ? present : !present;
   }
   observations.page ??= observePage(runtime, signal);
@@ -193,7 +194,6 @@ export const waitForBrowserConditions = async (
     const networkIdle = navigationTracker.networkIdle();
     const observations: {
       page?: Promise<BrowserPageObservation>;
-      visibleText?: Promise<string>;
     } = {};
     const settledStates = await Promise.allSettled(
       input.conditions.map((condition) =>

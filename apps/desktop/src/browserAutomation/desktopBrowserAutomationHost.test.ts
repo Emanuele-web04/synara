@@ -147,7 +147,7 @@ const createWebContents = () => {
       if (expression.includes("document.activeElement || document.body")) {
         return { result: { objectId: "active-element", type: "object", subtype: "node" } };
       }
-      if (expression.includes("document.body?.innerText")) return { result: { value: "Ready" } };
+      if (expression.includes("document.body?.innerText")) return { result: { value: true } };
       if (expression.trim() === "({answer: 42})") return { result: { value: { answer: 42 } } };
       if (expression.includes("elementFromPoint")) {
         return { result: { objectId: "point-target", type: "object", subtype: "node" } };
@@ -2010,29 +2010,40 @@ describe("DesktopBrowserAutomationHost", () => {
     controller.abort();
     await expect(first).rejects.toMatchObject({ browserError: { code: "BrowserCancelled" } });
 
-    const second = host.executeTool({
-      sessionId: "session-drain",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_tabs",
-      arguments: {},
+    const retryArguments = {
+      idempotencyKey: "resize-after-queued-timeout",
+      width: 700,
+      height: 500,
+    };
+    await expect(
+      host.executeTool({
+        sessionId: "session-inner-lock-timeout",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_resize",
+        arguments: { ...retryArguments, timeoutMs: 100 },
+      }),
+    ).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserTimeout",
+        phase: "queue",
+        effectMayHaveCommitted: false,
+      },
     });
-    let secondSettled = false;
-    void second.finally(() => {
-      secondSettled = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(secondSettled).toBe(false);
-    expect(sendCommand).not.toHaveBeenCalledWith(
-      "Emulation.setDeviceMetricsOverride",
-      expect.anything(),
-    );
 
     layout.resolve({ cssLayoutViewport: { clientWidth: 1024, clientHeight: 768 } });
-    await expect(second).resolves.toMatchObject({ activeTabId: TAB_ID });
-    expect(sendCommand).not.toHaveBeenCalledWith(
+    await expect(
+      host.executeTool({
+        sessionId: "session-inner-lock-timeout",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_resize",
+        arguments: retryArguments,
+      }),
+    ).resolves.toBeDefined();
+    expect(sendCommand).toHaveBeenCalledWith(
       "Emulation.setDeviceMetricsOverride",
-      expect.anything(),
+      expect.objectContaining({ width: 700, height: 500 }),
     );
   });
 

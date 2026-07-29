@@ -327,6 +327,7 @@ interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
+  gatewayConnection?: AgentGatewayMcpConnection;
   readonly lifecycleGeneration?: string;
   runtime: PiAgentRuntime;
   readonly processSupervisor: PiBashProcessSupervisor;
@@ -1976,7 +1977,29 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             });
           }
           const completionBase = makeEventBase(context);
-          Effect.runFork(cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId));
+          if (turnId && context.gatewaySessionLease && context.gatewayConnection) {
+            const outgoingLease = context.gatewaySessionLease;
+            const drainage = outgoingLease.retireTurn(turnId);
+            outgoingLease.release();
+            const replacementLease = acquireAgentGatewaySessionLease(
+              agentGatewayCredentials,
+              context.session.threadId,
+              PROVIDER,
+            );
+            if (replacementLease) {
+              context.gatewaySessionLease = replacementLease;
+              Object.assign(context.gatewayConnection, replacementLease.connection);
+            } else {
+              delete context.gatewaySessionLease;
+            }
+            Effect.runFork(
+              Effect.promise(() => drainage).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("pi.agent_gateway.turn_retirement_failed", { turnId, cause }),
+                ),
+              ),
+            );
+          }
           context.activeTurnId = undefined;
           context.activeAssistantItemId = undefined;
           context.activeReasoningItemId = undefined;
@@ -2196,7 +2219,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           runtime,
           gatewayControlAvailable,
           ...(gatewayControlAvailable && agentGatewaySessionLease
-            ? { gatewaySessionLease: agentGatewaySessionLease }
+            ? {
+                gatewaySessionLease: agentGatewaySessionLease,
+                gatewayConnection: agentGatewayConnection!,
+              }
             : {}),
           processSupervisor,
           modelRegistry,
