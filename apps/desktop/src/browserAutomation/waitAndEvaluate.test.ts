@@ -34,7 +34,8 @@ const createRuntime = (state: TargetState): BrowserAutomationVisibleRuntime => {
       const expression = String(params?.expression ?? "");
       if (expression.includes("performance.getEntriesByType")) return { result: { value: 0 } };
       if (expression.includes("document.body?.innerText")) {
-        return { result: { value: "Ready for work" } };
+        const encodedNeedle = expression.match(/\.includes\((.*)\)$/)?.[1] ?? '""';
+        return { result: { value: "Ready for work".includes(JSON.parse(encodedNeedle)) } };
       }
       if (
         expression.includes("state.currentTarget =") ||
@@ -244,7 +245,7 @@ describe("browser_wait target states", () => {
     ).resolves.toMatchObject({ satisfiedConditionIndexes: [0, 1] });
   });
 
-  it("shares page and text observations across conditions in one polling pass", async () => {
+  it("evaluates text predicates in the renderer and shares page observations", async () => {
     const runtime = createRuntime({});
     const sendCommand = runtime.webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
 
@@ -279,7 +280,7 @@ describe("browser_wait target states", () => {
           "readyState: document.readyState",
         ),
     );
-    expect(runtimeEvaluations).toHaveLength(1);
+    expect(runtimeEvaluations).toHaveLength(2);
     expect(pageEvaluations).toHaveLength(1);
   });
 

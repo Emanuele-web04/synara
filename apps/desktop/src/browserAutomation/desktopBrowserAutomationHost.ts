@@ -351,7 +351,13 @@ export class DesktopBrowserAutomationHost {
     const affinity = this.bindSession(request);
     const timeoutMs =
       typeof input.timeoutMs === "number" ? input.timeoutMs : definition.defaultTimeoutMs;
-    const timeoutError = new BrowserAutomationHostError({
+    const queuedTimeoutError = new BrowserAutomationHostError({
+      code: "BrowserTimeout",
+      retryable: true,
+      phase: "queue",
+      effectMayHaveCommitted: false,
+    });
+    const runtimeTimeoutError = new BrowserAutomationHostError({
       code: "BrowserTimeout",
       retryable: true,
       phase: "runtime",
@@ -364,7 +370,9 @@ export class DesktopBrowserAutomationHost {
       effectMayHaveCommitted: !definition.annotations.readOnlyHint,
     });
     const controller = new AbortController();
-    const abortForTimeout = () => controller.abort(timeoutError);
+    let actionStarted = false;
+    const abortForTimeout = () =>
+      controller.abort(actionStarted ? runtimeTimeoutError : queuedTimeoutError);
     const abortForRequest = () =>
       controller.abort(
         request.signal?.reason instanceof BrowserAutomationHostError
@@ -400,11 +408,12 @@ export class DesktopBrowserAutomationHost {
               input,
               affinity,
               controller.signal,
-              timeoutError,
+              runtimeTimeoutError,
               interruptByHuman,
+              () => (actionStarted = true),
             ),
           controller.signal,
-          timeoutError,
+          queuedTimeoutError,
         );
       } catch (error) {
         if (error instanceof BrowserAutomationHostError) throw error;
@@ -495,7 +504,7 @@ export class DesktopBrowserAutomationHost {
 
     const timer = setTimeout(abortForTimeout, timeoutMs);
     try {
-      const output = await raceWithAbort(operation, controller.signal, timeoutError);
+      const output = await raceWithAbort(operation, controller.signal, queuedTimeoutError);
       try {
         return Schema.decodeUnknownSync(definition.hostOutput as never)(output);
       } catch {
@@ -884,6 +893,7 @@ export class DesktopBrowserAutomationHost {
     signal: AbortSignal,
     abortError: BrowserAutomationHostError,
     interruptByHuman: (error: BrowserAutomationHostError) => void,
+    markActionStarted: () => void,
   ): Promise<unknown> {
     switch (request.name) {
       case "browser_status":
@@ -898,6 +908,7 @@ export class DesktopBrowserAutomationHost {
           signal,
           abortError,
           interruptByHuman,
+          markActionStarted,
         );
     }
 
@@ -912,8 +923,17 @@ export class DesktopBrowserAutomationHost {
             !BROWSER_TOOL_DEFINITIONS_BY_NAME[request.name].annotations.readOnlyHint,
             signal,
             interruptByHuman,
-            () =>
-              this.executeTabTool(request, input, affinity, targetTabId, signal, interruptByHuman),
+            () => {
+              markActionStarted();
+              return this.executeTabTool(
+                request,
+                input,
+                affinity,
+                targetTabId,
+                signal,
+                interruptByHuman,
+              );
+            },
           );
           return this.reconcileTabToolExecution(request, affinity, targetTabId, execution);
         }),
@@ -1217,6 +1237,7 @@ export class DesktopBrowserAutomationHost {
     signal: AbortSignal,
     abortError: BrowserAutomationHostError,
     interruptByHuman: (error: BrowserAutomationHostError) => void,
+    markActionStarted: () => void,
   ): Promise<BrowserOpenOutput> {
     throwIfAborted(signal);
     const url = input.url === undefined ? undefined : validateWebUrl(input.url);
@@ -1238,12 +1259,13 @@ export class DesktopBrowserAutomationHost {
     // per-tab lock and the human-control guard. Preparing browser state here
     // would reopen, select, or create a renderer before that proof succeeds.
     const prepared = show
-      ? await this.withVisibilityLock(affinity.threadId, signal, abortError, async () =>
-          this.browserManager.prepareAutomationTab({
+      ? await this.withVisibilityLock(affinity.threadId, signal, abortError, async () => {
+          markActionStarted();
+          return this.browserManager.prepareAutomationTab({
             threadId: affinity.threadId,
             reuse: input.reuse ?? true,
-          }),
-        )
+          });
+        })
       : before;
     const selected = show ? prepared.activeTabId : hiddenTabId;
     if (!selected) throw new Error("Browser open did not create a tab.");
@@ -1266,6 +1288,7 @@ export class DesktopBrowserAutomationHost {
               await this.resolveVisibleRuntime(affinity, selected, signal, false);
             }
             const executeOpen = async (): Promise<BrowserOpenOutput> => {
+              markActionStarted();
               if (!show) {
                 const visibleState = this.browserManager.getState({ threadId: affinity.threadId });
                 if (

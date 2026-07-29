@@ -196,10 +196,6 @@ export const dispatchTrustedDrag = async (
     resolveDragData = resolve;
     rejectDragData = reject;
   });
-  // The promise is intentionally created before the first mouse event so the
-  // renderer cannot emit dragIntercepted between command acknowledgement and
-  // listener installation. Suppress an early abort's unhandled-rejection tick;
-  // the awaited promise below still propagates the same error to the caller.
   void dragDataPromise.catch(() => undefined);
   let interceptedDragData: Record<string, unknown> | undefined;
   let dragListenerActive = true;
@@ -280,7 +276,13 @@ export const dispatchTrustedDrag = async (
       );
       if (interceptedDragData) break;
     }
-    const dragData = await dragDataPromise;
+    const dragData =
+      interceptedDragData ??
+      (await Promise.race([
+        dragDataPromise,
+        new Promise<undefined>((resolve) => setTimeout(resolve, 25)),
+      ]));
+    if (!dragData) return;
     dragStarted = true;
     throwIfAborted(signal);
     await sendCdpCommand(runtime, "Input.setInterceptDrags", { enabled: false }, signal);

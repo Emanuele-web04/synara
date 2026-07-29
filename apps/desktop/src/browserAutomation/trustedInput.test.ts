@@ -139,7 +139,13 @@ describe("trusted browser input", () => {
           params.buttons === 1
         ) {
           intercepted = true;
-          harness.debuggerEvents.emit("message", {}, "Input.dragIntercepted", { data: dragData });
+          setTimeout(
+            () =>
+              harness.debuggerEvents.emit("message", {}, "Input.dragIntercepted", {
+                data: dragData,
+              }),
+            5,
+          );
         }
         return {};
       },
@@ -158,6 +164,27 @@ describe("trusted browser input", () => {
       });
     }
     expect(harness.sendCommand).toHaveBeenCalledWith("Input.setInterceptDrags", { enabled: false });
+  });
+
+  it("finishes pointer-only drags without waiting for an HTML drag interception event", async () => {
+    const harness = makeRuntime();
+
+    await dispatchTrustedDrag(harness.runtime, { x: 10, y: 20 }, { x: 100, y: 200 }, { steps: 2 });
+
+    expect(harness.sendCommand).toHaveBeenCalledWith(
+      "Input.dispatchMouseEvent",
+      expect.objectContaining({
+        type: "mouseReleased",
+        x: 100,
+        y: 200,
+        button: "left",
+        buttons: 0,
+      }),
+    );
+    expect(harness.sendCommand).not.toHaveBeenCalledWith(
+      "Input.dispatchDragEvent",
+      expect.anything(),
+    );
   });
 
   it("cancels interception and releases a pressed drag pointer when drop dispatch fails", async () => {
