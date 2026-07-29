@@ -9,10 +9,12 @@ import {
   ORCHESTRATION_WS_METHODS,
   WS_CHANNELS,
   WS_COMPATIBILITY_QUERY,
+  WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
   WsCompatibilityError,
+  type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 
 import {
@@ -25,7 +27,9 @@ import {
   getTerminalCompatibilityError,
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
+  makeNegotiateHttpUrl,
   makeRequestAbortScope,
+  negotiateOverHttp,
   serverIdentityChanged,
   MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS,
   MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
@@ -54,6 +58,7 @@ class MockWebSocket {
 
   readyState = MockWebSocket.CONNECTING;
   readonly sent: unknown[] = [];
+  onSend: ((data: string) => void) | null = null;
   private readonly listeners = new Map<WsEventType, Set<WsListener>>();
 
   constructor(readonly url: string) {
@@ -72,17 +77,47 @@ class MockWebSocket {
 
   send(data: unknown) {
     this.sent.push(data);
+    this.onSend?.(String(data));
   }
 
-  close() {
+  close(code?: number, reason?: string) {
     this.readyState = MockWebSocket.CLOSED;
-    this.emit("close");
+    this.emit("close", { code: code ?? 1000, reason: reason ?? "" } as never);
+  }
+
+  open() {
+    this.readyState = MockWebSocket.OPEN;
+    this.emit("open");
+  }
+
+  receive(data: string) {
+    this.emit("message", { data });
+  }
+
+  // Answers Effect RPC frames so unit tests can complete a feature-socket
+  // session: Ping gets a Pong and every request gets a successful void Exit.
+  serveVoidRpc() {
+    this.onSend = (data) => {
+      const frame = JSON.parse(data) as Record<string, unknown>;
+      if (frame._tag === "Ping") {
+        this.receive(JSON.stringify({ _tag: "Pong" }));
+      } else if (frame._tag === "Request" && typeof frame.id === "string") {
+        this.receive(
+          JSON.stringify({
+            _tag: "Exit",
+            requestId: frame.id,
+            exit: { _tag: "Success", value: null },
+          }),
+        );
+      }
+    };
+    this.open();
   }
 
   private emit(type: WsEventType, event?: { data?: unknown }) {
     const listeners = this.listeners.get(type);
     if (!listeners) return;
-    for (const listener of listeners) {
+    for (const listener of [...listeners]) {
       listener(event);
     }
   }
@@ -165,9 +200,39 @@ function bindWindowTimersToCurrentGlobals(): void {
   });
 }
 
+const NEGOTIATION_RESULT: WsBootstrapNegotiateResult = {
+  protocolEpoch: WS_PROTOCOL_EPOCH,
+  negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+  serverBuild: "test-server",
+  serverInstanceId: "server-instance-1",
+  capabilities: ["transport.http-negotiate"],
+};
+
+function jsonResponse(status: number, body: unknown): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+  } as Response;
+}
+
+async function waitForSockets(count: number): Promise<void> {
+  for (let attempt = 0; attempt < 50 && sockets.length < count; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(sockets.length).toBeGreaterThanOrEqual(count);
+}
+
 beforeEach(() => {
   sockets.length = 0;
   vi.stubEnv("VITE_WS_URL", "");
+  // Default to an older server without the HTTP negotiate endpoint so
+  // connection tests exercise the legacy bootstrap fallback unless they
+  // install their own fetch stub.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.reject(new Error("http negotiate unavailable"))),
+  );
 
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -185,6 +250,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -657,11 +723,12 @@ describe("WsTransport", () => {
     expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverConfigUpdated]))).toBe(false);
   });
 
-  it("opens the stable bootstrap endpoint before the feature RPC socket", async () => {
+  it("falls back to the legacy bootstrap socket when HTTP negotiation is unavailable", async () => {
     const transport = new WsTransport("ws://localhost:3020");
 
-    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
     expect(transport.getState()).toBe("connecting");
+    await waitForSockets(1);
+    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
 
     await transport.dispose();
   });
@@ -676,6 +743,132 @@ describe("WsTransport", () => {
     expect(serverIdentityChanged("instance-a", "instance-b")).toBe(true);
   });
 
+  it("negotiates over HTTP so a connect opens only the feature socket", async () => {
+    const fetchMock = vi.fn((_input: string | URL | Request) =>
+      Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("ws://localhost:3020");
+    await waitForSockets(1);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const negotiateUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(negotiateUrl.protocol).toBe("http:");
+    expect(negotiateUrl.pathname).toBe("/ws/negotiate");
+    expect(negotiateUrl.searchParams.get(WS_NEGOTIATE_QUERY.protocolEpoch)).toBe(
+      String(WS_PROTOCOL_EPOCH),
+    );
+    expect(sockets).toHaveLength(1);
+    const featureUrl = new URL(sockets[0]!.url);
+    expect(featureUrl.pathname).toBe("/ws");
+    expect(featureUrl.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId)).toBe(
+      NEGOTIATION_RESULT.serverInstanceId,
+    );
+
+    await transport.dispose();
+  });
+
+  it("surfaces a 426 HTTP negotiation refusal as a terminal compatibility error", async () => {
+    const refusal = new WsCompatibilityError({
+      message: "Update this client.",
+      code: "WS_PROTOCOL_INCOMPATIBLE",
+      retryable: false,
+      action: "update-client",
+      serverBuild: "0.5.2",
+      protocolEpoch: WS_PROTOCOL_EPOCH,
+      minRevision: WS_PROTOCOL_MIN_REVISION,
+      maxRevision: WS_PROTOCOL_MAX_REVISION,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(426, JSON.parse(JSON.stringify(refusal))))),
+    );
+
+    await expect(negotiateOverHttp("ws://localhost:3020")).rejects.toSatisfy((error) =>
+      isTerminalCompatibilityFailure(error),
+    );
+    // A non-426 failure (older server, transient outage) must fall back to the
+    // legacy bootstrap socket instead of failing the connect.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(404, null))),
+    );
+    await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
+  });
+
+  it("falls back to bootstrap when the negotiate request never settles", async () => {
+    // A connection that accepts and then stalls (WAN/tunnel black hole) must
+    // not wedge the transport: browsers apply no default fetch timeout, so
+    // without an abort signal the bootstrap fallback would never run.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: unknown, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError")),
+            );
+          }),
+      ),
+    );
+
+    await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
+  }, 10_000);
+
+  it("aborts a stalled negotiate when the caller's lifetime signal fires", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: unknown, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError")),
+            );
+          }),
+      ),
+    );
+
+    const negotiation = negotiateOverHttp("ws://localhost:3020", controller.signal);
+    controller.abort();
+    // Resolves well before the 5s deadline because disposal, not the timeout,
+    // ended the request.
+    await expect(negotiation).resolves.toBeNull();
+  });
+
+  it("does not create a bootstrap socket when disposed during negotiation", async () => {
+    // dispose() captures a null runtime and returns while the HTTP request is
+    // still pending; the transport must not build one afterwards.
+    let abortNegotiation: (() => void) | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: unknown, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            abortNegotiation = () =>
+              reject(new DOMException("The operation was aborted.", "AbortError"));
+            init?.signal?.addEventListener("abort", () => abortNegotiation?.());
+          }),
+      ),
+    );
+
+    const transport = new WsTransport();
+    // subscribeShell reaches getClient(), so the request genuinely drives the
+    // connect path rather than relying on the constructor's eager session.
+    const connecting = transport
+      .request(ORCHESTRATION_WS_METHODS.subscribeShell, {})
+      .catch(() => null);
+    await Promise.resolve();
+    const socketsBefore = sockets.length;
+
+    await transport.dispose();
+    await connecting;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sockets.length).toBe(socketsBefore);
+  }, 10_000);
+
   it("uses the desktop bridge URL before falling back to the browser location", async () => {
     const getWsUrl = vi.fn().mockReturnValue("ws://127.0.0.1:53036/?token=old");
     Object.defineProperty(globalThis, "window", {
@@ -687,8 +880,9 @@ describe("WsTransport", () => {
     });
 
     const transport = new WsTransport();
+    await waitForSockets(1);
 
-    expect(getWsUrl).toHaveBeenCalledTimes(1);
+    expect(getWsUrl).toHaveBeenCalled();
     expect(sockets[0]?.url).toBe("ws://127.0.0.1:53036/ws/bootstrap?token=old");
 
     await transport.dispose();
@@ -696,10 +890,118 @@ describe("WsTransport", () => {
 
   it("falls back to the current browser host when no desktop bridge URL exists", async () => {
     const transport = new WsTransport();
+    await waitForSockets(1);
 
     expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
 
     await transport.dispose();
+  });
+
+  it("reuses cached negotiation on reconnect while the server instance is unchanged", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("ws://localhost:3020");
+    const internals = transport as unknown as {
+      createSession(): { clientPromise: Promise<unknown> };
+      probeFeatureConnection: (...args: unknown[]) => Promise<void>;
+      compatibility: WsBootstrapNegotiateResult | null;
+    };
+    await waitForSockets(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
+
+    const probe = vi.fn(async () => undefined);
+    internals.probeFeatureConnection = probe;
+    await internals.createSession().clientPromise;
+
+    // Reconnect on the same server generation opens exactly one new socket and
+    // performs no renegotiation round trip — only the liveness probe.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(2);
+    const reconnectUrl = new URL(sockets[1]!.url);
+    expect(reconnectUrl.pathname).toBe("/ws");
+    expect(reconnectUrl.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId)).toBe(
+      NEGOTIATION_RESULT.serverInstanceId,
+    );
+
+    await transport.dispose();
+  });
+
+  it("renegotiates and resets replayed push state when the server instance changed", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("ws://localhost:3020");
+    const internals = transport as unknown as {
+      createSession(): { clientPromise: Promise<unknown> };
+      compatibility: WsBootstrapNegotiateResult | null;
+      latestPushByChannel: Map<string, unknown>;
+      sequence: number;
+    };
+    await waitForSockets(1);
+    internals.latestPushByChannel.set("server.welcome", { stale: true });
+    internals.sequence = 7;
+
+    // A failed session clears the cache (probe or socket failure), so the next
+    // reconnect renegotiates and lands on the restarted server generation.
+    internals.compatibility = null;
+    const restarted = { ...NEGOTIATION_RESULT, serverInstanceId: "server-instance-2" };
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, restarted)));
+    await internals.createSession().clientPromise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(internals.compatibility).toEqual(restarted);
+    expect(internals.latestPushByChannel.size).toBe(0);
+    expect(internals.sequence).toBe(0);
+    const reconnectUrl = new URL(sockets[1]!.url);
+    expect(reconnectUrl.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId)).toBe(
+      "server-instance-2",
+    );
+
+    await transport.dispose();
+  });
+
+  it("clears cached negotiation when the reconnect liveness probe fails", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("ws://localhost:3020");
+    const internals = transport as unknown as {
+      createSession(): { clientPromise: Promise<unknown> };
+      probeFeatureConnection: (...args: unknown[]) => Promise<void>;
+      compatibility: WsBootstrapNegotiateResult | null;
+    };
+    await waitForSockets(1);
+    expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
+
+    internals.probeFeatureConnection = async function (this: typeof internals) {
+      this.compatibility = null;
+      throw new Error("stale server generation");
+    }.bind(internals);
+    await expect(internals.createSession().clientPromise).rejects.toThrow(
+      "stale server generation",
+    );
+
+    expect(internals.compatibility).toBeNull();
+
+    await transport.dispose();
+  });
+
+  it("mirrors the negotiate endpoint onto the WS host with an HTTP scheme", () => {
+    const url = new URL(makeNegotiateHttpUrl("wss://remote.example:8443/?token=old"));
+
+    expect(url.protocol).toBe("https:");
+    expect(url.host).toBe("remote.example:8443");
+    expect(url.pathname).toBe("/ws/negotiate");
+    expect(url.searchParams.get("token")).toBe("old");
+    expect(url.searchParams.get(WS_NEGOTIATE_QUERY.minRevision)).toBe(
+      String(WS_PROTOCOL_MIN_REVISION),
+    );
+    expect(url.searchParams.get(WS_NEGOTIATE_QUERY.maxRevision)).toBe(
+      String(WS_PROTOCOL_MAX_REVISION),
+    );
   });
 
   it("pins the feature socket to the negotiated revision and server generation", () => {

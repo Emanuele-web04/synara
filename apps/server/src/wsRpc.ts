@@ -8,8 +8,10 @@ import {
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
   WS_FEATURE_PATH,
+  WS_NEGOTIATE_HTTP_PATH,
   WS_METHODS,
   WsBootstrapRpcGroup,
+  WsCompatibilityError,
   WsFeatureRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
@@ -112,8 +114,14 @@ import {
   WsConnectionSessionsLive,
   type WsConnectionSession,
 } from "./wsConnectionSessions";
-import { negotiateWsCompatibility, validateWsFeatureCompatibility } from "./wsCompatibility";
 import {
+  negotiateWsCompatibility,
+  parseWsNegotiateSearchParams,
+  validateWsFeatureCompatibility,
+} from "./wsCompatibility";
+import {
+  isTrustedAppOrigin,
+  normalizeCorsOrigin,
   requiresWebSocketAuthentication,
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
@@ -1849,6 +1857,53 @@ export function makeWebsocketRpcRouteLayer<R>(
   );
 }
 
+// Negotiation over plain HTTP: a connect costs exactly one WebSocket upgrade
+// instead of the legacy bootstrap-socket round trip. Advertised to clients via
+// the "transport.http-negotiate" capability; the WS_BOOTSTRAP_PATH socket stays
+// available for older clients during rollout.
+function makeWsNegotiateHttpRouteLayer() {
+  return Layer.effectDiscard(
+    Effect.gen(function* () {
+      const router = yield* HttpRouter.HttpRouter;
+      yield* router.add(
+        "GET",
+        WS_NEGOTIATE_HTTP_PATH,
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const config = yield* ServerConfig;
+          const url = trustedWebSocketRequestUrl(request, config);
+          if (!url) {
+            // Same no-store discipline as the negotiated responses: an
+            // intermediary must never cache a refusal keyed on our behalf.
+            return HttpServerResponse.text("Forbidden", {
+              status: 403,
+              headers: { "Cache-Control": "no-store", Vary: "Origin" },
+            });
+          }
+          // The desktop app fetches cross-origin (synara://app); reflect only
+          // origins the WS upgrade itself would trust.
+          const origin = normalizeCorsOrigin(request.headers.origin);
+          const corsHeaders =
+            origin && isTrustedAppOrigin({ origin, requestOrigin: url.origin, config })
+              ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" }
+              : {};
+          const headers = { "Cache-Control": "no-store", ...corsHeaders };
+          const input = parseWsNegotiateSearchParams(url.searchParams);
+          if (input instanceof WsCompatibilityError) {
+            return HttpServerResponse.jsonUnsafe(input, { status: 426, headers });
+          }
+          return yield* negotiateWsCompatibility(input).pipe(
+            Effect.map((result) => HttpServerResponse.jsonUnsafe(result, { status: 200, headers })),
+            Effect.catch((error) =>
+              Effect.succeed(HttpServerResponse.jsonUnsafe(error, { status: 426, headers })),
+            ),
+          );
+        }),
+      );
+    }),
+  );
+}
+
 function makeWebsocketBootstrapRouteLayer<R>(
   bootstrapWebSocketHttpEffectSource: Effect.Effect<
     Effect.Effect<
@@ -1881,8 +1936,17 @@ function makeWebsocketBootstrapRouteLayer<R>(
   );
 }
 
+// Both negotiation surfaces: the single-handshake HTTP endpoint and the legacy
+// bootstrap socket kept for older clients during rollout. Exported separately
+// so route-level tests can mount them beside a custom feature RPC group.
+export const makeWebsocketNegotiationRouteLayer = () =>
+  Layer.merge(
+    makeWsNegotiateHttpRouteLayer(),
+    makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
+  );
+
 export const websocketRpcRouteLayer = Layer.merge(
-  makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
+  makeWebsocketNegotiationRouteLayer(),
   // The registry must be provided here so the upgrade route and the RPC
   // middleware (built from the same source effect) share one instance.
   makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect).pipe(

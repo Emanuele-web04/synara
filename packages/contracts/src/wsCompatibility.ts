@@ -7,6 +7,7 @@ export const WS_PROTOCOL_MIN_REVISION = 1;
 export const WS_PROTOCOL_MAX_REVISION = 1;
 export const WS_BOOTSTRAP_METHOD = "bootstrap.negotiate";
 export const WS_BOOTSTRAP_PATH = "/ws/bootstrap";
+export const WS_NEGOTIATE_HTTP_PATH = "/ws/negotiate";
 export const WS_FEATURE_PATH = "/ws";
 
 // These are protocol budgets, not server implementation details. Keeping the
@@ -24,10 +25,28 @@ export const WS_COMPATIBILITY_QUERY = {
   serverInstanceId: "x-synara-server-instance",
 } as const;
 
-export const WS_SERVER_CAPABILITIES = [
+export const WS_NEGOTIATE_QUERY = {
+  clientBuild: "x-synara-client-build",
+  protocolEpoch: "x-synara-protocol-epoch",
+  minRevision: "x-synara-protocol-min-revision",
+  maxRevision: "x-synara-protocol-max-revision",
+  requiredCapability: "x-synara-required-capability",
+} as const;
+
+// Capabilities the current client refuses to run without. Kept separate from
+// the advertised server list so a newer client can still negotiate with an
+// older server (over the legacy bootstrap socket) during a rollout window.
+export const WS_CLIENT_REQUIRED_CAPABILITIES = [
   "orchestration.cursor-safe-streams",
   "orchestration.thread-detail-snapshot",
   "rpc.typed-errors",
+] as const;
+
+export const WS_SERVER_CAPABILITIES = [
+  ...WS_CLIENT_REQUIRED_CAPABILITIES,
+  // Single-handshake connect: negotiation is available over plain HTTP at
+  // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.
+  "transport.http-negotiate",
 ] as const;
 
 export const WsCompatibilityAction = Schema.Literals(["reload", "update-client", "update-server"]);

@@ -9,14 +9,17 @@ import {
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
   WS_CHANNELS,
+  WS_CLIENT_REQUIRED_CAPABILITIES,
   WS_COMPATIBILITY_QUERY,
   WS_FEATURE_PATH,
+  WS_NEGOTIATE_HTTP_PATH,
+  WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
-  WS_SERVER_CAPABILITIES,
-  WS_METHODS,
+  WsBootstrapNegotiateResult,
   WsBootstrapRpcGroup,
+  WS_METHODS,
   WsCompatibilityError,
   WsFeatureRpcGroup,
   type AutomationStreamEvent,
@@ -34,10 +37,20 @@ import {
   type WsPush,
   type WsPushChannel,
   type WsPushMessage,
-  type WsBootstrapNegotiateResult,
   ThreadId,
 } from "@synara/contracts";
-import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Schema, Scope, Stream } from "effect";
+import {
+  Cause,
+  Data,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
@@ -147,6 +160,7 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 const makeRpcClient = RpcClient.make(WsFeatureRpcGroup);
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
+const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
 
 function resolveRpcUrl(rawUrl: string, path: string): string {
   const url = new URL(rawUrl);
@@ -182,6 +196,58 @@ export function makeFeatureSocketUrl(
   );
   url.searchParams.set(WS_COMPATIBILITY_QUERY.serverInstanceId, compatibility.serverInstanceId);
   return url.toString();
+}
+
+export function makeNegotiateHttpUrl(explicitUrl: string | null): string {
+  const url = new URL(makeSocketUrl(explicitUrl, WS_NEGOTIATE_HTTP_PATH));
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.searchParams.set(WS_NEGOTIATE_QUERY.clientBuild, APP_VERSION);
+  url.searchParams.set(WS_NEGOTIATE_QUERY.protocolEpoch, String(WS_PROTOCOL_EPOCH));
+  url.searchParams.set(WS_NEGOTIATE_QUERY.minRevision, String(WS_PROTOCOL_MIN_REVISION));
+  url.searchParams.set(WS_NEGOTIATE_QUERY.maxRevision, String(WS_PROTOCOL_MAX_REVISION));
+  for (const capability of WS_CLIENT_REQUIRED_CAPABILITIES) {
+    url.searchParams.append(WS_NEGOTIATE_QUERY.requiredCapability, capability);
+  }
+  return url.toString();
+}
+
+/** Bounded so a stalled negotiate falls back to bootstrap instead of hanging. */
+const NEGOTIATE_HTTP_TIMEOUT_MS = 5_000;
+
+/**
+ * Negotiates compatibility over plain HTTP so a connect costs exactly one
+ * WebSocket handshake. Returns null when the server does not expose the
+ * endpoint yet (older server) or the request failed transiently, letting the
+ * caller fall back to the legacy `/ws/bootstrap` socket. A 426 is a terminal
+ * compatibility verdict and is thrown as a typed WsCompatibilityError.
+ */
+export async function negotiateOverHttp(
+  explicitUrl: string | null,
+  lifetimeSignal?: AbortSignal,
+): Promise<WsBootstrapNegotiateResult | null> {
+  // Browsers apply no default fetch timeout. Without the deadline, a
+  // connection that accepts and then stalls (the WAN/tunnel case this
+  // endpoint exists to improve) never settles, so the bootstrap fallback
+  // never runs and the transport wedges; the legacy socket path got that
+  // backstop for free from the browser's WS handshake timeout. The caller's
+  // lifetime signal is composed in so disposal aborts the request too.
+  const deadline = AbortSignal.timeout(NEGOTIATE_HTTP_TIMEOUT_MS);
+  const signal = lifetimeSignal ? AbortSignal.any([lifetimeSignal, deadline]) : deadline;
+  let response: Response;
+  try {
+    response = await fetch(makeNegotiateHttpUrl(explicitUrl), { cache: "no-store", signal });
+  } catch {
+    return null;
+  }
+  const body: unknown = await response.json().catch(() => null);
+  if (response.status === 426) {
+    const issue = Schema.decodeUnknownOption(WsCompatibilityError)(body);
+    if (Option.isSome(issue)) throw issue.value;
+    throw new Error("WebSocket negotiation was refused with an unreadable 426 response.");
+  }
+  if (!response.ok) return null;
+  const result = Schema.decodeUnknownOption(WsBootstrapNegotiateResult)(body);
+  return Option.isSome(result) ? result.value : null;
 }
 
 function makeProtocolLayer(url: string) {
@@ -485,8 +551,11 @@ export class WsTransport {
     RpcClientInstance,
     ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>
   >();
-  private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
-  private clientScope: Scope.Closeable;
+  private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never> | null = null;
+  private clientScope: Scope.Closeable | null = null;
+  // Aborted by dispose() so an in-flight HTTP negotiation cannot outlive the
+  // transport and resurrect a runtime after teardown returned.
+  private readonly lifetime = new AbortController();
   private clientPromise: Promise<RpcClientInstance>;
   private reconnectPromise: Promise<RpcClientInstance> | null = null;
   private reconnectFailures = 0;
@@ -502,19 +571,15 @@ export class WsTransport {
   private shellSubscribed = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
-  // Survives failed reconnects, unlike `compatibility`, which is cleared on
-  // every failure. Journal identity must be compared against the last server
-  // we actually reached: an outage longer than the first retry would
-  // otherwise erase the evidence that the server came back different.
-  private lastKnownServerInstanceId: string | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
+  // Tracks the last server generation this transport observed so cross-restart
+  // reconnects still reset replayed push state even after the negotiation
+  // cache was cleared by an intervening failure.
+  private lastServerInstanceId: string | null = null;
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
-    const session = this.createSession();
-    this.runtime = session.runtime;
-    this.clientScope = session.clientScope;
-    this.clientPromise = session.clientPromise;
+    this.clientPromise = this.createSession().clientPromise;
   }
 
   async request<T = unknown>(
@@ -699,6 +764,9 @@ export class WsTransport {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Abort before anything else: a pending negotiate must fail now rather
+    // than resolve later and build a runtime this teardown will not see.
+    this.lifetime.abort();
     this.setState("disposed");
     this.resetAllStreamCapacityRetries();
     this.resetAllStreamCompletionRetries();
@@ -712,35 +780,107 @@ export class WsTransport {
     void this.reconnectPromise?.catch(() => undefined);
     const runtime = this.runtime;
     const clientScope = this.clientScope;
-    await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
+    if (!runtime) return;
+    if (clientScope) {
+      await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
+    }
     await runtime.dispose().catch(() => undefined);
   }
 
-  private createSession() {
-    const sessionVersion = ++this.sessionVersion;
+  /**
+   * Resolves negotiation without burning a WebSocket handshake: the HTTP
+   * endpoint answers directly on current servers, and only servers predating
+   * it fall back to the legacy `/ws/bootstrap` socket round trip.
+   */
+  private async negotiateCompatibility(): Promise<WsBootstrapNegotiateResult> {
+    const httpResult = await negotiateOverHttp(this.explicitUrl, this.lifetime.signal);
+    if (httpResult) return httpResult;
+    // dispose() may have run while the request was in flight; it captured a
+    // null runtime and returned, so building one here would strand it.
+    if (this.disposed) {
+      throw new Error("WebSocket transport was disposed during negotiation.");
+    }
     const runtime = ManagedRuntime.make(
       makeProtocolLayer(makeSocketUrl(this.explicitUrl, WS_BOOTSTRAP_PATH)),
     );
     const clientScope = runtime.runSync(Scope.make());
-    const clientPromise = (async () => {
-      let compatibility: WsBootstrapNegotiateResult;
-      try {
-        const bootstrapClient = await runtime.runPromise(
-          Scope.provide(clientScope)(makeBootstrapRpcClient),
-        );
-        compatibility = await runtime.runPromise(
-          bootstrapClient[WS_BOOTSTRAP_METHOD]({
-            protocolEpoch: WS_PROTOCOL_EPOCH,
-            minRevision: WS_PROTOCOL_MIN_REVISION,
-            maxRevision: WS_PROTOCOL_MAX_REVISION,
-            clientBuild: APP_VERSION,
-            requiredCapabilities: [...WS_SERVER_CAPABILITIES],
-          }),
-        );
-      } finally {
-        await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
-        await runtime.dispose().catch(() => undefined);
+    // Track the bootstrap runtime so dispose() during negotiation aborts it.
+    this.runtime = runtime;
+    this.clientScope = clientScope;
+    try {
+      const bootstrapClient = await runtime.runPromise(
+        Scope.provide(clientScope)(makeBootstrapRpcClient),
+      );
+      return await runtime.runPromise(
+        bootstrapClient[WS_BOOTSTRAP_METHOD]({
+          protocolEpoch: WS_PROTOCOL_EPOCH,
+          minRevision: WS_PROTOCOL_MIN_REVISION,
+          maxRevision: WS_PROTOCOL_MAX_REVISION,
+          clientBuild: APP_VERSION,
+          requiredCapabilities: [...WS_CLIENT_REQUIRED_CAPABILITIES],
+        }),
+      );
+    } finally {
+      await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
+      await runtime.dispose().catch(() => undefined);
+      if (this.runtime === runtime) {
+        this.runtime = null;
+        this.clientScope = null;
       }
+    }
+  }
+
+  private adoptNegotiation(compatibility: WsBootstrapNegotiateResult): void {
+    if (serverIdentityChanged(this.lastServerInstanceId, compatibility.serverInstanceId)) {
+      this.latestPushByChannel.clear();
+      this.sequence = 0;
+      // A resume cursor is only valid against the journal that issued its
+      // sequences. A new server instance may serve a different journal (fresh
+      // install, restored backup), so every cursor must reset to force full
+      // snapshots. `lastServerInstanceId` survives failed reconnects, unlike
+      // `compatibility`, so an outage longer than the first retry still
+      // detects the change. Interim tradeoff: this also drops resume across
+      // plain restarts of the same journal, acceptable until the protocol
+      // carries a durable journal epoch.
+      resetThreadDetailResumeCursors();
+    }
+    this.lastServerInstanceId = compatibility.serverInstanceId;
+    this.compatibility = compatibility;
+    this.setCompatibilityIssue(null);
+  }
+
+  /**
+   * A cached-negotiation session skips the negotiation round trip, so nothing
+   * has yet proven the server is alive on the cached generation. Probe with a
+   * no-op RPC: a restarted server refuses the stale `/ws` upgrade (426) and
+   * the probe fails, clearing the cache so the next attempt renegotiates.
+   */
+  private async probeFeatureConnection(
+    client: RpcClientInstance,
+    runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>,
+  ): Promise<void> {
+    const probe = (
+      client as unknown as Record<
+        string,
+        (input: unknown) => Effect.Effect<unknown, WsTransportRpcError>
+      >
+    )[ORCHESTRATION_WS_METHODS.unsubscribeShell];
+    if (!probe) return;
+    try {
+      await runtime.runPromise(probe({}).pipe(Effect.timeout(FEATURE_CONNECTION_PROBE_TIMEOUT_MS)));
+    } catch (error) {
+      this.compatibility = null;
+      throw error;
+    }
+  }
+
+  private createSession() {
+    const sessionVersion = ++this.sessionVersion;
+    // Reconnects reuse the cached negotiation while the server generation is
+    // unchanged, so a reconnect costs exactly one WebSocket handshake.
+    const cachedCompatibility = this.compatibility;
+    const clientPromise = (async () => {
+      const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
       if (this.disposed || this.sessionVersion !== sessionVersion) {
         throw new Error("WebSocket session superseded during compatibility negotiation.");
       }
@@ -753,23 +893,11 @@ export class WsTransport {
       this.clientScope = featureScope;
       const client = await featureRuntime.runPromise(Scope.provide(featureScope)(makeRpcClient));
       this.runtimeByClient.set(client, featureRuntime);
+      if (cachedCompatibility) {
+        await this.probeFeatureConnection(client, featureRuntime);
+      }
       if (!this.disposed && this.sessionVersion === sessionVersion) {
-        if (serverIdentityChanged(this.lastKnownServerInstanceId, compatibility.serverInstanceId)) {
-          this.latestPushByChannel.clear();
-          this.sequence = 0;
-          // A resume cursor is only valid against the journal that issued its
-          // sequences. A new server instance may serve a different journal
-          // (fresh install, restored backup), so every cursor must reset to
-          // force full snapshots. Compared against the last instance actually
-          // reached rather than `compatibility`, which a failed reconnect
-          // clears — the downtime case this exists to catch. Interim tradeoff:
-          // this also drops resume across plain restarts of the same journal,
-          // acceptable until the protocol carries a durable journal epoch.
-          resetThreadDetailResumeCursors();
-        }
-        this.lastKnownServerInstanceId = compatibility.serverInstanceId;
-        this.compatibility = compatibility;
-        this.setCompatibilityIssue(null);
+        this.adoptNegotiation(compatibility);
         this.setState("open");
       }
       return client;
@@ -786,7 +914,7 @@ export class WsTransport {
       }
       throw error;
     });
-    return { runtime, clientScope, clientPromise };
+    return { clientPromise };
   }
 
   private async getClient(): Promise<RpcClientInstance> {
@@ -814,6 +942,8 @@ export class WsTransport {
 
     const oldRuntime = this.runtime;
     const oldClientScope = this.clientScope;
+    this.runtime = null;
+    this.clientScope = null;
     this.resetAllStreamCapacityRetries();
     this.resetAllStreamCompletionRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
@@ -822,12 +952,15 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    void oldRuntime
-      .runPromise(Scope.close(oldClientScope, Exit.void))
-      .catch(() => undefined)
-      .finally(() => {
+    if (oldRuntime) {
+      void (
+        oldClientScope
+          ? oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).catch(() => undefined)
+          : Promise.resolve()
+      ).finally(() => {
         void oldRuntime.dispose().catch(() => undefined);
       });
+    }
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
@@ -959,8 +1092,6 @@ export class WsTransport {
     }
 
     const session = this.createSession();
-    this.runtime = session.runtime;
-    this.clientScope = session.clientScope;
     this.clientPromise = session.clientPromise;
 
     const client = await session.clientPromise;
