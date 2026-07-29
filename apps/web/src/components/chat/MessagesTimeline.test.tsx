@@ -141,7 +141,11 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-  }, 10_000);
+    // First test in the file pays the full dynamic-import cost of the
+    // MessagesTimeline module graph, which exceeds 10s under CI thread
+    // contention (observed flaking on 4-thread runners while passing in
+    // ~2s locally).
+  }, 30_000);
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
