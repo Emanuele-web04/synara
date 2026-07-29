@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { DesktopBridge } from "@synara/contracts";
+import type { BrowserUseOpenPanelRequest, DesktopBridge } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 
@@ -12,6 +12,17 @@ function getDesktopWsUrl(): string | null {
   } catch {
     return resolveDesktopWsUrlFromEnv(process.env);
   }
+}
+
+function parseBrowserOpenPanelRequest(payload: unknown): BrowserUseOpenPanelRequest | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const threadId = (payload as { readonly threadId?: unknown }).threadId;
+  if (typeof threadId !== "string" || threadId.trim().length === 0) {
+    return null;
+  }
+  return { threadId: threadId as BrowserUseOpenPanelRequest["threadId"] };
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
@@ -155,7 +166,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(IPC.browser.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(IPC.browser.captureScreenshot, input),
-    executeCdp: (input) => ipcRenderer.invoke(IPC.browser.executeCdp, input),
     navigate: (input) => ipcRenderer.invoke(IPC.browser.navigate, input),
     reload: (input) => ipcRenderer.invoke(IPC.browser.reload, input),
     goBack: (input) => ipcRenderer.invoke(IPC.browser.goBack, input),
@@ -176,7 +186,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
     },
     onBrowserUseOpenPanelRequest: (listener) => {
-      const wrappedListener = () => listener();
+      const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        const request = parseBrowserOpenPanelRequest(payload);
+        if (request) {
+          listener(request);
+        }
+      };
       ipcRenderer.on(IPC.browser.requestOpenPanel, wrappedListener);
       return () => {
         ipcRenderer.removeListener(IPC.browser.requestOpenPanel, wrappedListener);

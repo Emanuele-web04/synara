@@ -57,8 +57,12 @@ describe("Pi native Synara gateway tools", () => {
       });
     };
     const defineTool = (tool: any) => tool;
+    const firstConnection = {
+      url: "http://127.0.0.1:3773/mcp",
+      bearerToken: "token-a",
+    };
     const first = await buildPiAgentGatewayCustomTools({
-      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+      connection: firstConnection,
       defineTool,
       fetch,
     });
@@ -86,6 +90,9 @@ describe("Pi native Synara gateway tools", () => {
     ]);
     expect(requests[2]?.body.params.arguments).toEqual({ owner: "thread-a" });
     expect(requests[3]?.body.params.arguments).toEqual({ owner: "thread-b" });
+    Object.assign(firstConnection, { bearerToken: "token-c" });
+    await first[0]?.execute("call-c", {}, undefined, undefined, {} as never);
+    expect(requests[4]?.token).toBe("Bearer token-c");
   });
 
   it("forwards Pi tool cancellation to the in-flight MCP request", async () => {

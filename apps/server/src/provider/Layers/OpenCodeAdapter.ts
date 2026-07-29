@@ -41,7 +41,9 @@ import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGatew
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
+  cancelAgentGatewayTurn,
   type AgentGatewaySessionLease,
+  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
@@ -193,6 +195,32 @@ function releaseOpenCodeGatewayLease(context: OpenCodeSessionContext): void {
   context.gatewaySessionLease?.release();
   delete context.gatewaySessionLease;
 }
+
+const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(function* (input: {
+  readonly client: OpencodeClient;
+  readonly directory: string;
+  readonly displayName: string;
+  readonly connection: AgentGatewaySessionLease["connection"];
+}) {
+  const result = yield* runOpenCodeSdk("mcp.add", () =>
+    input.client.mcp.add({
+      directory: input.directory,
+      name: SYNARA_MCP_SERVER_NAME,
+      config: buildOpenCodeMcpServer(input.connection),
+    }),
+  );
+  const status = result.data?.[SYNARA_MCP_SERVER_NAME];
+  if (status?.status === "connected") {
+    return;
+  }
+  return yield* new OpenCodeRuntimeError({
+    operation: "mcp.add",
+    detail:
+      status?.status === "failed"
+        ? `${input.displayName} Synara MCP connection failed: ${status.error}`
+        : `${input.displayName} Synara MCP connection did not become ready.`,
+  });
+});
 
 interface OpenCodeMessageSnapshot {
   readonly info: {
@@ -692,7 +720,13 @@ function updateProviderSession(
   return nextSession;
 }
 
-function clearActiveTurnState(context: OpenCodeSessionContext): void {
+const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function* (
+  context: OpenCodeSessionContext,
+  options?: { readonly cancelGatewayTurn?: boolean },
+) {
+  if (options?.cancelGatewayTurn !== false) {
+    yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+  }
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
   context.activeTurnProviderActivitySerial = 0;
@@ -711,7 +745,7 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   // would misclassify that echo as a real resolution (orphaned "Approval resolved" in the
   // UI). Ids are unique per request so stale entries are inert; the set is freed with the
   // session context when the session is removed.
-}
+});
 
 function markOpenCodeTurnProviderActivity(
   context: OpenCodeSessionContext,
@@ -1105,6 +1139,18 @@ function buildOpenCodeThreadSnapshot(input: {
   };
 }
 
+const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResources")(function* (
+  context: OpenCodeSessionContext,
+) {
+  yield* clearActiveTurnState(context).pipe(
+    Effect.ensuring(
+      Scope.close(context.sessionScope, Exit.void).pipe(
+        Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
+      ),
+    ),
+  );
+});
+
 const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   context: OpenCodeSessionContext,
 ) {
@@ -1116,9 +1162,7 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
   ).pipe(Effect.ignore({ log: true }));
 
-  yield* Scope.close(context.sessionScope, Exit.void).pipe(
-    Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
-  );
+  yield* releaseOpenCodeSessionResources(context);
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -1293,9 +1337,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             sessionID: context.openCodeSessionId,
           }),
         ).pipe(Effect.ignore({ log: true }));
-        yield* Scope.close(context.sessionScope, Exit.void).pipe(
-          Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
-        );
+        yield* releaseOpenCodeSessionResources(context);
       });
 
       const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
@@ -1490,7 +1532,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (context.activeTurnId !== input.turnId) {
           return false;
         }
-        clearActiveTurnState(context);
+        yield* clearActiveTurnState(context);
         updateProviderSession(
           context,
           input.errorMessage
@@ -1986,7 +2028,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ) {
                 return requestError;
               }
-              clearActiveTurnState(context);
+              yield* clearActiveTurnState(context);
               updateProviderSession(
                 context,
                 {
@@ -2039,7 +2081,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               if (context.activeTurnId !== input.turnId) {
                 return requestError;
               }
-              clearActiveTurnState(context);
+              yield* clearActiveTurnState(context);
               updateProviderSession(
                 context,
                 {
@@ -2986,7 +3028,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               break;
             }
             const activeTurnId = context.activeTurnId;
-            clearActiveTurnState(context);
+            yield* clearActiveTurnState(context);
             updateProviderSession(
               context,
               {
@@ -3408,8 +3450,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           const resumedSessionId = extractResumeSessionId(input.resumeCursor);
           // OpenCode's MCP registry is process/directory scoped, not session
-          // scoped. A gateway token is therefore issued only for a managed
-          // server that this runtime isolates to the exact Synara thread.
+          // scoped. Issue a gateway token only for a managed server isolated to
+          // this exact Synara thread.
           const agentGatewaySessionLease = serverUrl
             ? undefined
             : acquireAgentGatewaySessionLease(agentGatewayCredentials, input.threadId, provider);
@@ -3439,42 +3481,28 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       cliSpec: adapterConfig.cliSpec,
                       ...(server.external && serverPassword ? { serverPassword } : {}),
                     });
-                    const gatewayControlAvailable = agentGatewayConnection
-                      ? yield* runOpenCodeSdk("mcp.add", () =>
-                          client.mcp.add({
-                            directory,
-                            name: SYNARA_MCP_SERVER_NAME,
-                            config: buildOpenCodeMcpServer(agentGatewayConnection),
-                          }),
-                        ).pipe(
-                          Effect.flatMap((result) => {
-                            const status = result.data?.[SYNARA_MCP_SERVER_NAME];
-                            return status?.status === "connected"
-                              ? Effect.void
-                              : Effect.fail(
-                                  new OpenCodeRuntimeError({
-                                    operation: "mcp.add",
-                                    detail:
-                                      status?.status === "failed"
-                                        ? `${adapterConfig.displayName} Synara MCP connection failed: ${status.error}`
-                                        : `${adapterConfig.displayName} Synara MCP connection did not become ready.`,
-                                  }),
-                                );
-                          }),
-                          Effect.as(true),
-                          Effect.catchCause((cause) =>
-                            Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
-                              Effect.andThen(
-                                Effect.logWarning(
-                                  `${adapterConfig.displayName} could not install thread-scoped Synara MCP control`,
-                                  Cause.squash(cause),
-                                ),
+                    let gatewayControlAvailable = false;
+                    if (agentGatewayConnection) {
+                      gatewayControlAvailable = yield* installOpenCodeGatewayMcp({
+                        client,
+                        directory,
+                        displayName: adapterConfig.displayName,
+                        connection: agentGatewayConnection,
+                      }).pipe(
+                        Effect.as(true),
+                        Effect.catchCause((cause) =>
+                          Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
+                            Effect.andThen(
+                              Effect.logWarning(
+                                `${adapterConfig.displayName} could not install thread-scoped Synara MCP control`,
+                                Cause.squash(cause),
                               ),
-                              Effect.as(false),
                             ),
+                            Effect.as(false),
                           ),
-                        )
-                      : false;
+                        ),
+                      );
+                    }
                     const createSessionId = resumedSessionId
                       ? // A resumed provider may still be executing an interrupted Plan turn.
                         // Install the read-only ruleset until Synara dispatches a new turn with a
@@ -3678,9 +3706,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
-      const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+      const sendTurnImpl = Effect.fn("sendTurn")(function* (
+        input: Parameters<OpenCodeAdapterShape["sendTurn"]>[0],
+        turnId: TurnId,
+      ) {
         const context = ensureAdapterSessionContext(input.threadId);
-        const turnId = TurnId.makeUnsafe(`${adapterConfig.turnIdPrefix}-${randomUUID()}`);
         const modelSelection =
           input.modelSelection ??
           (context.session.model ? { provider, model: context.session.model } : undefined);
@@ -3838,17 +3868,58 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         };
       });
 
+      const sendTurn: OpenCodeAdapterShape["sendTurn"] = (input) => {
+        const turnId = TurnId.makeUnsafe(`${adapterConfig.turnIdPrefix}-${randomUUID()}`);
+        return sendTurnImpl(input, turnId).pipe(
+          Effect.onError(() => {
+            const context = sessions.get(input.threadId);
+            if (!context) {
+              return Effect.void;
+            }
+            if (context.activeTurnId === turnId) {
+              return clearActiveTurnState(context).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() =>
+                    updateProviderSession(
+                      context,
+                      { status: "ready" },
+                      { clearActiveTurnId: true },
+                    ),
+                  ),
+                ),
+              );
+            }
+            return Effect.void;
+          }),
+        );
+      };
+
       const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
         function* (threadId, turnId) {
           const context = ensureAdapterSessionContext(threadId);
+          if (turnId !== undefined && turnId !== context.activeTurnId) {
+            yield* Effect.logWarning("opencode.stale_interrupt_ignored", {
+              provider,
+              threadId,
+              requestedTurnId: turnId,
+              activeTurnId: context.activeTurnId,
+            });
+            return;
+          }
           const activeTurnId = turnId ?? context.activeTurnId;
-          yield* runOpenCodeSdk("session.abort", () =>
-            context.client.session.abort({
-              sessionID: context.openCodeSessionId,
+          yield* withAgentGatewayTurnCancellation(
+            context.gatewaySessionLease,
+            activeTurnId,
+            Effect.gen(function* () {
+              yield* runOpenCodeSdk("session.abort", () =>
+                context.client.session.abort({
+                  sessionID: context.openCodeSessionId,
+                }),
+              ).pipe(Effect.mapError(toAdapterRequestError));
+              yield* clearActiveTurnState(context, { cancelGatewayTurn: false });
+              updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
             }),
-          ).pipe(Effect.mapError(toAdapterRequestError));
-          clearActiveTurnState(context);
-          updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
+          );
           if (activeTurnId) {
             yield* emit(context, {
               ...buildEventBase({ threadId, turnId: activeTurnId }),

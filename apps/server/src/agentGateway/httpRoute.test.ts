@@ -15,6 +15,7 @@ import {
 import { AGENT_GATEWAY_MCP_MAX_BODY_BYTES, agentGatewayRouteLayer } from "./httpRoute.ts";
 
 const VALID_TOKEN = "sagw_session_http_route_test";
+const VALID_BOOTSTRAP_TOKEN = "sagw_bootstrap_http_route_test";
 
 async function withGatewayServer(
   run: (input: {
@@ -47,6 +48,15 @@ async function withGatewayServer(
               ]),
             }
           : null,
+      issueStdioBootstrapToken: () => VALID_BOOTSTRAP_TOKEN,
+      exchangeStdioBootstrapToken: (() => {
+        let active = true;
+        return (token: string) => {
+          if (!active || token !== VALID_BOOTSTRAP_TOKEN) return null;
+          active = false;
+          return VALID_TOKEN;
+        };
+      })(),
       bindWriteAuthority: (token, turnId) =>
         token === VALID_TOKEN
           ? {
@@ -57,6 +67,10 @@ async function withGatewayServer(
             }
           : null,
       verifyWriteAuthority: (authority) => authority.sessionKey === "session-http-route-test",
+      registerInFlightRequest: () => () => undefined,
+      cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+      cancelSessionTurnRequests: () => Promise.resolve(),
+      retireSessionTurn: () => Promise.resolve(),
       revokeSessionToken: () => undefined,
       connectionForThread: () => ({
         url: "http://127.0.0.1/mcp",
@@ -149,6 +163,24 @@ describe("agentGatewayRouteLayer", () => {
       });
       expect(response.status).toBe(400);
       expect(handledBodies).toHaveLength(0);
+    });
+  });
+
+  it("exchanges a stdio bootstrap credential once and never caches the bearer", async () => {
+    await withGatewayServer(async ({ origin }) => {
+      const first = await fetch(`${origin}/mcp/bootstrap`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${VALID_BOOTSTRAP_TOKEN}` },
+      });
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("no-store");
+      expect(await first.json()).toEqual({ bearerToken: VALID_TOKEN });
+
+      const replay = await fetch(`${origin}/mcp/bootstrap`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${VALID_BOOTSTRAP_TOKEN}` },
+      });
+      expect(replay.status).toBe(401);
     });
   });
 });
