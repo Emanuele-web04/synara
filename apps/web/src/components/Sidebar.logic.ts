@@ -787,8 +787,14 @@ export function buildProjectThreadTree<
 
   for (const thread of threads) {
     const parentThreadId = thread.parentThreadId ?? null;
-    if (!parentThreadId || !threadById.has(parentThreadId)) {
+    if (!parentThreadId) {
       roots.push(thread);
+      continue;
+    }
+    // Subagent threads are only reachable through their parent. When the parent
+    // is not in the list (archived or deleted), its subtree stays hidden instead
+    // of being promoted to top-level rows.
+    if (!threadById.has(parentThreadId)) {
       continue;
     }
     const siblings = childrenByParentId.get(parentThreadId) ?? [];
@@ -958,10 +964,9 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
 // Exception: a pinned parent whose children are in the list stays in the tree.
-// The pinned section renders flat rows only, and buildProjectThreadTree
-// promotes children with a missing parent to top-level rows — hiding such a
-// parent would either orphan its children as project roots or (if the
-// descendants were hidden too) make them unreachable anywhere in the sidebar.
+// The pinned section renders flat rows only, and buildProjectThreadTree hides
+// children with a missing parent — hiding such a parent would make its
+// descendants unreachable anywhere in the sidebar.
 export function getUnpinnedThreadsForSidebar<
   T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {

@@ -650,9 +650,9 @@ describe("pin helpers", () => {
       makeThread("thread-2"),
     ];
 
-    // Pinning the parent must not orphan child-1 as a top-level project row
-    // (buildProjectThreadTree promotes children with missing parents) nor hide
-    // it entirely; the parent stays in the tree, children render under it.
+    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree
+    // hides children with missing parents); the parent stays in the tree,
+    // children render under it.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual(threads);
     // Childless pinned threads are still hidden from project lists.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
@@ -1116,6 +1116,37 @@ describe("buildProjectThreadTree", () => {
     expect(rows).toEqual([
       expect.objectContaining({
         thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-parent") }),
+        depth: 0,
+      }),
+    ]);
+  });
+
+  it("hides subagent subtrees whose parent is not in the list", () => {
+    // Regression: archiving (or deleting) a parent removes it from the sidebar
+    // list; its subagent children must stay hidden instead of surfacing as
+    // top-level rows (#488).
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-other"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-child"),
+          parentThreadId: ThreadId.makeUnsafe("thread-archived-parent"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-grandchild"),
+          parentThreadId: ThreadId.makeUnsafe("thread-child"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-other") }),
         depth: 0,
       }),
     ]);

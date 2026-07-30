@@ -140,6 +140,10 @@
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
     },
+    "./threadHierarchy": {
+      "types": "./src/threadHierarchy.ts",
+      "import": "./src/threadHierarchy.ts"
+    },
     "./subagents": {
       "types": "./src/subagents.ts",
       "import": "./src/subagents.ts"
