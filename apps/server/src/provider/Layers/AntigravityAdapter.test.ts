@@ -455,7 +455,46 @@ describe("Antigravity CLI integration helpers", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("{}");
+    // Neutral for PreToolUse means preserving the permission flow: Antigravity
+    // requires a `decision`, and an empty object is treated as a denial with
+    // an empty reason that blocks every tool call (#490).
+    expect(result.stdout.trim()).toBe('{"decision":"ask"}');
+
+    const postToolResult = runCaptureCommand(
+      buildAntigravityCaptureCommand(
+        "__synara_gui_must_not_launch__",
+        "__capture_script_must_not_run__",
+        "post-tool",
+      ),
+      JSON.stringify({ payload: "x" }),
+      { SYNARA_ANTIGRAVITY_EVENTS: "" },
+    );
+    expect(postToolResult.error).toBeUndefined();
+    expect(postToolResult.status).toBe(0);
+    expect(postToolResult.stdout.trim()).toBe("{}");
+  });
+
+  it("answers pre-tool with a decision from the capture script when capture is inactive", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-hook-test-"));
+    const scriptPath = path.join(directory, "capture.cjs");
+    try {
+      await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
+      // Invoke the script directly, bypassing the shell wrapper: its inactive
+      // fallback is defense in depth for a caller that runs the script without
+      // a capture target, and must answer PreToolUse with a decision too.
+      const result = spawnSync(process.execPath, [scriptPath, "pre-tool"], {
+        env: { ...process.env, SYNARA_ANTIGRAVITY_EVENTS: "" },
+        input: JSON.stringify({ tool: "shell" }),
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('{"decision":"ask"}');
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("runs the capture script for Synara-managed sessions", async () => {
@@ -489,7 +528,7 @@ describe("Antigravity CLI integration helpers", () => {
         "darwin",
       ),
     ).toBe(
-      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
+      `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"ask"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-tool'; fi`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -499,7 +538,7 @@ describe("Antigravity CLI integration helpers", () => {
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && "C:\Program Files\Synara\Synara.exe" "C:\Users\test\.gemini\capture.cjs" "pre-tool")`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set "ELECTRON_RUN_AS_NODE=1" && "C:\Program Files\Synara\Synara.exe" "C:\Users\test\.gemini\capture.cjs" "pre-tool")`,
     );
   });
 

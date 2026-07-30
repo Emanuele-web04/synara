@@ -159,6 +159,19 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * Hook output when capture is inactive (the session is not Synara-managed).
+ * Antigravity requires PreToolUse output to carry a `decision`: an empty
+ * object is treated as a denial with an empty reason, which blocks every tool
+ * call because the hook is installed globally with `matcher: "*"` (#490).
+ * "ask" preserves the permission flow the user would have without the hook.
+ * `{}` stays correct for the other hook points, including Stop, where an
+ * inactive hook must not force a decision over Antigravity's default.
+ */
+function inactiveHookOutput(event: string): string {
+  return event === "pre-tool" ? '{"decision":"ask"}' : "{}";
+}
+
 export function buildAntigravityCaptureCommand(
   executablePath: string,
   scriptPath: string,
@@ -166,10 +179,11 @@ export function buildAntigravityCaptureCommand(
   platform: NodeJS.Platform = process.platform,
 ): string {
   const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
+  const fallback = inactiveHookOutput(event);
   if (platform === "win32") {
-    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set "ELECTRON_RUN_AS_NODE=1" && ${invocation})`;
   }
-  return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
+  return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '${fallback}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
 }
 
 export function hookScriptSource(): string {
@@ -181,7 +195,9 @@ process.stdin.on("data", (chunk) => { payload += chunk; });
 process.stdin.on("end", () => {
   const target = process.env.SYNARA_ANTIGRAVITY_EVENTS;
   if (!target) {
-    process.stdout.write("{}\\n");
+    // Mirrors the shell wrapper's inactive fallback: PreToolUse must carry a
+    // decision or Antigravity denies the tool call with an empty reason.
+    process.stdout.write((event === "pre-tool" ? '{"decision":"ask"}' : "{}") + "\\n");
     return;
   }
   fs.appendFileSync(target, event + "\\t" + payload.trim() + "\\n");
