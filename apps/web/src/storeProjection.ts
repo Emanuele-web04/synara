@@ -15,7 +15,7 @@ import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
 import {
   clearThreadDetailResumeCursor,
-  clearThreadDetailResumeCursors,
+  resetThreadDetailResumeCursors,
   retainThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
@@ -630,8 +630,8 @@ function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppSta
   // failure reset) funnels through here, so this is where the resume-cursor
   // invariant is enforced — wiped detail must never leave a cursor that would
   // let a resubscribe gap-replay on top of missing history. The full-sync
-  // pruning paths cover their bulk removals with
-  // `retainThreadDetailResumeCursors` instead.
+  // paths cover their bulk invalidations separately: the shell snapshot prunes
+  // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
   clearThreadDetailResumeCursor(threadId);
   if (
     state.threadDetailSyncById === undefined ||
@@ -1409,16 +1409,12 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       return normalizeThreadFromReadModel(thread, existing);
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
-  // This full resync (including the "Repair local state" action) prunes detail
-  // slices down to the read model's threads; any resume cursor for a pruned
-  // thread must fall with its detail or a later resubscribe would gap-replay
-  // on top of history this prune just discarded.
-  retainThreadDetailResumeCursors(nextThreadIds);
-  // A surviving thread's detail is replaced wholesale by this read model, so a
-  // cursor ahead of the replacement would resume past history the new detail
-  // does not contain. Drop them all: the next subscribe takes a snapshot and
-  // re-establishes a cursor that matches what is actually cached.
-  clearThreadDetailResumeCursors([...nextThreadIds]);
+  // This full resync (including the "Repair local state" action) replaces
+  // every thread's detail wholesale: pruned threads lose their detail, and a
+  // surviving thread's cursor would vouch for history the replacement does not
+  // contain. No cursor survives — the next subscribe takes a snapshot and
+  // re-establishes one that matches what is actually cached.
+  resetThreadDetailResumeCursors();
   let normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),

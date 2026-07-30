@@ -63,9 +63,11 @@ Details that are easy to get wrong and are therefore tested:
 
 Subscribing to a thread can **resume from a cursor** instead of refetching full history ([`threadDetailResumeCursors.ts`][4]).
 
-Resume is fenced by a high-water mark. If the requested cursor is behind what the server can still serve, the server answers `ORCHESTRATION_RESNAPSHOT_REQUIRED` and the client takes a fresh snapshot. The fence is deliberately conservative: a redundant snapshot is wasteful, a stale delta is wrong, so any doubt resolves toward the snapshot.
+Resume is fenced by a high-water mark. The server trusts a cursor only when the subject thread still exists, the gap to the journal head is non-negative (hard purges can lower the head below a cursor a client legitimately held), and the gap fits the replay limit. Any other cursor falls back to the full-snapshot path **inside the same stream** — the client is served a snapshot as if it had never sent a cursor, with no extra round trip. (`ORCHESTRATION_RESNAPSHOT_REQUIRED` is the snapshot path's own fence for a replay that can no longer cover its gap; the resume shortcut never emits it.) The fence is deliberately conservative: a redundant snapshot is wasteful, a stale delta is wrong, so any doubt resolves toward the snapshot.
 
-The `orchestration.cursor-safe-streams` capability advertised by `/ws/negotiate` gates this. A client that does not present it receives full snapshots exactly as before.
+The `afterSequence` field is optional on the subscribe input, so an older client simply never sends it and receives full snapshots exactly as before.
+
+Cursor state also gates sidebar prewarming: a speculative prewarm subscription is only cheap when it can resume from a cursor, so threads without cached detail are not prewarmed from scroll position and pay their first full snapshot when actually opened. That trades a slightly colder first open of a never-viewed thread for not spending the per-client thread-stream budget on full-history streams the user may never look at.
 
 [1]: ../apps/server/src/nodeHttpServer.ts
 [2]: ../apps/server/src/wsCompatibility.ts
