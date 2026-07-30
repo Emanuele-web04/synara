@@ -15,8 +15,9 @@ export const SETTINGS_RADIUS_CLASS_NAME = "rounded-xl";
 export const SETTINGS_INSET_RADIUS_CLASS_NAME = "rounded-lg";
 
 /** The inset radius forced over a component's own default (Select triggers, segmented chips,
- *  inputs, menu options all ship a radius of their own). */
-export const SETTINGS_CONTROL_RADIUS_CLASS_NAME = `!${SETTINGS_INSET_RADIUS_CLASS_NAME}`;
+ *  inputs, menu options all ship a radius of their own). Written as a literal because Tailwind
+ *  scans source text for candidates — a template-built `!${...}` class emits no CSS at all. */
+export const SETTINGS_CONTROL_RADIUS_CLASS_NAME = "rounded-lg!";
 
 /** Same border token as Button `outline` / `chrome-outline` variants. */
 export const SETTINGS_CONTROL_BORDER_CLASS_NAME = "border border-[color:var(--color-border)]";
