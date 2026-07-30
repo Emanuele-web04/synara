@@ -146,6 +146,8 @@ function evictEntry(
   if (!retainedThreadEntries.delete(threadId)) {
     return;
   }
+  // The store's detail-wipe transition also drops the thread's resume cursor,
+  // so a resubscribe after this eviction fetches a fresh snapshot.
   useStore.getState().evictThreadDetail(threadId);
   emitEviction(threadId);
   if (options?.notify !== false) {

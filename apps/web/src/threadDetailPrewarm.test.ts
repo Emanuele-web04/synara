@@ -5,6 +5,10 @@
 import { ThreadId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createThreadDetailPrewarmController } from "./threadDetailPrewarm";
+import {
+  resetThreadDetailResumeCursorsForTests,
+  setThreadDetailResumeCursor,
+} from "./threadDetailResumeCursors";
 
 function threadId(value: string): ThreadId {
   return ThreadId.makeUnsafe(value);
@@ -30,6 +34,7 @@ function makeRetainSpy() {
 describe("thread detail prewarm", () => {
   afterEach(() => {
     vi.useRealTimers();
+    resetThreadDetailResumeCursorsForTests();
   });
 
   it("retains a target thread immediately and releases it after the prewarm window", () => {
@@ -38,6 +43,7 @@ describe("thread detail prewarm", () => {
     const thread = threadId("thread-1");
     const controller = createThreadDetailPrewarmController({
       retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      canPrewarmThreadDetail: () => true,
       releaseMs: 1000,
     });
 
@@ -59,6 +65,7 @@ describe("thread detail prewarm", () => {
     const thread = threadId("thread-2");
     const controller = createThreadDetailPrewarmController({
       retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      canPrewarmThreadDetail: () => true,
       releaseMs: 1000,
     });
 
@@ -84,6 +91,7 @@ describe("thread detail prewarm", () => {
     const threadFour = threadId("thread-4");
     const controller = createThreadDetailPrewarmController({
       retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      canPrewarmThreadDetail: () => true,
       releaseMs: 1000,
       maxRetainedThreads: 2,
     });
@@ -101,5 +109,66 @@ describe("thread detail prewarm", () => {
     controller.dispose();
 
     expect(retain.releasedThreadIds).toEqual([threadOne, threadTwo, threadFour]);
+  });
+
+  it("does not open a speculative subscription for a thread without cached detail", () => {
+    vi.useFakeTimers();
+    const retain = makeRetainSpy();
+    const cachedThread = threadId("thread-cached");
+    const coldThread = threadId("thread-cold");
+    const controller = createThreadDetailPrewarmController({
+      retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      canPrewarmThreadDetail: (candidate) => candidate === cachedThread,
+      releaseMs: 1000,
+    });
+
+    controller.prewarmThreadDetails([coldThread, cachedThread]);
+
+    // Cold threads would pay a full-history snapshot stream, so only the
+    // cursor-resumable thread is retained.
+    expect(retain.retainedThreadIds).toEqual([cachedThread]);
+
+    controller.prewarmThreadDetail(coldThread);
+    expect(retain.retainedThreadIds).toEqual([cachedThread]);
+
+    controller.dispose();
+    expect(retain.releasedThreadIds).toEqual([cachedThread]);
+  });
+
+  it("defaults the prewarm gate to the thread-detail resume cursor", () => {
+    vi.useFakeTimers();
+    const retain = makeRetainSpy();
+    const cachedThread = threadId("thread-with-cursor");
+    const coldThread = threadId("thread-without-cursor");
+    setThreadDetailResumeCursor(cachedThread, 7);
+    const controller = createThreadDetailPrewarmController({
+      retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      releaseMs: 1000,
+    });
+
+    controller.prewarmThreadDetails([coldThread, cachedThread]);
+
+    expect(retain.retainedThreadIds).toEqual([cachedThread]);
+    controller.dispose();
+  });
+
+  it("filters ineligible threads before applying the prewarm limit", () => {
+    vi.useFakeTimers();
+    const retain = makeRetainSpy();
+    const coldThreadIds = Array.from({ length: 6 }, (_, index) => threadId(`cold-${index}`));
+    const cachedThread = threadId("cached-after-cold");
+    setThreadDetailResumeCursor(cachedThread, 10);
+    const controller = createThreadDetailPrewarmController({
+      retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      releaseMs: 1000,
+    });
+
+    // More cold threads than the limit precede the one cached thread. The
+    // limit must apply after eligibility filtering, or the cold prefix would
+    // consume every slot and the cached thread would never prewarm.
+    controller.prewarmThreadDetails([...coldThreadIds, cachedThread]);
+
+    expect(retain.retainedThreadIds).toEqual([cachedThread]);
+    controller.dispose();
   });
 });

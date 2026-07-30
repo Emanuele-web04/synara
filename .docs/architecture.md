@@ -66,6 +66,8 @@ sequenceDiagram
 4. Once the server is ready, [`wsServer`][3] sends `server.welcome` from the contracts in [`ws.ts`][6] through [`ServerPushBus`][5].
 5. The browser receives that ordered push through [`WsTransport`][1], and [`wsNativeApi`][2] uses it to seed local client state.
 
+The connect itself is a single negotiated handshake, and the socket is compressed. See [transport.md](./transport.md) for the negotiation contract, `permessage-deflate`, static asset delivery, and cursor-based thread resume.
+
 ### User turn flow
 
 ```mermaid

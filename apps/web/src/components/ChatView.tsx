@@ -215,6 +215,7 @@ import {
   createComposerThreadMentionSourcesSelector,
   createThreadSelector,
 } from "../storeSelectors";
+import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canOfferForkSlashCommand,
@@ -3299,7 +3300,9 @@ export default function ChatView({
   const handleRetryThreadDetailSync = useCallback(() => {
     useStore.getState().clearThreadDetailSyncFailure(threadId);
     const api = readNativeApi();
-    void api?.orchestration.subscribeThread({ threadId }).catch(() => undefined);
+    void api?.orchestration
+      .subscribeThread(buildThreadSubscribeInput(threadId))
+      .catch(() => undefined);
   }, [threadId]);
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
   // building it inline in JSX would defeat its `memo()` on every keystroke.

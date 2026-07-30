@@ -85,6 +85,13 @@ import {
   subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
+import {
+  advanceThreadDetailResumeCursor,
+  buildThreadSubscribeInput,
+  clearThreadDetailResumeCursor,
+  getThreadDetailResumeCursor,
+  setThreadDetailResumeCursor,
+} from "../threadDetailResumeCursors";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -935,6 +942,8 @@ function releaseOrphanedThreadDetail(input: {
   if (orphanedThreadIds.length === 0) {
     return;
   }
+  // The store's detail-wipe transition also drops each thread's resume cursor,
+  // so a resubscribe after this release fetches a fresh snapshot.
   useStore.getState().evictThreadDetails(orphanedThreadIds);
 }
 
@@ -1021,7 +1030,17 @@ function EventRouter() {
     let reconcileThreadSubscriptionsChain = Promise.resolve();
 
     const beginThreadSubscription = (threadId: ThreadId) => {
-      threadSnapshotSequenceById.delete(threadId);
+      // Cursor resume delivers no snapshot: the stream replays only the gap on
+      // top of the cached detail. Seed the live cursor so gap/live events apply
+      // immediately instead of buffering while waiting for a snapshot — which
+      // is also what previously triggered the unsubscribe-resubscribe race that
+      // re-shipped full history.
+      const resumeCursor = getThreadDetailResumeCursor(threadId);
+      if (resumeCursor === undefined) {
+        threadSnapshotSequenceById.delete(threadId);
+      } else {
+        threadSnapshotSequenceById.set(threadId, resumeCursor);
+      }
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
@@ -1043,6 +1062,7 @@ function EventRouter() {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
           threadSnapshotSequenceById.set(threadId, latestThreadSequence);
+          advanceThreadDetailResumeCursor(threadId, latestThreadSequence);
           queueDomainEvent(event);
         }
       }
@@ -1096,7 +1116,9 @@ function EventRouter() {
       }
       await Promise.all(
         additions.map((threadId) =>
-          api.orchestration.subscribeThread({ threadId }).catch(() => undefined),
+          api.orchestration
+            .subscribeThread(buildThreadSubscribeInput(threadId))
+            .catch(() => undefined),
         ),
       );
     };
@@ -1130,6 +1152,10 @@ function EventRouter() {
         if (disposed || !subscribedThreadIds.has(threadId)) {
           return;
         }
+        // Every caller of this restart wants authoritative history (wiped or
+        // never-synced detail), so a cursor resume would skip exactly the
+        // snapshot being requested.
+        clearThreadDetailResumeCursor(threadId);
         await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
@@ -1360,6 +1386,7 @@ function EventRouter() {
               continue;
             }
             threadSnapshotSequenceById.set(threadId, event.sequence);
+            advanceThreadDetailResumeCursor(threadId, event.sequence);
             queueDomainEvent(event);
           }
         })
@@ -1410,6 +1437,7 @@ function EventRouter() {
           threadId,
           Math.max(currentSequence, snapshot.snapshotSequence),
         );
+        advanceThreadDetailResumeCursor(threadId, snapshot.snapshotSequence);
         // Apply even when the cursor did not advance. The projection is
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
@@ -1517,14 +1545,29 @@ function EventRouter() {
         if (!canApplyThreadSnapshot({ threadId, leasedThreadIds: subscribedThreadIds })) {
           threadSnapshotSequenceById.delete(threadId);
           pendingThreadEventsById.delete(threadId);
+          clearThreadDetailResumeCursor(threadId);
+          return;
+        }
+        syncServerThreadDetailHotPath(item.snapshot.thread);
+        // The projection can discard a tombstoned snapshot (deleted thread or
+        // project) instead of applying it; committing the cursor or the stream
+        // fence first would leave resume bookkeeping vouching for detail that
+        // was never stored. `threadDetailSyncById` flips to "synced" only when
+        // the detail was actually applied.
+        if (useStore.getState().threadDetailSyncById?.[threadId] !== "synced") {
+          threadSnapshotSequenceById.delete(threadId);
+          pendingThreadEventsById.delete(threadId);
+          clearThreadDetailResumeCursor(threadId);
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        // Snapshots replace cached detail wholesale, so overwrite the cursor
+        // even when it is lower than the previous one (server-side reset).
+        setThreadDetailResumeCursor(threadId, item.snapshot.snapshotSequence);
         nextThreadProjectionReconcileAtById.set(
           threadId,
           Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
         );
-        syncServerThreadDetailHotPath(item.snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(item.snapshot.thread);
         flushThreadBuffer(threadId, item.snapshot.snapshotSequence);
         return;
@@ -1555,6 +1598,7 @@ function EventRouter() {
         return;
       }
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
+      advanceThreadDetailResumeCursor(threadId, item.event.sequence);
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1569,6 +1613,7 @@ function EventRouter() {
       // The stream is dead with retries and reconnects exhausted: forget its
       // cursor so a future resubscribe requests a fresh snapshot, and surface
       // the failure so the thread view stops posing as an empty conversation.
+      clearThreadDetailResumeCursor(threadId);
       threadSnapshotSequenceById.delete(threadId);
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
@@ -1578,6 +1623,8 @@ function EventRouter() {
     // active. The wiped messages never refresh on their own, so drop the cursor
     // and restart the stream to fetch a fresh snapshot.
     const unsubThreadDetailEviction = subscribeThreadDetailEvictions((threadId) => {
+      // Retention already dropped the resume cursor when it wiped the detail;
+      // here only the live-stream bookkeeping for leased threads remains.
       if (disposed || !subscribedThreadIds.has(threadId)) {
         return;
       }

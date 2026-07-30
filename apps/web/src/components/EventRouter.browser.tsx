@@ -34,6 +34,7 @@ import {
 } from "../test/effectRpcWebSocketMock";
 import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
+import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 
@@ -473,6 +474,7 @@ describe("EventRouter scoped orchestration sync", () => {
     getThreadDetailSnapshotRequestCount = 0;
     delayNextThreadDetailSnapshotResponse = false;
     pendingThreadDetailSnapshotResponse = null;
+    resetThreadDetailResumeCursorsForTests();
   });
 
   afterEach(() => {
