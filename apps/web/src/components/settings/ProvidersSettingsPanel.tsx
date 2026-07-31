@@ -42,8 +42,10 @@ import { ensureNativeApi } from "~/nativeApi";
 import { sameProviderOrder } from "~/providerOrdering";
 import {
   getVisibleProviderUpdateStatuses,
+  isProviderLatestVersionKnowable,
   isProviderUpdateActive,
   shouldOfferProviderUpdateAction,
+  shouldPromptProviderUpdate,
   shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "~/providerUpdates";
@@ -670,8 +672,14 @@ function ProviderToolRow(props: {
     props.updatingProviders.has(props.config.provider),
   );
   const showUpdateButton = props.providerStatus
-    ? shouldOfferProviderUpdateAction(props.providerStatus) &&
+    ? shouldPromptProviderUpdate(props.providerStatus) &&
       (showProviderUpdateStatus || updateAdvisory?.status === "unknown")
+    : false;
+  // Self-updating CLIs never report a latest version, so the update stays available
+  // inside the panel rather than as a header badge that can never be satisfied.
+  const showSelfManagedUpdate = props.providerStatus
+    ? shouldOfferProviderUpdateAction(props.providerStatus) &&
+      !isProviderLatestVersionKnowable(props.providerStatus)
     : false;
 
   return (
@@ -727,6 +735,20 @@ function ProviderToolRow(props: {
                   ) : (
                     "A newer version is available, but Synara could not identify a safe one-click update command for this installation."
                   )}
+                </div>
+              ) : null}
+              {showSelfManagedUpdate && props.providerStatus ? (
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 text-xs text-muted-foreground">
+                    {title} manages its own releases, so Synara cannot tell whether a newer
+                    version exists. Run the update to be sure.
+                  </div>
+                  <ProviderUpdateAction
+                    providerStatus={props.providerStatus}
+                    active={updateActive}
+                    disabled={updateActive}
+                    onUpdate={props.onUpdate}
+                  />
                 </div>
               ) : null}
               {props.config.fields.map((field) => (

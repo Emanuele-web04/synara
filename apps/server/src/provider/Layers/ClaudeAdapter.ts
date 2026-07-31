@@ -3284,6 +3284,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : {}),
           payload: {
             message,
+            target: "subagent",
           },
           providerRefs: nativeProviderRefs(run.context),
           raw: {
@@ -5554,7 +5555,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             createdAt: stamp.createdAt,
             threadId: context.session.threadId,
             turnId: liveTurnState.turnId,
-            payload: { message: steerText },
+            payload: { message: steerText, target: "turn" },
             providerRefs: nativeProviderRefs(context),
           });
         }

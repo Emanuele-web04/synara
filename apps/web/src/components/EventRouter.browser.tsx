@@ -1517,9 +1517,9 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
             subscribeCountBeforeMaterialization,
           );
-          expect(getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text).toBe(
-            "recovered without a reload",
-          );
+          expect(
+            getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text,
+          ).toBe("recovered without a reload");
           expect(
             useComposerDraftStore.getState().draftThreadsByThreadId[draftThreadId],
           ).toBeUndefined();

@@ -1922,7 +1922,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               threadId: input.threadId,
               turnId: result.turnId,
               createdAt: new Date().toISOString(),
-              payload: { message },
+              payload: { message, target: "turn" },
             });
           }),
           Effect.map((result) => ({

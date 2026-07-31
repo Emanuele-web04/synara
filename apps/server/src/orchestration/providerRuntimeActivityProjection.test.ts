@@ -160,6 +160,27 @@ describe("projected activities satisfy the orchestration command schema", () => 
     );
   });
 
+  it("projects a subagent steer but not a steer of the thread's own turn", () => {
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "turn.steered",
+          eventId: "turn-steered-own-turn",
+          turnId: TURN_ID,
+          payload: { message: "dimmi ciao subito", target: "turn" },
+        }),
+      ),
+    ).toEqual([]);
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "turn.steered",
+        eventId: "turn-steered-subagent",
+        turnId: TURN_ID,
+        payload: { message: "dimmi ciao subito", target: "subagent" },
+      }),
+    );
+  });
+
   it("keeps raw provider payloads inside what Schema.Json admits", () => {
     const cyclic: Record<string, unknown> = { window: "5h" };
     cyclic.self = cyclic;

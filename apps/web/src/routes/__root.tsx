@@ -1889,8 +1889,7 @@ function EventRouter() {
           nextThreadProjectionReconcileAtById.delete(threadId);
           continue;
         }
-        const nextProjectionReconcileAt =
-          nextThreadProjectionReconcileAtById.get(threadId) ?? now;
+        const nextProjectionReconcileAt = nextThreadProjectionReconcileAtById.get(threadId) ?? now;
         if (
           availableProjectionReconcileSlots > 0 &&
           !threadProjectionReconcileInFlight.has(threadId) &&

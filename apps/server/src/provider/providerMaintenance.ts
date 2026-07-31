@@ -640,6 +640,7 @@ export function createProviderVersionAdvisory(input: {
     status: advisory.status,
     currentVersion: input.currentVersion,
     latestVersion,
+    latestVersionKnowable: capabilities.latestVersionSource !== null,
     updateCommand: capabilities.update?.command ?? null,
     canUpdate: capabilities.update !== null,
     checkedAt: input.checkedAt ?? null,

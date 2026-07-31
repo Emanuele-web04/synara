@@ -314,4 +314,60 @@ describe("MessagesTimeline tail anchor", () => {
       await screen.unmount();
     }
   });
+
+  it("anchors a steer monotonically while the previous assistant row is still growing", async () => {
+    const handleRef: { current: HarnessHandle | null } = { current: null };
+    const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
+
+    try {
+      const handle = () => {
+        if (!handleRef.current) throw new Error("harness not mounted");
+        return handleRef.current;
+      };
+
+      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
+      await settleFrames(3);
+      void handle().listRef.current?.scrollToEnd?.({ animated: false });
+      await expect
+        .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
+        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+
+      handle().growStream(FIRST_STREAMING_MESSAGE_ID, 2);
+      await settleFrames(3);
+
+      const container = getScrollContainer(handle());
+      const topGapPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
+      handle().send(FIRST_SENT_MESSAGE_ID);
+
+      const offsets: number[] = [];
+      for (let frame = 0; frame < 48; frame += 1) {
+        if (frame === 4 || frame === 8 || frame === 12) {
+          handle().growStream(FIRST_STREAMING_MESSAGE_ID, 1);
+        }
+        if (frame === 16) {
+          handle().finishTurn();
+        }
+        await settleFrames(1);
+        const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+        if (offset !== null) {
+          offsets.push(offset);
+        }
+      }
+
+      expect(offsets.length).toBeGreaterThan(0);
+      expect(Math.min(...offsets)).toBeGreaterThanOrEqual(topGapPx - 8);
+      const largestDownwardJumpPx = offsets.slice(1).reduce((largest, offset, index) => {
+        return Math.max(largest, offset - offsets[index]!);
+      }, 0);
+      expect(largestDownwardJumpPx).toBeLessThanOrEqual(2);
+      await expect
+        .poll(() => {
+          const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+          return offset !== null && Math.abs(offset - topGapPx) <= 8;
+        })
+        .toBe(true);
+    } finally {
+      await screen.unmount();
+    }
+  });
 });

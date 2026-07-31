@@ -847,6 +847,14 @@ export function projectProviderRuntimeActivities(
     }
 
     case "turn.steered": {
+      // A steer of the thread's own turn is already visible as the sent user
+      // message that produced it, so an activity row would just repeat the text
+      // under the bubble. Only a subagent delivery needs its own marker: it
+      // lands on the child thread, which never renders the message otherwise.
+      if (event.payload.target === "turn") {
+        return [];
+      }
+
       return [
         {
           id: event.eventId,

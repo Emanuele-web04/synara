@@ -498,6 +498,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
+  const [settledTailAnchorMessageId, setSettledTailAnchorMessageId] = useState<MessageId | null>(
+    null,
+  );
+  const tailAnchorSlideInFlight =
+    tailAnchorMessageId !== null && tailAnchorMessageId !== settledTailAnchorMessageId;
+  const handleTailAnchorSlideFinished = useCallback((messageId: MessageId) => {
+    setSettledTailAnchorMessageId((current) => (current === messageId ? current : messageId));
+  }, []);
   const crossTaskOrigin = crossTaskOriginProp ?? null;
   const normalizedChatFontSizePx = normalizeChatFontSizePx(
     chatFontSizePxProp ?? DEFAULT_CHAT_FONT_SIZE_PX,
@@ -617,6 +625,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     anchorMessageId: tailAnchorMessageId,
     baseInsetPx: BOTTOM_CONTENT_INSET_PX,
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
+    onAnchorSlideFinished: handleTailAnchorSlideFinished,
+    contentChangeSignal: timelineEntries,
+    animateAnchorSlide: !followLiveOutput,
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
@@ -2109,7 +2120,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
         initialScrollAtEnd
-        maintainScrollAtEnd={followLiveOutput}
+        maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
         maintainScrollAtEndThreshold={0.1}
         {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
         onClickCapture={onMessagesClickCapture}

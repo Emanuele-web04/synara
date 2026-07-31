@@ -27,7 +27,7 @@
 
 import { type MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { computeTailAnchorSpacerHeightPx, isScrollContainerNearBottom } from "../../chat-scroll";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 
@@ -42,9 +42,9 @@ const ANCHOR_MEASURE_MAX_RETRY_FRAMES = 90;
 // second, estimate-based motion before the real anchor target is measurable.
 const ANCHOR_REVEAL_AFTER_MISSING_FRAMES = 3;
 
-// Native smooth scrolling has no completion promise. `scrollend` is the normal
-// completion signal; this fallback also covers browsers that do not emit it.
-const ANCHOR_SLIDE_FALLBACK_MS = 750;
+const ANCHOR_SLIDE_MAX_SETTLE_MS = 750;
+const ANCHOR_SLIDE_SETTLED_FRAMES = 3;
+const STEER_ANCHOR_MIN_SETTLE_MS = 500;
 
 // How long a measurement may wait for LegendList's tail positions to match the
 // rendered rows. Bounded so an unexpected steady-state mismatch (a row box the
@@ -65,6 +65,12 @@ interface UseTailAnchorSpacerOptions {
    * slide has a single scroll owner and cannot be preempted mid-flight.
    */
   anchorScrollInFlightRef?: RefObject<boolean> | undefined;
+  /** Lets the list suspend its own end-follow until the anchor slide is settled. */
+  onAnchorSlideFinished?: ((messageId: MessageId) => void) | undefined;
+  /** Changes whenever transcript content may have moved the anchor row. */
+  contentChangeSignal?: unknown;
+  /** Normal sends slide; steering an already-streaming turn anchors immediately. */
+  animateAnchorSlide?: boolean | undefined;
 }
 
 function getScrollContainer(listRef: RefObject<LegendListRef | null>): HTMLElement | null {
@@ -147,12 +153,23 @@ export function useTailAnchorSpacer({
   anchorMessageId,
   baseInsetPx,
   anchorScrollInFlightRef,
+  onAnchorSlideFinished,
+  contentChangeSignal,
+  animateAnchorSlide = true,
 }: UseTailAnchorSpacerOptions): void {
   const previousAnchorRef = useRef<MessageId | null>(null);
   const collapseTimeoutRef = useRef<number | null>(null);
   const collapseStartFrameRef = useRef<number | null>(null);
+  const anchorSlideCorrectionRef = useRef<(() => void) | null>(null);
+  const animateAnchorSlideRef = useRef(animateAnchorSlide);
 
-  useEffect(() => {
+  // Capture the mode selected for each new anchor without restarting an active
+  // steering settle when `followLiveOutput` later flips to false.
+  useLayoutEffect(() => {
+    animateAnchorSlideRef.current = animateAnchorSlide;
+  }, [anchorMessageId, animateAnchorSlide]);
+
+  useLayoutEffect(() => {
     const previousAnchor = previousAnchorRef.current;
     previousAnchorRef.current = anchorMessageId;
 
@@ -207,6 +224,7 @@ export function useTailAnchorSpacer({
     // Fresh anchor (new send, or steer replacing the previous anchor): size the
     // reserve instantly and slide the transcript so the message lands at the top.
     const anchorId = anchorMessageId;
+    const shouldAnimateAnchorSlide = animateAnchorSlideRef.current;
     clearCollapseTimers();
     if (anchorScrollInFlightRef) {
       anchorScrollInFlightRef.current = true;
@@ -229,11 +247,18 @@ export function useTailAnchorSpacer({
     // Consecutive measurements skipped while LegendList's tail was still on
     // estimated sizes (see isTailLayoutSettled).
     let deferredForStaleTail = 0;
+    let anchorSlideFrameId: number | null = null;
     let anchorSlideFallbackId: number | null = null;
     let anchorSlideContainer: HTMLElement | null = null;
     let anchorSlideScrollEndListener: (() => void) | null = null;
+    let advanceAnchorSlide: ((now: number) => boolean) | null = null;
+    let anchorLayoutObserver: MutationObserver | null = null;
 
     function clearAnchorSlideCompletion(): void {
+      if (anchorSlideFrameId !== null) {
+        window.cancelAnimationFrame(anchorSlideFrameId);
+        anchorSlideFrameId = null;
+      }
       if (anchorSlideFallbackId !== null) {
         window.clearTimeout(anchorSlideFallbackId);
         anchorSlideFallbackId = null;
@@ -243,6 +268,10 @@ export function useTailAnchorSpacer({
       }
       anchorSlideContainer = null;
       anchorSlideScrollEndListener = null;
+      advanceAnchorSlide = null;
+      anchorSlideCorrectionRef.current = null;
+      anchorLayoutObserver?.disconnect();
+      anchorLayoutObserver = null;
     }
 
     // The slide is over (or was never needed): hand scroll ownership back to
@@ -252,6 +281,7 @@ export function useTailAnchorSpacer({
       if (anchorScrollInFlightRef) {
         anchorScrollInFlightRef.current = false;
       }
+      onAnchorSlideFinished?.(anchorId);
     }
 
     function findAnchorElement(): HTMLElement | null {
@@ -262,14 +292,12 @@ export function useTailAnchorSpacer({
       );
     }
 
-    function settleAnchorSlide(): void {
+    function settleAnimatedAnchorSlide(): void {
       if (disposed) {
         return;
       }
-      // A pointer/wheel/touch gesture clears the shared flag in ChatView. Do not
-      // pull the transcript back after the user has taken over the scroll.
       if (anchorScrollInFlightRef && !anchorScrollInFlightRef.current) {
-        clearAnchorSlideCompletion();
+        finishAnchorSlide();
         return;
       }
       const container = getScrollContainer(listRef);
@@ -286,23 +314,103 @@ export function useTailAnchorSpacer({
         finishAnchorSlide();
         return;
       }
-      if (prefersReducedMotion() || Math.abs(target - container.scrollTop) <= 1) {
-        container.scrollTop = target;
-        finishAnchorSlide();
+      clearAnchorSlideCompletion();
+
+      // Keep the already-stable normal-send motion unchanged. Only steering
+      // needs the live coordinate correction below because it has a growing row
+      // above the new anchor.
+      if (shouldAnimateAnchorSlide) {
+        if (prefersReducedMotion() || Math.abs(target - container.scrollTop) <= 1) {
+          container.scrollTop = target;
+          finishAnchorSlide();
+          return;
+        }
+        anchorSlideContainer = container;
+        anchorSlideScrollEndListener = () => {
+          const currentTarget = anchoredScrollTopPx(container, findAnchorElement());
+          if (currentTarget !== null && Math.abs(currentTarget - container.scrollTop) <= 1) {
+            settleAnimatedAnchorSlide();
+          }
+        };
+        container.addEventListener("scrollend", anchorSlideScrollEndListener);
+        anchorSlideFallbackId = window.setTimeout(
+          settleAnimatedAnchorSlide,
+          ANCHOR_SLIDE_MAX_SETTLE_MS,
+        );
+        container.scrollTo({ top: target, behavior: "smooth" });
         return;
       }
 
-      clearAnchorSlideCompletion();
-      anchorSlideContainer = container;
-      anchorSlideScrollEndListener = () => {
-        const currentTarget = anchoredScrollTopPx(container, findAnchorElement());
-        if (currentTarget !== null && Math.abs(currentTarget - container.scrollTop) <= 1) {
-          settleAnchorSlide();
+      container.scrollTop = target;
+      const startedAt = performance.now();
+      const topInsetPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
+      let settledFrames = 0;
+
+      advanceAnchorSlide = (now: number) => {
+        if (disposed) {
+          return true;
+        }
+        // A pointer/wheel/touch gesture clears the shared flag in ChatView. Do
+        // not pull the transcript back after the user takes over the scroll.
+        if (anchorScrollInFlightRef && !anchorScrollInFlightRef.current) {
+          finishAnchorSlide();
+          return true;
+        }
+        const currentContainer = getScrollContainer(listRef);
+        const currentAnchor = findAnchorElement();
+        if (!currentContainer || !currentAnchor || currentAnchor.getClientRects().length === 0) {
+          finishAnchorSlide();
+          return true;
+        }
+
+        const desiredOffset = topInsetPx;
+        const currentOffset =
+          currentAnchor.getBoundingClientRect().top - currentContainer.getBoundingClientRect().top;
+        const correction = currentOffset - desiredOffset;
+        if (Math.abs(correction) > 0.5) {
+          currentContainer.scrollTop += correction;
+        }
+
+        const spacer = spacerRef.current;
+        const anchorIsSettled = Math.abs(currentOffset - topInsetPx) <= 1;
+        settledFrames =
+          spacer && anchorIsSettled && isTailLayoutSettled(listRef, spacer)
+            ? settledFrames + 1
+            : 0;
+        if (
+          (settledFrames < ANCHOR_SLIDE_SETTLED_FRAMES ||
+            now - startedAt < STEER_ANCHOR_MIN_SETTLE_MS) &&
+          now - startedAt < ANCHOR_SLIDE_MAX_SETTLE_MS
+        ) {
+          return false;
+        }
+        finishAnchorSlide();
+        return true;
+      };
+      anchorSlideCorrectionRef.current = () => {
+        advanceAnchorSlide?.(performance.now());
+      };
+      const timelineRoot = timelineRootRef.current;
+      if (timelineRoot && typeof MutationObserver !== "undefined") {
+        anchorLayoutObserver = new MutationObserver(() => {
+          anchorSlideCorrectionRef.current?.();
+        });
+        // LegendList repositions the anchor's absolute wrapper by mutating its
+        // inline style after a preceding streaming row is remeasured. Catch
+        // that mutation before paint instead of waiting for the next rAF.
+        anchorLayoutObserver.observe(timelineRoot, {
+          attributes: true,
+          attributeFilter: ["style"],
+          subtree: true,
+        });
+      }
+      const step = (now: number) => {
+        anchorSlideFrameId = null;
+        if (!advanceAnchorSlide?.(now)) {
+          anchorSlideFrameId = window.requestAnimationFrame(step);
         }
       };
-      container.addEventListener("scrollend", anchorSlideScrollEndListener);
-      anchorSlideFallbackId = window.setTimeout(settleAnchorSlide, ANCHOR_SLIDE_FALLBACK_MS);
-      container.scrollTo({ top: target, behavior: "smooth" });
+      anchorSlideFrameId = window.requestAnimationFrame(step);
     }
 
     function measure(): void {
@@ -383,6 +491,10 @@ export function useTailAnchorSpacer({
           container.scrollTop = target;
         }
       }
+      // A steering message is appended below an assistant row that may still
+      // receive one last streaming chunk. Correct that above-anchor growth in
+      // the same total-size notification so it never paints as a downward hop.
+      advanceAnchorSlide?.(performance.now());
     }
 
     function schedule(): void {
@@ -432,7 +544,11 @@ export function useTailAnchorSpacer({
       resizeObserver = new ResizeObserver(schedule);
       resizeObserver.observe(container);
     }
-    schedule();
+    if (shouldAnimateAnchorSlide) {
+      schedule();
+    } else {
+      measureNow();
+    }
 
     return () => {
       disposed = true;
@@ -447,7 +563,22 @@ export function useTailAnchorSpacer({
       unlistenTotalSize?.();
       resizeObserver?.disconnect();
     };
-  }, [anchorMessageId, anchorScrollInFlightRef, baseInsetPx, listRef, spacerRef, timelineRootRef]);
+  }, [
+    anchorMessageId,
+    anchorScrollInFlightRef,
+    baseInsetPx,
+    listRef,
+    onAnchorSlideFinished,
+    spacerRef,
+    timelineRootRef,
+  ]);
+
+  // React commits streamed text before paint. Re-apply the current slide
+  // coordinate in that layout window so a final pre-steer assistant chunk above
+  // the anchor cannot push the steering message down for one visible frame.
+  useLayoutEffect(() => {
+    anchorSlideCorrectionRef.current?.();
+  }, [contentChangeSignal]);
 
   // Unmount (thread switch remounts the timeline): drop any pending collapse timers.
   useEffect(() => {
