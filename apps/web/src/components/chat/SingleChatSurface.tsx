@@ -1,7 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   lazy,
@@ -23,6 +23,7 @@ import { basenameOfPath } from "../../file-icons";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
   addChatFileComment,
   appendChatFileReference,
@@ -37,6 +38,7 @@ import {
 } from "../../lib/chatPaneScope";
 import type { DockPaneRuntimeMode } from "../../lib/dockPaneActivation";
 import type { FileCommentSelection } from "../../lib/fileComments";
+import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
 import { getSidechatCreator } from "../../lib/sidechatCreatorRegistry";
@@ -76,7 +78,7 @@ import {
 } from "./ChatThreadSurfacePrimitives";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { RightDock } from "./RightDock";
-import { RIGHT_DOCK_ADD_MENU_KINDS, getRightDockPaneMeta } from "./rightDockPaneMeta";
+import { getRightDockPaneMeta, resolveRightDockLauncherItems } from "./rightDockPaneMeta";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
@@ -205,6 +207,18 @@ export function SingleChatSurface(props: {
     threadWorkingDirectory:
       threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
+  const dockGitRepositoryQuery = useQuery(gitBranchesQueryOptions(workspaceRoot));
+  const hasGitRepository = dockGitRepositoryQuery.data?.isRepo === true;
+  const dockDiffTotals = useRepoDiffTotals({
+    gitCwd: workspaceRoot,
+    isGitRepo: hasGitRepository,
+  });
+  const dockLauncherItems = resolveRightDockLauncherItems({
+    hasWorkspace: workspaceRoot !== null,
+    hasGitRepository,
+    hasReview: dockDiffTotals.fileCount > 0,
+  });
+  const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -287,6 +301,9 @@ export function SingleChatSurface(props: {
   const handleToggleBrowser = () => {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
+  };
+  const handleToggleRightDock = () => {
+    setDockOpen(props.threadId, !dockState.open);
   };
   const handleOpenBrowserUrl = () => {
     requestImmediateDockHydration("browser");
@@ -943,6 +960,7 @@ export function SingleChatSurface(props: {
               isFocusedPane
               panelState={chatPanelState}
               onToggleDiff={handleToggleDiff}
+              onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
@@ -960,7 +978,8 @@ export function SingleChatSurface(props: {
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
           shouldAcceptWidth={shouldAcceptDockWidth}
-          addMenuKinds={RIGHT_DOCK_ADD_MENU_KINDS}
+          addMenuKinds={availableDockPaneKinds}
+          launcherItems={dockLauncherItems}
           motionKey={props.threadId}
           activePaneRuntimeMode={activePaneRuntimeMode}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}

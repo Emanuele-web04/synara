@@ -1074,6 +1074,7 @@ interface ChatViewProps {
   isFocusedPane?: boolean;
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
+  onToggleRightDock?: () => void;
   onToggleBrowserPanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
@@ -1136,6 +1137,7 @@ export default function ChatView({
   isFocusedPane: isFocusedPaneProp,
   panelState,
   onToggleDiffPanel,
+  onToggleRightDock,
   onToggleBrowserPanel,
   onOpenBrowserUrl,
   onOpenTurnDiffPanel,
@@ -11190,6 +11192,8 @@ export default function ChatView({
           showDiffToggle={!isEditorRail}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
+          rightDockOpen={rightDockOpen}
+          {...(onToggleRightDock ? { onToggleRightDock } : {})}
           environment={isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={

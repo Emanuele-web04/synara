@@ -30,6 +30,10 @@ export interface RightDockPaneMeta {
   Icon: LucideIcon;
 }
 
+export interface RightDockLauncherItem extends RightDockPaneMeta {
+  kind: RightDockPaneKind;
+}
+
 export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> = {
   browser: { label: "Browser", Icon: GlobeIcon },
   diff: { label: "Diff", Icon: DiffIcon },
@@ -63,6 +67,52 @@ export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta
 export const RIGHT_DOCK_ADD_MENU_KINDS: readonly RightDockPaneKind[] = RIGHT_DOCK_PANE_KINDS.filter(
   (kind) => kind !== "file" && kind !== "pullRequest",
 );
+
+// Empty-dock launchers prioritize the everyday workspace tools. Review only
+// appears when the selected diff scope contains changes, Git is gated by
+// repository discovery, and Explorer needs a concrete workspace. Context-only
+// file and pull-request panes continue to open from their owning surfaces.
+const RIGHT_DOCK_LAUNCHER_ORDER: readonly RightDockPaneKind[] = [
+  "diff",
+  "terminal",
+  "browser",
+  "explorer",
+  "sidechat",
+  "git",
+];
+
+const RIGHT_DOCK_LAUNCHER_LABELS: Partial<Record<RightDockPaneKind, string>> = {
+  diff: "Review",
+  explorer: "Files",
+  sidechat: "Side chat",
+  git: "Source control",
+};
+
+export function resolveRightDockLauncherItems(input: {
+  hasWorkspace: boolean;
+  hasGitRepository: boolean;
+  hasReview: boolean;
+}): readonly RightDockLauncherItem[] {
+  return RIGHT_DOCK_LAUNCHER_ORDER.flatMap((kind) => {
+    if (kind === "diff" && !input.hasReview) {
+      return [];
+    }
+    if (kind === "git" && !input.hasGitRepository) {
+      return [];
+    }
+    if (kind === "explorer" && !input.hasWorkspace) {
+      return [];
+    }
+    const meta = getRightDockPaneMeta(kind);
+    return [
+      {
+        kind,
+        Icon: meta.Icon,
+        label: RIGHT_DOCK_LAUNCHER_LABELS[kind] ?? meta.label,
+      },
+    ];
+  });
+}
 
 // Resolves a tab label, preferring caller-provided per-pane overrides (e.g. the
 // embedded sidechat thread title) before falling back to the kind label.

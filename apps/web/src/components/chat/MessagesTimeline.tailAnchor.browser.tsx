@@ -231,16 +231,32 @@ describe("MessagesTimeline tail anchor", () => {
         .toBeGreaterThan(BASE_BOTTOM_INSET_PX);
       await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
-      // 2) Short streaming: response grows into the reserve; the message stays pinned.
+      // 2) Short streaming: response grows into the reserve; the message stays
+      // pinned. Sampled every frame, because the regression this guards is a
+      // single-frame hop: LegendList positions a freshly appended row from
+      // `estimatedItemSize`, and sizing the reserve from that frame moves the
+      // scroll max, which jerks the anchored message and springs it back.
       const container = getScrollContainer(handle());
       const scrollTopBeforeStream = container.scrollTop;
       const spacerBeforeStream = getSpacer().getBoundingClientRect().height;
 
       handle().growStream(FIRST_STREAMING_MESSAGE_ID, 2);
+      const perFrameOffsets: number[] = [];
+      for (let index = 0; index < 24; index += 1) {
+        await settleFrames(1);
+        const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+        if (offset !== null) {
+          perFrameOffsets.push(offset);
+        }
+      }
+      const worstDriftPx = perFrameOffsets.reduce(
+        (worst, offset) => Math.max(worst, Math.abs(offset - topGapPx)),
+        0,
+      );
+      expect(worstDriftPx).toBeLessThanOrEqual(8);
       await expect
         .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
         .toBeLessThan(spacerBeforeStream);
-      await settleFrames(3);
 
       expect(Math.abs(container.scrollTop - scrollTopBeforeStream)).toBeLessThanOrEqual(1);
       await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
@@ -268,7 +284,13 @@ describe("MessagesTimeline tail anchor", () => {
       void handle().listRef.current?.scrollToEnd?.({ animated: true });
       await expectAnchoredAtTopGap(SECOND_SENT_MESSAGE_ID);
 
-      handle().growStream(SECOND_STREAMING_MESSAGE_ID, 40);
+      // Streamed in chunks, the way a real turn arrives: the transcript has to
+      // stay at the live edge as it grows past the reserve, rather than being
+      // yanked to the bottom in one jump.
+      for (let chunk = 0; chunk < 10; chunk += 1) {
+        handle().growStream(SECOND_STREAMING_MESSAGE_ID, 4);
+        await settleFrames(2);
+      }
       await expect
         .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
         .toBe(BASE_BOTTOM_INSET_PX);

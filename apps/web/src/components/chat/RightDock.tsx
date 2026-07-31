@@ -44,6 +44,7 @@ import {
 } from "./chatHeaderControls";
 import {
   getRightDockPaneMeta,
+  type RightDockLauncherItem,
   resolveRightDockPaneIcon,
   resolveRightDockPaneLabel,
 } from "./rightDockPaneMeta";
@@ -65,6 +66,7 @@ interface RightDockProps {
   // swapping the generic kind icon for its live state glyph.
   paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
+  launcherItems?: readonly RightDockLauncherItem[];
   // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts
   // provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
@@ -78,6 +80,34 @@ interface RightDockProps {
     pane: RightDockPane,
     context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
   ) => ReactNode;
+}
+
+function RightDockLauncher(props: {
+  items: readonly RightDockLauncherItem[];
+  onOpen: (kind: RightDockPaneKind) => void;
+}) {
+  return (
+    <nav
+      aria-label="Open a panel"
+      className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-6"
+    >
+      <div className="flex w-full max-w-sm flex-col gap-1.5">
+        {props.items.map(({ kind, Icon, label }) => (
+          <Button
+            key={kind}
+            variant="subtle"
+            size="xl"
+            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-[length:var(--app-font-size-ui-lg,13px)] font-normal"
+            aria-label={`Open ${label}`}
+            onClick={() => props.onOpen(kind)}
+          >
+            <Icon className="size-4 shrink-0" />
+            <span>{label}</span>
+          </Button>
+        ))}
+      </div>
+    </nav>
+  );
 }
 
 function RightDockTab(props: {
@@ -250,7 +280,7 @@ export function RightDock(props: RightDockProps) {
                 />
               ))}
             </div>
-            {props.addMenuKinds.length > 0 ? (
+            {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
               <Menu modal={false}>
                 <MenuTrigger
                   render={
@@ -291,6 +321,9 @@ export function RightDock(props: RightDockProps) {
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">
+            {activePane === null && props.launcherItems ? (
+              <RightDockLauncher items={props.launcherItems} onOpen={props.onAddPane} />
+            ) : null}
             {renderedPanes.map((pane) => {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;

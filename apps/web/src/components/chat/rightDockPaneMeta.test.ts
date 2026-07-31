@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { RIGHT_DOCK_PANE_KINDS } from "~/rightDockStore.logic";
-import { RIGHT_DOCK_ADD_MENU_KINDS, getRightDockPaneMeta } from "./rightDockPaneMeta";
+import {
+  RIGHT_DOCK_ADD_MENU_KINDS,
+  getRightDockPaneMeta,
+  resolveRightDockLauncherItems,
+} from "./rightDockPaneMeta";
 
 describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
   it("offers the explorer pane but not the chat-driven file pane", () => {
@@ -19,5 +23,52 @@ describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
 
   it("labels the explorer pane", () => {
     expect(getRightDockPaneMeta("explorer").label).toBe("Explorer");
+  });
+});
+
+describe("resolveRightDockLauncherItems", () => {
+  it("offers the non-Git tools for a chat without a repository", () => {
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: false,
+        hasReview: false,
+      }).map(({ kind, label }) => [kind, label]),
+    ).toEqual([
+      ["terminal", "Terminal"],
+      ["browser", "Browser"],
+      ["explorer", "Files"],
+      ["sidechat", "Side chat"],
+    ]);
+  });
+
+  it("adds review and source control only for Git repositories", () => {
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: true,
+        hasReview: true,
+      }).map(({ kind }) => kind),
+    ).toEqual(["diff", "terminal", "browser", "explorer", "sidechat", "git"]);
+  });
+
+  it("hides workspace-backed tools while no workspace is ready", () => {
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: false,
+        hasGitRepository: false,
+        hasReview: false,
+      }).map(({ kind }) => kind),
+    ).toEqual(["terminal", "browser", "sidechat"]);
+  });
+
+  it("hides review for a clean Git repository", () => {
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: true,
+        hasReview: false,
+      }).map(({ kind }) => kind),
+    ).toEqual(["terminal", "browser", "explorer", "sidechat", "git"]);
   });
 });

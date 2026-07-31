@@ -9,9 +9,13 @@
 //      a chat's first message), which lets the existing scroll-to-end +
 //      stick-to-end machinery produce the anchored layout with no second scroll
 //      system. Resizes are applied synchronously with the content change that
-//      caused them so the invariant holds within every frame, and while the
-//      post-send slide is animating this hook is the sole scroll owner (the
-//      shared in-flight flag pauses ChatView's auto-follow re-snaps). While the
+//      caused them so the invariant holds within every frame — except on frames
+//      where LegendList still positions the tail from `estimatedItemSize`, which
+//      are skipped outright because sizing the reserve from an estimate moves the
+//      scroll max and throws the anchored message past the viewport top. Through
+//      the whole slide and its settle window this hook is the sole scroll owner
+//      (the shared in-flight flag pauses ChatView's auto-follow re-snaps), and it
+//      only ever chases the anchor's own target, never the raw list end. While the
 //      response is shorter than the viewport it grows into the
 //      reserve (total scroll height stays constant, so the message stays pinned);
 //      once it overflows, the spacer bottoms out at the base inset and normal
@@ -32,6 +36,12 @@ import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/di
 // that window; afterwards content-size changes re-trigger measurement anyway.
 const ANCHOR_MEASURE_MAX_RETRY_FRAMES = 90;
 
+// How long a measurement may wait for LegendList's tail positions to match the
+// rendered rows. Bounded so an unexpected steady-state mismatch (a row box the
+// list measures differently than its border box) degrades to a small delay
+// instead of freezing the reserve.
+const STALE_TAIL_MAX_DEFERRED_FRAMES = 3;
+
 interface UseTailAnchorSpacerOptions {
   listRef: RefObject<LegendListRef | null>;
   timelineRootRef: RefObject<HTMLElement | null>;
@@ -50,6 +60,62 @@ interface UseTailAnchorSpacerOptions {
 function getScrollContainer(listRef: RefObject<LegendListRef | null>): HTMLElement | null {
   const node: unknown = listRef.current?.getScrollableNode?.();
   return node instanceof HTMLElement ? node : null;
+}
+
+/**
+ * True when LegendList's tail positions match what is actually rendered.
+ *
+ * A freshly appended row is positioned from `estimatedItemSize` until its real
+ * height is reported, so for one frame the list footer — and with it the spacer
+ * — sits at an offset that does not match the rendered rows. Sizing the reserve
+ * from that frame bakes the estimate in: the reserve over- or under-shrinks,
+ * the scroll max moves with it, and the anchored message visibly overshoots the
+ * top and springs back. The gap between the last rendered row's bottom edge and
+ * the spacer's top edge is exactly that estimate error, so it is the signal to
+ * wait a frame on. It is zero once the row's real size lands.
+ */
+function isTailLayoutSettled(
+  listRef: RefObject<LegendListRef | null>,
+  spacer: HTMLElement,
+): boolean {
+  const state = listRef.current?.getState?.();
+  if (!state) {
+    return true;
+  }
+  const lastIndex = state.data.length - 1;
+  if (lastIndex < 0) {
+    return true;
+  }
+  const lastElement: unknown = state.elementAtIndex(lastIndex);
+  if (!(lastElement instanceof HTMLElement) || lastElement.getClientRects().length === 0) {
+    return true;
+  }
+  return (
+    Math.abs(spacer.getBoundingClientRect().top - lastElement.getBoundingClientRect().bottom) <= 1
+  );
+}
+
+/**
+ * scrollTop that puts the anchored message's top edge one top-inset below the
+ * viewport top, clamped to the container's scroll range. Derived from the
+ * anchor's own box, so unlike "the list end" it cannot be thrown off by a row
+ * that momentarily overstates the content height.
+ */
+function anchoredScrollTopPx(
+  container: HTMLElement,
+  anchorElement: HTMLElement | null,
+): number | null {
+  if (!anchorElement || anchorElement.getClientRects().length === 0) {
+    return null;
+  }
+  const topInsetPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
+  const offsetFromViewportTop =
+    anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top;
+  const maxScrollTopPx = Math.max(0, container.scrollHeight - container.clientHeight);
+  return Math.min(
+    maxScrollTopPx,
+    Math.max(0, container.scrollTop + offsetFromViewportTop - topInsetPx),
+  );
 }
 
 function readSpacerHeightPx(spacer: HTMLElement, baseInsetPx: number): number {
@@ -149,6 +215,9 @@ export function useTailAnchorSpacer({
     // A send far from the bottom leaves the new row outside the render window,
     // so the slide toward the end must start before the row can be measured.
     let requestedTailReveal = false;
+    // Consecutive measurements skipped while LegendList's tail was still on
+    // estimated sizes (see isTailLayoutSettled).
+    let deferredForStaleTail = 0;
 
     // The slide is over (or was never needed): hand scroll ownership back to
     // ChatView's auto-follow machinery.
@@ -158,6 +227,14 @@ export function useTailAnchorSpacer({
       }
     }
 
+    function findAnchorElement(): HTMLElement | null {
+      return (
+        timelineRootRef.current?.querySelector<HTMLElement>(
+          `[data-message-id="${CSS.escape(anchorId)}"]`,
+        ) ?? null
+      );
+    }
+
     function measure(): void {
       const container = getScrollContainer(listRef);
       const spacer = spacerRef.current;
@@ -165,9 +242,7 @@ export function useTailAnchorSpacer({
       if (!container || !spacer || !root) {
         return;
       }
-      const anchorElement = root.querySelector<HTMLElement>(
-        `[data-message-id="${CSS.escape(anchorId)}"]`,
-      );
+      const anchorElement = findAnchorElement();
       if (!anchorElement || anchorElement.getClientRects().length === 0) {
         // Row not committed yet (or virtualized out). Retry briefly for the
         // fresh-send case; otherwise freeze the current reserve.
@@ -184,6 +259,18 @@ export function useTailAnchorSpacer({
         }
         return;
       }
+      // Never size the reserve from a frame where the tail is still positioned
+      // from estimated row sizes — that estimate error is what makes the
+      // anchored message shoot past the top and spring back.
+      if (
+        !isTailLayoutSettled(listRef, spacer) &&
+        deferredForStaleTail < STALE_TAIL_MAX_DEFERRED_FRAMES
+      ) {
+        deferredForStaleTail += 1;
+        schedule();
+        return;
+      }
+      deferredForStaleTail = 0;
       const spacerTop = spacer.getBoundingClientRect().top;
       const anchorTop = anchorElement.getBoundingClientRect().top;
       const containerStyle = getComputedStyle(container);
@@ -227,11 +314,11 @@ export function useTailAnchorSpacer({
           if (disposed) {
             return;
           }
-          if (wasAnchorSlide) {
-            finishAnchorSlide();
-          }
           const settledContainer = getScrollContainer(listRef);
           if (!settledContainer) {
+            if (wasAnchorSlide) {
+              finishAnchorSlide();
+            }
             return;
           }
           const distanceFromBottom =
@@ -242,23 +329,51 @@ export function useTailAnchorSpacer({
           // there and only late row measurements left it short; farther away
           // means the user scrolled off mid-animation — leave them alone.
           if (distanceFromBottom > 1 && distanceFromBottom <= settledContainer.clientHeight) {
+            // Ownership is held for the whole settle window, not just the
+            // animation: the first response rows land during these frames, and
+            // an auto-follow re-snap to the raw end in the middle of them is
+            // the same overshoot this loop exists to avoid.
             let snapFramesLeft = 10;
             const snap = () => {
-              if (disposed || snapFramesLeft <= 0) {
+              if (disposed) {
+                return;
+              }
+              if (snapFramesLeft <= 0) {
+                if (wasAnchorSlide) {
+                  finishAnchorSlide();
+                }
                 return;
               }
               snapFramesLeft -= 1;
               const c = getScrollContainer(listRef);
-              if (!c) {
+              const s = spacerRef.current;
+              if (!c || !s) {
+                if (wasAnchorSlide) {
+                  finishAnchorSlide();
+                }
                 return;
               }
-              const max = c.scrollHeight - c.clientHeight;
-              if (max - c.scrollTop > 1) {
-                c.scrollTop = max;
+              // Chase the anchor's own target, never the raw end: the first
+              // response rows land while this loop is still running, and for the
+              // frame they are positioned from `estimatedItemSize` the end sits
+              // past the anchored position — snapping to it is what threw the
+              // message above the viewport top before it sprang back. Frames
+              // where the tail is still on estimates are sat out entirely, and
+              // the snap only ever moves forward so an overflowing response can
+              // scroll the anchor away without being pulled back.
+              if (isTailLayoutSettled(listRef, s)) {
+                const target = anchoredScrollTopPx(c, findAnchorElement());
+                if (target !== null && target - c.scrollTop > 1) {
+                  c.scrollTop = target;
+                }
               }
               window.requestAnimationFrame(snap);
             };
             snap();
+            return;
+          }
+          if (wasAnchorSlide) {
+            finishAnchorSlide();
           }
         });
       }
