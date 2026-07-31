@@ -32,7 +32,13 @@ import {
 } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
-import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
+import {
+  getComposerTraitSelection,
+  hasVisibleComposerTraitControls,
+  resolveComposerTraitStatusLabel,
+  showsComposerFastModeBadge,
+  supportsComposerFastModeControl,
+} from "./composerTraits";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
@@ -86,46 +92,33 @@ export function resolveTraitsTriggerSummary(options: {
   showsFastBadge: boolean;
   summaryText: string;
 } {
-  const {
-    caps,
-    effort,
-    effortLevels,
-    thinkingEnabled,
-    fastModeEnabled,
-    fastModeDescriptor,
-    contextWindow,
-    contextWindowOptions,
-    defaultContextWindow,
-    ultrathinkPromptControlled,
-  } = getComposerTraitSelection(
+  const selection = getComposerTraitSelection(
     options.provider,
     options.model,
     options.prompt,
     options.modelOptions,
     options.runtimeModel,
   );
-  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
+  const {
+    effortLevels,
+    thinkingEnabled,
+    fastModeEnabled,
+    contextWindow,
+    contextWindowOptions,
+    defaultContextWindow,
+  } = selection;
   // Providers whose only trait control is the fast toggle surface it as the
   // primary label ("Fast"/"Default") instead of the appended badge.
   const isFastOnlyControl =
-    supportsFastModeControl &&
+    supportsComposerFastModeControl(selection) &&
     effortLevels.length === 0 &&
     thinkingEnabled === null &&
     contextWindowOptions.length <= 1;
-  const effortLabel = effort
-    ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
-    : null;
-  const primaryLabel = ultrathinkPromptControlled
-    ? "Ultrathink"
-    : effortLabel
-      ? effortLabel
-      : thinkingEnabled !== null
-        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
-        : isFastOnlyControl
-          ? fastModeEnabled
-            ? "Fast"
-            : "Default"
-          : null;
+  // The shared status ladder (ultrathink → effort → thinking) covers every model
+  // that exposes those controls; the fast-only fallback only applies when it does not.
+  const primaryLabel =
+    resolveComposerTraitStatusLabel(selection) ??
+    (isFastOnlyControl ? (fastModeEnabled ? "Fast" : "Default") : null);
   // Only departures from the default context window earn a label.
   const contextWindowLabel =
     contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
@@ -137,7 +130,7 @@ export function resolveTraitsTriggerSummary(options: {
   // Agent name stands in as the primary label for agent-driven providers
   // (kilo/opencode) that expose no effort/thinking controls.
   const resolvedPrimaryLabel = primaryLabel ?? agentLabel;
-  const showsFastBadge = supportsFastModeControl && fastModeEnabled && !isFastOnlyControl;
+  const showsFastBadge = showsComposerFastModeBadge(selection) && !isFastOnlyControl;
   const summaryText = [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
     .filter((value): value is string => Boolean(value))
     .join(" · ");
@@ -307,7 +300,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
     { includeFastMode },
   );
-  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
+  const supportsFastModeControl = supportsComposerFastModeControl({ caps, fastModeDescriptor });
   // Fast mode rides the Effort header as a compact icon toggle whenever an
   // effort section exists; fast-only models (no effort levels) keep the
   // standalone radio section instead.

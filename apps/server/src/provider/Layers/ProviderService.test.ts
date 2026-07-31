@@ -1456,73 +1456,71 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.timeout("2 seconds")),
   );
 
-  it.effect(
-    "rotates a terminal turn's retired gateway session before the next turn is sent",
-    () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService;
-        const directory = yield* ProviderSessionDirectory;
-        const threadId = asThreadId("thread-proactive-terminal-gateway-rotation");
-        const turnA = asTurnId(`turn-${threadId}`);
+  it.effect("rotates a terminal turn's retired gateway session before the next turn is sent", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-proactive-terminal-gateway-rotation");
+      const turnA = asTurnId(`turn-${threadId}`);
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
-        const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        const lifecycleGeneration = initialBinding?.lifecycleGeneration;
-        assert.equal(typeof lifecycleGeneration, "string");
-        yield* routing.codex.waitForRuntimeSubscribers();
-        yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const lifecycleGeneration = initialBinding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
+      yield* routing.codex.waitForRuntimeSubscribers();
+      yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
 
-        const startsBeforeRotation = routing.codex.startSession.mock.calls.length;
-        const stopsBeforeRotation = routing.codex.stopSession.mock.calls.length;
-        routing.codex.emit({
-          type: "turn.completed",
-          eventId: asEventId("proactive-terminal-rotation-turn-a-completed"),
-          provider: "codex",
-          createdAt: "2026-07-23T13:00:01.000Z",
-          threadId,
-          turnId: turnA,
-          lifecycleGeneration,
-          payload: { state: "completed" },
-          raw: {
-            source: "codex.app-server.notification",
-            method: "turn/completed",
-            payload: { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true },
-          },
-        });
+      const startsBeforeRotation = routing.codex.startSession.mock.calls.length;
+      const stopsBeforeRotation = routing.codex.stopSession.mock.calls.length;
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("proactive-terminal-rotation-turn-a-completed"),
+        provider: "codex",
+        createdAt: "2026-07-23T13:00:01.000Z",
+        threadId,
+        turnId: turnA,
+        lifecycleGeneration,
+        payload: { state: "completed" },
+        raw: {
+          source: "codex.app-server.notification",
+          method: "turn/completed",
+          payload: { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true },
+        },
+      });
 
-        yield* waitUntilEffect(
-          () =>
-            directory.getBinding(threadId).pipe(
-              Effect.map((binding) => {
-                const current = Option.getOrUndefined(binding);
-                return (
-                  routing.codex.stopSession.mock.calls.length === stopsBeforeRotation + 1 &&
-                  routing.codex.startSession.mock.calls.length === startsBeforeRotation + 1 &&
-                  asRuntimePayloadRecord(current?.runtimePayload)
-                    .agentGatewayCredentialRotationRequired === false
-                );
-              }),
-            ),
-          500,
-          20,
-          "proactive terminal credential rotation",
-        );
+      yield* waitUntilEffect(
+        () =>
+          directory.getBinding(threadId).pipe(
+            Effect.map((binding) => {
+              const current = Option.getOrUndefined(binding);
+              return (
+                routing.codex.stopSession.mock.calls.length === stopsBeforeRotation + 1 &&
+                routing.codex.startSession.mock.calls.length === startsBeforeRotation + 1 &&
+                asRuntimePayloadRecord(current?.runtimePayload)
+                  .agentGatewayCredentialRotationRequired === false
+              );
+            }),
+          ),
+        500,
+        20,
+        "proactive terminal credential rotation",
+      );
 
-        const startsBeforeB = routing.codex.startSession.mock.calls.length;
-        const stopsBeforeB = routing.codex.stopSession.mock.calls.length;
-        const sendsBeforeB = routing.codex.sendTurn.mock.calls.length;
-        yield* provider.sendTurn({ threadId, input: "turn B", attachments: [] });
-        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB);
-        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB);
-        assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB + 1);
+      const startsBeforeB = routing.codex.startSession.mock.calls.length;
+      const stopsBeforeB = routing.codex.stopSession.mock.calls.length;
+      const sendsBeforeB = routing.codex.sendTurn.mock.calls.length;
+      yield* provider.sendTurn({ threadId, input: "turn B", attachments: [] });
+      assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB);
+      assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB);
+      assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB + 1);
 
-        yield* provider.stopSession({ threadId });
-      }).pipe(Effect.timeout("2 seconds")),
+      yield* provider.stopSession({ threadId });
+    }).pipe(Effect.timeout("2 seconds")),
   );
 
   it.effect(

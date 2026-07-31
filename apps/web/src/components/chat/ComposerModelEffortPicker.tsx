@@ -29,7 +29,12 @@ import {
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
-import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
+import {
+  getComposerTraitSelection,
+  hasVisibleComposerTraitControls,
+  resolveComposerTraitStatusLabel,
+  showsComposerFastModeBadge,
+} from "./composerTraits";
 import {
   getProviderIconClassName,
   ProviderModelMenuItems,
@@ -104,30 +109,10 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     props.runtimeModel,
   );
 
-  const {
-    caps,
-    effort,
-    effortLevels,
-    thinkingEnabled,
-    fastModeEnabled,
-    fastModeDescriptor,
-    ultrathinkPromptControlled,
-  } = traitSelection;
-
-  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
   const hasTraitsTopSection = hasVisibleComposerTraitControls(traitSelection);
 
-  const effortLabel = effort
-    ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
-    : null;
-  const triggerStatusLabel = ultrathinkPromptControlled
-    ? "Ultrathink"
-    : effortLabel
-      ? effortLabel
-      : thinkingEnabled !== null
-        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
-        : null;
-  const showsFastBadge = supportsFastModeControl && fastModeEnabled;
+  const triggerStatusLabel = resolveComposerTraitStatusLabel(traitSelection);
+  const showsFastBadge = showsComposerFastModeBadge(traitSelection);
 
   const handleAfterModelSelection = () => {
     setMenuOpen(false);

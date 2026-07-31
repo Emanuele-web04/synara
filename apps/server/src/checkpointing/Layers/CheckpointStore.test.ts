@@ -132,9 +132,7 @@ describe("CheckpointStoreLive", () => {
           const store = yield* CheckpointStore;
           yield* store.captureCheckpoint({
             cwd: tempDir,
-            checkpointRef: CheckpointRef.makeUnsafe(
-              "refs/synara-checkpoints/thread/stat-cache",
-            ),
+            checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/stat-cache"),
           });
         }),
       );

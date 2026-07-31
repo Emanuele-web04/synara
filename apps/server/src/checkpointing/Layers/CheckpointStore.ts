@@ -158,10 +158,7 @@ const makeCheckpointStore = Effect.gen(function* () {
               GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
             };
 
-            const seededFromWorkingIndex = yield* seedCheckpointIndex(
-              input.cwd,
-              tempIndexPath,
-            );
+            const seededFromWorkingIndex = yield* seedCheckpointIndex(input.cwd, tempIndexPath);
             if (!seededFromWorkingIndex && (yield* hasHeadCommit(input.cwd))) {
               yield* git.execute({
                 operation,

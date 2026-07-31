@@ -180,6 +180,47 @@ export function getComposerTraitSelection(
   };
 }
 
+// Human label for the currently selected reasoning/thinking trait, shared by the
+// composer trigger and any surface that summarizes a thread's model selection.
+export function resolveComposerTraitStatusLabel(
+  selection: Pick<
+    ReturnType<typeof getComposerTraitSelection>,
+    "effort" | "effortLevels" | "thinkingEnabled" | "ultrathinkPromptControlled"
+  >,
+): string | null {
+  if (selection.ultrathinkPromptControlled) {
+    return "Ultrathink";
+  }
+  const effortLabel = selection.effort
+    ? (selection.effortLevels.find((level) => level.value === selection.effort)?.label ??
+      selection.effort)
+    : null;
+  if (effortLabel) {
+    return effortLabel;
+  }
+  return selection.thinkingEnabled !== null
+    ? `Thinking ${selection.thinkingEnabled ? "On" : "Off"}`
+    : null;
+}
+
+// A model exposes a speed control either through an explicit descriptor or the
+// legacy capability flag; every surface must agree on that test.
+export function supportsComposerFastModeControl(
+  selection: Pick<ReturnType<typeof getComposerTraitSelection>, "caps" | "fastModeDescriptor">,
+): boolean {
+  return selection.fastModeDescriptor !== null || selection.caps.supportsFastMode;
+}
+
+// Fast mode is only worth surfacing when the model exposes the control and it is on.
+export function showsComposerFastModeBadge(
+  selection: Pick<
+    ReturnType<typeof getComposerTraitSelection>,
+    "caps" | "fastModeDescriptor" | "fastModeEnabled"
+  >,
+): boolean {
+  return supportsComposerFastModeControl(selection) && selection.fastModeEnabled;
+}
+
 export function hasVisibleComposerTraitControls(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
@@ -193,7 +234,6 @@ export function hasVisibleComposerTraitControls(
     selection.effortLevels.length > 0 ||
     selection.thinkingEnabled !== null ||
     selection.contextWindowOptions.length > 1 ||
-    ((options?.includeFastMode ?? true) &&
-      (selection.fastModeDescriptor !== null || selection.caps.supportsFastMode))
+    ((options?.includeFastMode ?? true) && supportsComposerFastModeControl(selection))
   );
 }
