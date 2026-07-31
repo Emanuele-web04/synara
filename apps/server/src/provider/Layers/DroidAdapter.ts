@@ -1314,7 +1314,10 @@ export function makeDroidAdapter(
                 ),
               ),
             ),
-          ).pipe(Effect.forkChild);
+            // The drain's lifetime is the session's, not the caller's: forking it as
+            // a child of the fiber that called startSession kills it as soon as that
+            // fiber returns, silently dropping every session/update.
+          ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = notificationFiber;
           sessions.set(input.threadId, ctx);

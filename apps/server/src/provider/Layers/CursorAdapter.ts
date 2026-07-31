@@ -1134,7 +1134,11 @@ export function makeCursorAdapter(
                 }
               }),
             ),
-          ).pipe(Effect.forkChild);
+            // The drain's lifetime is the session's, not the caller's. Forking it
+            // as a child of the fiber that called startSession killed it the moment
+            // that fiber returned, so every session/update — assistant text, tool
+            // calls, usage — was dropped and the transcript stayed empty.
+          ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = nf;
           sessions.set(input.threadId, ctx);

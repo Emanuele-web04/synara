@@ -5509,10 +5509,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     // A steer rides the live SDK agent loop: the message is pushed into the
     // session's streaming prompt input and the work continues as the same
-    // turn — no interrupt, no new turn boundary. The SDK delivers it at the
-    // model's next turn boundary. Only a real user turn can be steered; with
-    // no live turn (or only a synthetic one wrapping background agent output)
-    // the message dispatches as a normal turn instead.
+    // turn — no interrupt, no new turn boundary. The CLI delivers it when it
+    // builds the next API request, so a steer parked behind long-running
+    // tools is read only once they return (inherent to the agent loop; the
+    // interactive Claude Code CLI behaves the same). Only a real user turn
+    // can be steered; with no live turn (or only a synthetic one wrapping
+    // background agent output) the message dispatches as a normal turn.
     const steerTurn: ClaudeAdapterShape["steerTurn"] = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
