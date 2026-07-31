@@ -220,11 +220,21 @@ describe("MessagesTimeline tail anchor", () => {
           )
           .toBe(true);
 
-      // 1) Send: the spacer reserves space and the new message slides to the top.
-      // ChatView issues an animated scroll-to-end alongside every send; the hook's
-      // spacer sizing is what turns that into "message at the viewport top".
+      // 1) Send: the spacer reserves space and the new message slides directly
+      // to its anchored coordinate. It must never pass that coordinate and then
+      // spring back while the virtualized tail finishes measuring.
       handle().send(FIRST_SENT_MESSAGE_ID);
-      void handle().listRef.current?.scrollToEnd?.({ animated: true });
+
+      const initialSlideOffsets: number[] = [];
+      for (let index = 0; index < 36; index += 1) {
+        await settleFrames(1);
+        const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+        if (offset !== null) {
+          initialSlideOffsets.push(offset);
+        }
+      }
+      expect(initialSlideOffsets.length).toBeGreaterThan(0);
+      expect(Math.min(...initialSlideOffsets)).toBeGreaterThanOrEqual(topGapPx - 8);
 
       await expect
         .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })

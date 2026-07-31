@@ -6,9 +6,10 @@
 //      browser cannot scroll it to the viewport top. Reserving the missing space in
 //      the list footer makes "scrolled to end" mean "sent message anchored just
 //      below the viewport top" (offset by the container's own top padding, matching
-//      a chat's first message), which lets the existing scroll-to-end +
-//      stick-to-end machinery produce the anchored layout with no second scroll
-//      system. Resizes are applied synchronously with the content change that
+//      a chat's first message). Once the row is measurable, the slide targets
+//      that exact anchored coordinate rather than LegendList's moving end, while
+//      the footer reserve lets the message remain there as the response grows.
+//      Resizes are applied synchronously with the content change that
 //      caused them so the invariant holds within every frame — except on frames
 //      where LegendList still positions the tail from `estimatedItemSize`, which
 //      are skipped outright because sizing the reserve from an estimate moves the
@@ -31,10 +32,19 @@ import { computeTailAnchorSpacerHeightPx, isScrollContainerNearBottom } from "..
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 
 // A freshly appended anchor row can take a while to be committed by the virtualized
-// list — especially when the send happened far from the bottom and the animated
-// scroll-to-end still has to bring the row into the render window. Retry across
+// list — especially when the send happened far from the bottom and a tail reveal
+// still has to bring the row into the render window. Retry across
 // that window; afterwards content-size changes re-trigger measurement anyway.
 const ANCHOR_MEASURE_MAX_RETRY_FRAMES = 90;
+
+// Give the optimistic row a couple of frames to commit before asking LegendList
+// to reveal its tail. Starting an animated end-scroll immediately creates a
+// second, estimate-based motion before the real anchor target is measurable.
+const ANCHOR_REVEAL_AFTER_MISSING_FRAMES = 3;
+
+// Native smooth scrolling has no completion promise. `scrollend` is the normal
+// completion signal; this fallback also covers browsers that do not emit it.
+const ANCHOR_SLIDE_FALLBACK_MS = 750;
 
 // How long a measurement may wait for LegendList's tail positions to match the
 // rendered rows. Bounded so an unexpected steady-state mismatch (a row box the
@@ -210,6 +220,7 @@ export function useTailAnchorSpacer({
     let measureFrameId: number | null = null;
     let measuring = false;
     let retryFramesLeft = ANCHOR_MEASURE_MAX_RETRY_FRAMES;
+    let missingAnchorFrames = 0;
     // The first successful measurement after a new anchor owns the smooth slide.
     let pendingAnchorScroll = true;
     // A send far from the bottom leaves the new row outside the render window,
@@ -218,10 +229,26 @@ export function useTailAnchorSpacer({
     // Consecutive measurements skipped while LegendList's tail was still on
     // estimated sizes (see isTailLayoutSettled).
     let deferredForStaleTail = 0;
+    let anchorSlideFallbackId: number | null = null;
+    let anchorSlideContainer: HTMLElement | null = null;
+    let anchorSlideScrollEndListener: (() => void) | null = null;
+
+    function clearAnchorSlideCompletion(): void {
+      if (anchorSlideFallbackId !== null) {
+        window.clearTimeout(anchorSlideFallbackId);
+        anchorSlideFallbackId = null;
+      }
+      if (anchorSlideContainer && anchorSlideScrollEndListener) {
+        anchorSlideContainer.removeEventListener("scrollend", anchorSlideScrollEndListener);
+      }
+      anchorSlideContainer = null;
+      anchorSlideScrollEndListener = null;
+    }
 
     // The slide is over (or was never needed): hand scroll ownership back to
     // ChatView's auto-follow machinery.
     function finishAnchorSlide(): void {
+      clearAnchorSlideCompletion();
       if (anchorScrollInFlightRef) {
         anchorScrollInFlightRef.current = false;
       }
@@ -233,6 +260,49 @@ export function useTailAnchorSpacer({
           `[data-message-id="${CSS.escape(anchorId)}"]`,
         ) ?? null
       );
+    }
+
+    function settleAnchorSlide(): void {
+      if (disposed) {
+        return;
+      }
+      // A pointer/wheel/touch gesture clears the shared flag in ChatView. Do not
+      // pull the transcript back after the user has taken over the scroll.
+      if (anchorScrollInFlightRef && !anchorScrollInFlightRef.current) {
+        clearAnchorSlideCompletion();
+        return;
+      }
+      const container = getScrollContainer(listRef);
+      const target = container ? anchoredScrollTopPx(container, findAnchorElement()) : null;
+      if (container && target !== null && Math.abs(target - container.scrollTop) > 1) {
+        container.scrollTop = target;
+      }
+      finishAnchorSlide();
+    }
+
+    function startAnchorSlide(container: HTMLElement, anchorElement: HTMLElement): void {
+      const target = anchoredScrollTopPx(container, anchorElement);
+      if (target === null) {
+        finishAnchorSlide();
+        return;
+      }
+      if (prefersReducedMotion() || Math.abs(target - container.scrollTop) <= 1) {
+        container.scrollTop = target;
+        finishAnchorSlide();
+        return;
+      }
+
+      clearAnchorSlideCompletion();
+      anchorSlideContainer = container;
+      anchorSlideScrollEndListener = () => {
+        const currentTarget = anchoredScrollTopPx(container, findAnchorElement());
+        if (currentTarget !== null && Math.abs(currentTarget - container.scrollTop) <= 1) {
+          settleAnchorSlide();
+        }
+      };
+      container.addEventListener("scrollend", anchorSlideScrollEndListener);
+      anchorSlideFallbackId = window.setTimeout(settleAnchorSlide, ANCHOR_SLIDE_FALLBACK_MS);
+      container.scrollTo({ top: target, behavior: "smooth" });
     }
 
     function measure(): void {
@@ -247,9 +317,16 @@ export function useTailAnchorSpacer({
         // Row not committed yet (or virtualized out). Retry briefly for the
         // fresh-send case; otherwise freeze the current reserve.
         if (retryFramesLeft > 0) {
-          if (pendingAnchorScroll && !requestedTailReveal) {
+          missingAnchorFrames += 1;
+          if (
+            pendingAnchorScroll &&
+            !requestedTailReveal &&
+            missingAnchorFrames >= ANCHOR_REVEAL_AFTER_MISSING_FRAMES
+          ) {
             requestedTailReveal = true;
-            void listRef.current?.scrollToEnd?.({ animated: true });
+            // This is only a virtualization reveal. The one visible animation
+            // begins after the row exists and can supply an exact top target.
+            void listRef.current?.scrollToEnd?.({ animated: false });
           }
           retryFramesLeft -= 1;
           schedule();
@@ -259,6 +336,7 @@ export function useTailAnchorSpacer({
         }
         return;
       }
+      missingAnchorFrames = 0;
       // Never size the reserve from a frame where the tail is still positioned
       // from estimated row sizes — that estimate error is what makes the
       // anchored message shoot past the top and spring back.
@@ -284,98 +362,26 @@ export function useTailAnchorSpacer({
         baseInsetPx,
       });
       const current = readSpacerHeightPx(spacer, baseInsetPx);
-      if (Math.abs(next - current) < 1) {
-        if (pendingAnchorScroll) {
-          pendingAnchorScroll = false;
-          finishAnchorSlide();
-        }
-        return;
-      }
+      const spacerChanged = Math.abs(next - current) >= 1;
       const wasNearBottom = isScrollContainerNearBottom({
         scrollTop: container.scrollTop,
         clientHeight: container.clientHeight,
         scrollHeight: container.scrollHeight,
       });
-      spacer.style.height = `${next}px`;
+      if (spacerChanged) {
+        spacer.style.height = `${next}px`;
+      }
       // Growing the reserve moves the list end away; re-stick so the anchored
       // message reaches (or stays at) the viewport top. Shrinks during streaming
       // are net-zero (content grew by the same amount) and need no scrolling.
-      if (pendingAnchorScroll || (next > current && wasNearBottom)) {
-        const wasAnchorSlide = pendingAnchorScroll;
+      if (pendingAnchorScroll) {
         pendingAnchorScroll = false;
-        const scrolled = listRef.current?.scrollToEnd?.({ animated: wasAnchorSlide });
-        if (wasAnchorSlide && typeof scrolled?.then !== "function") {
-          finishAnchorSlide();
+        startAnchorSlide(container, anchorElement);
+      } else if (spacerChanged && next > current && wasNearBottom) {
+        const target = anchoredScrollTopPx(container, anchorElement);
+        if (target !== null && target - container.scrollTop > 1) {
+          container.scrollTop = target;
         }
-        // An animated scroll targets the end position captured at call time; row
-        // measurement corrections that land mid-flight leave it short by the
-        // delta. Snap the remainder once the animation settles.
-        void scrolled?.then(() => {
-          if (disposed) {
-            return;
-          }
-          const settledContainer = getScrollContainer(listRef);
-          if (!settledContainer) {
-            if (wasAnchorSlide) {
-              finishAnchorSlide();
-            }
-            return;
-          }
-          const distanceFromBottom =
-            settledContainer.scrollHeight -
-            settledContainer.clientHeight -
-            settledContainer.scrollTop;
-          // Within a viewport of the end means the anchor scroll basically got
-          // there and only late row measurements left it short; farther away
-          // means the user scrolled off mid-animation — leave them alone.
-          if (distanceFromBottom > 1 && distanceFromBottom <= settledContainer.clientHeight) {
-            // Ownership is held for the whole settle window, not just the
-            // animation: the first response rows land during these frames, and
-            // an auto-follow re-snap to the raw end in the middle of them is
-            // the same overshoot this loop exists to avoid.
-            let snapFramesLeft = 10;
-            const snap = () => {
-              if (disposed) {
-                return;
-              }
-              if (snapFramesLeft <= 0) {
-                if (wasAnchorSlide) {
-                  finishAnchorSlide();
-                }
-                return;
-              }
-              snapFramesLeft -= 1;
-              const c = getScrollContainer(listRef);
-              const s = spacerRef.current;
-              if (!c || !s) {
-                if (wasAnchorSlide) {
-                  finishAnchorSlide();
-                }
-                return;
-              }
-              // Chase the anchor's own target, never the raw end: the first
-              // response rows land while this loop is still running, and for the
-              // frame they are positioned from `estimatedItemSize` the end sits
-              // past the anchored position — snapping to it is what threw the
-              // message above the viewport top before it sprang back. Frames
-              // where the tail is still on estimates are sat out entirely, and
-              // the snap only ever moves forward so an overflowing response can
-              // scroll the anchor away without being pulled back.
-              if (isTailLayoutSettled(listRef, s)) {
-                const target = anchoredScrollTopPx(c, findAnchorElement());
-                if (target !== null && target - c.scrollTop > 1) {
-                  c.scrollTop = target;
-                }
-              }
-              window.requestAnimationFrame(snap);
-            };
-            snap();
-            return;
-          }
-          if (wasAnchorSlide) {
-            finishAnchorSlide();
-          }
-        });
       }
     }
 
@@ -430,6 +436,7 @@ export function useTailAnchorSpacer({
 
     return () => {
       disposed = true;
+      clearAnchorSlideCompletion();
       if (anchorScrollInFlightRef) {
         anchorScrollInFlightRef.current = false;
       }
