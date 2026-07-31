@@ -640,7 +640,10 @@ export function createProviderVersionAdvisory(input: {
     status: advisory.status,
     currentVersion: input.currentVersion,
     latestVersion,
-    latestVersionKnowable: capabilities.latestVersionSource !== null,
+    // Knowable when a registry can be queried, or when a latest version was already
+    // resolved. Self-updating CLIs satisfy neither, so their status is pinned to
+    // "unknown" and must not be presented as "an update is waiting".
+    latestVersionKnowable: capabilities.latestVersionSource !== null || latestVersion !== null,
     updateCommand: capabilities.update?.command ?? null,
     canUpdate: capabilities.update !== null,
     checkedAt: input.checkedAt ?? null,

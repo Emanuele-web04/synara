@@ -6,6 +6,7 @@ import { Effect, FileSystem } from "effect";
 import {
   createProviderVersionAdvisory,
   deriveNpmGlobalPrefix,
+  makeProviderMaintenanceCapabilities,
   parseGenericCliVersion,
   resolvePackageManagedProviderMaintenance,
   resolveProviderMaintenanceCapabilitiesEffect,
@@ -260,5 +261,27 @@ describe("providerMaintenance", () => {
     assert.strictEqual(advisory.status, "behind_latest");
     assert.strictEqual(advisory.currentVersion, "0.129.0");
     assert.strictEqual(advisory.latestVersion, "0.130.0");
+    assert.strictEqual(advisory.latestVersionKnowable, true);
+  });
+
+  it("reports an unknowable latest version for self-updating providers", () => {
+    // `cursor-agent update` exists, but no registry publishes its version, so the
+    // advisory can never reach "current" — callers must not read that as "outdated".
+    const advisory = createProviderVersionAdvisory({
+      provider: "cursor",
+      currentVersion: "2026.07.09-c59fd9a",
+      maintenanceCapabilities: makeProviderMaintenanceCapabilities({
+        provider: "cursor",
+        packageName: null,
+        updateExecutable: "cursor-agent",
+        updateArgs: ["update"],
+        updateLockKey: "cursor-agent",
+      }),
+    });
+
+    assert.strictEqual(advisory.status, "unknown");
+    assert.strictEqual(advisory.latestVersion, null);
+    assert.strictEqual(advisory.latestVersionKnowable, false);
+    assert.strictEqual(advisory.canUpdate, true);
   });
 });

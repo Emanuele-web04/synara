@@ -374,9 +374,7 @@ export function useTailAnchorSpacer({
         const spacer = spacerRef.current;
         const anchorIsSettled = Math.abs(currentOffset - topInsetPx) <= 1;
         settledFrames =
-          spacer && anchorIsSettled && isTailLayoutSettled(listRef, spacer)
-            ? settledFrames + 1
-            : 0;
+          spacer && anchorIsSettled && isTailLayoutSettled(listRef, spacer) ? settledFrames + 1 : 0;
         if (
           (settledFrames < ANCHOR_SLIDE_SETTLED_FRAMES ||
             now - startedAt < STEER_ANCHOR_MIN_SETTLE_MS) &&

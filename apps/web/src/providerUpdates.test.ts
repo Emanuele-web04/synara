@@ -8,9 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   getVisibleProviderUpdateStatuses,
+  isProviderLatestVersionKnowable,
   isProviderUpdateActive,
   providerUpdateNotificationKey,
   shouldOfferProviderUpdateAction,
+  shouldPromptProviderUpdate,
   shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "./providerUpdates";
@@ -267,5 +269,69 @@ describe("shouldOfferProviderUpdateAction", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("shouldPromptProviderUpdate", () => {
+  // Cursor and Antigravity self-update, so Synara has no registry to read a latest
+  // version from and their advisory is pinned to "unknown" forever. Prompting on that
+  // left a permanent "Update" badge on a fully up-to-date CLI.
+  const selfManaged = providerStatus("cursor", {
+    version: "2026.07.09-c59fd9a",
+    versionAdvisory: {
+      status: "unknown",
+      currentVersion: "2026.07.09-c59fd9a",
+      latestVersion: null,
+      latestVersionKnowable: false,
+      updateCommand: "cursor-agent update",
+      canUpdate: true,
+      checkedAt: "2026-07-15T14:00:00.000Z",
+      message: null,
+    },
+  });
+
+  it("does not prompt when the latest version is unknowable", () => {
+    expect(isProviderLatestVersionKnowable(selfManaged)).toBe(false);
+    expect(shouldPromptProviderUpdate(selfManaged)).toBe(false);
+    // The update itself stays reachable as a manual action.
+    expect(shouldOfferProviderUpdateAction(selfManaged)).toBe(true);
+  });
+
+  it("still prompts when a lookup source exists but the latest version is missing", () => {
+    const transient = providerStatus("antigravity", {
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: "1.1.2",
+        latestVersion: null,
+        latestVersionKnowable: true,
+        updateCommand: "agy update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(shouldPromptProviderUpdate(transient)).toBe(true);
+  });
+
+  it("assumes a lookup source when an older server omits the flag", () => {
+    const legacy = providerStatus("kilo", {
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: "1.1.2",
+        latestVersion: null,
+        updateCommand: "kilo update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(isProviderLatestVersionKnowable(legacy)).toBe(true);
+    expect(shouldPromptProviderUpdate(legacy)).toBe(true);
+  });
+
+  it("keeps prompting for providers Synara can prove are behind", () => {
+    expect(shouldPromptProviderUpdate(providerStatus("codex"))).toBe(true);
   });
 });

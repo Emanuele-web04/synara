@@ -740,8 +740,8 @@ function ProviderToolRow(props: {
               {showSelfManagedUpdate && props.providerStatus ? (
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 text-xs text-muted-foreground">
-                    {title} manages its own releases, so Synara cannot tell whether a newer
-                    version exists. Run the update to be sure.
+                    {title} manages its own releases, so Synara cannot tell whether a newer version
+                    exists. Run the update to be sure.
                   </div>
                   <ProviderUpdateAction
                     providerStatus={props.providerStatus}
