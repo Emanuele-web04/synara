@@ -386,6 +386,11 @@ interface MessagesTimelineProps {
    * fills the remaining viewport; null collapses the reserve (turn finished).
    */
   tailAnchorMessageId?: MessageId | null;
+  /**
+   * Shared flag set by ChatView on send and cleared by the tail-anchor hook once
+   * the anchored slide settles; ChatView's auto-follow re-snaps pause while set.
+   */
+  tailAnchorScrollInFlightRef?: RefObject<boolean> | undefined;
   /** Provenance for a conversation created from another Synara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
@@ -446,6 +451,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   threadMarkers: threadMarkersProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
   tailAnchorMessageId: tailAnchorMessageIdProp,
+  tailAnchorScrollInFlightRef,
   crossTaskOrigin: crossTaskOriginProp,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
@@ -610,6 +616,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     spacerRef: tailSpacerRef,
     anchorMessageId: tailAnchorMessageId,
     baseInsetPx: BOTTOM_CONTENT_INSET_PX,
+    anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);

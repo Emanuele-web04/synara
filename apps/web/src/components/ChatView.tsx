@@ -3165,6 +3165,10 @@ export default function ChatView({
     threadId: ThreadId;
     messageId: MessageId;
   } | null>(null);
+  // True from send until the tail-anchor hook finishes sliding the sent message
+  // to the viewport top. The auto-follow effect stays quiet while set so the
+  // anchored slide has exactly one scroll owner (see useTailAnchorSpacer).
+  const tailAnchorScrollInFlightRef = useRef(false);
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
@@ -4879,6 +4883,8 @@ export default function ChatView({
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
+    // A user scroll gesture takes over from any in-flight tail-anchor slide.
+    tailAnchorScrollInFlightRef.current = false;
   }, []);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
@@ -4984,6 +4990,12 @@ export default function ChatView({
     // Re-apply the bottom stick only for real transcript messages; tool/work
     // rows can arrive quickly and should not churn scroll/layout work.
     const frameId = window.requestAnimationFrame(() => {
+      // The tail-anchor slide owns the scroll after a send; a re-snap here
+      // would hard-jump past the smooth slide mid-flight. Once the anchor
+      // settles the spacer keeps the end position exact, so nothing is missed.
+      if (tailAnchorScrollInFlightRef.current) {
+        return;
+      }
       const shouldAnimate = animateNextAutoFollowScrollRef.current;
       animateNextAutoFollowScrollRef.current = false;
       scrollToEnd(shouldAnimate);
@@ -7697,10 +7709,12 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    // Mark the transcript as anchored before the optimistic row lands so the
-    // re-snap effect on row count change pulls us to the new tail. The tail
-    // anchor sizes the spacer that lets this message sit at the viewport top.
+    // Mark the transcript as anchored before the optimistic row lands. The tail
+    // anchor sizes the spacer that lets this message sit at the viewport top,
+    // and its hook owns the slide; auto-follow stays armed for bookkeeping but
+    // pauses until the in-flight flag clears.
     armTranscriptAutoFollow(threadIdForSend, true);
+    tailAnchorScrollInFlightRef.current = true;
     setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
     setThreadError(threadIdForSend, null);
@@ -8372,6 +8386,7 @@ export default function ChatView({
       },
     ]);
     armTranscriptAutoFollow(threadIdForSend, true);
+    tailAnchorScrollInFlightRef.current = true;
     setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
     // Nested function so the `try` body holds no value blocks — see the comment on
@@ -11393,6 +11408,7 @@ export default function ChatView({
                         ? tailAnchor.messageId
                         : null
                     }
+                    tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
                     crossTaskOrigin={crossTaskOrigin}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
