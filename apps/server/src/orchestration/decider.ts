@@ -2069,11 +2069,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.session.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const sessionChanged =
+        (command.expectedSessionStatus !== undefined &&
+          thread.session?.status !== command.expectedSessionStatus) ||
+        (command.expectedSessionUpdatedAt !== undefined &&
+          thread.session?.updatedAt !== command.expectedSessionUpdatedAt);
+      if (sessionChanged) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' session changed before the conditional update.`,
+        });
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",

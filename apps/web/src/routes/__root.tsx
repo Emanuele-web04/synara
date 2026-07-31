@@ -1021,6 +1021,7 @@ function EventRouter() {
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadSnapshotRefreshPending = new Set<ThreadId>();
+    const threadSnapshotNotFoundRetryAttempted = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
     const threadProjectionReconcileInFlight = new Map<ThreadId, number>();
     const threadProjectionTerminalFencePending = new Set<ThreadId>();
@@ -1044,6 +1045,7 @@ function EventRouter() {
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
+      threadSnapshotNotFoundRetryAttempted.delete(threadId);
       threadProjectionReconcileInFlight.delete(threadId);
       threadProjectionTerminalFencePending.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
@@ -1092,6 +1094,7 @@ function EventRouter() {
         pendingThreadEventsById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
         threadSnapshotRefreshPending.delete(threadId);
+        threadSnapshotNotFoundRetryAttempted.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
         threadProjectionReconcileInFlight.delete(threadId);
         threadProjectionTerminalFencePending.delete(threadId);
@@ -1172,8 +1175,14 @@ function EventRouter() {
     // Draft routes can subscribe before the server thread exists. Once the shell
     // row appears, explicitly restart the stream for a first thread snapshot so
     // buffered detail events can flush instead of waiting forever.
-    const requestThreadSnapshot = async (threadId: ThreadId) => {
-      if (threadSnapshotSequenceById.has(threadId)) {
+    const requestThreadSnapshot = async (
+      threadId: ThreadId,
+      allowAfterNotFound = false,
+    ) => {
+      if (
+        threadSnapshotSequenceById.has(threadId) ||
+        (threadSnapshotNotFoundRetryAttempted.has(threadId) && !allowAfterNotFound)
+      ) {
         return;
       }
       await refreshThreadSnapshot(threadId);
@@ -1561,6 +1570,7 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
         setThreadDetailResumeCursor(threadId, item.snapshot.snapshotSequence);
@@ -1618,6 +1628,15 @@ function EventRouter() {
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
+      if (
+        failure.code === "THREAD_SNAPSHOT_NOT_FOUND" &&
+        !threadSnapshotNotFoundRetryAttempted.has(threadId) &&
+        getThreadFromState(useStore.getState(), threadId)
+      ) {
+        threadSnapshotNotFoundRetryAttempted.add(threadId);
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        void requestThreadSnapshot(threadId, true);
+      }
     });
     // Retention can evict a thread's detail slices while its stream lease stays
     // active. The wiped messages never refresh on their own, so drop the cursor

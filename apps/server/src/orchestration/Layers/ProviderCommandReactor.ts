@@ -671,6 +671,7 @@ const make = Effect.gen(function* () {
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
+    readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
     readonly createdAt: string;
   }) =>
     orchestrationEngine.dispatch({
@@ -678,6 +679,12 @@ const make = Effect.gen(function* () {
       commandId: serverCommandId("provider-session-set"),
       threadId: input.threadId,
       session: input.session,
+      ...(input.expectedSession !== undefined
+        ? {
+            expectedSessionStatus: input.expectedSession.status,
+            expectedSessionUpdatedAt: input.expectedSession.updatedAt,
+          }
+        : {}),
       createdAt: input.createdAt,
     });
 
@@ -685,6 +692,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly runtimeMode?: RuntimeMode;
     readonly detail: string;
+    readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -702,6 +710,9 @@ const make = Effect.gen(function* () {
         lastError: input.detail,
         updatedAt: input.createdAt,
       },
+      ...(input.expectedSession !== undefined
+        ? { expectedSession: input.expectedSession }
+        : {}),
       createdAt: input.createdAt,
     });
   });
@@ -3217,6 +3228,37 @@ const make = Effect.gen(function* () {
       createdAt: event.payload.createdAt,
     });
 
+  const surfaceTimedOutTurnStart = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+    detail: string,
+  ) {
+    const session = (yield* resolveThread(event.payload.threadId))?.session;
+    if (session?.status !== "starting" || session.activeTurnId !== null) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    yield* setThreadSessionError({
+      threadId: event.payload.threadId,
+      runtimeMode: event.payload.runtimeMode,
+      detail,
+      expectedSession: {
+        status: session.status,
+        updatedAt: session.updatedAt,
+      },
+      createdAt,
+    });
+    yield* appendProviderFailureActivity({
+      threadId: event.payload.threadId,
+      kind: "provider.turn.start.failed",
+      summary: "Provider turn start timed out",
+      detail,
+      turnId: null,
+      createdAt,
+      settlementStatus: "uncertain",
+    });
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -3614,6 +3656,17 @@ const make = Effect.gen(function* () {
           // The delivery lock is single-permit and process-wide, so an attempt
           // that never returns is a total outage. Settle it as uncertain and
           // let the thread quarantine rather than block every other thread.
+          if (event.type === "thread.turn-start-requested") {
+            yield* surfaceTimedOutTurnStart(event, workerResult.detail).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("failed to surface timed-out provider turn start", {
+                  eventSequence: event.sequence,
+                  threadId: event.payload.threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            );
+          }
           yield* settleTerminalFailure({
             event,
             claimOwner,

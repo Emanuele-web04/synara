@@ -21,6 +21,27 @@ import { setupWorker } from "msw/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+const threadSnapshotFailureListeners = vi.hoisted(
+  () =>
+    new Set<
+      (failure: { readonly threadId: string; readonly code: string | null; readonly error: Error }) =>
+        void
+    >(),
+);
+
+vi.mock("../wsNativeApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../wsNativeApi")>();
+  return {
+    ...actual,
+    onThreadStreamFailure: (
+      listener: (typeof threadSnapshotFailureListeners extends Set<infer T> ? T : never),
+    ) => {
+      threadSnapshotFailureListeners.add(listener);
+      return () => threadSnapshotFailureListeners.delete(listener);
+    },
+  };
+});
+
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
@@ -431,6 +452,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
   beforeEach(async () => {
     await resetWsNativeApiForTest();
+    threadSnapshotFailureListeners.clear();
     fixture = buildFixture();
     document.body.innerHTML = "";
     shellStreamRequestId = null;
@@ -1492,6 +1514,25 @@ describe("EventRouter scoped orchestration sync", () => {
           ).toBeGreaterThanOrEqual(2);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const subscribeCountAfterMaterialization =
+        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+      for (const listener of threadSnapshotFailureListeners) {
+        listener({
+          threadId: draftThreadId,
+          code: "THREAD_SNAPSHOT_NOT_FOUND",
+          error: new Error("The original draft stream exhausted after materialization"),
+        });
+      }
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountAfterMaterialization + 1,
+          );
+          expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
         },
         { timeout: 4_000, interval: 16 },
       );

@@ -4035,6 +4035,45 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("surfaces a timed-out fresh turn start instead of leaving the thread starting", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(25),
+    });
+    const now = new Date().toISOString();
+    harness.startSession.mockImplementationOnce(() => Effect.never);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-times-out"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-start-times-out"),
+          role: "user",
+          text: "hello stalled provider",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.session?.lastError).toContain("did not respond within 25ms");
+    await waitFor(async () =>
+      Boolean(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) =>
+            activity.kind === "provider.turn.start.failed" &&
+            activity.payload?.settlementStatus === "uncertain",
+        ),
+      ),
+    );
+  });
+
   it("uses the runtime mode requested by thread.turn.start when starting the provider session", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
