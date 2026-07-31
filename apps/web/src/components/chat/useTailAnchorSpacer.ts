@@ -4,13 +4,17 @@
 // Layer: Chat transcript behavior hook
 // Why: Right after a send there is almost no content below the new message, so the
 //      browser cannot scroll it to the viewport top. Reserving the missing space in
-//      the list footer makes "scrolled to end" mean "sent message at viewport top",
-//      which lets the existing scroll-to-end + stick-to-end machinery produce the
-//      anchored layout with no second scroll system. While the response is shorter
-//      than the viewport it grows into the reserve (total scroll height stays
-//      constant, so the message stays pinned); once it overflows, the spacer bottoms
-//      out at the base inset and normal follow-the-tail scrolling resumes. When the
-//      turn ends the reserve collapses with the shared disclosure motion.
+//      the list footer makes "scrolled to end" mean "sent message anchored just
+//      below the viewport top" (offset by the container's own top padding, matching
+//      a chat's first message), which lets the existing scroll-to-end +
+//      stick-to-end machinery produce the anchored layout with no second scroll
+//      system. While the response is shorter than the viewport it grows into the
+//      reserve (total scroll height stays constant, so the message stays pinned);
+//      once it overflows, the spacer bottoms out at the base inset and normal
+//      follow-the-tail scrolling resumes. The reserve persists after the turn ends
+//      so the settled transcript never jumps; it is replaced by the next send and
+//      reset by thread switches (the timeline remounts per thread). The animated
+//      collapse below is a fallback for an anchor being cleared while mounted.
 
 import { type MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
@@ -146,11 +150,14 @@ export function useTailAnchorSpacer({
       }
       const spacerTop = spacer.getBoundingClientRect().top;
       const anchorTop = anchorElement.getBoundingClientRect().top;
-      const paddingBottom = Number.parseFloat(getComputedStyle(container).paddingBottom) || 0;
+      const containerStyle = getComputedStyle(container);
+      const paddingBottom = Number.parseFloat(containerStyle.paddingBottom) || 0;
+      const paddingTop = Number.parseFloat(containerStyle.paddingTop) || 0;
       const next = computeTailAnchorSpacerHeightPx({
         viewportHeightPx: container.clientHeight,
         anchorTopToSpacerTopPx: spacerTop - anchorTop,
         trailingInsetPx: paddingBottom,
+        topInsetPx: paddingTop,
         baseInsetPx,
       });
       const current = readSpacerHeightPx(spacer, baseInsetPx);

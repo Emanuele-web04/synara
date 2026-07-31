@@ -39,6 +39,7 @@ import {
   RuntimeMode,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
@@ -1536,8 +1537,9 @@ export default function ChatView({
     restoredSourceProposedPlan ?? null,
   );
   const autoDispatchingQueuedTurnRef = useRef(false);
-  // Holds queued-composer auto-dispatch through a non-Codex steer's
-  // interrupt→re-dispatch gap; see resolveQueuedSteerGateTransition.
+  // Holds queued-composer auto-dispatch through a non-natively-steerable
+  // provider steer's interrupt→re-dispatch gap; see
+  // resolveQueuedSteerGateTransition.
   const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(null);
   // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
   // blocked it; nothing else re-triggers the effect once they reset.
@@ -3155,20 +3157,14 @@ export default function ChatView({
     [optimisticUserMessages],
   );
   // The user message a local send anchored at the top of the transcript viewport.
-  // Set at the send sites; cleared when the turn settles so the timeline's tail
-  // spacer collapses and the transcript returns to its true bottom.
+  // Set at the send sites and kept after the turn settles — collapsing the tail
+  // spacer when a turn ends would visibly yank the settled transcript. The next
+  // send replaces it, and thread switches reset it via the per-thread timeline
+  // remount plus the threadId guard at the render site.
   const [tailAnchor, setTailAnchor] = useState<{
     threadId: ThreadId;
     messageId: MessageId;
   } | null>(null);
-  const previousActiveTurnInProgressRef = useRef(activeTurnInProgress);
-  useEffect(() => {
-    const wasInProgress = previousActiveTurnInProgressRef.current;
-    previousActiveTurnInProgressRef.current = activeTurnInProgress;
-    if (wasInProgress && !activeTurnInProgress) {
-      setTailAnchor(null);
-    }
-  }, [activeTurnInProgress]);
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
@@ -7934,13 +7930,17 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
-      // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer. The
-      // live session provider decides the interrupt path server-side, so the
-      // gate keys off it rather than the requested model selection.
+      // Steers on providers without native mid-turn steering interrupt the live
+      // turn before re-dispatching; hold queued auto-dispatch through that gap
+      // so it can't race the steer. The live session provider decides the
+      // interrupt path server-side, so the gate keys off it rather than the
+      // requested model selection.
       const liveProviderForSteerGate =
         activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
-      if (dispatchMode === "steer" && liveProviderForSteerGate !== "codex") {
+      if (
+        dispatchMode === "steer" &&
+        !providerSupportsNativeTurnSteering(liveProviderForSteerGate)
+      ) {
         setQueuedSteerGate({
           sawInterruptGap: false,
           gapStartedAt: null,
@@ -8427,13 +8427,17 @@ export default function ChatView({
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
-      // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer. The
-      // live session provider decides the interrupt path server-side, so the
-      // gate keys off it rather than the requested model selection.
+      // Steers on providers without native mid-turn steering interrupt the live
+      // turn before re-dispatching; hold queued auto-dispatch through that gap
+      // so it can't race the steer. The live session provider decides the
+      // interrupt path server-side, so the gate keys off it rather than the
+      // requested model selection.
       const livePlanProviderForSteerGate =
         activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
-      if (dispatchMode === "steer" && livePlanProviderForSteerGate !== "codex") {
+      if (
+        dispatchMode === "steer" &&
+        !providerSupportsNativeTurnSteering(livePlanProviderForSteerGate)
+      ) {
         setQueuedSteerGate({
           sawInterruptGap: false,
           gapStartedAt: null,

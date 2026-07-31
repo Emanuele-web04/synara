@@ -40,6 +40,7 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   capabilities: { sessionModelSwitch: "in-session" },
   startSession: vi.fn(),
   sendTurn: vi.fn(),
+  steerTurn: vi.fn(),
   interruptTurn: vi.fn(),
   stopTask: vi.fn(),
   backgroundTask: vi.fn(),

@@ -22,6 +22,7 @@ import {
   type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
+  EventId,
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
@@ -1723,6 +1724,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       (manager) => Effect.promise(() => manager.stopAll()),
     );
 
+    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
+      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+    );
+
     // Idle-progress backstop for codex turns. Same semantics as
     // AcpTurnIdleWatchdog (any inbound activity resets it, a pending human
     // decision pauses it), driven by one shared ticker because codex activity
@@ -1902,6 +1907,24 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           catch: (cause) => toRequestError(input.threadId, "turn/steer", cause),
         }).pipe(
           Effect.tap((result) => Effect.sync(() => armTurnWatchdog(input.threadId, result.turnId))),
+          // The `turn/steer` response carries no runtime event and the model
+          // only consumes injected input at its next turn boundary, so without
+          // this a landed steer is indistinguishable from a dropped one.
+          Effect.tap((result) => {
+            const message = input.input?.trim();
+            if (!message) {
+              return Effect.void;
+            }
+            return Queue.offer(runtimeEventQueue, {
+              type: "turn.steered",
+              eventId: EventId.makeUnsafe(crypto.randomUUID()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              turnId: result.turnId,
+              createdAt: new Date().toISOString(),
+              payload: { message },
+            });
+          }),
           Effect.map((result) => ({
             ...result,
             threadId: input.threadId,
@@ -2124,10 +2147,6 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             cause,
           }),
       }).pipe(Effect.map((result) => result satisfies ServerVoiceTranscriptionResult));
-
-    const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
-      PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
-    );
 
     yield* Effect.acquireRelease(
       Effect.gen(function* () {

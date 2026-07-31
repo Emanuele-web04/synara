@@ -193,6 +193,11 @@ interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
   readonly interactionMode: "default" | "plan";
+  // True for auto-started turns that wrap assistant output arriving without an
+  // active turn (background agent/subagent responses between user prompts).
+  // Synthetic turns are never steered: a sendTurn auto-closes them, and a
+  // steerTurn falls back to a normal turn dispatch.
+  readonly synthetic?: true;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
@@ -3222,6 +3227,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           turnId,
           startedAt,
           interactionMode: "default",
+          synthetic: true,
           items: [],
           assistantTextBlocks: new Map(),
           assistantTextBlockOrder: [],
@@ -5253,6 +5259,41 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const startSession: ClaudeAdapterShape["startSession"] = (input) =>
       withSessionLifecycleLock(input.threadId, startSessionUnlocked(input));
 
+    // Apply interaction mode on every turn so sticky SDK permission state
+    // cannot leak plan mode across service/recovery paths that omit it. The
+    // desired mode is computed exactly as before. We skip the control request
+    // in exactly one provable case: the first turn of a session whose desired
+    // mode equals the mode the CLI spawned in — sending it there would be
+    // redundant AND would block that first turn on the CLI's init handshake.
+    // In every other case we send unconditionally, because once any prompt has
+    // run the CLI's mode is opaque (`canUseTool` is shadowed under
+    // bypassPermissions, so a future mode-changing tool could diverge from
+    // anything we tracked); only the pre-first-prompt state is provable.
+    const applyInteractionModePermission = (
+      context: ClaudeSessionContext,
+      threadId: ThreadId,
+      interactionMode: ProviderSendTurnInput["interactionMode"],
+    ): Effect.Effect<"default" | "plan", ProviderAdapterError> =>
+      Effect.gen(function* () {
+        const effectiveInteractionMode = interactionMode ?? "default";
+        const desiredPermissionMode: PermissionMode | undefined =
+          effectiveInteractionMode === "plan"
+            ? "plan"
+            : context.basePermissionMode !== undefined || context.lastInteractionMode === "plan"
+              ? (context.basePermissionMode ?? "default")
+              : undefined;
+        const canSkipRedundantSpawnModeRequest =
+          context.firstTurnSpawnModeAuthoritative &&
+          desiredPermissionMode === context.spawnPermissionMode;
+        if (desiredPermissionMode !== undefined && !canSkipRedundantSpawnModeRequest) {
+          yield* Effect.tryPromise({
+            try: () => context.query.setPermissionMode(desiredPermissionMode),
+            catch: (cause) => toRequestError(threadId, "turn/setPermissionMode", cause),
+          });
+        }
+        return effectiveInteractionMode;
+      });
+
     const sendTurn: ClaudeAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
@@ -5387,33 +5428,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
         }
 
-        // Apply interaction mode on every turn so sticky SDK permission state
-        // cannot leak plan mode across service/recovery paths that omit it.
-        // The desired mode is computed exactly as before. We skip the control
-        // request in exactly one provable case: the first turn of a session
-        // whose desired mode equals the mode the CLI spawned in — sending it
-        // there would be redundant AND would block that first turn on the CLI's
-        // init handshake. In every other case we send unconditionally, because
-        // once any prompt has run the CLI's mode is opaque (`canUseTool` is
-        // shadowed under bypassPermissions, so a future mode-changing tool could
-        // diverge from anything we tracked); only the pre-first-prompt state is
-        // provable.
-        const effectiveInteractionMode = input.interactionMode ?? "default";
-        const desiredPermissionMode: PermissionMode | undefined =
-          effectiveInteractionMode === "plan"
-            ? "plan"
-            : context.basePermissionMode !== undefined || context.lastInteractionMode === "plan"
-              ? (context.basePermissionMode ?? "default")
-              : undefined;
-        const canSkipRedundantSpawnModeRequest =
-          context.firstTurnSpawnModeAuthoritative &&
-          desiredPermissionMode === context.spawnPermissionMode;
-        if (desiredPermissionMode !== undefined && !canSkipRedundantSpawnModeRequest) {
-          yield* Effect.tryPromise({
-            try: () => context.query.setPermissionMode(desiredPermissionMode),
-            catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
-          });
-        }
+        const effectiveInteractionMode = yield* applyInteractionModePermission(
+          context,
+          input.threadId,
+          input.interactionMode,
+        );
 
         const turnId = TurnId.makeUnsafe(yield* Random.nextUUIDv4);
         const turnState: ClaudeTurnState = {
@@ -5481,6 +5500,68 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return {
           threadId: context.session.threadId,
           turnId,
+          ...(context.session.resumeCursor !== undefined
+            ? { resumeCursor: context.session.resumeCursor }
+            : {}),
+        };
+      });
+
+    // A steer rides the live SDK agent loop: the message is pushed into the
+    // session's streaming prompt input and the work continues as the same
+    // turn — no interrupt, no new turn boundary. The SDK delivers it at the
+    // model's next turn boundary. Only a real user turn can be steered; with
+    // no live turn (or only a synthetic one wrapping background agent output)
+    // the message dispatches as a normal turn instead.
+    const steerTurn: ClaudeAdapterShape["steerTurn"] = (input) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(input.threadId);
+        const liveTurnState = context.turnState;
+        if (liveTurnState === undefined || liveTurnState.synthetic === true) {
+          return yield* sendTurn(input);
+        }
+
+        // Steering across an interaction-mode change (e.g. a plan follow-up
+        // that starts implementing) must flip the CLI's permission mode even
+        // though no new turn starts.
+        const effectiveInteractionMode = yield* applyInteractionModePermission(
+          context,
+          input.threadId,
+          input.interactionMode,
+        );
+        if (effectiveInteractionMode !== liveTurnState.interactionMode) {
+          context.turnState = {
+            ...liveTurnState,
+            interactionMode: effectiveInteractionMode,
+          };
+        }
+
+        const message = yield* buildUserMessageEffect(input, {
+          fileSystem,
+          attachmentsDir: serverConfig.attachmentsDir,
+        });
+        yield* Queue.offer(context.promptQueue, {
+          type: "message",
+          message,
+        }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/steer", cause)));
+
+        const steerText = input.input?.trim();
+        if (steerText) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "turn.steered",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: liveTurnState.turnId,
+            payload: { message: steerText },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+
+        return {
+          threadId: context.session.threadId,
+          turnId: liveTurnState.turnId,
           ...(context.session.resumeCursor !== undefined
             ? { resumeCursor: context.session.resumeCursor }
             : {}),
@@ -5997,10 +6078,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
         supportsRuntimeModelList: true,
+        supportsTurnSteering: true,
         supportsLiveTurnDiffPatch: false,
       },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       stopTask,
       backgroundTask,

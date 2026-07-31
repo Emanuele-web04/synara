@@ -14,12 +14,14 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThread,
   type OrchestrationThreadShell,
+  type ProviderKind,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@synara/contracts";
 import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
@@ -2454,11 +2456,16 @@ const make = Effect.gen(function* () {
       const thread = Option.getOrUndefined(
         yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId),
       );
-      const isCodexSteer =
+      // A native steer rides the live turn, so no later turn.started will
+      // arrive to match a pending delivery-mode request — bind to the live
+      // turn immediately instead.
+      const steerProvider = thread?.session?.providerName ?? thread?.modelSelection.provider;
+      const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
-        (thread?.session?.providerName ?? thread?.modelSelection.provider) === "codex";
+        steerProvider !== undefined &&
+        providerSupportsNativeTurnSteering(steerProvider);
       let deliveryTurnId: TurnId | undefined;
-      if (isCodexSteer) {
+      if (isNativeSteer) {
         let activeTurnId = thread?.session?.activeTurnId ?? undefined;
         if (!activeTurnId) {
           const runtimeSession = (yield* providerService.listSessions()).find(
@@ -2488,8 +2495,7 @@ const make = Effect.gen(function* () {
       const flushEvent: ProviderRuntimeEvent = {
         type: "turn.started",
         eventId: event.eventId,
-        provider:
-          isCodexSteer || thread?.session?.providerName !== "claudeAgent" ? "codex" : "claudeAgent",
+        provider: (steerProvider ?? "codex") as ProviderKind,
         createdAt: event.payload.createdAt,
         threadId: event.payload.threadId,
         turnId: deliveryTurnId,

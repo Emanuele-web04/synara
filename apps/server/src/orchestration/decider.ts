@@ -23,6 +23,7 @@ import {
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -1646,10 +1647,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // Subagent threads never queue: their messages steer the running child task
       // through the parent session, so deferring until the turn settles would
       // deliver the message only after the subagent already finished.
+      // Steers ride the live turn natively only on providers whose runtime can
+      // inject mid-turn input; everywhere else they queue and interrupt below.
       const shouldQueue =
         targetThread.parentThreadId === null &&
         isThreadRunning &&
-        (dispatchMode === "queue" || activeProvider !== "codex");
+        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
       const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",

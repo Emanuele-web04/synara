@@ -104,9 +104,22 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 600,
         anchorTopToSpacerTopPx: 120,
         trailingInsetPx: 16,
+        topInsetPx: 0,
         baseInsetPx: 64,
       }),
     ).toBe(464);
+  });
+
+  it("keeps the top inset gap so the anchor breathes like a chat's first message", () => {
+    expect(
+      computeTailAnchorSpacerHeightPx({
+        viewportHeightPx: 600,
+        anchorTopToSpacerTopPx: 120,
+        trailingInsetPx: 16,
+        topInsetPx: 16,
+        baseInsetPx: 64,
+      }),
+    ).toBe(448);
   });
 
   it("shrinks one-for-one as the streamed response grows", () => {
@@ -115,6 +128,7 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 600,
         anchorTopToSpacerTopPx: contentBelowAnchorPx,
         trailingInsetPx: 0,
+        topInsetPx: 16,
         baseInsetPx: 64,
       });
     expect(at(100) - at(180)).toBe(80);
@@ -126,6 +140,7 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 600,
         anchorTopToSpacerTopPx: 900,
         trailingInsetPx: 16,
+        topInsetPx: 16,
         baseInsetPx: 64,
       }),
     ).toBe(64);
@@ -137,6 +152,7 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 600,
         anchorTopToSpacerTopPx: -50,
         trailingInsetPx: 0,
+        topInsetPx: 0,
         baseInsetPx: 64,
       }),
     ).toBe(600);
@@ -148,6 +164,7 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: Number.NaN,
         anchorTopToSpacerTopPx: 120,
         trailingInsetPx: 16,
+        topInsetPx: 16,
         baseInsetPx: 64,
       }),
     ).toBe(64);
@@ -156,6 +173,7 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 0,
         anchorTopToSpacerTopPx: 120,
         trailingInsetPx: 16,
+        topInsetPx: 16,
         baseInsetPx: 64,
       }),
     ).toBe(64);
@@ -164,6 +182,16 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 600,
         anchorTopToSpacerTopPx: Number.NaN,
         trailingInsetPx: 16,
+        topInsetPx: 16,
+        baseInsetPx: 64,
+      }),
+    ).toBe(64);
+    expect(
+      computeTailAnchorSpacerHeightPx({
+        viewportHeightPx: 600,
+        anchorTopToSpacerTopPx: 120,
+        trailingInsetPx: 16,
+        topInsetPx: Number.NaN,
         baseInsetPx: 64,
       }),
     ).toBe(64);
@@ -175,6 +203,7 @@ describe("computeTailAnchorSpacerHeightPx", () => {
         viewportHeightPx: 40,
         anchorTopToSpacerTopPx: 10,
         trailingInsetPx: 0,
+        topInsetPx: 16,
         baseInsetPx: 64,
       }),
     ).toBe(64);

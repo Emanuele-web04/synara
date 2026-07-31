@@ -1067,6 +1067,104 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("steers a live turn through the prompt queue without opening a new turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.started" || event.type === "turn.steered"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Start the work",
+        attachments: [],
+      });
+
+      const steered = yield* adapter.steerTurn({
+        threadId: session.threadId,
+        input: "Actually, focus on the tests",
+        attachments: [],
+      });
+
+      // The steer rides the live turn: same turn id, no new turn boundary.
+      assert.equal(String(steered.turnId), String(turn.turnId));
+
+      const createInput = harness.getLastCreateQueryInput();
+      const iterator = createInput?.prompt[Symbol.asyncIterator]();
+      const firstPrompt = yield* Effect.promise(() => iterator!.next());
+      const secondPrompt = yield* Effect.promise(() => iterator!.next());
+      const promptText = (message: IteratorResult<SDKUserMessage>): string | undefined => {
+        if (message.done) {
+          return undefined;
+        }
+        const content = message.value.message.content[0];
+        return typeof content === "string" || content?.type !== "text" ? undefined : content.text;
+      };
+      assert.equal(promptText(firstPrompt), "Start the work");
+      assert.equal(promptText(secondPrompt), "Actually, focus on the tests");
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        ["turn.started", "turn.steered"],
+      );
+      const steeredEvent = runtimeEvents[1];
+      assert.equal(steeredEvent?.type, "turn.steered");
+      if (steeredEvent?.type === "turn.steered") {
+        assert.equal(String(steeredEvent.turnId), String(turn.turnId));
+        assert.equal(steeredEvent.payload.message, "Actually, focus on the tests");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("dispatches a steer as a normal turn when no turn is live", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.started" || event.type === "turn.steered"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const steered = yield* adapter.steerTurn({
+        threadId: session.threadId,
+        input: "Steer with nothing running",
+        attachments: [],
+      });
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const started = runtimeEvents[0];
+      assert.equal(started?.type, "turn.started");
+      if (started?.type === "turn.started") {
+        assert.equal(String(started.turnId), String(steered.turnId));
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("sends setPermissionMode on each turn of a plan then default sequence", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

@@ -1,8 +1,9 @@
 // FILE: MessagesTimeline.tailAnchor.browser.tsx
 // Purpose: Browser regression for send-time anchoring — a just-sent user message
-//          aligns with the viewport top, stays pinned while the response streams
-//          below it, hands off to follow-the-tail once the response overflows,
-//          and the reserved space collapses when the turn ends.
+//          aligns just below the viewport top (matching the container's own top
+//          padding), stays pinned while the response streams below it, keeps its
+//          reserve when the turn ends, hands off to follow-the-tail once the
+//          response overflows, and only collapses when the anchor is cleared.
 // Layer: Vitest browser tests
 
 import "../../index.css";
@@ -23,8 +24,10 @@ const BASE_BOTTOM_INSET_PX = 64;
 // maintainScrollAtEnd re-sticks within its threshold rather than to the exact
 // pixel bottom; anything within this tolerance counts as following the tail.
 const AUTO_FOLLOW_TOLERANCE_PX = 96;
-const SENT_MESSAGE_ID = "sent-user-message";
-const STREAMING_MESSAGE_ID = "streaming-assistant-message";
+const FIRST_SENT_MESSAGE_ID = "sent-user-message";
+const SECOND_SENT_MESSAGE_ID = "sent-user-message-2";
+const FIRST_STREAMING_MESSAGE_ID = "streaming-assistant-message";
+const SECOND_STREAMING_MESSAGE_ID = "streaming-assistant-message-2";
 
 function messageEntry(
   id: string,
@@ -62,9 +65,10 @@ function seedEntries(): TimelineEntries {
 }
 
 interface HarnessHandle {
-  send: () => void;
-  growStream: (lines: number) => void;
+  send: (messageId: string) => void;
+  growStream: (streamMessageId: string, lines: number) => void;
   finishTurn: () => void;
+  clearAnchor: () => void;
   listRef: React.RefObject<LegendListRef | null>;
 }
 
@@ -76,33 +80,37 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
 
   handleRef.current = {
     listRef,
-    send: () => {
+    send: (messageId: string) => {
       setEntries((current) => [
         ...current,
-        messageEntry(SENT_MESSAGE_ID, "user", "Freshly sent question."),
+        messageEntry(messageId, "user", "Freshly sent question."),
       ]);
-      setTailAnchorMessageId(MessageId.makeUnsafe(SENT_MESSAGE_ID));
+      setTailAnchorMessageId(MessageId.makeUnsafe(messageId));
     },
-    growStream: (lines: number) => {
+    growStream: (streamMessageId: string, lines: number) => {
       setFollowLiveOutput(true);
       setEntries((current) => {
         const streamingIndex = current.findIndex(
-          (entry) => entry.kind === "message" && entry.message.id === STREAMING_MESSAGE_ID,
+          (entry) => entry.kind === "message" && entry.message.id === streamMessageId,
         );
         const existingText =
           streamingIndex >= 0 && current[streamingIndex]?.kind === "message"
             ? current[streamingIndex].message.text
             : "";
         const grownText = `${existingText}${"Streamed line of response text.\n\n".repeat(lines)}`;
-        const grown = messageEntry(STREAMING_MESSAGE_ID, "assistant", grownText, true);
+        const grown = messageEntry(streamMessageId, "assistant", grownText, true);
         if (streamingIndex < 0) {
           return [...current, grown];
         }
         return current.map((entry, index) => (index === streamingIndex ? grown : entry));
       });
     },
+    // Turn end keeps the anchor: the reserve must persist so the settled
+    // transcript does not jump back to its true bottom.
     finishTurn: () => {
       setFollowLiveOutput(false);
+    },
+    clearAnchor: () => {
       setTailAnchorMessageId(null);
     },
   };
@@ -152,8 +160,8 @@ function getSpacer(): HTMLElement {
   return spacer;
 }
 
-function anchorTopOffsetPx(handle: HarnessHandle): number | null {
-  const anchor = document.querySelector<HTMLElement>(`[data-message-id="${SENT_MESSAGE_ID}"]`);
+function anchorTopOffsetPx(handle: HarnessHandle, messageId: string): number | null {
+  const anchor = document.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
   if (!anchor || anchor.getClientRects().length === 0) {
     return null;
   }
@@ -179,7 +187,7 @@ describe("MessagesTimeline tail anchor", () => {
     document.body.innerHTML = "";
   });
 
-  it("anchors a sent message at the viewport top, pins it while streaming, follows overflow, and collapses when the turn ends", async () => {
+  it("anchors a sent message below the top inset, pins it while streaming, keeps the reserve at turn end, follows overflow, and collapses only when cleared", async () => {
     const handleRef: { current: HarnessHandle | null } = { current: null };
     const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
 
@@ -197,42 +205,70 @@ describe("MessagesTimeline tail anchor", () => {
         .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
 
+      // The anchored message keeps the same top gap a chat's first message gets:
+      // the scroll container's own top padding.
+      const topGapPx =
+        Number.parseFloat(getComputedStyle(getScrollContainer(handle())).paddingTop) || 0;
+      const expectAnchoredAtTopGap = (messageId: string) =>
+        expect
+          .poll(
+            () => {
+              const offset = anchorTopOffsetPx(handle(), messageId);
+              return offset !== null && Math.abs(offset - topGapPx) <= 8;
+            },
+            { timeout: 5_000 },
+          )
+          .toBe(true);
+
       // 1) Send: the spacer reserves space and the new message slides to the top.
       // ChatView issues an animated scroll-to-end alongside every send; the hook's
       // spacer sizing is what turns that into "message at the viewport top".
-      handle().send();
+      handle().send(FIRST_SENT_MESSAGE_ID);
       void handle().listRef.current?.scrollToEnd?.({ animated: true });
 
       await expect
         .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
         .toBeGreaterThan(BASE_BOTTOM_INSET_PX);
-      await expect
-        .poll(
-          () => {
-            const offset = anchorTopOffsetPx(handle());
-            return offset !== null && Math.abs(offset) <= 8;
-          },
-          { timeout: 5_000 },
-        )
-        .toBe(true);
+      await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
       // 2) Short streaming: response grows into the reserve; the message stays pinned.
       const container = getScrollContainer(handle());
       const scrollTopBeforeStream = container.scrollTop;
       const spacerBeforeStream = getSpacer().getBoundingClientRect().height;
 
-      handle().growStream(2);
+      handle().growStream(FIRST_STREAMING_MESSAGE_ID, 2);
       await expect
         .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
         .toBeLessThan(spacerBeforeStream);
       await settleFrames(3);
 
       expect(Math.abs(container.scrollTop - scrollTopBeforeStream)).toBeLessThanOrEqual(1);
-      const pinnedOffset = anchorTopOffsetPx(handle());
-      expect(pinnedOffset !== null && Math.abs(pinnedOffset) <= 8).toBe(true);
+      await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
-      // 3) Overflow: the response outgrows the viewport; the tail stays visible.
-      handle().growStream(40);
+      // 3) Turn end: the reserve persists — no jump back to the true bottom.
+      const spacerBeforeTurnEnd = getSpacer().getBoundingClientRect().height;
+      const scrollTopBeforeTurnEnd = container.scrollTop;
+      handle().finishTurn();
+      await settleFrames(6);
+      expect(
+        Math.abs(getSpacer().getBoundingClientRect().height - spacerBeforeTurnEnd),
+      ).toBeLessThanOrEqual(1);
+      expect(Math.abs(container.scrollTop - scrollTopBeforeTurnEnd)).toBeLessThanOrEqual(1);
+      await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
+
+      // 4) Clearing the anchor (fallback path) collapses the reserve to the base inset.
+      handle().clearAnchor();
+      await expect
+        .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
+        .toBe(BASE_BOTTOM_INSET_PX);
+
+      // 5) A new send re-anchors, and an overflowing response hands off to
+      // follow-the-tail with the spacer back at the base inset.
+      handle().send(SECOND_SENT_MESSAGE_ID);
+      void handle().listRef.current?.scrollToEnd?.({ animated: true });
+      await expectAnchoredAtTopGap(SECOND_SENT_MESSAGE_ID);
+
+      handle().growStream(SECOND_STREAMING_MESSAGE_ID, 40);
       await expect
         .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
         .toBe(BASE_BOTTOM_INSET_PX);
@@ -240,14 +276,8 @@ describe("MessagesTimeline tail anchor", () => {
         .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
       // The anchored message has scrolled up and out of the way of the live tail.
-      const overflowOffset = anchorTopOffsetPx(handle());
+      const overflowOffset = anchorTopOffsetPx(handle(), SECOND_SENT_MESSAGE_ID);
       expect(overflowOffset === null || overflowOffset < 0).toBe(true);
-
-      // 4) Turn end: the reserve collapses back to the base inset.
-      handle().finishTurn();
-      await expect
-        .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
-        .toBe(BASE_BOTTOM_INSET_PX);
     } finally {
       await screen.unmount();
     }

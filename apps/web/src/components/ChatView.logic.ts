@@ -1107,11 +1107,12 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 }
 
 /**
- * Steering a non-Codex provider interrupts the live turn and lets the server
- * re-dispatch the steer text as a fresh turn. Between the abort and the
- * steered turn's start the thread briefly looks idle, which would otherwise
- * let the queued-composer auto-dispatch race the steered turn (and fire every
- * queued message at once). The gate holds auto-dispatch through that gap.
+ * Steering a provider without native mid-turn steering interrupts the live
+ * turn and lets the server re-dispatch the steer text as a fresh turn.
+ * Between the abort and the steered turn's start the thread briefly looks
+ * idle, which would otherwise let the queued-composer auto-dispatch race the
+ * steered turn (and fire every queued message at once). The gate holds
+ * auto-dispatch through that gap.
  */
 export interface QueuedSteerGate {
   /** The abort gap has been observed (phase left "running" after the steer). */

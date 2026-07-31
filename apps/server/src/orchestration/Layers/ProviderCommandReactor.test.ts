@@ -5701,7 +5701,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("falls back to interrupt plus priority queue for claude steering", async () => {
+  it("steers a running claude turn natively without interrupting it", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "claudeAgent",
@@ -5755,6 +5755,70 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    expect(harness.steerTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "switch directions",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    });
+  });
+
+  it("falls back to interrupt plus priority queue for steering without native support", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "cursor",
+        model: "composer-1",
+      },
+    });
+    const now = new Date().toISOString();
+
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-steer-cursor"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "cursor",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+    harness.interruptTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-steer-cursor"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-steer-cursor"),
+          role: "user",
+          text: "switch directions",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
     await harness.drain();
     expect(harness.steerTurn).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -5763,8 +5827,8 @@ describe("ProviderCommandReactor", () => {
     harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
-      eventId: asEventId("evt-turn-completed-steer-claude"),
-      provider: "claudeAgent",
+      eventId: asEventId("evt-turn-completed-steer-cursor"),
+      provider: "cursor",
       threadId: ThreadId.makeUnsafe("thread-1"),
       createdAt: new Date().toISOString(),
       turnId: asTurnId("turn-running"),

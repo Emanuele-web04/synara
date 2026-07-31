@@ -2293,6 +2293,203 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("anchors a freshly sent user message at the top of the transcript viewport", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-send-tail-anchor" as MessageId,
+      targetText: "tail anchor target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      // Start where a real conversation sits: parked at the bottom of the transcript.
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const prompt = "anchor this message at the viewport top";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      const findSentRow = () => {
+        const rows = document.querySelectorAll<HTMLElement>(
+          "[data-message-id][data-message-role='user']",
+        );
+        for (const row of rows) {
+          if (row.textContent?.includes(prompt)) {
+            return row;
+          }
+        }
+        return null;
+      };
+
+      const anchorOffsetPx = () => {
+        const row = findSentRow();
+        if (!row) {
+          return null;
+        }
+        return row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+      };
+      // The anchored message keeps the same top gap a chat's first message gets:
+      // the scroll container's own top padding.
+      const expectedTopGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
+
+      await vi.waitFor(
+        () => {
+          const offsetPx = anchorOffsetPx();
+          expect(offsetPx, "sent user message row not rendered").not.toBeNull();
+          expect(Math.abs(offsetPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      // Real sends ack before the turn goes live, so the transcript sits with no
+      // running turn for a beat. The anchor must survive that gap instead of
+      // collapsing the moment the send stops being "busy".
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 700);
+      });
+      const offsetAfterAckGapPx = anchorOffsetPx();
+      expect(offsetAfterAckGapPx, "sent user message row missing after ack gap").not.toBeNull();
+      expect(Math.abs(offsetAfterAckGapPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
+
+      // The server acknowledges the send and the turn starts running: the durable
+      // user message replaces the optimistic row and live turn chrome appears.
+      const activeTurnId = TurnId.makeUnsafe("turn-tail-anchor");
+      const sentMessageId = findSentRow()?.dataset.messageId;
+      expect(sentMessageId, "sent user message id").toBeTruthy();
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: MessageId.makeUnsafe(sentMessageId!),
+            role: "user" as const,
+            text: prompt,
+            turnId: activeTurnId,
+            streaming: false,
+            source: "native" as const,
+            createdAt: isoAt(1_300),
+            updatedAt: isoAt(1_300),
+          },
+        ],
+        latestTurn: {
+          turnId: activeTurnId,
+          state: "running",
+          requestedAt: isoAt(1_300),
+          startedAt: isoAt(1_301),
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? { ...thread.session, status: "running", activeTurnId, updatedAt: isoAt(1_301) }
+          : null,
+        updatedAt: isoAt(1_301),
+      }));
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          const offsetPx = anchorOffsetPx();
+          expect(offsetPx, "sent user message row missing after ack").not.toBeNull();
+          expect(Math.abs(offsetPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      // The assistant response streams in below the anchored message. While it is
+      // shorter than the viewport the anchored message must not move.
+      const streamingId = MessageId.makeUnsafe("msg-assistant-tail-anchor-stream");
+      for (const chunkCount of [1, 3, 6]) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages.filter((message) => message.id !== streamingId),
+            {
+              id: streamingId,
+              role: "assistant" as const,
+              text: `Streaming response paragraph.\n\n`.repeat(chunkCount),
+              turnId: activeTurnId,
+              streaming: true,
+              source: "native" as const,
+              createdAt: isoAt(1_302),
+              updatedAt: isoAt(1_302 + chunkCount),
+            },
+          ],
+          updatedAt: isoAt(1_302 + chunkCount),
+        }));
+        await waitForLayout();
+        await waitForLayout();
+        const offsetPx = anchorOffsetPx();
+        expect(offsetPx, `anchor row missing while streaming ${chunkCount} chunks`).not.toBeNull();
+        expect(
+          Math.abs(offsetPx! - expectedTopGapPx),
+          `anchor drifted while streaming ${chunkCount} chunks`,
+        ).toBeLessThanOrEqual(24);
+      }
+
+      // The turn completes: the reserve persists so the settled transcript does
+      // not jump back to its true bottom.
+      const scrollTopBeforeTurnEnd = scrollContainer.scrollTop;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === streamingId
+            ? { ...message, streaming: false, updatedAt: isoAt(1_400) }
+            : message,
+        ),
+        latestTurn: thread.latestTurn
+          ? { ...thread.latestTurn, state: "completed", completedAt: isoAt(1_400) }
+          : thread.latestTurn,
+        session: thread.session
+          ? { ...thread.session, status: "idle", activeTurnId: null, updatedAt: isoAt(1_400) }
+          : null,
+        updatedAt: isoAt(1_400),
+      }));
+      await waitForLayout();
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 700);
+      });
+      const offsetAfterTurnEndPx = anchorOffsetPx();
+      expect(offsetAfterTurnEndPx, "sent user message row missing after turn end").not.toBeNull();
+      expect(
+        Math.abs(offsetAfterTurnEndPx! - expectedTopGapPx),
+        "anchor jumped when the turn settled",
+      ).toBeLessThanOrEqual(24);
+      expect(
+        Math.abs(scrollContainer.scrollTop - scrollTopBeforeTurnEnd),
+        "scroll position jumped when the turn settled",
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
