@@ -922,7 +922,9 @@ function summarizeToolRequest(toolName: string, input: Record<string, unknown>):
   const commandValue = input.command ?? input.cmd;
   const command = typeof commandValue === "string" ? commandValue : undefined;
   if (command && command.trim().length > 0) {
-    return `${toolName}: ${command.trim().slice(0, 400)}`;
+    // Truncation can land on a space or newline even after trimming the full
+    // command. Runtime-event display metadata must itself end trimmed.
+    return `${toolName}: ${command.trim().slice(0, 400).trimEnd()}`;
   }
 
   const serialized = JSON.stringify(input);

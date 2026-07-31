@@ -925,6 +925,7 @@ export interface WorktreeSetupSnapshotOptions {
 
 export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
   worktreeSetupStepId?: WorktreeSetupStepId;
+  expectedUserMessageId?: ChatMessage["id"];
 }
 
 function worktreeSetupStepDefinitions(
@@ -983,6 +984,7 @@ export function worktreeSetupHasError(snapshot: WorktreeSetupSnapshot | null): b
 export interface LocalDispatchSnapshot {
   startedAt: string;
   worktreeSetup: WorktreeSetupSnapshot | null;
+  expectedUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: Thread["latestTurn"] extends infer T
     ? T extends { turnId: infer U }
       ? U | null
@@ -1010,6 +1012,7 @@ export function createLocalDispatchSnapshot(
     worktreeSetup: options?.worktreeSetupStepId
       ? createWorktreeSetupSnapshot(options.worktreeSetupStepId, options)
       : null,
+    expectedUserMessageId: options?.expectedUserMessageId ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
@@ -1051,6 +1054,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
   session: Thread["session"] | null;
+  messages: readonly ChatMessage[];
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
   threadError: string | null | undefined;
@@ -1063,6 +1067,15 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.hasPendingApproval ||
     input.hasPendingUserInput ||
     Boolean(input.threadError)
+  ) {
+    return true;
+  }
+  if (
+    input.localDispatch.expectedUserMessageId !== null &&
+    input.messages.some(
+      (message) =>
+        message.role === "user" && message.id === input.localDispatch?.expectedUserMessageId,
+    )
   ) {
     return true;
   }

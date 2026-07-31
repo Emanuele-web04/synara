@@ -1302,6 +1302,7 @@ describe("ClaudeAdapterLive", () => {
         input: "hello",
         attachments: [],
       });
+      const commandWhoseTruncationEndsInWhitespace = `${"x".repeat(399)} \nignored`;
 
       harness.query.emit({
         type: "stream_event",
@@ -1357,7 +1358,7 @@ describe("ClaudeAdapterLive", () => {
             id: "tool-1",
             name: "Bash",
             input: {
-              command: "ls",
+              command: commandWhoseTruncationEndsInWhitespace,
             },
           },
         },
@@ -1428,6 +1429,7 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "command_execution");
+        assert.equal(toolStarted.payload.detail, `Bash: ${"x".repeat(399)}`);
       }
 
       const assistantCompletedIndex = runtimeEvents.findIndex(

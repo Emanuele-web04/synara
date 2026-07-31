@@ -212,6 +212,9 @@ describe("ProviderCommandReactor", () => {
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
+    const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
+      Effect.succeed(runtimeSessions),
+    );
     const modelSelection = input?.threadModelSelection ?? {
       provider: "codex",
       model: "gpt-5-codex",
@@ -469,7 +472,7 @@ describe("ProviderCommandReactor", () => {
       clearSessionResumeCursor: clearSessionResumeCursor as NonNullable<
         ProviderServiceShape["clearSessionResumeCursor"]
       >,
-      listSessions: () => Effect.succeed(runtimeSessions),
+      listSessions,
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
@@ -596,6 +599,7 @@ describe("ProviderCommandReactor", () => {
       engine,
       reactor,
       startSession,
+      listSessions,
       sendTurn,
       steerTurn,
       startReview,
@@ -3280,6 +3284,7 @@ describe("ProviderCommandReactor", () => {
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    harness.listSessions.mockClear();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3313,6 +3318,9 @@ describe("ProviderCommandReactor", () => {
     const thread = await readHarnessThread(harness);
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+    // One scan rechecks the provider's live-turn race before dispatch; the
+    // session ensure then performs the only full lookup needed for startup.
+    expect(harness.listSessions).toHaveBeenCalledTimes(2);
   });
 
   it("routes subagent-thread turn starts to the parent session as steers", async () => {

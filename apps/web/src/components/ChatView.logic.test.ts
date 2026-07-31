@@ -1720,6 +1720,7 @@ describe("worktree setup snapshots", () => {
     const current: LocalDispatchSnapshot = {
       startedAt: "2026-04-13T00:00:00.000Z",
       worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      expectedUserMessageId: null,
       latestTurnTurnId: null,
       latestTurnRequestedAt: null,
       latestTurnStartedAt: null,
@@ -1741,6 +1742,7 @@ describe("worktree setup snapshots", () => {
     const current: LocalDispatchSnapshot = {
       startedAt: "2026-04-13T00:00:00.000Z",
       worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      expectedUserMessageId: null,
       latestTurnTurnId: null,
       latestTurnRequestedAt: null,
       latestTurnStartedAt: null,
@@ -1768,6 +1770,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
     worktreeSetup: null,
+    expectedUserMessageId: "message-for-dispatch" as never,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -1778,6 +1781,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   const firstTurnLocalDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
     worktreeSetup: null,
+    expectedUserMessageId: "message-first-send" as never,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -1792,6 +1796,14 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "ready",
         latestTurn: null,
+        messages: [
+          {
+            id: "message-before-dispatch" as never,
+            role: "user",
+            text: "an unrelated message",
+            createdAt: "2026-04-13T00:00:00.000Z",
+          },
+        ],
         session: {
           provider: "codex",
           status: "ready",
@@ -1820,6 +1832,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
           assistantMessageId: null,
           sourceProposedPlan: undefined,
         },
+        messages: [],
         session: {
           provider: "codex",
           status: "ready",
@@ -1840,6 +1853,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch: firstTurnLocalDispatch,
         phase: "ready",
         latestTurn: null,
+        messages: [],
         session: {
           provider: "claudeAgent",
           status: "ready",
@@ -1854,12 +1868,41 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(false);
   });
 
+  it("acknowledges a first send when its user message becomes durable", () => {
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch: firstTurnLocalDispatch,
+        phase: "ready",
+        latestTurn: null,
+        messages: [
+          {
+            id: "message-first-send" as never,
+            role: "user",
+            text: "the submitted message",
+            createdAt: "2026-04-13T00:00:01.000Z",
+          },
+        ],
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
   it("still acknowledges non-ready session transitions without a latest turn snapshot", () => {
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch: firstTurnLocalDispatch,
         phase: "disconnected",
         latestTurn: null,
+        messages: [],
         session: null,
         hasPendingApproval: false,
         hasPendingUserInput: false,

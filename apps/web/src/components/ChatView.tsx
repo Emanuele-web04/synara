@@ -2814,6 +2814,7 @@ export default function ChatView({
         phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
+        messages: activeThread?.messages ?? EMPTY_MESSAGES,
         hasPendingApproval: activePendingApproval !== null,
         hasPendingUserInput: activePendingUserInput !== null,
         threadError: activeThread?.error,
@@ -2823,6 +2824,7 @@ export default function ChatView({
       activePendingApproval,
       activePendingUserInput,
       activeThread?.error,
+      activeThread?.messages,
       activeThread?.session,
       localDispatch,
       phase,
@@ -7574,13 +7576,15 @@ export default function ChatView({
       ? setupProjectScript(targetProjectScriptsForSend)
       : null;
     const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
+    const messageIdForSend = newMessageId();
 
     sendInFlightRef.current = true;
-    beginLocalDispatch(
-      baseBranchForWorktree
+    beginLocalDispatch({
+      expectedUserMessageId: messageIdForSend,
+      ...(baseBranchForWorktree
         ? { worktreeSetupStepId: "create-worktree", setupScriptName: worktreeSetupScriptName }
-        : undefined,
-    );
+        : {}),
+    });
 
     const composerImagesSnapshot = [...composerImagesForSend];
     const composerFilesSnapshot = [...composerFilesForSend];
@@ -7593,7 +7597,6 @@ export default function ChatView({
     const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
-    const messageIdForSend = newMessageId();
     // Trailing blocks are appended innermost-to-outermost: assistant selections,
     // terminal contexts, file comments, pasted text, then browser annotations
     // (outermost). The display
@@ -8337,7 +8340,7 @@ export default function ChatView({
     });
 
     sendInFlightRef.current = true;
-    beginLocalDispatch();
+    beginLocalDispatch({ expectedUserMessageId: messageIdForSend });
     setThreadError(threadIdForSend, null);
     setOptimisticUserMessages((existing) => [
       ...existing,
@@ -11352,7 +11355,7 @@ export default function ChatView({
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
-                    isWorking={isWorking}
+                    isWorking={hasLiveTurn}
                     worktreeSetup={activeWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
