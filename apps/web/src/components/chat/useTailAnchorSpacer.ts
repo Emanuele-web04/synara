@@ -86,13 +86,15 @@ function getScrollContainer(listRef: RefObject<LegendListRef | null>): HTMLEleme
  * — sits at an offset that does not match the rendered rows. Sizing the reserve
  * from that frame bakes the estimate in: the reserve over- or under-shrinks,
  * the scroll max moves with it, and the anchored message visibly overshoots the
- * top and springs back. The gap between the last rendered row's bottom edge and
- * the spacer's top edge is exactly that estimate error, so it is the signal to
- * wait a frame on. It is zero once the row's real size lands.
+ * top and springs back. Every adjacent gap in the rendered tail exposes that
+ * estimate error. Checking only the final row misses an estimated row inserted
+ * before it (for example `Working for` between the sent message and `Thinking`),
+ * because the following row and footer move together and still appear aligned.
  */
 function isTailLayoutSettled(
   listRef: RefObject<LegendListRef | null>,
   spacer: HTMLElement,
+  anchorElement: HTMLElement,
 ): boolean {
   const state = listRef.current?.getState?.();
   if (!state) {
@@ -102,13 +104,28 @@ function isTailLayoutSettled(
   if (lastIndex < 0) {
     return true;
   }
-  const lastElement: unknown = state.elementAtIndex(lastIndex);
-  if (!(lastElement instanceof HTMLElement) || lastElement.getClientRects().length === 0) {
-    return true;
+  let nextTop = spacer.getBoundingClientRect().top;
+  let inspectedRows = 0;
+  for (let index = lastIndex; index >= 0; index -= 1) {
+    const element: unknown = state.elementAtIndex(index);
+    if (!(element instanceof HTMLElement) || element.getClientRects().length === 0) {
+      // Rows before the contiguous rendered tail are virtualized out and cannot
+      // affect its current footer geometry.
+      return inspectedRows > 0;
+    }
+    const rect = element.getBoundingClientRect();
+    if (Math.abs(nextTop - rect.bottom) > 1) {
+      return false;
+    }
+    nextTop = rect.top;
+    inspectedRows += 1;
+    // Only rows between the current anchor and the footer can affect its
+    // reserve. Stop here so cached history stays out of this hot path.
+    if (element === anchorElement || element.contains(anchorElement)) {
+      return true;
+    }
   }
-  return (
-    Math.abs(spacer.getBoundingClientRect().top - lastElement.getBoundingClientRect().bottom) <= 1
-  );
+  return true;
 }
 
 /**
@@ -374,7 +391,9 @@ export function useTailAnchorSpacer({
         const spacer = spacerRef.current;
         const anchorIsSettled = Math.abs(currentOffset - topInsetPx) <= 1;
         settledFrames =
-          spacer && anchorIsSettled && isTailLayoutSettled(listRef, spacer) ? settledFrames + 1 : 0;
+          spacer && anchorIsSettled && isTailLayoutSettled(listRef, spacer, currentAnchor)
+            ? settledFrames + 1
+            : 0;
         if (
           (settledFrames < ANCHOR_SLIDE_SETTLED_FRAMES ||
             now - startedAt < STEER_ANCHOR_MIN_SETTLE_MS) &&
@@ -447,7 +466,7 @@ export function useTailAnchorSpacer({
       // from estimated row sizes — that estimate error is what makes the
       // anchored message shoot past the top and spring back.
       if (
-        !isTailLayoutSettled(listRef, spacer) &&
+        !isTailLayoutSettled(listRef, spacer, anchorElement) &&
         deferredForStaleTail < STALE_TAIL_MAX_DEFERRED_FRAMES
       ) {
         deferredForStaleTail += 1;

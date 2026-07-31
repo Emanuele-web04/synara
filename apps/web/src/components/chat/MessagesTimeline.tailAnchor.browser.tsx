@@ -67,6 +67,8 @@ function seedEntries(): TimelineEntries {
 interface HarnessHandle {
   send: (messageId: string) => void;
   growStream: (streamMessageId: string, lines: number) => void;
+  showThinking: () => void;
+  showWorkingHeader: () => void;
   finishTurn: () => void;
   clearAnchor: () => void;
   listRef: React.RefObject<LegendListRef | null>;
@@ -77,6 +79,8 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
   const [entries, setEntries] = useState<TimelineEntries>(seedEntries);
   const [tailAnchorMessageId, setTailAnchorMessageId] = useState<MessageId | null>(null);
   const [followLiveOutput, setFollowLiveOutput] = useState(false);
+  const [isWorking, setIsWorking] = useState(false);
+  const [activeTurnStartedAt, setActiveTurnStartedAt] = useState<string | null>(null);
 
   handleRef.current = {
     listRef,
@@ -105,6 +109,14 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
         return current.map((entry, index) => (index === streamingIndex ? grown : entry));
       });
     },
+    showThinking: () => {
+      setIsWorking(true);
+      setActiveTurnStartedAt(null);
+    },
+    showWorkingHeader: () => {
+      setIsWorking(true);
+      setActiveTurnStartedAt("2026-03-17T19:12:29.000Z");
+    },
     // Turn end keeps the anchor: the reserve must persist so the settled
     // transcript does not jump back to its true bottom.
     finishTurn: () => {
@@ -119,9 +131,9 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
     <div style={{ height: VIEWPORT_HEIGHT_PX }}>
       <MessagesTimeline
         hasMessages={entries.length > 0}
-        isWorking={false}
+        isWorking={isWorking}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        activeTurnStartedAt={activeTurnStartedAt}
         listRef={listRef}
         tailAnchorMessageId={tailAnchorMessageId}
         followLiveOutput={followLiveOutput}
@@ -366,6 +378,49 @@ describe("MessagesTimeline tail anchor", () => {
           return offset !== null && Math.abs(offset - topGapPx) <= 8;
         })
         .toBe(true);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps a settled send anchored when Thinking gains its Working for header", async () => {
+    const handleRef: { current: HarnessHandle | null } = { current: null };
+    const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
+
+    try {
+      const handle = () => {
+        if (!handleRef.current) throw new Error("harness not mounted");
+        return handleRef.current;
+      };
+
+      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
+      await settleFrames(3);
+      void handle().listRef.current?.scrollToEnd?.({ animated: false });
+
+      const container = getScrollContainer(handle());
+      const topGapPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
+      handle().send(FIRST_SENT_MESSAGE_ID);
+      await expect
+        .poll(() => {
+          const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+          return offset !== null && Math.abs(offset - topGapPx) <= 8;
+        })
+        .toBe(true);
+
+      handle().showThinking();
+      await settleFrames(6);
+      handle().showWorkingHeader();
+
+      const offsets: number[] = [];
+      for (let frame = 0; frame < 24; frame += 1) {
+        await settleFrames(1);
+        const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+        if (offset !== null) offsets.push(offset);
+      }
+
+      expect(offsets.length).toBeGreaterThan(0);
+      expect(Math.max(...offsets) - Math.min(...offsets)).toBeLessThanOrEqual(2);
+      expect(Math.abs(offsets.at(-1)! - topGapPx)).toBeLessThanOrEqual(8);
     } finally {
       await screen.unmount();
     }
