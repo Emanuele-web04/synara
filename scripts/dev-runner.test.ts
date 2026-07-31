@@ -131,6 +131,28 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("createDevRunnerEnv", () => {
+    it.effect("marks an inherited terminal PATH as already hydrated", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: { PATH: "/opt/homebrew/bin:/usr/bin" },
+          serverOffset: 0,
+          webOffset: 0,
+          synaraHome: undefined,
+          authToken: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.SYNARA_PATH_HYDRATED, "1");
+        assert.match(env.PATH ?? "", /\/opt\/homebrew\/bin/);
+      }),
+    );
+
     it.effect("defaults SYNARA_HOME to ~/.synara when not provided", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({

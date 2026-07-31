@@ -559,6 +559,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const { worktreesDir } = yield* ServerConfig;
+    const statusRefreshScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+      Scope.close(scope, Exit.void),
+    );
 
     const buildGeneratedDetachedWorktreePath = () =>
       Effect.gen(function* () {
@@ -1248,7 +1251,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return branchLastCommit;
       });
 
-    const statusDetails: GitCoreShape["statusDetails"] = (cwd) =>
+    const readStatusDetails = (cwd: string, refreshUpstream: boolean) =>
       Effect.gen(function* () {
         const operation = "GitCore.statusDetails.isInsideWorkTree";
         const args = ["rev-parse", "--is-inside-work-tree"] as const;
@@ -1281,10 +1284,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return NON_REPOSITORY_STATUS_DETAILS;
         }
 
-        yield* refreshStatusUpstreamIfStale(cwd).pipe(
-          Effect.catchIf(isMissingGitCwdError, () => Effect.void),
-          Effect.ignoreCause({ log: true }),
-        );
+        if (refreshUpstream) {
+          yield* refreshStatusUpstreamIfStale(cwd).pipe(
+            Effect.catchIf(isMissingGitCwdError, () => Effect.void),
+            Effect.ignoreCause({ log: true }),
+          );
+        }
 
         const statusStdout = yield* runGitStdout("GitCore.statusDetails.status", cwd, [
           "status",
@@ -1435,9 +1440,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const statusDetails: GitCoreShape["statusDetails"] = (cwd) => readStatusDetails(cwd, true);
+
     const status: GitCoreShape["status"] = (input) =>
-      statusDetails(input.cwd).pipe(
-        Effect.map((details) => ({
+      Effect.gen(function* () {
+        const details = yield* readStatusDetails(input.cwd, false);
+        if (details.hasUpstream) {
+          yield* refreshStatusUpstreamIfStale(input.cwd).pipe(
+            Effect.catchIf(isMissingGitCwdError, () => Effect.void),
+            Effect.ignoreCause({ log: true }),
+            Effect.forkIn(statusRefreshScope),
+          );
+        }
+        return {
           branch: details.branch,
           hasWorkingTreeChanges: details.hasWorkingTreeChanges,
           workingTree: details.workingTree,
@@ -1446,8 +1461,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           aheadCount: details.aheadCount,
           behindCount: details.behindCount,
           pr: null,
-        })),
-      );
+        };
+      });
 
     const readUntrackedPatches = (cwd: string, operationPrefix: string) =>
       runGitStdout(

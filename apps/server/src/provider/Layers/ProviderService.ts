@@ -1179,6 +1179,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       registry.getByProvider(provider),
     );
     const runtimeEventPumpHealth = makeProviderRuntimeEventPumpHealthRegistry(providers);
+    let scheduleRetiredGatewaySessionRecovery = (
+      _event: ProviderRuntimeEvent,
+    ): Effect.Effect<void> => Effect.void;
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void, unknown> =>
       Effect.uninterruptible(
         Effect.suspend(() => {
@@ -1212,35 +1215,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ),
             Effect.andThen(updateSessionBindingFromRuntimeEvent(canonicalEvent)),
             Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+            Effect.andThen(scheduleRetiredGatewaySessionRecovery(canonicalEvent)),
           );
         }),
       );
-
-    // Each Adapter has one supervised journal-first pump. Per-event retry holds
-    // the current queue item until durable acceptance succeeds; stream restart
-    // covers unexpected completion/defects without provider-specific fallbacks.
-    yield* Effect.forEach(adapters, (adapter) =>
-      runProviderRuntimeEventPump({
-        provider: adapter.provider,
-        stream: adapter.streamEvents,
-        processEvent: processRuntimeEvent,
-        updateHealth: runtimeEventPumpHealth.update,
-        isPermanentFailure: (cause) =>
-          Option.match(Cause.findErrorOption(cause), {
-            onNone: () => false,
-            onSome: (error) => error instanceof PersistenceDecodeError,
-          }),
-        ...(options?.quarantineRuntimeEvent !== undefined
-          ? { quarantineEvent: options.quarantineRuntimeEvent }
-          : {}),
-        ...(options?.runtimeEventRetryBaseDelayMs !== undefined
-          ? { retryBaseDelayMs: options.runtimeEventRetryBaseDelayMs }
-          : {}),
-        ...(options?.runtimeEventRetryMaxDelayMs !== undefined
-          ? { retryMaxDelayMs: options.runtimeEventRetryMaxDelayMs }
-          : {}),
-      }).pipe(Effect.forkIn(runtimeEventProducerScope)),
-    ).pipe(Effect.asVoid);
 
     const recoverSessionForThread = (input: {
       readonly binding: ProviderRuntimeBinding;
@@ -1414,6 +1392,79 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }),
         );
       });
+
+    const retiredGatewaySessionRecoveries = new Set<ThreadId>();
+    scheduleRetiredGatewaySessionRecovery = (event) => {
+      if (
+        (event.type !== "turn.completed" && event.type !== "turn.aborted") ||
+        !runtimeEventRetiredGatewayTurnAuthority(event)
+      ) {
+        return Effect.void;
+      }
+
+      return Effect.suspend(() => {
+        if (retiredGatewaySessionRecoveries.has(event.threadId)) {
+          return Effect.void;
+        }
+        retiredGatewaySessionRecoveries.add(event.threadId);
+
+        return Effect.gen(function* () {
+          // The terminal event is already durable and published. Rotate the
+          // retired bearer now, while the user is reading the response, so the
+          // next turn does not pay for process teardown and thread/resume.
+          yield* Effect.yieldNow;
+          const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+          if (!binding) return;
+          yield* recoverSessionForThread({
+            binding,
+            operation: "ProviderService.proactiveGatewayCredentialRotation",
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.session.proactive_gateway_rotation_failed", {
+              threadId: event.threadId,
+              provider: event.provider,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              retiredGatewaySessionRecoveries.delete(event.threadId);
+            }),
+          ),
+          Effect.forkIn(runtimeEventProducerScope),
+          Effect.asVoid,
+        );
+      });
+    };
+
+    // Each Adapter has one supervised journal-first pump. Per-event retry holds
+    // the current queue item until durable acceptance succeeds; stream restart
+    // covers unexpected completion/defects without provider-specific fallbacks.
+    // Start the pumps only after proactive recovery is installed so even an
+    // immediately queued terminal event can schedule credential rotation.
+    yield* Effect.forEach(adapters, (adapter) =>
+      runProviderRuntimeEventPump({
+        provider: adapter.provider,
+        stream: adapter.streamEvents,
+        processEvent: processRuntimeEvent,
+        updateHealth: runtimeEventPumpHealth.update,
+        isPermanentFailure: (cause) =>
+          Option.match(Cause.findErrorOption(cause), {
+            onNone: () => false,
+            onSome: (error) => error instanceof PersistenceDecodeError,
+          }),
+        ...(options?.quarantineRuntimeEvent !== undefined
+          ? { quarantineEvent: options.quarantineRuntimeEvent }
+          : {}),
+        ...(options?.runtimeEventRetryBaseDelayMs !== undefined
+          ? { retryBaseDelayMs: options.runtimeEventRetryBaseDelayMs }
+          : {}),
+        ...(options?.runtimeEventRetryMaxDelayMs !== undefined
+          ? { retryMaxDelayMs: options.runtimeEventRetryMaxDelayMs }
+          : {}),
+      }).pipe(Effect.forkIn(runtimeEventProducerScope)),
+    ).pipe(Effect.asVoid);
 
     const findLiveSessionAdapter = (threadId: ThreadId) =>
       Effect.gen(function* () {

@@ -2303,6 +2303,50 @@ it.layer(TestLayer)("git integration", (it) => {
         }),
     );
 
+    it.effect("returns UI status before its background upstream refresh completes", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const source = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(source);
+        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
+          (branch) => branch.current,
+        )!.name;
+        yield* git(source, ["remote", "add", "origin", remote]);
+        yield* git(source, ["push", "-u", "origin", initialBranch]);
+
+        const realGitCore = yield* GitCore;
+        let fetchStarted = false;
+        let releaseFetch!: () => void;
+        const waitForRelease = new Promise<void>((resolve) => {
+          releaseFetch = resolve;
+        });
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.args[0] === "fetch") {
+            fetchStarted = true;
+            return Effect.promise(() =>
+              waitForRelease.then(() => ({ code: 0, stdout: "", stderr: "" })),
+            );
+          }
+          return realGitCore.execute(input);
+        });
+        const fallbackRelease = setTimeout(releaseFetch, 1_000);
+        const startedAt = performance.now();
+        const status = yield* core.status({ cwd: source });
+        const elapsedMs = performance.now() - startedAt;
+        yield* Effect.promise(() =>
+          vi.waitFor(() => {
+            expect(fetchStarted).toBe(true);
+          }),
+        );
+        clearTimeout(fallbackRelease);
+
+        expect(status.branch).toBe(initialBranch);
+        expect(elapsedMs).toBeLessThan(500);
+        releaseFetch();
+      }),
+    );
+
     it.effect("prepares commit context by auto-staging and creates commit", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

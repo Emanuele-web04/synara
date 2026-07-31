@@ -441,6 +441,40 @@ const lifecycleLayer = it.layer(
 );
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("normalizes whitespace in configuration warnings at the provider boundary", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-config-warning"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "configWarning",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          summary: "  Invalid MCP configuration  ",
+          details: "url is not supported for stdio\n",
+          path: "  mcp_servers.synara  ",
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "config.warning");
+      if (firstEvent.value.type !== "config.warning") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.summary, "Invalid MCP configuration");
+      assert.equal(firstEvent.value.payload.details, "url is not supported for stdio");
+      assert.equal(firstEvent.value.payload.path, "mcp_servers.synara");
+    }),
+  );
+
   it.effect("maps Codex 0.144 reasoning summaries from canonical item arrays", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

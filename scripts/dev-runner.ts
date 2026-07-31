@@ -12,6 +12,7 @@ import {
   optionalBooleanFlag,
   type BooleanFlagInput,
 } from "@synara/shared/cli";
+import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { Config, Data, Effect, Hash, Layer, Logger, Option, Path, Schema } from "effect";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { Argument, Command, Flag } from "effect/unstable/cli";
@@ -198,6 +199,7 @@ export function createDevRunnerEnv({
 
     const pathKey = process.platform === "win32" ? "Path" : "PATH";
     const existingPath = output[pathKey] ?? output.PATH ?? "";
+    const inheritedPathIsUsable = existingPath.trim().length > 0;
     const localBin = pathJoin(homedir(), ".local", "bin");
     if (localBin.length > 0 && !existingPath.split(pathDelimiter).includes(localBin)) {
       const augmentedPath =
@@ -207,6 +209,12 @@ export function createDevRunnerEnv({
         output.PATH = augmentedPath;
       }
     }
+    // The dev runner itself is launched from the user's terminal environment.
+    // Tell the child server not to synchronously source the login shell again:
+    // that duplicate probe can block listening for the full timeout when a
+    // shell plugin hangs. An empty inherited PATH remains unmarked so the
+    // server still performs its normal recovery.
+    applyShellEnvironmentHydrationMarker(output, inheritedPathIsUsable);
 
     if (authToken !== undefined) {
       output.SYNARA_AUTH_TOKEN = authToken;
