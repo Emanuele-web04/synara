@@ -1299,7 +1299,7 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  it("recovers buffered thread events by re-requesting the missing thread snapshot", async () => {
+  it("recovers buffered thread events with a direct snapshot read", async () => {
     const recoveryThreadId = ThreadId.makeUnsafe("thread-buffered-recovery");
     const bufferedEvent = {
       sequence: 3,
@@ -1359,6 +1359,9 @@ describe("EventRouter scoped orchestration sync", () => {
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforeMaterialization =
+        subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
+      const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
 
       const baseThread = fixture.snapshot.threads[0]!;
       fixture.snapshot = {
@@ -1390,7 +1393,12 @@ describe("EventRouter scoped orchestration sync", () => {
       let thread;
       await vi.waitFor(
         () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(3);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            detailSnapshotReadsBeforeMaterialization,
+          );
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+            subscribeCountBeforeMaterialization,
+          );
           thread = getThreadFromState(useStore.getState(), recoveryThreadId);
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
@@ -1452,6 +1460,9 @@ describe("EventRouter scoped orchestration sync", () => {
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforeMaterialization =
+        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+      const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
 
       const baseThread = fixture.snapshot.threads[0]!;
       fixture.snapshot = {
@@ -1508,10 +1519,12 @@ describe("EventRouter scoped orchestration sync", () => {
       await vi.waitFor(
         () => {
           expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
-          expect(
-            subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBeGreaterThanOrEqual(2);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+            detailSnapshotReadsBeforeMaterialization,
+          );
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountBeforeMaterialization,
+          );
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },

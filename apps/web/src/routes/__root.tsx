@@ -1172,22 +1172,6 @@ function EventRouter() {
       });
     };
 
-    // Draft routes can subscribe before the server thread exists. Once the shell
-    // row appears, explicitly restart the stream for a first thread snapshot so
-    // buffered detail events can flush instead of waiting forever.
-    const requestThreadSnapshot = async (
-      threadId: ThreadId,
-      allowAfterNotFound = false,
-    ) => {
-      if (
-        threadSnapshotSequenceById.has(threadId) ||
-        (threadSnapshotNotFoundRetryAttempted.has(threadId) && !allowAfterNotFound)
-      ) {
-        return;
-      }
-      await refreshThreadSnapshot(threadId);
-    };
-
     const shouldApplyBootstrapShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
       if (disposed) {
         return false;
@@ -1538,7 +1522,12 @@ function EventRouter() {
         subscribedThreadIds.has(item.thread.id) &&
         !threadSnapshotSequenceById.has(item.thread.id)
       ) {
-        void requestThreadSnapshot(item.thread.id);
+        // The draft's live stream may still be waiting on a snapshot request
+        // that started before the thread projection existed. Read the now-real
+        // projection directly instead of restarting that stream on every shell
+        // update; repeated ready/running/meta updates can otherwise keep
+        // cancelling hydration before a snapshot reaches the renderer.
+        void reconcileThreadProjection(item.thread.id).catch(() => undefined);
       }
       if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
@@ -1600,7 +1589,7 @@ function EventRouter() {
         appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
         pendingThreadEventsById.set(threadId, pendingThreadEvents);
         if (subscribedThreadIds.has(threadId)) {
-          void requestThreadSnapshot(threadId);
+          void reconcileThreadProjection(threadId).catch(() => undefined);
         }
         return;
       }
@@ -1635,7 +1624,7 @@ function EventRouter() {
       ) {
         threadSnapshotNotFoundRetryAttempted.add(threadId);
         useStore.getState().clearThreadDetailSyncFailure(threadId);
-        void requestThreadSnapshot(threadId, true);
+        void refreshThreadSnapshot(threadId);
       }
     });
     // Retention can evict a thread's detail slices while its stream lease stays
@@ -1842,7 +1831,7 @@ function EventRouter() {
       for (const threadId of subscribedThreadIds) {
         if (shouldPollThreadDetailCatchup(threadId)) {
           if (!threadSnapshotSequenceById.has(threadId)) {
-            void requestThreadSnapshot(threadId);
+            void reconcileThreadProjection(threadId).catch(() => undefined);
           } else {
             void replayThreadEvents(threadId).catch(() => undefined);
           }
