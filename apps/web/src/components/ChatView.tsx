@@ -3154,6 +3154,21 @@ export default function ChatView({
     () => new Set(optimisticUserMessages.map((message) => message.id)),
     [optimisticUserMessages],
   );
+  // The user message a local send anchored at the top of the transcript viewport.
+  // Set at the send sites; cleared when the turn settles so the timeline's tail
+  // spacer collapses and the transcript returns to its true bottom.
+  const [tailAnchor, setTailAnchor] = useState<{
+    threadId: ThreadId;
+    messageId: MessageId;
+  } | null>(null);
+  const previousActiveTurnInProgressRef = useRef(activeTurnInProgress);
+  useEffect(() => {
+    const wasInProgress = previousActiveTurnInProgressRef.current;
+    previousActiveTurnInProgressRef.current = activeTurnInProgress;
+    if (wasInProgress && !activeTurnInProgress) {
+      setTailAnchor(null);
+    }
+  }, [activeTurnInProgress]);
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
@@ -7687,8 +7702,10 @@ export default function ChatView({
       },
     ]);
     // Mark the transcript as anchored before the optimistic row lands so the
-    // re-snap effect on row count change pulls us to the new tail.
+    // re-snap effect on row count change pulls us to the new tail. The tail
+    // anchor sizes the spacer that lets this message sit at the viewport top.
     armTranscriptAutoFollow(threadIdForSend, true);
+    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -8355,6 +8372,7 @@ export default function ChatView({
       },
     ]);
     armTranscriptAutoFollow(threadIdForSend, true);
+    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
@@ -11366,6 +11384,11 @@ export default function ChatView({
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     enteringUserMessageIds={enteringUserMessageIds}
+                    tailAnchorMessageId={
+                      tailAnchor !== null && tailAnchor.threadId === activeThread.id
+                        ? tailAnchor.messageId
+                        : null
+                    }
                     crossTaskOrigin={crossTaskOrigin}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}

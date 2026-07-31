@@ -1119,11 +1119,10 @@ const make = Effect.gen(function* () {
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
     const activeSessionBeforeEnsure = yield* resolveActiveSession(threadId);
-    const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" && activeSessionBeforeEnsure
-        ? thread.id
-        : null;
-    if (existingSessionThreadId) {
+    const reusableSession =
+      thread.session && thread.session.status !== "stopped" ? activeSessionBeforeEnsure : undefined;
+    if (reusableSession) {
+      const existingSessionThreadId = thread.id;
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
       const providerChanged =
         requestedModelSelection !== undefined &&
@@ -1162,7 +1161,7 @@ const make = Effect.gen(function* () {
       ) {
         return {
           activeSessionBeforeEnsure,
-          activeSession: activeSessionBeforeEnsure,
+          activeSession: reusableSession,
         };
       }
 

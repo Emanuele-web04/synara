@@ -104,6 +104,7 @@ import {
 } from "./MessagesTimeline.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
+import { useTailAnchorSpacer } from "./useTailAnchorSpacer";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -379,6 +380,12 @@ interface MessagesTimelineProps {
   threadMarkers?: readonly ThreadMarker[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
+  /**
+   * Just-sent user message to anchor at the top of the viewport for the live turn.
+   * While set, the tail spacer reserves the space below it so the streaming response
+   * fills the remaining viewport; null collapses the reserve (turn finished).
+   */
+  tailAnchorMessageId?: MessageId | null;
   /** Provenance for a conversation created from another Synara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
@@ -438,6 +445,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onTogglePinMessage,
   threadMarkers: threadMarkersProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
+  tailAnchorMessageId: tailAnchorMessageIdProp,
   crossTaskOrigin: crossTaskOriginProp,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
@@ -483,6 +491,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const followLiveOutput = followLiveOutputProp ?? false;
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
+  const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const crossTaskOrigin = crossTaskOriginProp ?? null;
   const normalizedChatFontSizePx = normalizeChatFontSizePx(
     chatFontSizePxProp ?? DEFAULT_CHAT_FONT_SIZE_PX,
@@ -580,10 +589,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
+  // Tail spacer: normally the fixed bottom content inset; while a just-sent user
+  // message is anchored it grows so the message can sit at the viewport top with
+  // the streaming response filling the space below (see useTailAnchorSpacer).
+  const tailSpacerRef = useRef<HTMLDivElement | null>(null);
   const listFooter = useMemo(
-    () => <div aria-hidden="true" style={{ height: BOTTOM_CONTENT_INSET_PX }} />,
+    () => (
+      <div
+        aria-hidden="true"
+        ref={tailSpacerRef}
+        data-tail-anchor-spacer="true"
+        style={{ height: BOTTOM_CONTENT_INSET_PX }}
+      />
+    ),
     [],
   );
+  useTailAnchorSpacer({
+    listRef: resolvedListRef,
+    timelineRootRef,
+    spacerRef: tailSpacerRef,
+    anchorMessageId: tailAnchorMessageId,
+    baseInsetPx: BOTTOM_CONTENT_INSET_PX,
+  });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const rawRows = useMemo(

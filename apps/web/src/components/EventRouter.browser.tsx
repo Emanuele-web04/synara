@@ -9,7 +9,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
-  type OrchestrationShellStreamEvent,
+  type OrchestrationShellStreamItem,
   type OrchestrationThread,
   type ServerConfig,
   type WsWelcomePayload,
@@ -431,7 +431,7 @@ function sendPendingThreadDetailSnapshotResponse() {
   sendEffectRpcExit(pending.client, pending.requestId, pending.result);
 }
 
-function sendShellEventPush(event: OrchestrationShellStreamEvent) {
+function sendShellEventPush(event: OrchestrationShellStreamItem) {
   if (!shellStreamRequestId || !shellStreamClient) {
     throw new Error("Shell stream is not connected");
   }
