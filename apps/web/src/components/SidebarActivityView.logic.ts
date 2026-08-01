@@ -180,6 +180,41 @@ export function splitActivityThreadsByDateBucket(
   return buckets;
 }
 
+/** How the feed lays out its sections: calendar buckets or one block per project. */
+export type ActivityGroupMode = "time" | "project";
+
+export interface ActivityProjectGroup {
+  projectId: ProjectId;
+  threads: SidebarThreadSummary[];
+}
+
+/**
+ * Groups an already-ordered active list by project, busiest-recent project
+ * first. Thread order inside a group is preserved, so status priority still
+ * decides who leads each project block.
+ */
+export function groupActivityThreadsByProject(
+  threads: readonly SidebarThreadSummary[],
+): ActivityProjectGroup[] {
+  const groupByProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const group = groupByProjectId.get(thread.projectId);
+    if (group) {
+      group.push(thread);
+    } else {
+      groupByProjectId.set(thread.projectId, [thread]);
+    }
+  }
+  return Array.from(groupByProjectId, ([projectId, groupThreads]) => ({
+    projectId,
+    threads: groupThreads,
+  })).sort(
+    (left, right) =>
+      Math.max(...right.threads.map(resolveActivityRecencyMs)) -
+      Math.max(...left.threads.map(resolveActivityRecencyMs)),
+  );
+}
+
 export type ActivityScopeOption =
   | { kind: "project"; projectId: ProjectId; threadCount: number }
   | { kind: "chats"; projectIds: ProjectId[]; threadCount: number };

@@ -8,13 +8,7 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 
-import {
-  CircleCheckIcon,
-  GitBranchIcon,
-  ListChecksIcon,
-  PinFilledIcon,
-  Undo2Icon,
-} from "~/lib/icons";
+import { CircleCheckIcon, FilterIcon, GitBranchIcon, PinFilledIcon, Undo2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
@@ -38,8 +32,11 @@ import {
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
+  groupActivityThreadsByProject,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
+  type ActivityGroupMode,
+  type ActivityProjectGroup,
   type ActivityScopeOption,
 } from "./SidebarActivityView.logic";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
@@ -50,11 +47,20 @@ import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadStatusPillChip } from "./ThreadStatusPillChip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
-import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuGroup,
+  MenuItem,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
 import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
+const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
 
 function ActivityThreadRow({
   thread,
@@ -336,6 +342,58 @@ function ActivityScopeMenu({
   );
 }
 
+/**
+ * Header filter control: picks how the feed groups its sections (by time or by
+ * project) and hosts "Mark all as read" below that choice.
+ */
+function ActivityFilterMenu({
+  groupMode,
+  onChangeGroupMode,
+  markAllReadDisabled,
+  onMarkAllRead,
+}: {
+  groupMode: ActivityGroupMode;
+  onChangeGroupMode: (mode: ActivityGroupMode) => void;
+  markAllReadDisabled: boolean;
+  onMarkAllRead: () => void;
+}) {
+  return (
+    <Menu>
+      <SidebarIconButton
+        icon={FilterIcon}
+        label="Filter activity"
+        tooltip="Filter activity"
+        tooltipSide="bottom"
+        render={<MenuTrigger />}
+      />
+      <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
+        <MenuGroup>
+          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort by</div>
+          <MenuRadioGroup
+            value={groupMode}
+            onValueChange={(value) => onChangeGroupMode(value as ActivityGroupMode)}
+          >
+            <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-xs">
+              Recent activity
+            </MenuRadioItem>
+            <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-xs">
+              Project
+            </MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuItem
+          className="min-h-7 py-1 sm:text-xs"
+          disabled={markAllReadDisabled}
+          onClick={onMarkAllRead}
+        >
+          Mark all as read
+        </MenuItem>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
+
 function ActivityShowMoreRow({
   canShowMore,
   canShowLess,
@@ -410,6 +468,7 @@ export function SidebarActivityView({
   headerToolbar?: ReactNode;
 }) {
   const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
+  const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);
@@ -443,6 +502,8 @@ export function SidebarActivityView({
     model.active,
   );
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
+  const projectGroups =
+    groupMode === "project" ? groupActivityThreadsByProject(model.active) : EMPTY_PROJECT_GROUPS;
 
   const earlierPaging = resolveSidebarThreadListPaging({
     totalCount: dateBuckets.earlier.length,
@@ -503,14 +564,11 @@ export function SidebarActivityView({
           scopeSelection={scopeSelection}
           onChangeScopeSelection={setScopeSelection}
         />
-        <SidebarIconButton
-          icon={ListChecksIcon}
-          label="Mark all as read"
-          tooltip="Mark all as read"
-          tooltipSide="bottom"
-          disabled={unreadThreads.length === 0}
-          className="disabled:cursor-default disabled:opacity-45"
-          onClick={markAllRead}
+        <ActivityFilterMenu
+          groupMode={groupMode}
+          onChangeGroupMode={setGroupMode}
+          markAllReadDisabled={unreadThreads.length === 0}
+          onMarkAllRead={markAllRead}
         />
         {headerToolbar}
       </div>
@@ -523,6 +581,17 @@ export function SidebarActivityView({
               : "No activity yet"
             : "Loading activity..."}
         </div>
+      ) : groupMode === "project" ? (
+        projectGroups.map((group) => (
+          <div key={group.projectId}>
+            <ActivitySectionLabel
+              label={resolveThreadProjectLabel(projectById.get(group.projectId))}
+            />
+            <div className="flex flex-col gap-0.5">
+              {group.threads.map((thread) => renderRow(thread, false))}
+            </div>
+          </div>
+        ))
       ) : (
         <>
           {recentThreads.length > 0 ? (
