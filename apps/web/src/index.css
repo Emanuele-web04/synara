@@ -5,6 +5,7 @@
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
   --font-sans: var(--font-ui-family);
+  --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
@@ -496,6 +497,9 @@
     system-ui,
     sans-serif
   );
+  /* Display/wordmark face: Cal Sans ships as a single semibold-looking cut, so
+     consumers should pair it with a normal font-weight. */
+  --font-display-family: "Cal Sans", var(--font-ui-family);
   --font-mono-family: var(
     --theme-font-code-family,
     "JetBrains Mono Variable",
@@ -2826,6 +2830,15 @@ diffs-container {
   --picker-option-min-h: 2.75rem;
   --picker-option-px: 0.625rem;
   --picker-option-py: 0.3125rem;
+}
+
+/* Sidebar Synara/Studio surface switcher: tight shell inset, airy option rows.
+   Composer picker tokens otherwise pin option py to ~1px and win over Tailwind. */
+.sidebar-surface-picker-menu {
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 0;
+  --picker-option-px: 0.75rem;
+  --picker-option-py: 0.5625rem;
 }
 
 .runtime-mode-menu-item {

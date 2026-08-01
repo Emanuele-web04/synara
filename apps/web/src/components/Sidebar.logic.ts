@@ -102,14 +102,6 @@ export function pullRequestRepositoryConfigFingerprint(
   );
 }
 
-/** The optimistic segment follows a destination click and clears when the user returns. */
-export function resolvePendingSidebarViewSelection(
-  activeView: SidebarView,
-  selectedView: SidebarView,
-): SidebarView | null {
-  return selectedView === activeView ? null : selectedView;
-}
-
 type SidebarProject = {
   id: string;
   name: string;
