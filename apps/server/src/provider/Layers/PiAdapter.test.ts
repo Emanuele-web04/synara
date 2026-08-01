@@ -23,6 +23,7 @@ import {
   makePiRuntimeEventBase,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
+  toPiProviderModelDescriptor,
 } from "./PiAdapter";
 
 describe("Pi native Synara gateway tools", () => {
@@ -211,6 +212,25 @@ function makePiModel(input: {
 }
 
 describe("getPiDiscoverableModels", () => {
+  it("normalizes extension model metadata before returning it through RPC", () => {
+    const descriptor = toPiProviderModelDescriptor(
+      {
+        provider: "extension-provider",
+        id: "model-id",
+        name: "Extension Model ",
+        reasoning: false,
+      } as Model<Api>,
+      () => " Extension Provider ",
+    );
+
+    expect(descriptor).toMatchObject({
+      slug: "extension-provider/model-id",
+      name: "Extension Model",
+      upstreamProviderId: "extension-provider",
+      upstreamProviderName: "Extension Provider",
+    });
+  });
+
   it("isolates extension providers between sessions that share an agent directory", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
