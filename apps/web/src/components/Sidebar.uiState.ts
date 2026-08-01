@@ -139,6 +139,24 @@ export function readSidebarUiState(): SidebarUiState {
   }
 }
 
+/**
+ * Notifies when another tab rewrites the persisted sidebar UI state. Every tab
+ * persists this key wholesale from its in-memory state, so without adopting
+ * external writes a two-tab session silently fights over fields like the
+ * Activity view toggle (last writer wins and the toggle feels "stuck").
+ */
+export function subscribeSidebarUiState(listener: (state: SidebarUiState) => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== SIDEBAR_UI_STATE_STORAGE_KEY) return;
+    listener(readSidebarUiState());
+  };
+  window.addEventListener("storage", handleStorage);
+  return () => window.removeEventListener("storage", handleStorage);
+}
+
 export function persistSidebarUiState(input: SidebarUiState): void {
   if (typeof window === "undefined") {
     return;
