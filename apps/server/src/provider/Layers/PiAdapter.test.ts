@@ -212,22 +212,22 @@ function makePiModel(input: {
 }
 
 describe("getPiDiscoverableModels", () => {
-  it("normalizes extension model metadata before returning it through RPC", () => {
+  it("normalizes the malformed Pi extension model metadata before returning it through RPC", () => {
     const descriptor = toPiProviderModelDescriptor(
       {
-        provider: "extension-provider",
-        id: "model-id",
-        name: "Extension Model ",
+        provider: "openrouter",
+        id: "google/gemma-4-26b-a4b-it",
+        name: "Google: Gemma 4 26B A4B ",
         reasoning: false,
       } as Model<Api>,
-      () => " Extension Provider ",
+      () => " OpenRouter ",
     );
 
     expect(descriptor).toMatchObject({
-      slug: "extension-provider/model-id",
-      name: "Extension Model",
-      upstreamProviderId: "extension-provider",
-      upstreamProviderName: "Extension Provider",
+      slug: "openrouter/google/gemma-4-26b-a4b-it",
+      name: "Google: Gemma 4 26B A4B",
+      upstreamProviderId: "openrouter",
+      upstreamProviderName: "OpenRouter",
     });
   });
 
