@@ -3169,7 +3169,7 @@ export default function ChatView({
   } | null>(null);
   // True from send until the tail-anchor hook finishes sliding the sent message
   // to the viewport top. The auto-follow effect stays quiet while set so the
-  // anchored slide has exactly one scroll owner (see useTailAnchorSpacer).
+  // anchored slide has exactly one scroll owner (see useTailAnchorScroll).
   const tailAnchorScrollInFlightRef = useRef(false);
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;

@@ -104,7 +104,7 @@ import {
 } from "./MessagesTimeline.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
-import { useTailAnchorSpacer } from "./useTailAnchorSpacer";
+import { useTailAnchorScroll } from "./useTailAnchorScroll";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -603,27 +603,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
-  // Tail spacer: normally the fixed bottom content inset; while a just-sent user
-  // message is anchored it grows so the message can sit at the viewport top with
-  // the streaming response filling the space below (see useTailAnchorSpacer).
-  const tailSpacerRef = useRef<HTMLDivElement | null>(null);
+  // Fixed bottom content inset. The variable space that lets a just-sent
+  // message anchor at the viewport top is reserved natively by LegendList's
+  // `anchoredEndSpace` below, not by resizing this footer — resizing the footer
+  // from outside fights the list's own footer-layout and initial-scroll
+  // machinery (visible as send-time scroll jumps).
   const listFooter = useMemo(
     () => (
       <div
         aria-hidden="true"
-        ref={tailSpacerRef}
         data-tail-anchor-spacer="true"
         style={{ height: BOTTOM_CONTENT_INSET_PX }}
       />
     ),
     [],
   );
-  useTailAnchorSpacer({
+  useTailAnchorScroll({
     listRef: resolvedListRef,
     timelineRootRef,
-    spacerRef: tailSpacerRef,
     anchorMessageId: tailAnchorMessageId,
-    baseInsetPx: BOTTOM_CONTENT_INSET_PX,
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
@@ -656,6 +654,54 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  // Native reserve for the anchored send: LegendList sizes an end space so the
+  // anchor row can sit at the viewport top when scrolled to the end, keeps that
+  // reserve in sync with measured tail sizes inside its own layout pass, and
+  // shrinks it to zero as the streaming response grows (automatic hand-off to
+  // follow-the-tail). `anchorOffset` carries the container's own CSS vertical
+  // padding, which the list cannot see (it only reads style props), so that
+  // "at end" lands the anchor exactly one top-inset below the viewport top.
+  const tailAnchorRowIndex = useMemo(() => {
+    if (tailAnchorMessageId === null) {
+      return -1;
+    }
+    return rows.findIndex(
+      (row) => row.kind === "message" && row.message.id === tailAnchorMessageId,
+    );
+  }, [rows, tailAnchorMessageId]);
+  const [anchorVerticalInsetPx, setAnchorVerticalInsetPx] = useState(0);
+  useLayoutEffect(() => {
+    if (tailAnchorMessageId === null) {
+      return;
+    }
+    const node: unknown = resolvedListRef.current?.getScrollableNode?.();
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+    const style = getComputedStyle(node);
+    const inset =
+      (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+    setAnchorVerticalInsetPx((current) => (Math.abs(current - inset) > 0.5 ? inset : current));
+  }, [resolvedListRef, tailAnchorMessageId]);
+  const anchoredEndSpace = useMemo(
+    () =>
+      tailAnchorRowIndex < 0
+        ? undefined
+        : {
+            anchorIndex: tailAnchorRowIndex,
+            anchorOffset: anchorVerticalInsetPx,
+          },
+    [anchorVerticalInsetPx, tailAnchorRowIndex],
+  );
+  // Surface the live reserve for tests/diagnostics without re-rendering. The
+  // signal (unlike `onSizeChanged`) also reports the collapse to zero after the
+  // anchor is cleared, when no config object exists to receive a callback.
+  useEffect(() => {
+    const state = resolvedListRef.current?.getState?.();
+    return state?.listen?.("anchoredEndSpaceSize", (size) => {
+      timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
+    });
+  }, [resolvedListRef]);
   // The newest work group renders its rows inline while the turn is live; every
   // older run of tool calls folds into a "Ran N commands..." summary row.
   const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);
@@ -2119,10 +2165,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // LegendList caches rendered rows, so every local expansion map that changes row content
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
-        initialScrollAtEnd
+        initialScrollAtEnd={tailAnchorMessageId === null}
+        {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
         maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
         maintainScrollAtEndThreshold={0.1}
-        {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
+        {...(tailAnchorMessageId !== null
+          ? { maintainVisibleContentPosition: false }
+          : !followLiveOutput
+            ? { maintainVisibleContentPosition: true }
+            : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={onMessagesPointerCancel}

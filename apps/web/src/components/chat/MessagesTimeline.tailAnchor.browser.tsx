@@ -172,6 +172,13 @@ function getSpacer(): HTMLElement {
   return spacer;
 }
 
+/** Live size of LegendList's native anchored end space (see MessagesTimeline). */
+function reservePx(): number {
+  const root = document.querySelector<HTMLElement>('[data-messages-timeline-root="true"]');
+  const value = root?.getAttribute("data-anchored-end-space");
+  return value === null || value === undefined ? 0 : Number.parseFloat(value) || 0;
+}
+
 function anchorTopOffsetPx(handle: HarnessHandle, messageId: string): number | null {
   const anchor = document.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
   if (!anchor || anchor.getClientRects().length === 0) {
@@ -232,9 +239,9 @@ describe("MessagesTimeline tail anchor", () => {
           )
           .toBe(true);
 
-      // 1) Send: the spacer reserves space and the new message slides directly
-      // to its anchored coordinate. It must never pass that coordinate and then
-      // spring back while the virtualized tail finishes measuring.
+      // 1) Send: the native end space reserves room and the new message slides
+      // directly to its anchored coordinate. It must never pass that coordinate
+      // and then spring back while the virtualized tail finishes measuring.
       handle().send(FIRST_SENT_MESSAGE_ID);
 
       const initialSlideOffsets: number[] = [];
@@ -248,9 +255,8 @@ describe("MessagesTimeline tail anchor", () => {
       expect(initialSlideOffsets.length).toBeGreaterThan(0);
       expect(Math.min(...initialSlideOffsets)).toBeGreaterThanOrEqual(topGapPx - 8);
 
-      await expect
-        .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
-        .toBeGreaterThan(BASE_BOTTOM_INSET_PX);
+      await expect.poll(() => reservePx(), { timeout: 5_000 }).toBeGreaterThan(0);
+      expect(getSpacer().getBoundingClientRect().height).toBe(BASE_BOTTOM_INSET_PX);
       await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
       // 2) Short streaming: response grows into the reserve; the message stays
@@ -260,7 +266,7 @@ describe("MessagesTimeline tail anchor", () => {
       // scroll max, which jerks the anchored message and springs it back.
       const container = getScrollContainer(handle());
       const scrollTopBeforeStream = container.scrollTop;
-      const spacerBeforeStream = getSpacer().getBoundingClientRect().height;
+      const reserveBeforeStream = reservePx();
 
       handle().growStream(FIRST_STREAMING_MESSAGE_ID, 2);
       const perFrameOffsets: number[] = [];
@@ -276,32 +282,26 @@ describe("MessagesTimeline tail anchor", () => {
         0,
       );
       expect(worstDriftPx).toBeLessThanOrEqual(8);
-      await expect
-        .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
-        .toBeLessThan(spacerBeforeStream);
+      await expect.poll(() => reservePx(), { timeout: 5_000 }).toBeLessThan(reserveBeforeStream);
 
       expect(Math.abs(container.scrollTop - scrollTopBeforeStream)).toBeLessThanOrEqual(1);
       await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
       // 3) Turn end: the reserve persists — no jump back to the true bottom.
-      const spacerBeforeTurnEnd = getSpacer().getBoundingClientRect().height;
+      const reserveBeforeTurnEnd = reservePx();
       const scrollTopBeforeTurnEnd = container.scrollTop;
       handle().finishTurn();
       await settleFrames(6);
-      expect(
-        Math.abs(getSpacer().getBoundingClientRect().height - spacerBeforeTurnEnd),
-      ).toBeLessThanOrEqual(1);
+      expect(Math.abs(reservePx() - reserveBeforeTurnEnd)).toBeLessThanOrEqual(1);
       expect(Math.abs(container.scrollTop - scrollTopBeforeTurnEnd)).toBeLessThanOrEqual(1);
       await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
-      // 4) Clearing the anchor (fallback path) collapses the reserve to the base inset.
+      // 4) Clearing the anchor (fallback path) collapses the reserve.
       handle().clearAnchor();
-      await expect
-        .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
-        .toBe(BASE_BOTTOM_INSET_PX);
+      await expect.poll(() => reservePx(), { timeout: 5_000 }).toBe(0);
 
       // 5) A new send re-anchors, and an overflowing response hands off to
-      // follow-the-tail with the spacer back at the base inset.
+      // follow-the-tail with the reserve back at zero.
       handle().send(SECOND_SENT_MESSAGE_ID);
       void handle().listRef.current?.scrollToEnd?.({ animated: true });
       await expectAnchoredAtTopGap(SECOND_SENT_MESSAGE_ID);
@@ -313,9 +313,7 @@ describe("MessagesTimeline tail anchor", () => {
         handle().growStream(SECOND_STREAMING_MESSAGE_ID, 4);
         await settleFrames(2);
       }
-      await expect
-        .poll(() => getSpacer().getBoundingClientRect().height, { timeout: 5_000 })
-        .toBe(BASE_BOTTOM_INSET_PX);
+      await expect.poll(() => reservePx(), { timeout: 5_000 }).toBe(0);
       await expect
         .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
@@ -378,6 +376,71 @@ describe("MessagesTimeline tail anchor", () => {
           return offset !== null && Math.abs(offset - topGapPx) <= 8;
         })
         .toBe(true);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  // Regression: visible-content preservation must stay disabled for the full
+  // lifetime of a send anchor. Thinking and the "Working for" header are rows
+  // inserted below that anchor; letting the list start a second preservation
+  // cycle for those inserts resets scrollTop after the sent row has reached the
+  // top and visibly juggles it through the pre-turn phases.
+  it("keeps the sent message stable while pre-turn status rows land mid-slide", async () => {
+    const handleRef: { current: HarnessHandle | null } = { current: null };
+    const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
+
+    try {
+      const handle = () => {
+        if (!handleRef.current) throw new Error("harness not mounted");
+        return handleRef.current;
+      };
+
+      await expect.poll(() => handle().listRef.current?.getScrollableNode?.() != null).toBe(true);
+      await settleFrames(3);
+      void handle().listRef.current?.scrollToEnd?.({ animated: false });
+      await expect
+        .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
+        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+
+      const container = getScrollContainer(handle());
+      const topGapPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
+
+      handle().send(FIRST_SENT_MESSAGE_ID);
+
+      // The pre-turn status rows land while the anchored slide is still in
+      // flight, exactly like a real send: Thinking appears on the server ack,
+      // the "Working for" header once the turn starts, then text streams.
+      const samples: Array<number | null> = [];
+      for (let frame = 0; frame < 90; frame += 1) {
+        if (frame === 3) handle().showThinking();
+        if (frame === 12) handle().showWorkingHeader();
+        if (frame === 40) handle().growStream(FIRST_STREAMING_MESSAGE_ID, 2);
+        await settleFrames(1);
+        const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+        samples.push(offset);
+      }
+
+      // The message must move only toward its anchor, then never move again.
+      const visibleSamples = samples.flatMap((offset) => (offset === null ? [] : [offset]));
+      const largestDownwardJumpPx = visibleSamples.slice(1).reduce((largest, offset, index) => {
+        return Math.max(largest, offset - visibleSamples[index]!);
+      }, 0);
+      expect(largestDownwardJumpPx).toBeLessThanOrEqual(2);
+
+      const settledIndex = samples.findIndex(
+        (offset) => offset !== null && Math.abs(offset - topGapPx) <= 2,
+      );
+      expect(settledIndex).toBeGreaterThanOrEqual(0);
+      const postSettle = samples
+        .slice(settledIndex)
+        .flatMap((offset) => (offset === null ? [] : [offset]));
+      expect(postSettle.length).toBe(samples.length - settledIndex);
+      const maxDriftPx = postSettle.reduce(
+        (worst, offset) => Math.max(worst, Math.abs(offset - topGapPx)),
+        0,
+      );
+      expect(maxDriftPx).toBeLessThanOrEqual(2);
     } finally {
       await screen.unmount();
     }
