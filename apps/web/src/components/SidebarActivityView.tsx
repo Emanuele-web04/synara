@@ -1,6 +1,6 @@
 // FILE: SidebarActivityView.tsx
-// Purpose: Task-feed sidebar surface — every thread is a task row (project /
-//          title / provider + branch) grouped by status, with settle/unsettle.
+// Purpose: Task-feed sidebar surface — every thread is a 2-line task row
+//          (provider + title / project + branch) grouped by status, with settle.
 // Layer: Sidebar UI component
 // Exports: SidebarActivityView
 
@@ -16,11 +16,11 @@ import {
   Undo2Icon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import type { TimestampFormat } from "../appSettings";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
+  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import type { Project, SidebarThreadSummary } from "../types";
@@ -38,7 +38,6 @@ import {
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
-  formatActivityRowTime,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
   type ActivityScopeOption,
@@ -64,7 +63,6 @@ function ActivityThreadRow({
   isSettled,
   isPinned,
   status,
-  timeLabel,
   onOpen,
   onSetSettled,
   onTogglePinned,
@@ -77,7 +75,6 @@ function ActivityThreadRow({
   isSettled: boolean;
   isPinned: boolean;
   status: ThreadStatusPill | null;
-  timeLabel: string;
   onOpen: () => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
@@ -121,34 +118,11 @@ function ActivityThreadRow({
         >
           <span
             className={cn(
-              "flex min-w-0 items-center gap-1.5 transition-[padding] duration-150 ease-out",
-              // Yield row 1 to the hover action cluster (pin + archive + done).
+              "flex min-w-0 items-center gap-1.5 overflow-hidden transition-[padding] duration-150 ease-out",
+              // Yield the title row to the hover action cluster (pin + archive + done).
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
             )}
           >
-            <FolderClosed className="size-3 shrink-0 text-muted-foreground/90" aria-hidden />
-            <span className="min-w-0 truncate text-[11px] text-muted-foreground/95">
-              {resolveThreadProjectLabel(project)}
-            </span>
-            {isPinned ? (
-              <PinFilledIcon
-                className="size-2.5 shrink-0 text-muted-foreground/60"
-                aria-label="Pinned"
-              />
-            ) : null}
-            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/55 transition-opacity group-hover/activity-row:opacity-0 group-focus-within/activity-row:opacity-0">
-              {timeLabel}
-            </span>
-          </span>
-          <span
-            className={cn(
-              "min-w-0 truncate text-[13px] leading-snug font-medium",
-              isActive ? "text-foreground" : "text-foreground/90",
-            )}
-          >
-            {thread.title}
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5 pt-0.5">
             <ProviderIcon
               provider={provider}
               className="size-3 shrink-0 opacity-80"
@@ -156,12 +130,35 @@ function ActivityThreadRow({
                 <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
               }
             />
+            <span
+              className={cn(
+                "min-w-0 shrink truncate text-[length:var(--app-font-size-ui,12px)] leading-5 font-normal",
+                isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+              )}
+            >
+              {thread.title}
+            </span>
             {status && !isSettled ? <ThreadStatusPillChip pill={status} /> : null}
+            {isPinned ? (
+              <PinFilledIcon
+                className="size-2.5 shrink-0 text-muted-foreground/60"
+                aria-label="Pinned"
+              />
+            ) : null}
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <FolderClosed
+              className={cn(SIDEBAR_TRAILING_ICON_CLASS, "text-muted-foreground/70")}
+              aria-hidden
+            />
+            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/80">
+              {resolveThreadProjectLabel(project)}
+            </span>
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
               {thread.lastKnownPr ? <PrStateChip pr={thread.lastKnownPr} /> : null}
               {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/70">
-                  <GitBranchIcon className="size-3 shrink-0" aria-hidden />
+                <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/70">
+                  <GitBranchIcon className={SIDEBAR_TRAILING_ICON_CLASS} aria-hidden />
                   <span className="max-w-36 truncate">{branch}</span>
                 </span>
               ) : null}
@@ -388,7 +385,6 @@ export function SidebarActivityView({
   onMarkThreadRead,
   renderThreadHoverCard,
   headerToolbar,
-  timestampFormat,
   pinnedThreads,
   renderPinnedThreadRow,
 }: {
@@ -398,7 +394,6 @@ export function SidebarActivityView({
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
-  timestampFormat: TimestampFormat;
   /** Classic single-line pinned rows, rendered by the Sidebar so both surfaces stay identical. */
   pinnedThreads: readonly SidebarThreadSummary[];
   renderPinnedThreadRow: (thread: SidebarThreadSummary) => ReactNode;
@@ -477,7 +472,6 @@ export function SidebarActivityView({
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
       status={resolveThreadStatus(thread)}
-      timeLabel={formatActivityRowTime({ thread, nowMs, timestampFormat })}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => onSetThreadSettled(thread.id, settled)}
       onTogglePinned={() => onToggleThreadPinned(thread.id)}
@@ -579,7 +573,7 @@ export function SidebarActivityView({
 
       {model.settled.length > 0 ? (
         <ActivityCollapsibleSection
-          label="Settled"
+          label="Done"
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
         >

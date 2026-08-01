@@ -258,7 +258,7 @@ export function useSidebarThreadActions(input: {
         console.error("Failed to update settled thread state", { threadId, error });
         toastManager.add({
           type: "error",
-          title: isSettled ? "Unable to settle thread" : "Unable to unsettle thread",
+          title: isSettled ? "Unable to mark thread as done" : "Unable to undo done",
         });
       });
     },
