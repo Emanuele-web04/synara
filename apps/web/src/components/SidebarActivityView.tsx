@@ -62,6 +62,12 @@ const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
 
+/** Keeps a row action (pin, archive, done) from also opening the thread. */
+function stopRowActivation(event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 function ActivityThreadRow({
   thread,
   project,
@@ -93,10 +99,6 @@ function ActivityThreadRow({
     scope: "activity",
     threadId: thread.id,
   });
-  const stopRowActivation = (event: MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-  };
   const actionToneClassName = "text-muted-foreground/42";
 
   return (
@@ -541,9 +543,17 @@ export function SidebarActivityView({
     />
   );
 
-  // Pinned rows render in their own section, so the feed itself is empty
-  // exactly when no date bucket has rows.
-  const isEmpty = model.active.length === 0;
+  // The placeholder speaks for the whole surface, so it may only appear when no
+  // section has rows — a feed with nothing active but a populated Pinned or Done
+  // section is not empty.
+  const isEmpty =
+    model.active.length === 0 && model.settled.length === 0 && pinnedThreads.length === 0;
+  const emptyLabel =
+    scopeSelection === null
+      ? "No activity yet"
+      : scopeSelection === "chats"
+        ? "No activity in Synara chats"
+        : "No activity for this project";
 
   return (
     <div className="flex flex-col gap-3">
@@ -575,11 +585,7 @@ export function SidebarActivityView({
 
       {isEmpty ? (
         <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-          {threadsHydrated
-            ? scopeSelection !== null
-              ? "No activity for this project"
-              : "No activity yet"
-            : "Loading activity..."}
+          {threadsHydrated ? emptyLabel : "Loading activity..."}
         </div>
       ) : groupMode === "project" ? (
         projectGroups.map((group) => (
