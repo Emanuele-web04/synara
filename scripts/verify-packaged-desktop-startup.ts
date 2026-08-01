@@ -354,7 +354,12 @@ export async function verifyPackagedDesktopStartup(
     if (child) {
       await terminateProcessTree(child);
     }
-    rmSync(temporaryRoot, { recursive: true, force: true });
+    rmSync(temporaryRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 20 : 0,
+      retryDelay: process.platform === "win32" ? 250 : 100,
+    });
   }
 }
 
