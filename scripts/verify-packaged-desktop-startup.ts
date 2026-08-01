@@ -354,12 +354,24 @@ export async function verifyPackagedDesktopStartup(
     if (child) {
       await terminateProcessTree(child);
     }
-    rmSync(temporaryRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: process.platform === "win32" ? 20 : 0,
-      retryDelay: process.platform === "win32" ? 250 : 100,
-    });
+    try {
+      rmSync(temporaryRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: process.platform === "win32" ? 20 : 0,
+        retryDelay: process.platform === "win32" ? 250 : 100,
+      });
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !(error instanceof Error && "code" in error && error.code === "EPERM")
+      ) {
+        throw error;
+      }
+      console.warn(
+        `Could not remove Windows smoke temp directory; leaving it for runner cleanup: ${temporaryRoot}`,
+      );
+    }
   }
 }
 
