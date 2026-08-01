@@ -2658,7 +2658,9 @@ describe("MessagesTimeline", () => {
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
-  it("uses the Synara icon and action name for Synara browser calls", async () => {
+  // Browser calls get the globe rather than the generic Synara mark: a browsing
+  // row is about a page, and the surface it acted on is the first thing to read.
+  it("uses the browser icon and action name for Synara browser calls", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2689,7 +2691,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('data-tool-icon="synara"');
+    expect(markup).toContain('data-tool-icon="browser"');
     expect(markup).toContain("Open browser tab");
     // A settled call reads as its action alone — no lifecycle or timing tail.
     expect(markup).not.toContain("elapsed");
