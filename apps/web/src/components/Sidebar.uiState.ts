@@ -14,6 +14,8 @@ export type SidebarUiState = {
   projectThreadListExtraPagesByCwd: Record<string, number>;
   dismissedThreadStatusKeyByThreadId: Record<string, string>;
   lastThreadRoute: LastThreadRoute | null;
+  /** Swaps the Projects surface for the flat task-feed Activity view. */
+  activityViewEnabled: boolean;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
@@ -22,6 +24,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   projectThreadListExtraPagesByCwd: {},
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
+  activityViewEnabled: false,
 };
 
 // Persisted paging is a request, not a promise: render-time clamping trims it to the real
@@ -81,6 +84,7 @@ export function readSidebarUiState(): SidebarUiState {
         threadId?: unknown;
         splitViewId?: unknown;
       } | null;
+      activityViewEnabled?: boolean;
     };
 
     const lastThreadRoute =
@@ -128,6 +132,7 @@ export function readSidebarUiState(): SidebarUiState {
         ),
       ),
       lastThreadRoute,
+      activityViewEnabled: parsed.activityViewEnabled === true,
     };
   } catch {
     return DEFAULT_SIDEBAR_UI_STATE;
@@ -161,6 +166,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
                 : {}),
             }
           : null,
+        activityViewEnabled: input.activityViewEnabled,
       }),
     );
   } catch {

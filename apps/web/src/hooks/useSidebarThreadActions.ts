@@ -26,6 +26,7 @@ import {
   isThreadAlreadyUnarchivedError,
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
+import { setThreadSettledFromClient } from "../lib/threadSettle";
 import { newCommandId, randomUUID } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
@@ -224,6 +225,66 @@ export function useSidebarThreadActions(input: {
     },
     [pinnedThreadIdSet, setThreadPinned],
   );
+
+  const [optimisticSettledStateByThreadId, setOptimisticSettledStateByThreadId] = useState<
+    ReadonlyMap<ThreadId, boolean>
+  >(() => new Map());
+
+  const setThreadSettled = useCallback(async (threadId: ThreadId, isSettled: boolean) => {
+    const api = readNativeApi();
+    if (!api) return;
+    setOptimisticSettledStateByThreadId((current) => {
+      if (current.get(threadId) === isSettled) return current;
+      const next = new Map(current);
+      next.set(threadId, isSettled);
+      return next;
+    });
+    try {
+      await setThreadSettledFromClient(api.orchestration, threadId, isSettled);
+    } catch (error) {
+      setOptimisticSettledStateByThreadId((current) => {
+        if (!current.has(threadId)) return current;
+        const next = new Map(current);
+        next.delete(threadId);
+        return next;
+      });
+      throw error;
+    }
+  }, []);
+
+  const setThreadSettledWithToast = useCallback(
+    (threadId: ThreadId, isSettled: boolean) => {
+      void setThreadSettled(threadId, isSettled).catch((error) => {
+        console.error("Failed to update settled thread state", { threadId, error });
+        toastManager.add({
+          type: "error",
+          title: isSettled ? "Unable to settle thread" : "Unable to unsettle thread",
+        });
+      });
+    },
+    [setThreadSettled],
+  );
+
+  // Drop optimistic settle entries once the server-confirmed state agrees, so
+  // later pushes from other clients are no longer masked by a stale override.
+  useEffect(() => {
+    if (optimisticSettledStateByThreadId.size === 0) return;
+    const settle = window.setTimeout(() => {
+      setOptimisticSettledStateByThreadId((current) => {
+        let next: Map<ThreadId, boolean> | null = null;
+        for (const [threadId, desiredSettled] of current) {
+          const serverSettled =
+            (sidebarThreadSummaryByIdRef.current[threadId]?.settledAt ?? null) !== null;
+          if (serverSettled === desiredSettled) {
+            next ??= new Map(current);
+            next.delete(threadId);
+          }
+        }
+        return next ?? current;
+      });
+    }, 0);
+    return () => window.clearTimeout(settle);
+  }, [sidebarThreads, optimisticSettledStateByThreadId]);
 
   useEffect(() => {
     if (optimisticPinnedStateByThreadId.size === 0) return;
@@ -688,6 +749,8 @@ export function useSidebarThreadActions(input: {
     pinnedThreadIds,
     pinnedThreadIdSet,
     toggleThreadPinned,
+    setThreadSettledWithToast,
+    settledOverrideByThreadId: optimisticSettledStateByThreadId,
     deleteThread,
     confirmAndDeleteThread,
     archiveThread,
