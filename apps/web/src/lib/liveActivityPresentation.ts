@@ -4,7 +4,7 @@
 
 import { useSyncExternalStore } from "react";
 
-import type { WorkLogEntry, WorkLogLiveActivity } from "../workLog";
+import type { WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
 import { deriveReadableCommandDisplay } from "./toolCallLabel";
 
@@ -123,49 +123,16 @@ export function friendlyLiveCommandTarget(rawCommand: string): string {
   return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
-function activitySubject(entry: Pick<WorkLogEntry, "itemType" | "requestKind">): string {
-  if (entry.requestKind === "command" || entry.itemType === "command_execution") return "command";
-  if (entry.requestKind === "file-read") return "file read";
-  if (entry.requestKind === "file-change" || entry.itemType === "file_change") return "edit";
-  if (entry.itemType === "web_search") return "search";
-  if (entry.itemType === "collab_agent_tool_call") return "agent";
-  return "tool";
-}
-
-function activityStateLead(activity: WorkLogLiveActivity, subject: string): string {
-  switch (activity.state) {
-    case "starting":
-      return `Starting ${subject}`;
-    case "thinking":
-      return "Thinking";
-    case "running_tool":
-      return `Running ${subject}`;
-    case "waiting":
-      return "Waiting";
-    case "streaming":
-      return "Streaming";
-    case "completed":
-      return `Completed ${subject}`;
-    case "failed":
-      return `Failed ${subject}`;
-    case "cancelled":
-      return `Cancelled ${subject}`;
-  }
-}
-
 export function formatLiveActivityPrimary(input: {
   activity: WorkLogLiveActivity;
-  entry: Pick<WorkLogEntry, "itemType" | "requestKind">;
   heading: string;
   displayTarget?: string | undefined;
   rawCommand?: string | undefined;
 }): string {
-  const subject = activitySubject(input.entry);
-  const lead = activityStateLead(input.activity, subject);
-  const target = input.rawCommand
-    ? friendlyLiveCommandTarget(input.rawCommand)
-    : (input.displayTarget || input.activity.label || input.heading).trim();
-  return target ? `${lead} · ${target}` : lead;
+  if (input.rawCommand) {
+    return `${input.heading} · ${friendlyLiveCommandTarget(input.rawCommand)}`;
+  }
+  return (input.displayTarget || input.activity.label || input.heading).trim();
 }
 
 export function formatLiveActivityProgress(progress: number): string {
@@ -221,21 +188,8 @@ export function formatLiveActivityMeta(
             : `Active ${formatClockDuration(idleMs)} ago`,
       );
     }
-  } else {
-    switch (activity.state) {
-      case "completed":
-        parts.push(formatLiveActivityStateLabel(activity.state));
-        break;
-      case "failed":
-        parts.push(formatLiveActivityStateLabel(activity.state));
-        break;
-      case "cancelled":
-        parts.push(formatLiveActivityStateLabel(activity.state));
-        break;
-      default:
-        parts.push(activityStateLead(activity, "tool"));
-        break;
-    }
+  } else if (activity.state !== "completed") {
+    parts.push(formatLiveActivityStateLabel(activity.state));
   }
 
   if (elapsed !== null) {

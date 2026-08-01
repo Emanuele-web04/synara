@@ -110,6 +110,7 @@ export type { CommandResult } from "../providerCliOutput";
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
+const CODEX_AUTH_STATUS_ARGS = ["-c", "mcp_servers={}", "login", "status"] as const;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
@@ -964,7 +965,7 @@ export const makeCheckCodexProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
-    const authProbe = yield* runCodexCommand(["login", "status"], executable, probeEnv).pipe(
+    const authProbe = yield* runCodexCommand(CODEX_AUTH_STATUS_ARGS, executable, probeEnv).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );

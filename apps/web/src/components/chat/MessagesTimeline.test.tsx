@@ -2658,6 +2658,44 @@ describe("MessagesTimeline", () => {
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
+  it("uses the Synara icon and action name for Synara browser calls", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-browser",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-browser",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolName: "mcp__synara__browser_open",
+              toolStatus: "completed",
+              liveActivity: {
+                state: "completed",
+                label: "Synara: Browser Open",
+                startedAt: "2026-03-17T19:12:27.000Z",
+                lastActivityAt: "2026-03-17T19:12:28.000Z",
+                elapsedSeconds: 1,
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-tool-icon="synara"');
+    expect(markup).toContain("Open browser tab");
+    expect(markup).toContain("1s elapsed");
+    expect(markup).not.toContain("Completed tool");
+    expect(markup).not.toContain("Synara: Browser Open");
+  });
+
   it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const baseProps = makeTimelineBaseProps();

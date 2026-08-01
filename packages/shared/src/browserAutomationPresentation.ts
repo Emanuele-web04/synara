@@ -1,0 +1,26 @@
+import type { BrowserToolName } from "@synara/contracts";
+
+export const BROWSER_TOOL_TITLES = {
+  browser_status: "Check browser status",
+  browser_tabs: "List browser tabs",
+  browser_open: "Open browser tab",
+  browser_navigate: "Navigate browser tab",
+  browser_back: "Go back in browser history",
+  browser_forward: "Go forward in browser history",
+  browser_reload: "Reload browser page",
+  browser_resize: "Resize browser viewport",
+  browser_snapshot: "Snapshot browser page",
+  browser_screenshot: "Capture browser screenshot",
+  browser_logs: "Read browser diagnostics",
+  browser_click: "Click browser target",
+  browser_hover: "Hover browser target",
+  browser_drag: "Drag between browser targets",
+  browser_type: "Type into browser target",
+  browser_select: "Select browser options",
+  browser_upload: "Upload workspace files",
+  browser_press: "Press browser keys",
+  browser_scroll: "Scroll browser page",
+  browser_wait: "Wait for browser condition",
+  browser_evaluate: "Evaluate browser expression",
+  browser_close: "Close browser tab",
+} as const satisfies Record<BrowserToolName, string>;

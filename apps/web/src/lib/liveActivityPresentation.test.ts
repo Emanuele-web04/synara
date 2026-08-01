@@ -33,7 +33,6 @@ describe("live activity presentation", () => {
     expect(
       formatLiveActivityPrimary({
         activity: runningActivity(),
-        entry: { itemType: "command_execution" },
         heading: "Running command",
         rawCommand: command,
       }),
@@ -47,11 +46,10 @@ describe("live activity presentation", () => {
           state: "completed",
           label: "Read",
         }),
-        entry: { requestKind: "file-read" },
         heading: "Read",
         displayTarget: "Read app.ts",
       }),
-    ).toBe("Completed file read · Read app.ts");
+    ).toBe("Read app.ts");
   });
 
   it("renders recent activity and elapsed time from one normalized state", () => {
@@ -83,8 +81,15 @@ describe("live activity presentation", () => {
     });
 
     expect(formatLiveActivityMeta(completed, Date.parse("2026-07-26T14:03:00.000Z"))).toBe(
-      "Completed · 2m 14s elapsed · 100%",
+      "2m 14s elapsed · 100%",
     );
+
+    expect(
+      formatLiveActivityMeta(
+        { ...completed, state: "failed" },
+        Date.parse("2026-07-26T14:03:00.000Z"),
+      ),
+    ).toBe("Failed · 2m 14s elapsed · 100%");
   });
 
   it("does not invent elapsed time when a terminal event has no known start", () => {
@@ -95,9 +100,7 @@ describe("live activity presentation", () => {
     };
 
     expect(liveActivityElapsedMs(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
-    expect(formatLiveActivityMeta(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBe(
-      "Completed",
-    );
+    expect(formatLiveActivityMeta(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
   });
 
   it("shares normalized state, elapsed, and progress labels across activity surfaces", () => {

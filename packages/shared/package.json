@@ -236,6 +236,10 @@
       "types": "./src/browserAutomationCatalogue.ts",
       "import": "./src/browserAutomationCatalogue.ts"
     },
+    "./browserAutomationPresentation": {
+      "types": "./src/browserAutomationPresentation.ts",
+      "import": "./src/browserAutomationPresentation.ts"
+    },
     "./browserAutomationErrors": {
       "types": "./src/browserAutomationErrors.ts",
       "import": "./src/browserAutomationErrors.ts"

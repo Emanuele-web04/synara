@@ -268,9 +268,9 @@ export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactE
   return createElement(Icon, { className });
 }
 
-// The leading glyph for a tool row: provider-brand marks (GitHub, Synara, MCP)
-// win over the kind-derived entry icon. Shared with the collapsed tool-group
-// summary row, which borrows its first entry's icon.
+// The leading glyph for a tool row: recognizable product and surface icons win
+// over the kind-derived entry icon. Shared with the collapsed tool-group summary
+// row, which borrows its first entry's icon.
 export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
   if (isSynaraToolCall(workEntry)) return SynaraToolIcon;
@@ -465,7 +465,13 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
   const isMcpToolRow =
     workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
-  const LeftIcon = workEntryLeftIcon(workEntry);
+  const LeftIcon = isGitHubToolRow
+    ? GitHubIcon
+    : isSynaraToolRow
+      ? SynaraToolIcon
+      : isMcpToolRow
+        ? McpIcon
+        : EntryIcon;
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon
@@ -497,7 +503,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const displayText = workEntry.liveActivity
     ? formatLiveActivityPrimary({
         activity: workEntry.liveActivity,
-        entry: workEntry,
         heading,
         displayTarget: showInlineAgentTaskPreview ? heading : defaultDisplayText,
         rawCommand,

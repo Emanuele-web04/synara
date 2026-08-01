@@ -60,6 +60,24 @@ describe("normalizeCompactToolLabel", () => {
 });
 
 describe("deriveSynaraMcpToolTitle", () => {
+  it("uses stable action-first names for Synara browser tools", () => {
+    for (const status of ["running", "completed", "failed"] as const) {
+      expect(
+        deriveSynaraMcpToolTitle({
+          toolName: "mcp__synara__browser_open",
+          status,
+        }),
+      ).toBe("Open browser tab");
+    }
+
+    expect(
+      deriveSynaraMcpToolTitle({
+        title: "Synara: Browser Snapshot",
+        status: "completed",
+      }),
+    ).toBe("Snapshot browser page");
+  });
+
   it("has intentional running and completed copy for every Synara gateway action", () => {
     const cases = [
       ["synara_context", "Synara is checking its context", "Synara checked its context"],

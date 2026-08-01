@@ -49,6 +49,8 @@ import {
 } from "@synara/contracts";
 import { Schema } from "effect";
 
+import { BROWSER_TOOL_TITLES } from "./browserAutomationPresentation";
+
 export interface BrowserToolAnnotations {
   readonly readOnlyHint: boolean;
   readonly destructiveHint: boolean;
@@ -169,7 +171,7 @@ function defineTool<const Name extends BrowserToolName>(
 export const BROWSER_TOOL_DEFINITIONS = [
   defineTool(
     "browser_status",
-    "Browser status",
+    BROWSER_TOOL_TITLES.browser_status,
     BrowserStatusInput,
     BrowserStatusOutput,
     READ_ONLY_LOCAL,
@@ -177,7 +179,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_tabs",
-    "List browser tabs",
+    BROWSER_TOOL_TITLES.browser_tabs,
     BrowserTabsInput,
     BrowserTabsOutput,
     READ_ONLY_LOCAL,
@@ -185,7 +187,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_open",
-    "Open browser tab",
+    BROWSER_TOOL_TITLES.browser_open,
     BrowserToolOpenInput,
     BrowserOpenOutput,
     MUTATING_OPEN_WORLD,
@@ -193,7 +195,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_navigate",
-    "Navigate browser tab",
+    BROWSER_TOOL_TITLES.browser_navigate,
     BrowserToolNavigateInput,
     BrowserNavigateOutput,
     MUTATING_OPEN_WORLD,
@@ -201,7 +203,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_back",
-    "Go back in browser history",
+    BROWSER_TOOL_TITLES.browser_back,
     BrowserBackInput,
     BrowserBackOutput,
     MUTATING_OPEN_WORLD,
@@ -209,7 +211,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_forward",
-    "Go forward in browser history",
+    BROWSER_TOOL_TITLES.browser_forward,
     BrowserForwardInput,
     BrowserForwardOutput,
     MUTATING_OPEN_WORLD,
@@ -217,7 +219,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_reload",
-    "Reload browser page",
+    BROWSER_TOOL_TITLES.browser_reload,
     BrowserReloadInput,
     BrowserReloadOutput,
     MUTATING_OPEN_WORLD,
@@ -225,7 +227,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_resize",
-    "Resize browser viewport",
+    BROWSER_TOOL_TITLES.browser_resize,
     BrowserResizeInput,
     BrowserResizeOutput,
     IDEMPOTENT_LOCAL,
@@ -233,7 +235,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_snapshot",
-    "Snapshot browser page",
+    BROWSER_TOOL_TITLES.browser_snapshot,
     BrowserSnapshotInput,
     BrowserSnapshotOutput,
     READ_ONLY_OPEN_WORLD,
@@ -242,7 +244,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_screenshot",
-    "Capture browser screenshot",
+    BROWSER_TOOL_TITLES.browser_screenshot,
     BrowserScreenshotInput,
     BrowserScreenshotOutput,
     READ_ONLY_OPEN_WORLD,
@@ -251,7 +253,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_logs",
-    "Read browser diagnostics",
+    BROWSER_TOOL_TITLES.browser_logs,
     BrowserLogsInput,
     BrowserLogsOutput,
     READ_ONLY_OPEN_WORLD,
@@ -259,7 +261,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_click",
-    "Click browser target",
+    BROWSER_TOOL_TITLES.browser_click,
     BrowserClickInput,
     BrowserClickOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -267,7 +269,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_hover",
-    "Hover browser target",
+    BROWSER_TOOL_TITLES.browser_hover,
     BrowserHoverInput,
     BrowserHoverOutput,
     MUTATING_OPEN_WORLD,
@@ -275,7 +277,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_drag",
-    "Drag between browser targets",
+    BROWSER_TOOL_TITLES.browser_drag,
     BrowserDragInput,
     BrowserDragOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -283,7 +285,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_type",
-    "Type into browser target",
+    BROWSER_TOOL_TITLES.browser_type,
     BrowserTypeInput,
     BrowserTypeOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -291,7 +293,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_select",
-    "Select browser options",
+    BROWSER_TOOL_TITLES.browser_select,
     BrowserSelectInput,
     BrowserSelectOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -299,7 +301,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_upload",
-    "Upload workspace files",
+    BROWSER_TOOL_TITLES.browser_upload,
     BrowserUploadInput,
     BrowserUploadOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -307,7 +309,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_press",
-    "Press browser keys",
+    BROWSER_TOOL_TITLES.browser_press,
     BrowserPressInput,
     BrowserPressOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -315,7 +317,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_scroll",
-    "Scroll browser page",
+    BROWSER_TOOL_TITLES.browser_scroll,
     BrowserScrollInput,
     BrowserScrollOutput,
     MUTATING_OPEN_WORLD,
@@ -323,7 +325,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_wait",
-    "Wait for browser condition",
+    BROWSER_TOOL_TITLES.browser_wait,
     BrowserWaitInput,
     BrowserWaitOutput,
     READ_ONLY_OPEN_WORLD,
@@ -331,7 +333,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_evaluate",
-    "Evaluate browser expression",
+    BROWSER_TOOL_TITLES.browser_evaluate,
     BrowserEvaluateInput,
     BrowserEvaluateOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -340,7 +342,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_close",
-    "Close browser tab",
+    BROWSER_TOOL_TITLES.browser_close,
     BrowserCloseInput,
     BrowserCloseOutput,
     DESTRUCTIVE_LOCAL,
