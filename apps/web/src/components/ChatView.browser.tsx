@@ -1339,7 +1339,10 @@ async function waitForLayout(): Promise<void> {
   await nextFrame();
 }
 
-function installImmediateScrollToSpy(scrollContainer: HTMLElement): {
+function installImmediateScrollToSpy(
+  scrollContainer: HTMLElement,
+  options?: { readonly suspendSmoothScroll?: boolean },
+): {
   readonly calls: ScrollToOptions[];
   readonly restore: () => void;
 } {
@@ -1354,6 +1357,9 @@ function installImmediateScrollToSpy(scrollContainer: HTMLElement): {
             ...(typeof y === "number" ? { top: y } : {}),
           };
     calls.push(normalized);
+    if (options?.suspendSmoothScroll && normalized.behavior === "smooth") {
+      return;
+    }
     if (typeof normalized.left === "number") {
       scrollContainer.scrollLeft = normalized.left;
     }
@@ -2300,6 +2306,72 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
+  it("stops the arrow's smooth scroll when the user scrolls upward", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    let restoreScrollTo = () => {};
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() => {
+        expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight);
+      });
+      // Let mount-time tail expansion retries (max 260ms) finish before
+      // isolating the arrow scroll and the user's takeover gesture.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await waitForLayout();
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+        ),
+        "Unable to find the visible scroll-to-bottom button.",
+      );
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer, {
+        suspendSmoothScroll: true,
+      });
+      restoreScrollTo = scrollSpy.restore;
+
+      scrollButton.click();
+      await vi.waitFor(() => {
+        expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
+      });
+      const takeoverOffset = scrollContainer.scrollTop;
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+
+      await vi.waitFor(() => {
+        expect(scrollSpy.calls.some((call) => call.behavior === "auto")).toBe(true);
+      });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      const smoothCalls = scrollSpy.calls.filter((call) => call.behavior === "smooth");
+      const takeoverCalls = scrollSpy.calls.filter((call) => call.behavior === "auto");
+      expect(smoothCalls).toHaveLength(1);
+      expect(takeoverCalls.length).toBeGreaterThanOrEqual(1);
+      expect(
+        takeoverCalls.every(
+          (call) =>
+            typeof call.top === "number" &&
+            call.top <= takeoverOffset + AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        ),
+      ).toBe(true);
     } finally {
       restoreScrollTo();
       await mounted.cleanup();

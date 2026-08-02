@@ -500,7 +500,10 @@ import {
 } from "./chat/WorkflowRunCard.logic";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
-import { scrollTranscriptToSettledEnd } from "./chat/transcriptScroll";
+import {
+  scrollTranscriptToSettledEnd,
+  stopTranscriptScrollAtCurrentOffset,
+} from "./chat/transcriptScroll";
 import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
 import {
   dispatchThreadMarkerAdd,
@@ -4907,6 +4910,7 @@ export default function ChatView({
     setShowScrollToBottom(false);
   }, []);
   const clearTranscriptAutoFollow = useCallback(() => {
+    const settledScrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
     settledScrollRequestRef.current += 1;
@@ -4914,6 +4918,9 @@ export default function ChatView({
     programmaticScrollUntilRef.current = 0;
     // A user scroll gesture takes over from any in-flight tail-anchor slide.
     tailAnchorScrollInFlightRef.current = false;
+    if (settledScrollTarget) {
+      void stopTranscriptScrollAtCurrentOffset(settledScrollTarget);
+    }
   }, []);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
