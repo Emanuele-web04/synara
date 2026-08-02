@@ -44,8 +44,13 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import type { Project, SidebarThreadSummary } from "../types";
 
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
-/** How long a confirmed settle override may outlive its projection push. */
-const SETTLE_OVERRIDE_MAX_LIFETIME_MS = 5000;
+/**
+ * How long a confirmed settle override may outlive its projection push. Well
+ * past normal push latency: the expiry is a last resort against a lost or
+ * reordered push, not part of the happy path, where reconciliation clears the
+ * override as soon as the projection agrees.
+ */
+const SETTLE_OVERRIDE_MAX_LIFETIME_MS = 15_000;
 
 /**
  * Unarchives a thread, treating "it was already unarchived" as success.
@@ -306,7 +311,7 @@ export function useSidebarThreadActions(input: {
           const serverSettled =
             (sidebarThreadSummaryByIdRef.current[threadId]?.settledAt ?? null) !== null;
           if (serverSettled === desiredSettled) {
-            next ??= new Map(current);
+            if (next === null) next = new Map(current);
             next.delete(threadId);
           }
         }
