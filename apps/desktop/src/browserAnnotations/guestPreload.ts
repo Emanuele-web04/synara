@@ -43,6 +43,7 @@ const INSPECTION_REFRESH_INTERVAL_MS = 100;
 /** Long enough to read a one-line notice, short enough not to sit in the way. */
 const NOTICE_DURATION_MS = 4_000;
 const UNANCHORABLE_NOTICE = "This element can't be pinned. Try one next to it.";
+const INVISIBLE_TARGET_NOTICE = "This element has no visible box. Try one next to it.";
 const STALE_TARGET_NOTICE = "This element changed. Pick it again — your comment is kept.";
 /** ASCII unit separator: never present in the tag/role parts it joins. */
 const FINGERPRINT_SEPARATOR = String.fromCharCode(31);
@@ -724,6 +725,13 @@ function renderOverlay(): void {
   // Page measurements first: nothing written below has touched the page yet.
   const focus = activeSession ? (selectedElement ?? hoveredElement) : null;
   const bounds = boundsOf(focus);
+  if (selectedElement && !bounds) {
+    // A selected node can collapse without disconnecting. Do not leave focus in
+    // a hidden composer or let Enter publish an invisible target; release the
+    // selection while preserving any comment the user already typed.
+    clearSelection({ keepComment: true });
+    showNotice(INVISIBLE_TARGET_NOTICE);
+  }
   const measuredMarkers = measureMarkers();
 
   // Then the content and visibility of every card, because a hidden card
@@ -808,6 +816,11 @@ function clearSelection(options: { readonly keepComment?: boolean } = {}): void 
 }
 
 function selectTarget(target: Element, point: { x: number; y: number } | null): void {
+  const bounds = boundsOf(target);
+  if (!bounds) {
+    showNotice(INVISIBLE_TARGET_NOTICE);
+    return;
+  }
   // Refuse targets the guest cannot address before the composer opens. Letting
   // the user type into a comment that can never be committed is worse than
   // saying so up front.
@@ -816,7 +829,6 @@ function selectTarget(target: Element, point: { x: number; y: number } | null): 
     return;
   }
   hideNotice();
-  const bounds = target.getBoundingClientRect();
   selectedElement = target;
   hoveredElement = target;
   selectionAnchor = {

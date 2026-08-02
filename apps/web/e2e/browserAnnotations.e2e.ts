@@ -341,6 +341,44 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { document.querySelector('[data-stale-chain]')?.remove(); return true; })()",
     );
 
+    // If a selected element collapses without disconnecting, the hidden
+    // composer must release it without allowing Enter to publish an invisible
+    // annotation. The typed comment still carries into the next valid pick.
+    const collapsingRect = (await runInGuest(
+      "(() => { const target = document.createElement('button'); target.id = 'collapsing-target'; target.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:999;padding:14px'; target.textContent = 'collapse'; document.body.append(target); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
+    )) as { x: number; y: number; width: number; height: number };
+    const clickCollapsingTarget = async (): Promise<void> => {
+      await page.mouse.click(
+        webviewRect.x + collapsingRect.x + collapsingRect.width / 2,
+        webviewRect.y + collapsingRect.y + collapsingRect.height / 2,
+      );
+    };
+    await clickCollapsingTarget();
+    await page.keyboard.type("Kept through a collapsed target");
+    await runInGuest(
+      "(() => { document.getElementById('collapsing-target').style.display = 'none'; return true; })()",
+    );
+    await page.waitForTimeout(100);
+    await page.keyboard.press("Enter");
+    expect(await committedAnnotations()).toHaveLength(3);
+    await runInGuest(
+      "(() => { document.getElementById('collapsing-target').style.display = 'block'; return true; })()",
+    );
+    await clickCollapsingTarget();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
+      .toBe(4);
+    expect((await committedAnnotations())[3]?.annotation.comment).toBe(
+      "Kept through a collapsed target",
+    );
+    await runInGuest(
+      "(() => { document.getElementById('collapsing-target')?.remove(); return true; })()",
+    );
+
     // A long unique ancestor id can make its anchored selector exceed the
     // contract even though the ordinary structural path remains short. Keep
     // walking in that case, and preserve the existing Cmd/Ctrl+Enter shortcut.
@@ -358,8 +396,8 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
         timeout: 5_000,
         intervals: [25, 50, 100],
       })
-      .toBe(4);
-    const fallbackSelectorEvent = (await committedAnnotations())[3];
+      .toBe(5);
+    const fallbackSelectorEvent = (await committedAnnotations())[4];
     expect(fallbackSelectorEvent?.annotation.comment).toBe("Fallback selector and shortcut");
     expect(fallbackSelectorEvent?.annotation.selector).not.toContain("anchor-");
     await runInGuest(
