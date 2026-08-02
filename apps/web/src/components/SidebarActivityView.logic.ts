@@ -208,7 +208,7 @@ export function groupActivityThreadsByProject(
   return Array.from(groupByProjectId, ([projectId, groupThreads]) => ({
     projectId,
     threads: groupThreads,
-  })).sort(
+  })).toSorted(
     (left, right) =>
       Math.max(...right.threads.map(resolveActivityRecencyMs)) -
       Math.max(...left.threads.map(resolveActivityRecencyMs)),
@@ -249,6 +249,32 @@ export function collectActivityScopeOptions(
     options.push({ kind: "chats", projectIds: chatProjectIds, threadCount: chatThreadCount });
   }
   return options.toSorted((left, right) => right.threadCount - left.threadCount);
+}
+
+/** The project scope the feed is pinned to, or null for every project. */
+export type ActivityScopeSelection = ProjectId | "chats" | null;
+
+/**
+ * The scope the feed can actually honor. A selection whose option has left the
+ * menu — its last thread was archived, settled away, or moved — falls back to
+ * "all projects" instead of filtering the feed down to nothing behind a scope
+ * the user can no longer see.
+ */
+export function resolveActivityScope(
+  scopeSelection: ActivityScopeSelection,
+  scopeOptions: readonly ActivityScopeOption[],
+): { scope: ActivityScopeSelection; projectFilterIds: Set<ProjectId> | null } {
+  if (scopeSelection === null) return { scope: null, projectFilterIds: null };
+  if (scopeSelection === "chats") {
+    const chats = scopeOptions.find((option) => option.kind === "chats");
+    if (!chats) return { scope: null, projectFilterIds: null };
+    return { scope: "chats", projectFilterIds: new Set(chats.projectIds) };
+  }
+  const isOffered = scopeOptions.some(
+    (option) => option.kind === "project" && option.projectId === scopeSelection,
+  );
+  if (!isOffered) return { scope: null, projectFilterIds: null };
+  return { scope: scopeSelection, projectFilterIds: new Set([scopeSelection]) };
 }
 
 export const ACTIVITY_RECENT_LIMIT = 5;

@@ -13,7 +13,9 @@ import {
   formatActivityRowTime,
   isActivityThread,
   resolveActivityDateBucket,
+  resolveActivityScope,
   resolveActivityStatusGroup,
+  type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
 } from "./SidebarActivityView.logic";
@@ -366,6 +368,37 @@ describe("project filter", () => {
       { kind: "chats", projectIds: [CHAT_PROJECT_A, CHAT_PROJECT_B], threadCount: 2 },
       { kind: "project", projectId: PROJECT_ID, threadCount: 1 },
     ]);
+  });
+});
+
+describe("resolveActivityScope", () => {
+  const OTHER_PROJECT_ID = ProjectId.makeUnsafe("project-2");
+  const options: ActivityScopeOption[] = [
+    { kind: "project", projectId: PROJECT_ID, threadCount: 2 },
+    { kind: "chats", projectIds: [OTHER_PROJECT_ID], threadCount: 1 },
+  ];
+
+  it("filters to the selected project", () => {
+    expect(resolveActivityScope(PROJECT_ID, options)).toEqual({
+      scope: PROJECT_ID,
+      projectFilterIds: new Set([PROJECT_ID]),
+    });
+  });
+
+  it("expands the Synara chats scope to its container projects", () => {
+    expect(resolveActivityScope("chats", options)).toEqual({
+      scope: "chats",
+      projectFilterIds: new Set([OTHER_PROJECT_ID]),
+    });
+  });
+
+  it("falls back to every project once the selected scope leaves the menu", () => {
+    const withoutChats = options.filter((option) => option.kind !== "chats");
+    expect(resolveActivityScope("chats", withoutChats)).toEqual({
+      scope: null,
+      projectFilterIds: null,
+    });
+    expect(resolveActivityScope(PROJECT_ID, [])).toEqual({ scope: null, projectFilterIds: null });
   });
 });
 

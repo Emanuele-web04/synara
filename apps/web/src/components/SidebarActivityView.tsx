@@ -34,11 +34,13 @@ import {
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
   groupActivityThreadsByProject,
+  resolveActivityScope,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
   type ActivityScopeOption,
+  type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
@@ -262,8 +264,6 @@ function ActivityCollapsibleSection({
  * the project menu, and while a project is selected the header reads its name so
  * the isolated scope is always visible at a glance.
  */
-export type ActivityScopeSelection = ProjectId | "chats" | null;
-
 function ActivityScopeMenu({
   options,
   projectById,
@@ -486,15 +486,10 @@ export function SidebarActivityView({
   const scopeOptions = collectActivityScopeOptions(threads, isRealProject);
   const unreadThreads = collectUnreadActivityThreads(threads);
 
-  const projectFilterIds =
-    scopeSelection === null
-      ? null
-      : scopeSelection === "chats"
-        ? new Set(
-            (scopeOptions.find((option) => option.kind === "chats")?.projectIds ??
-              []) as ProjectId[],
-          )
-        : new Set([scopeSelection]);
+  const { scope: activeScope, projectFilterIds } = resolveActivityScope(
+    scopeSelection,
+    scopeOptions,
+  );
 
   const model = buildActivityViewModel({
     threads,
@@ -558,9 +553,9 @@ export function SidebarActivityView({
   const isEmpty =
     model.active.length === 0 && model.settled.length === 0 && scopedPinnedThreads.length === 0;
   const emptyLabel =
-    scopeSelection === null
+    activeScope === null
       ? "No activity yet"
-      : scopeSelection === "chats"
+      : activeScope === "chats"
         ? "No activity in Synara chats"
         : "No activity for this project";
 
@@ -580,7 +575,7 @@ export function SidebarActivityView({
         <ActivityScopeMenu
           options={scopeOptions}
           projectById={projectById}
-          scopeSelection={scopeSelection}
+          scopeSelection={activeScope}
           onChangeScopeSelection={setScopeSelection}
         />
         <ActivityFilterMenu
