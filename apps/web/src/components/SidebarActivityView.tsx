@@ -4,11 +4,11 @@
 // Layer: Sidebar UI component
 // Exports: SidebarActivityView
 
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-import type { ProjectId, ThreadId } from "@synara/contracts";
+import type { GitStatusResult, ProjectId, ThreadId } from "@synara/contracts";
 
-import { CircleCheckIcon, FilterIcon, GitBranchIcon, PinFilledIcon, Undo2Icon } from "~/lib/icons";
+import { CircleCheckIcon, GitBranchIcon, SortIcon, Undo2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
@@ -16,6 +16,7 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
+  sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -33,18 +34,22 @@ import {
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
+  collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
+  isThreadSettledForActivity,
   resolveActivityScope,
   splitActivityThreadsByDateBucket,
+  splitPriorityActivityThreads,
   splitRecentActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
   type ActivityScopeOption,
   type ActivityScopeSelection,
 } from "./SidebarActivityView.logic";
-import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import { SidebarIconButton } from "./SidebarIconButton";
+import { SidebarUnreadCompletionGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadStatusPillChip } from "./ThreadStatusPillChip";
@@ -77,6 +82,7 @@ function ActivityThreadRow({
   isActive,
   isSettled,
   isPinned,
+  pr,
   status,
   onOpen,
   onSetSettled,
@@ -89,6 +95,7 @@ function ActivityThreadRow({
   isActive: boolean;
   isSettled: boolean;
   isPinned: boolean;
+  pr: NonNullable<GitStatusResult["pr"]> | null;
   status: ThreadStatusPill | null;
   onOpen: () => void;
   onSetSettled: (settled: boolean) => void;
@@ -103,6 +110,7 @@ function ActivityThreadRow({
     threadId: thread.id,
   });
   const actionToneClassName = "text-muted-foreground/42";
+  const showCompletedCheck = !isActive && status?.label === "Completed";
 
   return (
     <Tooltip>
@@ -129,7 +137,7 @@ function ActivityThreadRow({
         >
           <span
             className={cn(
-              "flex min-w-0 items-center gap-1.5 overflow-hidden transition-[padding] duration-150 ease-out",
+              "flex min-w-0 items-center gap-1.5 overflow-hidden pr-5 transition-[padding] duration-150 ease-out",
               // Yield the title row to the hover action cluster (pin + archive + done).
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
             )}
@@ -149,35 +157,45 @@ function ActivityThreadRow({
             >
               {thread.title}
             </span>
-            {status && (!isSettled || isUrgentThreadStatusPill(status)) ? (
-              <ThreadStatusPillChip pill={status} />
-            ) : null}
-            {isPinned ? (
-              <PinFilledIcon
-                className="size-2.5 shrink-0 text-muted-foreground/60"
-                aria-label="Pinned"
+            {status &&
+            status.label !== "Completed" &&
+            (!isSettled || isUrgentThreadStatusPill(status)) ? (
+              <ThreadStatusPillChip
+                pill={status}
+                className={sidebarHoverRevealHideClassName("activity-row")}
               />
             ) : null}
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
             <FolderClosed
-              className={cn(SIDEBAR_TRAILING_ICON_CLASS, "text-muted-foreground/70")}
+              className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
               aria-hidden
             />
-            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/80">
+            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {thread.lastKnownPr ? <PrStateChip pr={thread.lastKnownPr} /> : null}
+              {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
               {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/70">
-                  <GitBranchIcon className={SIDEBAR_TRAILING_ICON_CLASS} aria-hidden />
+                <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
+                  <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
                   <span className="max-w-36 truncate">{branch}</span>
                 </span>
               ) : null}
             </span>
           </span>
         </button>
+        {showCompletedCheck ? (
+          <span
+            data-slot="activity-completion-status"
+            className={cn(
+              "pointer-events-none absolute top-1 right-1 inline-flex size-5 items-center justify-center",
+              sidebarHoverRevealHideClassName("activity-row"),
+            )}
+          >
+            <SidebarUnreadCompletionGlyph />
+          </span>
+        ) : null}
         <span className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
           <ThreadPinToggleButton
             pinned={isPinned}
@@ -260,9 +278,8 @@ function ActivityCollapsibleSection({
 }
 
 /**
- * The "Activity" header doubles as the project scope switcher: clicking it opens
- * the project menu, and while a project is selected the header reads its name so
- * the isolated scope is always visible at a glance.
+ * The header doubles as the activity scope switcher: clicking it opens the
+ * project menu, and its label always reflects the currently visible scope.
  */
 function ActivityScopeMenu({
   options,
@@ -278,7 +295,7 @@ function ActivityScopeMenu({
   const [menuOpen, setMenuOpen] = useState(false);
   const scopeLabel =
     scopeSelection === null
-      ? "Activity"
+      ? "All activity"
       : scopeSelection === "chats"
         ? "Synara"
         : resolveThreadProjectLabel(projectById.get(scopeSelection));
@@ -311,7 +328,7 @@ function ActivityScopeMenu({
       <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-            Filter by project
+            Activity scope
           </div>
           <MenuRadioGroup
             value={scopeSelection ?? "all"}
@@ -322,7 +339,7 @@ function ActivityScopeMenu({
             }}
           >
             <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-xs">
-              All projects
+              All activity
             </MenuRadioItem>
             {options.map((option) => (
               <MenuRadioItem
@@ -365,21 +382,21 @@ function ActivityFilterMenu({
   return (
     <Menu>
       <SidebarIconButton
-        icon={FilterIcon}
-        label="Filter activity"
-        tooltip="Filter activity"
+        icon={SortIcon}
+        label="Activity options"
+        tooltip="Activity options"
         tooltipSide="bottom"
         render={<MenuTrigger />}
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort by</div>
+          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Group by</div>
           <MenuRadioGroup
             value={groupMode}
             onValueChange={(value) => onChangeGroupMode(value as ActivityGroupMode)}
           >
             <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-xs">
-              Recent activity
+              Time
             </MenuRadioItem>
             <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-xs">
               Project
@@ -447,9 +464,8 @@ export function SidebarActivityView({
   onArchiveThread,
   onMarkThreadRead,
   renderThreadHoverCard,
-  headerToolbar,
-  pinnedThreads,
-  renderPinnedThreadRow,
+  prByThreadId,
+  onVisibleThreadIdsChange,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -457,9 +473,8 @@ export function SidebarActivityView({
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
-  /** Classic single-line pinned rows, rendered by the Sidebar so both surfaces stay identical. */
-  pinnedThreads: readonly SidebarThreadSummary[];
-  renderPinnedThreadRow: (thread: SidebarThreadSummary) => ReactNode;
+  prByThreadId: ReadonlyMap<ThreadId, NonNullable<GitStatusResult["pr"]> | null>;
+  onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
   onSetThreadSettled: (threadId: ThreadId, settled: boolean) => void;
@@ -469,16 +484,17 @@ export function SidebarActivityView({
   onMarkThreadRead: (threadId: ThreadId, completedAt?: string) => void;
   /** Same rich hover card the classic thread rows show at the sidebar edge. */
   renderThreadHoverCard: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
-  /** Rendered on the "Activity" header row (e.g. the classic-view toggle). */
-  headerToolbar?: ReactNode;
 }) {
   const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
-  const [pinnedOpen, setPinnedOpen] = useState(false);
+  const [pinnedOpen, setPinnedOpen] = useState(true);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);
   const [settledOpen, setSettledOpen] = useState(false);
   const [settledExtraPages, setSettledExtraPages] = useState(0);
+  const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<
+    ReadonlyMap<string, number>
+  >(() => new Map());
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
   // Scope options and the unread sweep intentionally ignore the active scope:
@@ -490,6 +506,9 @@ export function SidebarActivityView({
     scopeSelection,
     scopeOptions,
   );
+  useEffect(() => {
+    if (scopeSelection !== activeScope) setScopeSelection(activeScope);
+  }, [activeScope, scopeSelection]);
 
   const model = buildActivityViewModel({
     threads,
@@ -497,19 +516,19 @@ export function SidebarActivityView({
     settledOverrideByThreadId,
     projectFilterIds,
   });
-  // Pinned rows come from the Sidebar unfiltered, so the active scope has to be
-  // applied here too — otherwise pins from other projects sit under a scoped header.
-  const scopedPinnedThreads =
-    projectFilterIds === null
-      ? pinnedThreads
-      : pinnedThreads.filter((thread) => projectFilterIds.has(thread.projectId));
+  const scopedPinnedThreads = model.pinned;
   const nowMs = Date.now();
-  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
+  const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
     model.active,
+  );
+  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
+    seenThreads,
   );
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
   const projectGroups =
-    groupMode === "project" ? groupActivityThreadsByProject(model.active) : EMPTY_PROJECT_GROUPS;
+    groupMode === "project"
+      ? groupActivityThreadsByProject(model.active, isRealProject)
+      : EMPTY_PROJECT_GROUPS;
 
   const earlierPaging = resolveSidebarThreadListPaging({
     totalCount: dateBuckets.earlier.length,
@@ -523,6 +542,65 @@ export function SidebarActivityView({
     pageSize: ACTIVITY_LIST_PAGE_SIZE,
     requestedExtraPages: settledExtraPages,
   });
+  const pagedProjectGroups = projectGroups.map((group) => {
+    const paging = resolveSidebarThreadListPaging({
+      totalCount: group.threads.length,
+      baseLimit: ACTIVITY_LIST_BASE_LIMIT,
+      pageSize: ACTIVITY_LIST_PAGE_SIZE,
+      requestedExtraPages: projectExtraPagesByKey.get(group.key) ?? 0,
+    });
+    return {
+      group,
+      paging,
+      threads: group.threads.slice(0, paging.previewLimit),
+    };
+  });
+
+  const visibleThreadIds = useMemo(
+    () =>
+      collectVisibleActivityThreadIds({
+        groupMode,
+        pinnedOpen,
+        pinned: scopedPinnedThreads,
+        priority: priorityThreads,
+        recent: recentThreads,
+        today: dateBuckets.today,
+        yesterday: dateBuckets.yesterday,
+        earlierOpen,
+        earlier: dateBuckets.earlier.slice(0, earlierPaging.previewLimit),
+        projectGroups: pagedProjectGroups.map((group) => group.threads),
+        settledOpen,
+        settled: model.settled.slice(0, settledPaging.previewLimit),
+      }),
+    [
+      dateBuckets.earlier,
+      dateBuckets.today,
+      dateBuckets.yesterday,
+      earlierOpen,
+      earlierPaging.previewLimit,
+      groupMode,
+      model.settled,
+      pagedProjectGroups,
+      pinnedOpen,
+      priorityThreads,
+      recentThreads,
+      scopedPinnedThreads,
+      settledOpen,
+      settledPaging.previewLimit,
+    ],
+  );
+  const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
+  const visibleThreadIdsRef = useRef(visibleThreadIds);
+  visibleThreadIdsRef.current = visibleThreadIds;
+  useEffect(() => {
+    onVisibleThreadIdsChange(visibleThreadIdsRef.current);
+  }, [onVisibleThreadIdsChange, visibleThreadIdsFingerprint]);
+  useEffect(
+    () => () => {
+      onVisibleThreadIdsChange([]);
+    },
+    [onVisibleThreadIdsChange],
+  );
 
   const markAllRead = () => {
     for (const thread of unreadThreads) {
@@ -530,7 +608,10 @@ export function SidebarActivityView({
     }
   };
 
-  const renderRow = (thread: SidebarThreadSummary, isSettled: boolean) => (
+  const renderRow = (
+    thread: SidebarThreadSummary,
+    isSettled: boolean,
+  ) => (
     <ActivityThreadRow
       key={thread.id}
       thread={thread}
@@ -538,14 +619,20 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
+      pr={prByThreadId.get(thread.id) ?? thread.lastKnownPr ?? null}
       status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
-      onSetSettled={(settled) => onSetThreadSettled(thread.id, settled)}
+      onSetSettled={(settled) => {
+        if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
+        onSetThreadSettled(thread.id, settled);
+      }}
       onTogglePinned={() => onToggleThreadPinned(thread.id)}
       onArchive={() => onArchiveThread(thread.id)}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
     />
   );
+  const renderActiveRow = (thread: SidebarThreadSummary) =>
+    renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId));
 
   // The placeholder speaks for the whole surface, so it may only appear when no
   // section has rows — a feed with nothing active but a populated Pinned or Done
@@ -567,7 +654,9 @@ export function SidebarActivityView({
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((open) => !open)}
         >
-          {scopedPinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+          {scopedPinnedThreads.map((thread) =>
+            renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId)),
+          )}
         </ActivityCollapsibleSection>
       ) : null}
 
@@ -584,7 +673,6 @@ export function SidebarActivityView({
           markAllReadDisabled={unreadThreads.length === 0}
           onMarkAllRead={markAllRead}
         />
-        {headerToolbar}
       </div>
 
       {isEmpty ? (
@@ -592,23 +680,48 @@ export function SidebarActivityView({
           {threadsHydrated ? emptyLabel : "Loading activity..."}
         </div>
       ) : groupMode === "project" ? (
-        projectGroups.map((group) => (
-          <div key={group.projectId}>
+        pagedProjectGroups.map(({ group, paging, threads: visibleThreads }) => (
+          <div key={group.key}>
             <ActivitySectionLabel
-              label={resolveThreadProjectLabel(projectById.get(group.projectId))}
+              label={
+                group.kind === "chats"
+                  ? "Synara"
+                  : resolveThreadProjectLabel(projectById.get(group.projectId))
+              }
             />
             <div className="flex flex-col gap-0.5">
-              {group.threads.map((thread) => renderRow(thread, false))}
+              {visibleThreads.map(renderActiveRow)}
+              <ActivityShowMoreRow
+                canShowMore={paging.canShowMore}
+                canShowLess={paging.canShowLess}
+                onShowMore={() => {
+                  setProjectExtraPagesByKey((current) => {
+                    const next = new Map(current);
+                    next.set(group.key, paging.effectiveExtraPages + 1);
+                    return next;
+                  });
+                }}
+                onShowLess={() => {
+                  setProjectExtraPagesByKey((current) => {
+                    const next = new Map(current);
+                    const extraPages = Math.max(0, paging.effectiveExtraPages - 1);
+                    if (extraPages === 0) next.delete(group.key);
+                    else next.set(group.key, extraPages);
+                    return next;
+                  });
+                }}
+              />
             </div>
           </div>
         ))
       ) : (
         <>
-          {recentThreads.length > 0 ? (
+          {priorityThreads.length > 0 || recentThreads.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Recent" />
               <div className="flex flex-col gap-0.5">
-                {recentThreads.map((thread) => renderRow(thread, false))}
+                {priorityThreads.map(renderActiveRow)}
+                {recentThreads.map(renderActiveRow)}
               </div>
             </div>
           ) : null}
@@ -616,7 +729,7 @@ export function SidebarActivityView({
             <div>
               <ActivitySectionLabel label="Today" />
               <div className="flex flex-col gap-0.5">
-                {dateBuckets.today.map((thread) => renderRow(thread, false))}
+                {dateBuckets.today.map(renderActiveRow)}
               </div>
             </div>
           ) : null}
@@ -624,7 +737,7 @@ export function SidebarActivityView({
             <div>
               <ActivitySectionLabel label="Yesterday" />
               <div className="flex flex-col gap-0.5">
-                {dateBuckets.yesterday.map((thread) => renderRow(thread, false))}
+                {dateBuckets.yesterday.map(renderActiveRow)}
               </div>
             </div>
           ) : null}
@@ -636,7 +749,7 @@ export function SidebarActivityView({
             >
               {dateBuckets.earlier
                 .slice(0, earlierPaging.previewLimit)
-                .map((thread) => renderRow(thread, false))}
+                .map(renderActiveRow)}
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}

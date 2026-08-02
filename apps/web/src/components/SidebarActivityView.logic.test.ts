@@ -10,13 +10,17 @@ import {
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
+  collectVisibleActivityThreadIds,
   formatActivityRowTime,
+  groupActivityThreadsByProject,
+  hasUnreadActivity,
   isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
   resolveActivityStatusGroup,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
+  splitPriorityActivityThreads,
   splitRecentActivityThreads,
 } from "./SidebarActivityView.logic";
 
@@ -45,10 +49,11 @@ function makeThread(input: {
   settledAt?: string | null;
   parentThreadId?: string | null;
   isPinned?: boolean;
+  projectId?: ProjectId;
 }): SidebarThreadSummary {
   return {
     id: ThreadId.makeUnsafe(input.id),
-    projectId: PROJECT_ID,
+    projectId: input.projectId ?? PROJECT_ID,
     title: `Thread ${input.id}`,
     modelSelection: { provider: "codex", model: "gpt-5" },
     interactionMode: "default",
@@ -199,23 +204,34 @@ describe("buildActivityViewModel", () => {
     ]);
   });
 
-  it("keeps pinned threads out of every feed bucket, settled or not", () => {
-    const pinnedActive = makeThread({
-      id: "pinned-active",
+  it("keeps every pinned thread exclusively in the Pinned section", () => {
+    const pinnedUnread = makeThread({
+      id: "pinned-unread",
       latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:00:00.000Z",
     });
-    const pinnedSettled = makeThread({
-      id: "pinned-settled",
+    const pinnedSeen = makeThread({
+      id: "pinned-seen",
       latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+    const pinnedSettledSeen = makeThread({
+      id: "pinned-settled-seen",
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
       settledAt: "2026-08-01T09:45:00.000Z",
     });
 
     const model = buildActivityViewModel({
-      threads: [pinnedActive, pinnedSettled],
-      pinnedThreadIdSet: new Set([pinnedActive.id, pinnedSettled.id]),
+      threads: [pinnedUnread, pinnedSeen, pinnedSettledSeen],
+      pinnedThreadIdSet: new Set([pinnedUnread.id, pinnedSeen.id, pinnedSettledSeen.id]),
     });
 
-    expect(model.pinned.map((thread) => thread.id)).toEqual(["pinned-active", "pinned-settled"]);
+    expect(model.pinned.map((thread) => thread.id)).toEqual([
+      "pinned-unread",
+      "pinned-seen",
+      "pinned-settled-seen",
+    ]);
     expect(model.settled).toEqual([]);
     expect(model.active).toEqual([]);
   });
@@ -224,6 +240,7 @@ describe("buildActivityViewModel", () => {
     const optimisticallySettled = makeThread({
       id: "opt-settled",
       latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
     });
     const optimisticallyRestored = makeThread({
       id: "opt-restored",
@@ -243,6 +260,38 @@ describe("buildActivityViewModel", () => {
 
     expect(model.settled.map((thread) => thread.id)).toEqual(["opt-settled"]);
     expect(model.active.map((thread) => thread.id)).toEqual(["opt-restored"]);
+  });
+
+  it("promotes settled threads while work is live, actionable, or newly completed", () => {
+    const settledAt = "2026-08-01T08:00:00.000Z";
+    const running = makeThread({ id: "running", settledAt, hasLiveTailWork: true });
+    const attention = makeThread({
+      id: "attention",
+      settledAt,
+      hasPendingApprovals: true,
+      session: makeSession("running"),
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+    });
+    const unseen = makeThread({
+      id: "unseen",
+      settledAt,
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:00:00.000Z",
+    });
+    const reviewed = makeThread({
+      id: "reviewed",
+      settledAt,
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+
+    const model = buildActivityViewModel({
+      threads: [reviewed, running, attention, unseen],
+      pinnedThreadIdSet: new Set(),
+    });
+
+    expect(model.active.map((thread) => thread.id)).toEqual(["attention", "unseen", "running"]);
+    expect(model.settled.map((thread) => thread.id)).toEqual(["reviewed"]);
   });
 });
 
@@ -369,6 +418,29 @@ describe("project filter", () => {
       { kind: "project", projectId: PROJECT_ID, threadCount: 1 },
     ]);
   });
+
+  it("merges project-less containers into one project-grouping section", () => {
+    const CHAT_PROJECT_A = ProjectId.makeUnsafe("chat-project-a");
+    const CHAT_PROJECT_B = ProjectId.makeUnsafe("chat-project-b");
+    const groups = groupActivityThreadsByProject(
+      [
+        makeThread({ id: "project", projectId: PROJECT_ID }),
+        makeThread({ id: "chat-a", projectId: CHAT_PROJECT_A }),
+        makeThread({ id: "chat-b", projectId: CHAT_PROJECT_B }),
+      ],
+      (projectId) => projectId === PROJECT_ID,
+    );
+
+    expect(groups.map((group) => [group.kind, group.threads.map((thread) => thread.id)])).toEqual([
+      ["project", ["project"]],
+      ["chats", ["chat-a", "chat-b"]],
+    ]);
+    expect(groups[1]).toMatchObject({
+      key: "chats",
+      kind: "chats",
+      projectIds: [CHAT_PROJECT_A, CHAT_PROJECT_B],
+    });
+  });
 });
 
 describe("resolveActivityScope", () => {
@@ -403,6 +475,34 @@ describe("resolveActivityScope", () => {
 });
 
 describe("splitRecentActivityThreads", () => {
+  it("keeps attention, unseen completions, and running work ahead of reviewed threads", () => {
+    const attention = makeThread({
+      id: "attention",
+      hasPendingApprovals: true,
+      session: makeSession("running"),
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+    });
+    const unseen = makeThread({
+      id: "unseen",
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:00:00.000Z",
+    });
+    const running = makeThread({ id: "running", hasLiveTailWork: true });
+    const seen = makeThread({
+      id: "seen",
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:45:00.000Z",
+    });
+
+    const split = splitPriorityActivityThreads([attention, unseen, running, seen]);
+    expect(split.priority.map((thread) => thread.id)).toEqual([
+      "attention",
+      "unseen",
+      "running",
+    ]);
+    expect(split.seen.map((thread) => thread.id)).toEqual(["seen"]);
+  });
+
   it("caps at the limit, sorts by newest interaction, and removes picks from the rest", () => {
     const byInteraction = (id: string, lastVisitedAt: string, latestUserMessageAt?: string) => ({
       ...makeThread({
@@ -437,6 +537,68 @@ describe("splitRecentActivityThreads", () => {
   });
 });
 
+describe("collectVisibleActivityThreadIds", () => {
+  it("uses the mounted Activity rows and respects collapsed and paged sections", () => {
+    const thread = (id: string) => makeThread({ id });
+    expect(
+      collectVisibleActivityThreadIds({
+        groupMode: "time",
+        pinnedOpen: false,
+        pinned: [thread("pinned")],
+        priority: [thread("attention")],
+        recent: [thread("recent")],
+        today: [thread("today")],
+        yesterday: [thread("yesterday")],
+        earlierOpen: true,
+        earlier: [thread("earlier-visible")],
+        projectGroups: [],
+        settledOpen: false,
+        settled: [thread("done")],
+      }),
+    ).toEqual(["attention", "recent", "today", "yesterday", "earlier-visible"]);
+  });
+
+  it("uses already-paged project groups in project mode", () => {
+    const thread = (id: string) => makeThread({ id });
+    expect(
+      collectVisibleActivityThreadIds({
+        groupMode: "project",
+        pinnedOpen: true,
+        pinned: [thread("pinned")],
+        priority: [thread("ignored-priority")],
+        recent: [],
+        today: [],
+        yesterday: [],
+        earlierOpen: false,
+        earlier: [],
+        projectGroups: [[thread("project-a")], [thread("project-b")]],
+        settledOpen: true,
+        settled: [thread("done")],
+      }),
+    ).toEqual(["pinned", "project-a", "project-b", "done"]);
+  });
+
+  it("deduplicates a pinned unread thread that also appears in Recent", () => {
+    const duplicated = makeThread({ id: "pinned-unread" });
+    expect(
+      collectVisibleActivityThreadIds({
+        groupMode: "time",
+        pinnedOpen: true,
+        pinned: [duplicated],
+        priority: [duplicated],
+        recent: [],
+        today: [],
+        yesterday: [],
+        earlierOpen: false,
+        earlier: [],
+        projectGroups: [],
+        settledOpen: false,
+        settled: [],
+      }),
+    ).toEqual([duplicated.id]);
+  });
+});
+
 describe("collectUnreadActivityThreads", () => {
   it("collects only eligible threads with unseen completions", () => {
     const unread = makeThread({
@@ -459,6 +621,22 @@ describe("collectUnreadActivityThreads", () => {
     expect(collectUnreadActivityThreads([unread, read, archivedUnread]).map((t) => t.id)).toEqual([
       "unread",
     ]);
+  });
+
+  it("does not light the bell for the thread currently being read", () => {
+    const activeUnread = makeThread({
+      id: "active-unread",
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:00:00.000Z",
+    });
+    const otherUnread = makeThread({
+      id: "other-unread",
+      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      lastVisitedAt: "2026-08-01T09:00:00.000Z",
+    });
+
+    expect(hasUnreadActivity([activeUnread], activeUnread.id)).toBe(false);
+    expect(hasUnreadActivity([activeUnread, otherUnread], activeUnread.id)).toBe(true);
   });
 });
 

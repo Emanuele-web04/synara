@@ -4431,11 +4431,37 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toHaveTextContent("project");
-      await projectPickerTrigger.click();
+      const inlineResetButton = page.getByTestId("project-picker-reset-trigger");
+      const inlineFolderIcon = projectPickerTrigger
+        .element()
+        .querySelector<HTMLElement>("[class*='transition-opacity']");
+      expect(inlineFolderIcon).not.toBeNull();
+      projectPickerTrigger.element().focus();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
+      });
+      await projectPickerTrigger.press("Tab");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(inlineResetButton.element());
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("1");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("0");
+      });
+      await inlineResetButton.press("Shift+Tab");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(projectPickerTrigger.element());
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
+      });
+      await projectPickerTrigger.press("Enter");
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
       await expect.element(page.getByText(/Folders on this/)).not.toBeInTheDocument();
+      await page.getByText("New project").hover();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+      });
 
       const currentProjectOption = await waitForElement(
         () =>
@@ -4634,22 +4660,43 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      expect(document.activeElement).toBe(composerEditor);
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
-      await projectPickerTrigger.click();
-      await page.getByText("Don't work in a project").click();
+      const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
+      await projectPickerTrigger.hover();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(resetProjectButton.element()).opacity).toBe("1");
+      });
 
-      await vi.waitFor(
-        () => {
-          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
-            projectId: HOME_PROJECT_ID,
-            envMode: "local",
-            branch: null,
-            worktreePath: null,
-          });
-        },
-        { timeout: 8_000, interval: 16 },
-      );
+      const originalRequestAnimationFrame = window.requestAnimationFrame;
+      let frameRequestCount = 0;
+      window.requestAnimationFrame = (callback) => {
+        frameRequestCount += 1;
+        return originalRequestAnimationFrame(callback);
+      };
+      try {
+        await resetProjectButton.click();
+        await vi.waitFor(
+          () => {
+            expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+              projectId: HOME_PROJECT_ID,
+              envMode: "local",
+              branch: null,
+              worktreePath: null,
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+
+      expect(frameRequestCount).toBe(0);
+      expect(document.activeElement).toBe(composerEditor);
+      await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();

@@ -9149,15 +9149,26 @@ export default function ChatView({
   );
 
   const moveEmptyDraftToLocalProject = useCallback(
-    (projectId: ProjectId) => {
+    (
+      projectId: ProjectId,
+      options?: {
+        restoreComposerFocus?: boolean;
+      },
+    ) => {
       // Project moves reset branch; the previous project's current branch may not exist here.
       moveDraftThreadToProject(threadId, projectId, LOCAL_PROJECT_DRAFT_CONTEXT);
-      scheduleComposerFocus();
+      if (options?.restoreComposerFocus ?? true) {
+        scheduleComposerFocus();
+      }
     },
     [moveDraftThreadToProject, scheduleComposerFocus, threadId],
   );
 
   const handleResetWorkspaceToHome = useCallback(() => {
+    // The inline reset action prevents pointer-down from stealing editor focus. Avoid refocusing
+    // an already-focused editor: focusAtEnd would move its cursor and schedule a redundant frame.
+    // Picker-menu resets still restore focus because the editor is no longer active in that path.
+    const restoreComposerFocus = !composerEditorRef.current?.isFocused();
     if (isLocalDraftThread) {
       if (isStudioContainer) {
         setDraftThreadContext(threadId, {
@@ -9167,7 +9178,9 @@ export default function ChatView({
           workingDirectory: null,
           lastKnownPr: null,
         });
-        scheduleComposerFocus();
+        if (restoreComposerFocus) {
+          scheduleComposerFocus();
+        }
         return;
       }
       if (!isHomeChatContainer) {
@@ -9193,7 +9206,7 @@ export default function ChatView({
             }
             syncServerShellSnapshot(snapshot);
           }
-          moveEmptyDraftToLocalProject(homeProjectId);
+          moveEmptyDraftToLocalProject(homeProjectId, { restoreComposerFocus });
         })();
       }
       setDraftThreadContext(threadId, {
@@ -9203,7 +9216,9 @@ export default function ChatView({
         branch: null,
         lastKnownPr: null,
       });
-      scheduleComposerFocus();
+      if (restoreComposerFocus) {
+        scheduleComposerFocus();
+      }
       return;
     }
 
@@ -9225,7 +9240,9 @@ export default function ChatView({
         });
       }
     }
-    scheduleComposerFocus();
+    if (restoreComposerFocus) {
+      scheduleComposerFocus();
+    }
   }, [
     activeThread,
     chatWorkspaceRoot,

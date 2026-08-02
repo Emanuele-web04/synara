@@ -30,7 +30,7 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
-import { CentralIcon, createCentralIconComponent } from "~/lib/central-icons";
+import { createCentralIconComponent } from "~/lib/central-icons";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
@@ -179,7 +179,7 @@ import {
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { collectUnreadActivityThreads } from "./SidebarActivityView.logic";
+import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -187,9 +187,9 @@ import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
-import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
@@ -543,30 +543,6 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon aria-hidden="true" className={sidebarGlyphClass("meta", className)} />;
 }
 
-// Trailing row status: spinner while working, check when completed, otherwise a
-// colored status dot. Thread rows and project headers use the same glyph so a
-// collapsed project still advertises active child chats.
-function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
-  if (status.label === "Completed") {
-    // Match the worktree/other trailing chips' optical size (15px) so the green
-    // check reads as part of the same right-side icon cluster. Same filled glyph
-    // as a passing PR check (PullRequestCheckStatusIcon).
-    return (
-      <CentralIcon
-        name="circle-check"
-        variant="fill"
-        className={cn(SIDEBAR_TRAILING_ICON_CLASS, status.colorClass)}
-      />
-    );
-  }
-  if (status.pulse) {
-    return <ThreadRunningSpinner />;
-  }
-  return (
-    <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
-  );
-}
-
 /** Pulsing green dot shown before a project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
@@ -587,23 +563,19 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
   sidebarHoverRevealHideClassName("thread-row"),
 );
 
-/** Fixed-width status column; fades on hover so pin/archive can overlay this slot. */
-function threadRowTimestampSlotClassName(
+/** Status glyph slot; matches the 15px meta-chip column so trailing icons stay compact. */
+function threadRowStatusSlotClassName(
   isSubagentThread: boolean,
   toneClassName?: string,
 ): string {
   return cn(
-    // No right margin: the timestamp moved to the hover card, so this column now
-    // only carries the status glyph (check/spinner/dot). It must sit flush at the
-    // row's right padding like the meta chips (worktree, fork) — a leftover `mr-1`
-    // pushed the completed check ~4px past them and broke the trailing-cluster line.
-    "flex shrink-0 items-center justify-end leading-none tabular-nums",
+    "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
-      ? "w-[1.2rem] text-[10px]"
+      ? "text-[10px]"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
         // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
-        "w-[1.625rem] text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
+        "text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
     toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
   );
 }
@@ -990,6 +962,7 @@ function ChatSortMenu({
 
 function SidebarPrimaryAction({
   icon: Icon,
+  iconClassName,
   label,
   onClick,
   onMouseEnter,
@@ -1001,6 +974,8 @@ function SidebarPrimaryAction({
 }: {
   // Accepts both Lucide adapters and raw react-icons glyphs (rendered via SidebarGlyph).
   icon: ComponentType<{ className?: string }>;
+  /** Optional optical correction for glyphs whose artwork fills more of its view box. */
+  iconClassName?: string;
   label: string;
   onClick?: () => void;
   onMouseEnter?: () => void;
@@ -1036,7 +1011,7 @@ function SidebarPrimaryAction({
         onFocus={onFocus}
       >
         <SidebarLeadingIcon size="sm" tone="text-inherit">
-          <SidebarGlyph icon={Icon} variant="leading" />
+          <SidebarGlyph icon={Icon} variant="leading" className={iconClassName} />
         </SidebarLeadingIcon>
         <span className="truncate">{label}</span>
         {badge ? (
@@ -1104,24 +1079,69 @@ function SortableProjectItem({
  * Header Activity toggle: a bell that lights up in the accent tone while the
  * Activity view is on, with an unread dot when completions are waiting.
  */
+const ACTIVITY_ONBOARDING_STORAGE_KEY = "synara:activity-onboarding:v1";
+const ACTIVITY_ONBOARDING_DURATION_MS = 8_000;
+
+function shouldShowActivityOnboarding(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(ACTIVITY_ONBOARDING_STORAGE_KEY) !== "seen";
+  } catch {
+    return true;
+  }
+}
+
 function SidebarActivityBellButton({
   active,
   showUnreadDot,
+  shortcutLabel,
   onClick,
 }: {
   active: boolean;
   showUnreadDot: boolean;
+  shortcutLabel: string | null;
   onClick: () => void;
 }) {
+  const [onboardingVisible, setOnboardingVisible] = useState(shouldShowActivityOnboarding);
+  const [tooltipOpen, setTooltipOpen] = useState(onboardingVisible);
+
+  useEffect(() => {
+    if (!onboardingVisible) return;
+    try {
+      window.localStorage.setItem(ACTIVITY_ONBOARDING_STORAGE_KEY, "seen");
+    } catch {
+      // Storage can be unavailable in private or restricted browser contexts.
+    }
+    const timeout = window.setTimeout(() => {
+      setOnboardingVisible(false);
+      setTooltipOpen(false);
+    }, ACTIVITY_ONBOARDING_DURATION_MS);
+    return () => window.clearTimeout(timeout);
+  }, [onboardingVisible]);
+
+  const dismissOnboarding = () => {
+    setOnboardingVisible(false);
+    setTooltipOpen(false);
+  };
+
   return (
-    <Tooltip>
+    <Tooltip
+      open={tooltipOpen}
+      onOpenChange={(open) => {
+        if (onboardingVisible && !open) return;
+        setTooltipOpen(open);
+      }}
+    >
       <TooltipTrigger
         render={
           <button
             type="button"
             aria-label={active ? "Switch to classic view" : "Switch to activity view"}
             aria-pressed={active}
-            onClick={onClick}
+            onClick={() => {
+              dismissOnboarding();
+              onClick();
+            }}
             className={cn(
               "relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors",
               SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -1132,7 +1152,7 @@ function SidebarActivityBellButton({
           />
         }
       >
-        <BellIcon className="size-3.5 shrink-0" />
+        <BellIcon className={sidebarGlyphClass("leading")} />
         {showUnreadDot ? (
           <span
             aria-hidden
@@ -1140,7 +1160,27 @@ function SidebarActivityBellButton({
           />
         ) : null}
       </TooltipTrigger>
-      <TooltipPopup side="bottom">Activity view</TooltipPopup>
+      <TooltipPopup
+        side={onboardingVisible ? "right" : "bottom"}
+        align={onboardingVisible ? "start" : "center"}
+        sideOffset={onboardingVisible ? 8 : 4}
+        className={cn(
+          onboardingVisible &&
+            "max-w-64 border-[var(--color-text-accent)] bg-[var(--color-text-accent)] text-white shadow-lg",
+        )}
+        viewportClassName={cn(onboardingVisible && "px-3 py-2.5")}
+      >
+        {onboardingVisible ? (
+          <div className="text-left">
+            <div className="text-xs font-semibold">Activity</div>
+            <div className="mt-0.5 text-[11px] leading-4 text-white/85">
+              See running tasks, completed work, and anything that needs your attention.
+            </div>
+          </div>
+        ) : (
+          `Activity view${shortcutLabel ? ` (${shortcutLabel})` : ""}`
+        )}
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -1184,7 +1224,12 @@ export function SidebarSurfacePicker({
           />
         }
       >
-        <span className="font-display min-w-0 truncate text-[15px] text-foreground">
+        <span
+          className={cn(
+            "font-display min-w-0 truncate text-foreground",
+            activeView === "threads" ? "text-[16px]" : "text-[15px]",
+          )}
+        >
           {activeCopy.title}
         </span>
         <DisclosureChevron open={menuOpen} className="text-muted-foreground/70" />
@@ -1450,6 +1495,7 @@ export default function Sidebar() {
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.search") ??
     (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const activityShortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.activity");
   const importThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
     (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
@@ -1487,11 +1533,31 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
-  // Another tab toggling the Activity view rewrites the shared localStorage
-  // blob; adopt its choice so this tab's next persist doesn't clobber it back.
+  const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
+  const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
+    setActivityVisibleThreadIds((current) => {
+      if (
+        current.length === threadIds.length &&
+        current.every((threadId, index) => threadId === threadIds[index])
+      ) {
+        return current;
+      }
+      return [...threadIds];
+    });
+  }, []);
+  // Sidebar UI state is stored as one blob. Adopt the complete external write
+  // so this tab cannot persist stale paging, dismissal, or route fields over a
+  // newer tab merely because the Activity toggle changed there.
   useEffect(
     () =>
       subscribeSidebarUiState((state) => {
+        setChatSectionExpanded(state.chatSectionExpanded);
+        setChatThreadListExtraPages(state.chatThreadListExtraPages);
+        setThreadListExtraPagesByProjectCwd(
+          new Map(Object.entries(state.projectThreadListExtraPagesByCwd)),
+        );
+        setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
+        setLastThreadRoute(state.lastThreadRoute);
         setActivityViewEnabled(state.activityViewEnabled);
       }),
     [],
@@ -1550,8 +1616,8 @@ export default function Sidebar() {
     );
   // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(
-    () => collectUnreadActivityThreads(nonStudioSidebarThreads).length > 0,
-    [nonStudioSidebarThreads],
+    () => hasUnreadActivityOutsideActiveThread(nonStudioSidebarThreads, activeSidebarThreadId),
+    [activeSidebarThreadId, nonStudioSidebarThreads],
   );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
@@ -1758,12 +1824,6 @@ export default function Sidebar() {
         pinnedThreadIds,
       ),
     [activeSpaceNonStudioSidebarTreeThreads, isOnStudio, pinnedThreadIds, studioSidebarTreeThreads],
-  );
-  // The Activity feed ignores spaces, so its pinned section must too — the
-  // space-filtered `pinnedThreads` above would silently hide pins from other spaces.
-  const activityPinnedThreads = useMemo(
-    () => getPinnedThreadsForSidebar(nonStudioSidebarTreeThreads, pinnedThreadIds),
-    [nonStudioSidebarTreeThreads, pinnedThreadIds],
   );
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -3774,7 +3834,7 @@ export default function Sidebar() {
     [activateThreadFromSidebarIntent, rangeSelectTo, toggleThreadSelection],
   );
 
-  const visibleSidebarThreadIds = useMemo(() => {
+  const classicVisibleSidebarThreadIds = useMemo(() => {
     const visibleThreadIdSet = new Set<ThreadId>();
     const addVisibleThreadId = (threadId: ThreadId) => {
       visibleThreadIdSet.add(threadId);
@@ -3812,9 +3872,24 @@ export default function Sidebar() {
 
     return [...visibleThreadIdSet];
   }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  const visibleSidebarThreadIds =
+    activityViewEnabled && !isOnStudio
+      ? activityVisibleThreadIds
+      : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
-    () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
-    [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
+    () =>
+      new Set(
+        activityViewEnabled && !isOnStudio
+          ? visibleSidebarThreadIds
+          : [...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds],
+      ),
+    [
+      activityViewEnabled,
+      isOnStudio,
+      studioChatThreadIds,
+      visibleChatThreadIds,
+      visibleSidebarThreadIds,
+    ],
   );
   const visibleSidebarThreads = useMemo(
     // Tree source so an active subagent row also gets PR badges and git targets.
@@ -4049,7 +4124,7 @@ export default function Sidebar() {
     hoverActions: ReactNode;
   }) {
     return (
-      <div className="relative flex shrink-0 items-center justify-end gap-1">
+      <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
         {input.rightMetaChips.length > 0 ? (
           <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -4067,7 +4142,7 @@ export default function Sidebar() {
           // slot only carries the live status/loader glyph; when idle it
           // collapses and the hover action icons sit flush at the end.
           <span
-            className={threadRowTimestampSlotClassName(
+            className={threadRowStatusSlotClassName(
               input.isSubagentThread,
               input.timestampToneClassName,
             )}
@@ -4916,6 +4991,16 @@ export default function Sidebar() {
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
         return;
       }
+      if (command === "sidebar.activity") {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpenActivity = isOnSettings || isOnStudio || !activityViewEnabled;
+        setActivityViewEnabledSmoothly(shouldOpenActivity);
+        if (shouldOpenActivity && (isOnSettings || isOnStudio)) {
+          handleSidebarViewChange("threads");
+        }
+        return;
+      }
       if (command === "sidebar.addProject") {
         event.preventDefault();
         event.stopPropagation();
@@ -5034,7 +5119,9 @@ export default function Sidebar() {
     activateThreadFromSidebarIntent,
     activeSidebarThreadId,
     activeSpaceId,
+    activityViewEnabled,
     handleSelectSpace,
+    handleSidebarViewChange,
     keybindings,
     getCurrentSidebarShortcutContext,
     homeDir,
@@ -5042,6 +5129,7 @@ export default function Sidebar() {
     isOnStudio,
     navigate,
     searchPaletteMode,
+    setActivityViewEnabledSmoothly,
     spaces,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
@@ -5635,6 +5723,7 @@ export default function Sidebar() {
                 <SidebarIconButton
                   icon={SearchIcon}
                   label="Search"
+                  glyph="leading"
                   size="md"
                   tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
                   tooltipSide="bottom"
@@ -5646,6 +5735,7 @@ export default function Sidebar() {
                   <SidebarActivityBellButton
                     active={activityViewEnabled}
                     showUnreadDot={hasUnreadActivity}
+                    shortcutLabel={activityShortcutLabel}
                     onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
                   />
                 ) : null}
@@ -5664,6 +5754,7 @@ export default function Sidebar() {
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
+                        iconClassName="size-3.5"
                         label="New studio chat"
                         onClick={handleCreateStudioChat}
                       />
@@ -5672,6 +5763,7 @@ export default function Sidebar() {
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
+                        iconClassName="size-3.5"
                         label="New thread"
                         onClick={handlePrimaryNewThread}
                         onMouseEnter={prefetchModelsForPrimaryNewThread}
@@ -5749,8 +5841,6 @@ export default function Sidebar() {
               ) : activityViewEnabled ? (
                 <SidebarGroup className="px-1.5 py-1.5">
                   <SidebarActivityView
-                    pinnedThreads={activityPinnedThreads}
-                    renderPinnedThreadRow={renderPinnedThreadRow}
                     threads={nonStudioSidebarThreads}
                     projectById={projectById}
                     activeThreadId={visualActiveSidebarThreadId}
@@ -5763,6 +5853,8 @@ export default function Sidebar() {
                     onToggleThreadPinned={toggleThreadPinned}
                     onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
                     onMarkThreadRead={markThreadVisited}
+                    prByThreadId={prByThreadId}
+                    onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                     renderThreadHoverCard={(thread, anchorId) =>
                       renderThreadHoverCardPopup(thread, anchorId)
                     }

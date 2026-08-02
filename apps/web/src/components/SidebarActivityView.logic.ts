@@ -95,9 +95,10 @@ export interface ActivityViewModel {
 /**
  * Splits eligible threads into the three Activity sections and orders each:
  * pinned by recency, active by status group then recency, settled by when they
- * were settled. Settling wins over pinning — an explicitly settled thread sinks
- * to the Settled section even while it stays pinned. An optional project filter
- * narrows every section without changing the ordering rules.
+ * were settled. Pinned threads live exclusively in the Pinned section, while a
+ * settled non-pinned thread is promoted back to active whenever it starts working,
+ * needs attention, or has an unseen completion. An optional project filter narrows
+ * every section without changing the ordering rules.
  */
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
@@ -114,11 +115,15 @@ export function buildActivityViewModel(input: {
   for (const thread of input.threads) {
     if (!isActivityThread(thread)) continue;
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
-    // Pinned threads live exclusively in the compact Pinned section above the
-    // feed (classic sidebar behavior), so they leave every feed bucket.
     if (input.pinnedThreadIdSet.has(thread.id)) {
       pinned.push(thread);
-    } else if (isThreadSettledForActivity(thread, input.settledOverrideByThreadId)) {
+      continue;
+    }
+    const statusGroup = resolveActivityStatusGroup(thread);
+    if (
+      isThreadSettledForActivity(thread, input.settledOverrideByThreadId) &&
+      statusGroup === "seen"
+    ) {
       settled.push(thread);
     } else {
       active.push(thread);
@@ -144,8 +149,6 @@ export function buildActivityViewModel(input: {
   return { pinned, active, settled };
 }
 
-const DAY_MS = 86_400_000;
-
 export type ActivityDateBucket = "today" | "yesterday" | "earlier";
 
 export function resolveActivityDateBucket(
@@ -154,9 +157,11 @@ export function resolveActivityDateBucket(
 ): ActivityDateBucket {
   const startOfToday = new Date(nowMs);
   startOfToday.setHours(0, 0, 0, 0);
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
   const recencyMs = resolveActivityRecencyMs(thread);
   if (recencyMs >= startOfToday.getTime()) return "today";
-  if (recencyMs >= startOfToday.getTime() - DAY_MS) return "yesterday";
+  if (recencyMs >= startOfYesterday.getTime()) return "yesterday";
   return "earlier";
 }
 
@@ -183,10 +188,19 @@ export function splitActivityThreadsByDateBucket(
 /** How the feed lays out its sections: calendar buckets or one block per project. */
 export type ActivityGroupMode = "time" | "project";
 
-export interface ActivityProjectGroup {
-  projectId: ProjectId;
-  threads: SidebarThreadSummary[];
-}
+export type ActivityProjectGroup =
+  | {
+      key: string;
+      kind: "project";
+      projectId: ProjectId;
+      threads: SidebarThreadSummary[];
+    }
+  | {
+      key: "chats";
+      kind: "chats";
+      projectIds: ProjectId[];
+      threads: SidebarThreadSummary[];
+    };
 
 /**
  * Groups an already-ordered active list by project, busiest-recent project
@@ -195,20 +209,37 @@ export interface ActivityProjectGroup {
  */
 export function groupActivityThreadsByProject(
   threads: readonly SidebarThreadSummary[],
+  isRealProject: (projectId: ProjectId) => boolean,
 ): ActivityProjectGroup[] {
-  const groupByProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
+  const groupByKey = new Map<string, ActivityProjectGroup>();
   for (const thread of threads) {
-    const group = groupByProjectId.get(thread.projectId);
+    const key = isRealProject(thread.projectId) ? `project:${thread.projectId}` : "chats";
+    const group = groupByKey.get(key);
     if (group) {
-      group.push(thread);
-    } else {
-      groupByProjectId.set(thread.projectId, [thread]);
+      group.threads.push(thread);
+      if (group.kind === "chats" && !group.projectIds.includes(thread.projectId)) {
+        group.projectIds.push(thread.projectId);
+      }
+      continue;
     }
+    groupByKey.set(
+      key,
+      isRealProject(thread.projectId)
+        ? {
+            key,
+            kind: "project",
+            projectId: thread.projectId,
+            threads: [thread],
+          }
+        : {
+            key: "chats",
+            kind: "chats",
+            projectIds: [thread.projectId],
+            threads: [thread],
+          },
+    );
   }
-  return Array.from(groupByProjectId, ([projectId, groupThreads]) => ({
-    projectId,
-    threads: groupThreads,
-  })).toSorted(
+  return Array.from(groupByKey.values()).toSorted(
     (left, right) =>
       Math.max(...right.threads.map(resolveActivityRecencyMs)) -
       Math.max(...left.threads.map(resolveActivityRecencyMs)),
@@ -280,6 +311,27 @@ export function resolveActivityScope(
 export const ACTIVITY_RECENT_LIMIT = 5;
 
 /**
+ * Keeps actionable or live work ahead of the user's already-reviewed working
+ * set. `active` is already status-sorted, so both returned arrays preserve the
+ * intended attention → unseen completion → running → seen ordering.
+ */
+export function splitPriorityActivityThreads(active: readonly SidebarThreadSummary[]): {
+  priority: SidebarThreadSummary[];
+  seen: SidebarThreadSummary[];
+} {
+  const priority: SidebarThreadSummary[] = [];
+  const seen: SidebarThreadSummary[] = [];
+  for (const thread of active) {
+    if (resolveActivityStatusGroup(thread) === "seen") {
+      seen.push(thread);
+    } else {
+      priority.push(thread);
+    }
+  }
+  return { priority, seen };
+}
+
+/**
  * When the user last touched a thread themselves: opened it (lastVisitedAt) or
  * sent a message (latestUserMessageAt). Agent/automation activity deliberately
  * does not count — the Recent section tracks the user's working set, not the
@@ -317,6 +369,38 @@ export function splitRecentActivityThreads(
 }
 
 /**
+ * Computes the rows that are actually mounted in Activity render order. The
+ * Sidebar consumes this same list for jump shortcuts, next/previous navigation,
+ * prewarming, and live PR refreshes so hidden classic-project state cannot leak
+ * into the Activity surface.
+ */
+export function collectVisibleActivityThreadIds(input: {
+  groupMode: ActivityGroupMode;
+  pinnedOpen: boolean;
+  pinned: readonly SidebarThreadSummary[];
+  priority: readonly SidebarThreadSummary[];
+  recent: readonly SidebarThreadSummary[];
+  today: readonly SidebarThreadSummary[];
+  yesterday: readonly SidebarThreadSummary[];
+  earlierOpen: boolean;
+  earlier: readonly SidebarThreadSummary[];
+  projectGroups: readonly (readonly SidebarThreadSummary[])[];
+  settledOpen: boolean;
+  settled: readonly SidebarThreadSummary[];
+}): ThreadId[] {
+  const visible: SidebarThreadSummary[] = [];
+  if (input.pinnedOpen) visible.push(...input.pinned);
+  if (input.groupMode === "project") {
+    for (const group of input.projectGroups) visible.push(...group);
+  } else {
+    visible.push(...input.priority, ...input.recent, ...input.today, ...input.yesterday);
+    if (input.earlierOpen) visible.push(...input.earlier);
+  }
+  if (input.settledOpen) visible.push(...input.settled);
+  return [...new Set(visible.map((thread) => thread.id))];
+}
+
+/**
  * Row timestamp: today's threads show the exact clock time (task-feed precision,
  * and it disambiguates same-title chats that would both read "2h"); older rows
  * keep the coarser relative label.
@@ -338,4 +422,12 @@ export function collectUnreadActivityThreads(
   threads: readonly SidebarThreadSummary[],
 ): SidebarThreadSummary[] {
   return threads.filter((thread) => isActivityThread(thread) && hasUnseenCompletion(thread));
+}
+
+/** The open thread is already being read even if its visited timestamp update is one render late. */
+export function hasUnreadActivity(
+  threads: readonly SidebarThreadSummary[],
+  activeThreadId: ThreadId | null,
+): boolean {
+  return collectUnreadActivityThreads(threads).some((thread) => thread.id !== activeThreadId);
 }

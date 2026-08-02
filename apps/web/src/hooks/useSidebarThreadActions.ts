@@ -26,7 +26,13 @@ import {
   isThreadAlreadyUnarchivedError,
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
-import { setThreadSettledFromClient } from "../lib/threadSettle";
+import {
+  createOptimisticSettledMutation,
+  recordOptimisticSettledMutationSequence,
+  reconcileOptimisticSettledMutation,
+  setThreadSettledFromClient,
+  type OptimisticSettledMutation,
+} from "../lib/threadSettle";
 import { newCommandId, randomUUID } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
@@ -235,12 +241,12 @@ export function useSidebarThreadActions(input: {
     [pinnedThreadIdSet, setThreadPinned],
   );
 
-  const [optimisticSettledStateByThreadId, setOptimisticSettledStateByThreadId] = useState<
-    ReadonlyMap<ThreadId, boolean>
+  const [optimisticSettledMutationByThreadId, setOptimisticSettledMutationByThreadId] = useState<
+    ReadonlyMap<ThreadId, OptimisticSettledMutation>
   >(() => new Map());
 
   const clearOptimisticThreadSettled = useCallback((threadId: ThreadId) => {
-    setOptimisticSettledStateByThreadId((current) => {
+    setOptimisticSettledMutationByThreadId((current) => {
       if (!current.has(threadId)) return current;
       const next = new Map(current);
       next.delete(threadId);
@@ -251,21 +257,49 @@ export function useSidebarThreadActions(input: {
   const setThreadSettled = useCallback(
     async (threadId: ThreadId, isSettled: boolean) => {
       const api = readNativeApi();
-      if (!api) return;
+      if (!api) throw new Error("Unable to connect to the app server.");
       const requestVersion =
         (latestSettledMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
       latestSettledMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
       const isLatestRequest = () =>
         latestSettledMutationVersionByThreadIdRef.current.get(threadId) === requestVersion;
 
-      setOptimisticSettledStateByThreadId((current) => {
-        if (current.get(threadId) === isSettled) return current;
+      const previousExpiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
+      if (previousExpiry !== undefined) {
+        window.clearTimeout(previousExpiry);
+        settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+      }
+      const serverSettledAtDispatch =
+        (sidebarThreadSummaryByIdRef.current[threadId]?.settledAt ?? null) !== null;
+      setOptimisticSettledMutationByThreadId((current) => {
         const next = new Map(current);
-        next.set(threadId, isSettled);
+        next.set(
+          threadId,
+          createOptimisticSettledMutation({
+            desiredSettled: isSettled,
+            serverSettledAtDispatch,
+          }),
+        );
         return next;
       });
       try {
-        await setThreadSettledFromClient(api.orchestration, threadId, isSettled);
+        const commandSequence = await setThreadSettledFromClient(
+          api.orchestration,
+          threadId,
+          isSettled,
+        );
+        if (isLatestRequest()) {
+          setOptimisticSettledMutationByThreadId((current) => {
+            const mutation = current.get(threadId);
+            if (!mutation) return current;
+            const next = new Map(current);
+            next.set(
+              threadId,
+              recordOptimisticSettledMutationSequence(mutation, commandSequence),
+            );
+            return next;
+          });
+        }
       } catch (error) {
         // A newer toggle owns the override now; dropping it here would revert to
         // a state the user has already moved on from.
@@ -280,8 +314,6 @@ export function useSidebarThreadActions(input: {
         settleOverrideExpiryTimeoutsRef.current.delete(threadId);
         if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
       }, SETTLE_OVERRIDE_MAX_LIFETIME_MS);
-      const previousExpiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
-      if (previousExpiry !== undefined) window.clearTimeout(previousExpiry);
       settleOverrideExpiryTimeoutsRef.current.set(threadId, expiry);
     },
     [clearOptimisticThreadSettled],
@@ -303,23 +335,64 @@ export function useSidebarThreadActions(input: {
   // Drop optimistic settle entries once the server-confirmed state agrees, so
   // later pushes from other clients are no longer masked by a stale override.
   useEffect(() => {
-    if (optimisticSettledStateByThreadId.size === 0) return;
-    const settle = window.setTimeout(() => {
-      setOptimisticSettledStateByThreadId((current) => {
-        let next: Map<ThreadId, boolean> | null = null;
-        for (const [threadId, desiredSettled] of current) {
-          const serverSettled =
-            (sidebarThreadSummaryByIdRef.current[threadId]?.settledAt ?? null) !== null;
-          if (serverSettled === desiredSettled) {
-            if (next === null) next = new Map(current);
-            next.delete(threadId);
+    if (optimisticSettledMutationByThreadId.size === 0) return;
+    let settle: number | undefined;
+    const scheduleReconciliation = () => {
+      if (settle !== undefined) window.clearTimeout(settle);
+      settle = window.setTimeout(() => {
+        settle = undefined;
+        const projectionSequence = useStore.getState().shellSnapshotSequence ?? 0;
+        setOptimisticSettledMutationByThreadId((current) => {
+          let next: Map<ThreadId, OptimisticSettledMutation> | null = null;
+          for (const [threadId, mutation] of current) {
+            const serverThread = sidebarThreadSummaryByIdRef.current[threadId];
+            if (!serverThread) {
+              if (next === null) next = new Map(current);
+              next.delete(threadId);
+              continue;
+            }
+            const reconciliation = reconcileOptimisticSettledMutation(
+              mutation,
+              (serverThread.settledAt ?? null) !== null,
+              projectionSequence,
+            );
+            if (reconciliation.acknowledged) {
+              if (next === null) next = new Map(current);
+              next.delete(threadId);
+              const expiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
+              if (expiry !== undefined) window.clearTimeout(expiry);
+              settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+            } else if (reconciliation.mutation !== mutation) {
+              if (next === null) next = new Map(current);
+              next.set(threadId, reconciliation.mutation);
+            }
           }
-        }
-        return next ?? current;
-      });
-    }, 0);
-    return () => window.clearTimeout(settle);
-  }, [sidebarThreads, optimisticSettledStateByThreadId]);
+          return next ?? current;
+        });
+      }, 0);
+    };
+    scheduleReconciliation();
+    const unsubscribe = useStore.subscribe((state, previousState) => {
+      if (state.shellSnapshotSequence !== previousState.shellSnapshotSequence) {
+        scheduleReconciliation();
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (settle !== undefined) window.clearTimeout(settle);
+    };
+  }, [sidebarThreads, optimisticSettledMutationByThreadId]);
+
+  const optimisticSettledStateByThreadId = useMemo(
+    () =>
+      new Map(
+        Array.from(optimisticSettledMutationByThreadId, ([threadId, mutation]) => [
+          threadId,
+          mutation.desiredSettled,
+        ] as const),
+      ),
+    [optimisticSettledMutationByThreadId],
+  );
 
   useEffect(() => {
     const expiryTimeouts = settleOverrideExpiryTimeoutsRef.current;
