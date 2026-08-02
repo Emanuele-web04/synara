@@ -499,6 +499,12 @@ export function SidebarActivityView({
     settledOverrideByThreadId,
     projectFilterIds,
   });
+  // Pinned rows come from the Sidebar unfiltered, so the active scope has to be
+  // applied here too — otherwise pins from other projects sit under a scoped header.
+  const scopedPinnedThreads =
+    projectFilterIds === null
+      ? pinnedThreads
+      : pinnedThreads.filter((thread) => projectFilterIds.has(thread.projectId));
   const nowMs = Date.now();
   const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
     model.active,
@@ -547,7 +553,7 @@ export function SidebarActivityView({
   // section has rows — a feed with nothing active but a populated Pinned or Done
   // section is not empty.
   const isEmpty =
-    model.active.length === 0 && model.settled.length === 0 && pinnedThreads.length === 0;
+    model.active.length === 0 && model.settled.length === 0 && scopedPinnedThreads.length === 0;
   const emptyLabel =
     scopeSelection === null
       ? "No activity yet"
@@ -557,13 +563,13 @@ export function SidebarActivityView({
 
   return (
     <div className="flex flex-col gap-3">
-      {pinnedThreads.length > 0 ? (
+      {scopedPinnedThreads.length > 0 ? (
         <ActivityCollapsibleSection
           label="Pinned"
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((open) => !open)}
         >
-          {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+          {scopedPinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
         </ActivityCollapsibleSection>
       ) : null}
 
