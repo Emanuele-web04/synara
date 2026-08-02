@@ -10,7 +10,7 @@ import {
 describe("scrollTranscriptToSettledEnd", () => {
   it("interrupts a native smooth scroll at its current offset", async () => {
     const nativeScrollCalls: ScrollToOptions[] = [];
-    const scrollToOffsetCalls: Array<{ offset: number; animated?: boolean }> = [];
+    const scrollToOffsetCalls: Array<{ offset: number; animated?: boolean | undefined }> = [];
     const scrollNode = {
       scrollTop: 420,
       scrollTo: (options: ScrollToOptions) => nativeScrollCalls.push(options),
@@ -36,9 +36,9 @@ describe("scrollTranscriptToSettledEnd", () => {
       },
     };
 
-    await expect(
-      scrollTranscriptToSettledEnd({ target, isCurrent: () => true }),
-    ).resolves.toBe(true);
+    await expect(scrollTranscriptToSettledEnd({ target, isCurrent: () => true })).resolves.toBe(
+      true,
+    );
     expect(animations).toEqual([true, false]);
   });
 

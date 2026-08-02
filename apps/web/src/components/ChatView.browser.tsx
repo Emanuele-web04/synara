@@ -1341,7 +1341,7 @@ async function waitForLayout(): Promise<void> {
 
 function installImmediateScrollToSpy(
   scrollContainer: HTMLElement,
-  options?: { readonly suspendSmoothScroll?: boolean },
+  config?: { readonly suspendSmoothScroll?: boolean },
 ): {
   readonly calls: ScrollToOptions[];
   readonly restore: () => void;
@@ -1357,7 +1357,7 @@ function installImmediateScrollToSpy(
             ...(typeof y === "number" ? { top: y } : {}),
           };
     calls.push(normalized);
-    if (options?.suspendSmoothScroll && normalized.behavior === "smooth") {
+    if (config?.suspendSmoothScroll && normalized.behavior === "smooth") {
       return;
     }
     if (typeof normalized.left === "number") {
@@ -2342,7 +2342,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () =>
           document.querySelector<HTMLButtonElement>(
             "button[aria-label='Scroll to bottom'][aria-hidden='false']",
-        ),
+          ),
         "Unable to find the visible scroll-to-bottom button.",
       );
       const scrollSpy = installImmediateScrollToSpy(scrollContainer, {

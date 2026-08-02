@@ -91,10 +91,7 @@ export function useThreadWorkspaceHandoff(input: {
         // durable. Apply that result locally as well so cwd-bound surfaces
         // (file preview, explorer, terminal) do not wait for the asynchronous
         // domain-event round trip and briefly keep targeting the old checkout.
-        setThreadWorkspace(
-          input.activeThread.id,
-          resolveWorktreeHandoffWorkspaceMetadata(result),
-        );
+        setThreadWorkspace(input.activeThread.id, resolveWorktreeHandoffWorkspaceMetadata(result));
 
         // Nested `if`s rather than `&&`, and the toast assembled outside: every value block —
         // `&&`, `??`, a ternary, a conditional spread — is one React Compiler refuses to lower
