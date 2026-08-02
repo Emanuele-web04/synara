@@ -4294,6 +4294,40 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses the latest ordinary project when New chat is clicked from Activity", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-activity-new-chat-latest-project" as MessageId,
+          targetText: "activity new chat latest project",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      const activityNewChatButton = page.getByRole("button", {
+        name: "Start new chat in last used project",
+      });
+      await expect.element(activityNewChatButton).toBeInTheDocument();
+      await activityNewChatButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Activity New chat should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("uses the latest ordinary project from Home for the command-palette New thread action", async () => {
     useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
     const mounted = await mountChatView({

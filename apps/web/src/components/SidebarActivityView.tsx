@@ -488,7 +488,7 @@ export function SidebarActivityView({
   onMarkThreadRead: (threadId: ThreadId, completedAt?: string) => void;
   /** Same rich hover card the classic thread rows show at the sidebar edge. */
   renderThreadHoverCard: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
-  /** Same "New chat" action the Chats section header runs. */
+  /** Starts a new chat in the current or most recently used ordinary project. */
   onCreateChat: () => void;
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
@@ -676,7 +676,7 @@ export function SidebarActivityView({
         <SidebarSectionToolbar revealOnHover className="mr-0">
           <SidebarIconButton
             icon={NewThreadIcon}
-            label="Open new chat home"
+            label="Start new chat in last used project"
             tooltip="New chat"
             tooltipSide="bottom"
             onClick={onCreateChat}
