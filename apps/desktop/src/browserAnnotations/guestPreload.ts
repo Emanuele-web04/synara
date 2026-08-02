@@ -9,6 +9,7 @@ import { sanitizeBrowserAnnotationUrl } from "@synara/shared/browserAnnotations"
 
 import { BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, BROWSER_IPC_CHANNELS } from "../ipcChannels";
 import {
+  formatCssBorderRadius,
   formatElementSize,
   inspectorCardFor,
   type ElementStyleSnapshot,
@@ -35,7 +36,10 @@ const VIEWPORT_GAP = 12;
 const ANCHOR_GAP = 18;
 const INSPECTOR_GAP = 8;
 const NOTICE_GAP = 8;
+const COMMENT_MIN_HEIGHT = 22;
 const COMMENT_MAX_HEIGHT = 112;
+/** Keep live styles accurate without turning the inspector into a per-frame style read. */
+const INSPECTION_REFRESH_INTERVAL_MS = 100;
 /** Long enough to read a one-line notice, short enough not to sit in the way. */
 const NOTICE_DURATION_MS = 4_000;
 const UNANCHORABLE_NOTICE = "This element can't be pinned. Try one next to it.";
@@ -74,6 +78,7 @@ let selectedElement: Element | null = null;
 let selectionAnchor: { x: number; y: number } | null = null;
 let inspectedElement: Element | null = null;
 let inspectedCard: InspectorCard | null = null;
+let lastInspectionRefreshAt = Number.NEGATIVE_INFINITY;
 
 const pointer = { x: 0, y: 0, inside: false, overOverlay: false };
 let pointerNeedsHitTest = false;
@@ -200,9 +205,11 @@ function uniqueSelector(element: Element): string | null {
     // into a silent cancel that discards the comment.
     const anchor = uniqueIdSelector(parent);
     if (anchor) {
-      segments.unshift(anchor);
-      const anchored = segments.join(" > ");
-      return anchored.length <= GUEST_ANNOTATION_MAX_SELECTOR_LENGTH ? anchored : null;
+      const anchored = [anchor, ...segments].join(" > ");
+      if (anchored.length <= GUEST_ANNOTATION_MAX_SELECTOR_LENGTH) return anchored;
+      // A long-but-valid id can push this anchored path over the contract limit
+      // even when the structural path to <html> is short. Keep walking so that
+      // fallback still gets a chance instead of rejecting an addressable node.
     }
     current = parent;
   }
@@ -472,26 +479,51 @@ function paintInspectorRows(card: InspectorCard): void {
   inspectorRows.replaceChildren(rows);
 }
 
-/**
- * Computed styles are read only when the inspected element changes; per-frame
- * work stays limited to geometry.
- */
+function inspectorCardsMatch(left: InspectorCard | null, right: InspectorCard): boolean {
+  return (
+    left?.tag === right.tag &&
+    left.rows.length === right.rows.length &&
+    left.rows.every(
+      (row, index) =>
+        row.label === right.rows[index]?.label && row.value === right.rows[index]?.value,
+    )
+  );
+}
+
+/** Refreshes live styles at a bounded rate while per-frame work stays geometry-only. */
 function refreshInspection(element: Element | null, rect: DOMRect | null): void {
-  if (element === inspectedElement) return;
+  if (!element || !rect || !outline) {
+    inspectedElement = element;
+    inspectedCard = null;
+    return;
+  }
+  const now = globalThis.performance.now();
+  if (
+    element === inspectedElement &&
+    now - lastInspectionRefreshAt < INSPECTION_REFRESH_INTERVAL_MS
+  ) {
+    return;
+  }
   inspectedElement = element;
-  inspectedCard = null;
-  if (!element || !rect || !outline) return;
+  lastInspectionRefreshAt = now;
   const style = globalThis.getComputedStyle(element);
-  inspectedCard = inspectorCardFor({
+  const nextCard = inspectorCardFor({
     tagName: element.tagName,
     width: rect.width,
     height: rect.height,
     style: styleSnapshot(style),
   });
-  paintInspectorRows(inspectedCard);
+  if (!inspectorCardsMatch(inspectedCard, nextCard)) paintInspectorRows(nextCard);
+  inspectedCard = nextCard;
   // Mirroring the element's own corners makes the outline read as the element
   // rather than as a box drawn around it.
-  outline.style.borderRadius = `${style.borderTopLeftRadius} ${style.borderTopRightRadius} ${style.borderBottomRightRadius} ${style.borderBottomLeftRadius}`;
+  const borderRadius = formatCssBorderRadius([
+    style.borderTopLeftRadius,
+    style.borderTopRightRadius,
+    style.borderBottomRightRadius,
+    style.borderBottomLeftRadius,
+  ]);
+  if (outline.style.borderRadius !== borderRadius) outline.style.borderRadius = borderRadius;
 }
 
 // --- Overlay geometry ------------------------------------------------------
@@ -757,7 +789,7 @@ function setPageCursorHidden(hidden: boolean): void {
 function autoSizeComment(): void {
   if (!textarea || !popover) return;
   textarea.style.height = "0px";
-  const height = Math.min(textarea.scrollHeight, COMMENT_MAX_HEIGHT);
+  const height = Math.max(COMMENT_MIN_HEIGHT, Math.min(textarea.scrollHeight, COMMENT_MAX_HEIGHT));
   textarea.style.height = `${height}px`;
   popover.toggleAttribute("data-multiline", height > 24);
 }
@@ -795,9 +827,13 @@ function selectTarget(target: Element, point: { x: number; y: number } | null): 
   // at a different element or recovering from a save that failed on a stale
   // target. Losing typed text to a stray click is the bug this picker had; the
   // paths that genuinely end a selection clear the box themselves.
-  autoSizeComment();
   // Open and focus synchronously so the first keystroke after selection cannot
   // land in the page while waiting for the next animation frame.
+  renderOverlay();
+  // The textarea must be visible before scrollHeight can represent a carried
+  // multi-line comment. Repaint once after sizing so the composer is positioned
+  // using its final height.
+  autoSizeComment();
   renderOverlay();
   textarea?.focus({ preventScroll: true });
 }
@@ -1292,9 +1328,9 @@ function initializeOverlay(): void {
   document.documentElement.append(host);
   markerResizeObserver = new ResizeObserver(scheduleFrame);
   markerResizeObserver.observe(document.documentElement);
-  // Structural changes are the only mutations that can invalidate a resolved
-  // marker. Attribute and text mutations are ignored so busy pages cannot
-  // reproject the overlay on every frame.
+  // Structural changes and locator-relevant attributes can invalidate a
+  // resolved marker. Limit attribute observation to the selector/fingerprint
+  // inputs so unrelated page churn cannot reproject the overlay every frame.
   new MutationObserver((records) => {
     if (projectedMarkers.length === 0) return;
     if (
@@ -1306,7 +1342,12 @@ function initializeOverlay(): void {
       return;
     }
     invalidateMarkersSoon();
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["id", "role", "href", "type", "multiple", "size"],
+    childList: true,
+    subtree: true,
+  });
   globalThis.addEventListener("popstate", handleHistoryNavigation);
   globalThis.addEventListener("hashchange", handleHistoryNavigation);
   sendReady();

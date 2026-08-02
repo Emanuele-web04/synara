@@ -280,6 +280,13 @@ function normalizeSynaraMcpIdentifier(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+const SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION = new Map<string, SynaraBrowserToolName>(
+  BROWSER_TOOL_NAMES.map((toolName) => [
+    normalizeSynaraMcpIdentifier(BROWSER_TOOL_TITLES[toolName]),
+    `synara_${toolName}`,
+  ]),
+);
+
 const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRESENTATIONS).map(
   ([toolName, presentation]) => ({
     toolName,
@@ -316,7 +323,10 @@ function resolveSynaraBrowserToolName(
     if (!candidate) continue;
     const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
     const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
-    const candidateToolName = extractedToolName ?? normalizedCandidate;
+    const candidateToolName =
+      extractedToolName ??
+      SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION.get(normalizedCandidate) ??
+      normalizedCandidate;
     if (candidateToolName in SYNARA_BROWSER_TOOL_PRESENTATIONS) {
       return candidateToolName as SynaraBrowserToolName;
     }

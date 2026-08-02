@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatCssBorderRadius,
   formatCssBox,
   formatCssColor,
   formatCssFont,
@@ -59,6 +60,25 @@ describe("formatCssBox", () => {
 
   it("rounds sub-pixel lengths and shortens zeros", () => {
     expect(formatCssBox(["12.3456px", "0px", "0px", "0px"])).toBe("12.35px 0 0");
+  });
+});
+
+describe("formatCssBorderRadius", () => {
+  it("collapses circular corners to ordinary shorthand", () => {
+    expect(formatCssBorderRadius(["8px", "16px", "8px", "16px"])).toBe("8px 16px");
+    expect(formatCssBorderRadius(["0px", "0px", "0px", "0px"])).toBe("0");
+  });
+
+  it("keeps the slash required by elliptical corners", () => {
+    expect(formatCssBorderRadius(["10px 20px", "10px 20px", "10px 20px", "10px 20px"])).toBe(
+      "10px / 20px",
+    );
+    expect(formatCssBorderRadius(["8px 12px", "16px", "8px 12px", "16px"])).toBe(
+      "8px 16px / 12px 16px",
+    );
+    expect(formatCssBorderRadius(["calc(10px + 2%) calc(20px + 3%)", "0px", "0px", "0px"])).toBe(
+      "calc(10px + 2%) 0 0 / calc(20px + 3%) 0 0",
+    );
   });
 });
 

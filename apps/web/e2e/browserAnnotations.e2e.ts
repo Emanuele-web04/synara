@@ -341,6 +341,31 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { document.querySelector('[data-stale-chain]')?.remove(); return true; })()",
     );
 
+    // A long unique ancestor id can make its anchored selector exceed the
+    // contract even though the ordinary structural path remains short. Keep
+    // walking in that case, and preserve the existing Cmd/Ctrl+Enter shortcut.
+    const fallbackSelectorRect = (await runInGuest(
+      "(() => { const root = document.createElement('div'); root.id = `anchor-${'x'.repeat(490)}`; root.setAttribute('data-long-anchor', ''); root.style.cssText = 'position:fixed;right:8px;top:8px;z-index:999;background:rgb(230,230,230)'; const target = document.createElement('button'); target.style.cssText = 'padding:14px'; target.textContent = 'fallback'; root.append(target); document.body.append(root); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
+    )) as { x: number; y: number; width: number; height: number };
+    await page.mouse.click(
+      webviewRect.x + fallbackSelectorRect.x + fallbackSelectorRect.width / 2,
+      webviewRect.y + fallbackSelectorRect.y + fallbackSelectorRect.height / 2,
+    );
+    await page.keyboard.type("Fallback selector and shortcut");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
+      .toBe(4);
+    const fallbackSelectorEvent = (await committedAnnotations())[3];
+    expect(fallbackSelectorEvent?.annotation.comment).toBe("Fallback selector and shortcut");
+    expect(fallbackSelectorEvent?.annotation.selector).not.toContain("anchor-");
+    await runInGuest(
+      "(() => { document.querySelector('[data-long-anchor]')?.remove(); return true; })()",
+    );
+
     const manualClicks = await runInGuest("document.body.dataset.manualClicks");
     expect(manualClicks).toBe("0");
     const hostileCapture = await runInGuest(

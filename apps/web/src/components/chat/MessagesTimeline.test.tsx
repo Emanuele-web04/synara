@@ -2697,6 +2697,30 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("elapsed");
     expect(markup).not.toContain("Completed tool");
     expect(markup).not.toContain("Synara: Browser Open");
+
+    const presentationOnlyMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "entry-presentation-only-browser",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-presentation-only-browser",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Open browser tab",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolTitle: "Open browser tab",
+              toolStatus: "completed",
+              activityKind: "tool.completed",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(presentationOnlyMarkup).toContain('data-tool-icon="browser"');
   });
 
   it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
