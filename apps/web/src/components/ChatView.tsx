@@ -500,6 +500,7 @@ import {
 } from "./chat/WorkflowRunCard.logic";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
+import { scrollTranscriptToSettledEnd } from "./chat/transcriptScroll";
 import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
 import {
   dispatchThreadMarkerAdd,
@@ -545,6 +546,7 @@ import {
   filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
   resolveNextLocalDispatchSnapshot,
+  resolveThreadArtifactWorkspaceRoot,
   WORKTREE_SETUP_ERROR_HOLD_MS,
   worktreeSetupHasError,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -3406,9 +3408,11 @@ export default function ChatView({
         workingDirectory: resolvedThreadWorkingDirectory,
       })
     : null;
-  const threadArtifactWorkspaceRoot = isStudioContainer
-    ? threadWorkspaceCwd
-    : (activeProject?.cwd ?? null);
+  const threadArtifactWorkspaceRoot = resolveThreadArtifactWorkspaceRoot({
+    isStudioContainer,
+    projectCwd: activeProject?.cwd ?? null,
+    threadWorkspaceCwd,
+  });
   const gitCwd = threadWorkspaceCwd;
   const gitBranchSourceCwd = isStudioContainer
     ? threadWorkspaceCwd
@@ -4885,6 +4889,10 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
+  // The arrow's smooth jump is followed by one exact settle after LegendList
+  // has measured the tail. A user gesture invalidates that pending settle.
+  const settledScrollRequestRef = useRef(0);
+  const settledScrollInFlightRef = useRef(false);
   // Smooth only the first auto-follow after a send; live stream re-sticks stay cheap.
   const animateNextAutoFollowScrollRef = useRef(false);
   const scrollToEnd = useCallback((animated = false) => {
@@ -4901,6 +4909,9 @@ export default function ChatView({
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
+    settledScrollRequestRef.current += 1;
+    settledScrollInFlightRef.current = false;
+    programmaticScrollUntilRef.current = 0;
     // A user scroll gesture takes over from any in-flight tail-anchor slide.
     tailAnchorScrollInFlightRef.current = false;
   }, []);
@@ -4932,7 +4943,12 @@ export default function ChatView({
   });
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
-    if (!isAtEnd && performance.now() < programmaticScrollUntilRef.current) return;
+    if (
+      !isAtEnd &&
+      (settledScrollInFlightRef.current || performance.now() < programmaticScrollUntilRef.current)
+    ) {
+      return;
+    }
     isAtEndRef.current = isAtEnd;
     if (isAtEnd) {
       showScrollDebouncer.current.cancel();
@@ -5274,6 +5290,9 @@ export default function ChatView({
 
   useEffect(() => {
     isAtEndRef.current = true;
+    settledScrollRequestRef.current += 1;
+    settledScrollInFlightRef.current = false;
+    programmaticScrollUntilRef.current = 0;
     showScrollDebouncer.current.cancel();
     // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
     // in render->commit order); defer only the setState so this thread-change reset
@@ -10121,8 +10140,41 @@ export default function ChatView({
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    scrollToEnd(true);
-  }, [scrollToEnd]);
+    const target = legendListRef.current;
+    if (!target) {
+      return;
+    }
+
+    const requestId = settledScrollRequestRef.current + 1;
+    settledScrollRequestRef.current = requestId;
+    settledScrollInFlightRef.current = true;
+    programmaticScrollUntilRef.current = performance.now() + 200;
+    void scrollTranscriptToSettledEnd({
+      target,
+      isCurrent: () =>
+        settledScrollRequestRef.current === requestId && legendListRef.current === target,
+      beforeFinalScroll: () => {
+        programmaticScrollUntilRef.current = performance.now() + 200;
+      },
+    })
+      .then((settled) => {
+        if (settledScrollRequestRef.current !== requestId) {
+          return;
+        }
+        settledScrollInFlightRef.current = false;
+        if (!settled) {
+          return;
+        }
+        isAtEndRef.current = true;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+      })
+      .catch(() => {
+        if (settledScrollRequestRef.current === requestId) {
+          settledScrollInFlightRef.current = false;
+        }
+      });
+  }, []);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {
