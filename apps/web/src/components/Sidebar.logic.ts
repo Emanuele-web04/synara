@@ -102,14 +102,6 @@ export function pullRequestRepositoryConfigFingerprint(
   );
 }
 
-/** The optimistic segment follows a destination click and clears when the user returns. */
-export function resolvePendingSidebarViewSelection(
-  activeView: SidebarView,
-  selectedView: SidebarView,
-): SidebarView | null {
-  return selectedView === activeView ? null : selectedView;
-}
-
 type SidebarProject = {
   id: string;
   name: string;
@@ -146,8 +138,24 @@ function differentDisplayValue(
   return existing !== null && normalized === existing ? null : normalized;
 }
 
+/**
+ * Display label for the container a thread lives in: real projects show their
+ * user-facing name, while project-less containers (home chats, studio) read as
+ * the app itself. Single rule shared by the Activity rows, pinned-row
+ * suffixes, and thread hover cards, so a chat's auto-generated slug folder
+ * never leaks into the UI as a fake "project name".
+ */
+export function resolveThreadProjectLabel(
+  project: Pick<Project, "kind" | "name" | "folderName"> | null | undefined,
+): string {
+  if (!project || project.kind !== "project") {
+    return "Synara";
+  }
+  return nonEmptyDisplayValue(project.name) ?? project.folderName;
+}
+
 export type SidebarThreadHoverMetadata = {
-  projectName: string | null;
+  projectName: string;
   projectCwd: string | null;
   sourceProjectName: string | null;
   branch: string | null;
@@ -159,10 +167,9 @@ export function resolveThreadHoverCardMetadata(input: {
     SidebarThreadSummary,
     "envMode" | "branch" | "worktreePath" | "associatedWorktreePath" | "associatedWorktreeBranch"
   >;
-  project: Pick<Project, "name" | "folderName" | "cwd"> | null;
+  project: Pick<Project, "kind" | "name" | "folderName" | "cwd"> | null;
 }): SidebarThreadHoverMetadata {
-  const projectName =
-    nonEmptyDisplayValue(input.project?.name) ?? nonEmptyDisplayValue(input.project?.folderName);
+  const projectName = resolveThreadProjectLabel(input.project);
   const activeWorktreePath = nonEmptyDisplayValue(input.thread.worktreePath);
   const isWorktree =
     resolveThreadEnvironmentMode({
@@ -212,7 +219,7 @@ export type SidebarProjectEntry = {
   depth: number;
 };
 
-export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project";
+export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
 
 export function createSidebarThreadHoverAnchorId(input: {
   scope: SidebarThreadHoverAnchorScope;
@@ -259,6 +266,15 @@ export interface ThreadStatusPill {
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+}
+
+/**
+ * A status that still asks something of the user or is producing output right
+ * now. Surfaces that dim finished work (the Activity Done section) keep showing
+ * these pills, so a thread that restarts or asks for approval stays visible.
+ */
+export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
+  return pill.label !== "Completed";
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {

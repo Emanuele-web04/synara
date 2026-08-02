@@ -23,6 +23,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 const SLOT_SIZE = {
   sm: "size-[18px]",
   md: "size-5",
+  /** Header-bar chrome (surface picker row): a roomier hit target than row actions. */
+  lg: "size-7",
 } as const;
 
 export type SidebarIconButtonSize = keyof typeof SLOT_SIZE;

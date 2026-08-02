@@ -1603,7 +1603,10 @@ export class DesktopBrowserManager {
       isLocalFileUrl(expectedUrl) &&
       this.sessionPolicy.resolveDisplayUrl(webContents.getURL()) !== expectedUrl;
     if (requiresLocalPreviewBootstrap) {
-      void this.loadTab(input.threadId, tab.id, { force: true, runtime });
+      void this.loadTab(input.threadId, tab.id, {
+        force: true,
+        ...(runtime ? { runtime } : {}),
+      });
       return this.snapshotThreadState(input.threadId, state);
     }
 
