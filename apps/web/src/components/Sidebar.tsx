@@ -4205,7 +4205,11 @@ export default function Sidebar() {
 
   // Shared rich hover card for thread/chat rows. Worktree metadata is resolved
   // once here so pinned and nested rows stay visually and semantically identical.
-  function renderThreadHoverCardPopup(thread: SidebarThreadSummary, hoverAnchorId: string) {
+  function renderThreadHoverCardPopup(
+    thread: SidebarThreadSummary,
+    hoverAnchorId: string,
+    isActive: boolean,
+  ) {
     const hoverProject = projectById.get(thread.projectId) ?? null;
     const hoverMetadata = resolveThreadHoverCardMetadata({
       thread,
@@ -4213,7 +4217,7 @@ export default function Sidebar() {
     });
     const hoverStatus = resolveThreadStatusTrailingIndicator({
       status: resolveThreadStatusForSidebar(thread),
-      isActive: activeThreadId === thread.id,
+      isActive,
     });
     return (
       <TooltipPopup
@@ -4411,7 +4415,7 @@ export default function Sidebar() {
             </div>
           </div>
         </TooltipTrigger>
-        {renderThreadHoverCardPopup(thread, hoverAnchorId)}
+        {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
       </Tooltip>
     );
   }
@@ -4607,7 +4611,7 @@ export default function Sidebar() {
               })}
             </div>
           </TooltipTrigger>
-          {renderThreadHoverCardPopup(thread, hoverAnchorId)}
+          {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
         </Tooltip>
       </SidebarMenuSubItem>
     );
@@ -5872,7 +5876,11 @@ export default function Sidebar() {
                     prByThreadId={prByThreadId}
                     onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                     renderThreadHoverCard={(thread, anchorId) =>
-                      renderThreadHoverCardPopup(thread, anchorId)
+                      renderThreadHoverCardPopup(
+                        thread,
+                        anchorId,
+                        visualActiveSidebarThreadId === thread.id,
+                      )
                     }
                     onCreateChat={() => {
                       void handleCreateHomeChat();
