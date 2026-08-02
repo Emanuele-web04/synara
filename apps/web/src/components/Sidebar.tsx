@@ -1209,11 +1209,10 @@ export function SidebarSurfacePicker({
   onSelectView: (view: SidebarView) => void;
   onPrewarmView?: (view: SidebarView) => void;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
   const activeCopy = SIDEBAR_SURFACE_PICKER_COPY[activeView];
 
   return (
-    <Menu onOpenChange={(open) => setMenuOpen(open)}>
+    <Menu>
       <MenuTrigger
         render={
           <button
@@ -1230,12 +1229,12 @@ export function SidebarSurfacePicker({
         <span
           className={cn(
             "font-display min-w-0 truncate text-foreground",
-            activeView === "threads" ? "text-[16px]" : "text-[15px]",
+            activeView === "threads" ? "text-[17px]" : "text-[15px]",
           )}
         >
           {activeCopy.title}
         </span>
-        <DisclosureChevron open={menuOpen} className="text-muted-foreground/70" />
+        <DisclosureChevron open className="text-muted-foreground/70" />
       </MenuTrigger>
       <ComposerPickerMenuPopup
         align="start"
