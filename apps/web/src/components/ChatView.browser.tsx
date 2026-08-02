@@ -4307,11 +4307,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
+      // The sidebar header renders Search as an icon button, so its accessible
+      // name is the only stable handle.
       const searchButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
-            button.textContent?.trim().startsWith("Search"),
-          ) ?? null,
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Search"]'),
         "Unable to find the global Search button.",
       );
       searchButton.click();
