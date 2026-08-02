@@ -293,10 +293,7 @@ export function useSidebarThreadActions(input: {
             const mutation = current.get(threadId);
             if (!mutation) return current;
             const next = new Map(current);
-            next.set(
-              threadId,
-              recordOptimisticSettledMutationSequence(mutation, commandSequence),
-            );
+            next.set(threadId, recordOptimisticSettledMutationSequence(mutation, commandSequence));
             return next;
           });
         }
@@ -386,10 +383,10 @@ export function useSidebarThreadActions(input: {
   const optimisticSettledStateByThreadId = useMemo(
     () =>
       new Map(
-        Array.from(optimisticSettledMutationByThreadId, ([threadId, mutation]) => [
-          threadId,
-          mutation.desiredSettled,
-        ] as const),
+        Array.from(
+          optimisticSettledMutationByThreadId,
+          ([threadId, mutation]) => [threadId, mutation.desiredSettled] as const,
+        ),
       ),
     [optimisticSettledMutationByThreadId],
   );

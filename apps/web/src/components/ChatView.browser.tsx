@@ -26,7 +26,7 @@ import {
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -4441,19 +4441,19 @@ describe("ChatView timeline estimator parity (full app)", () => {
         expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
         expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
       });
-      await projectPickerTrigger.press("Tab");
+      await userEvent.keyboard("{Tab}");
       await vi.waitFor(() => {
         expect(document.activeElement).toBe(inlineResetButton.element());
         expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("1");
         expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("0");
       });
-      await inlineResetButton.press("Shift+Tab");
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
       await vi.waitFor(() => {
         expect(document.activeElement).toBe(projectPickerTrigger.element());
         expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
         expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
       });
-      await projectPickerTrigger.press("Enter");
+      await userEvent.keyboard("{Enter}");
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();

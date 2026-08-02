@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-import type { GitStatusResult, ProjectId, ThreadId } from "@synara/contracts";
+import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
 
 import { CircleCheckIcon, GitBranchIcon, SortIcon, Undo2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -95,7 +95,7 @@ function ActivityThreadRow({
   isActive: boolean;
   isSettled: boolean;
   isPinned: boolean;
-  pr: NonNullable<GitStatusResult["pr"]> | null;
+  pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
   onOpen: () => void;
   onSetSettled: (settled: boolean) => void;
@@ -473,7 +473,7 @@ export function SidebarActivityView({
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
-  prByThreadId: ReadonlyMap<ThreadId, NonNullable<GitStatusResult["pr"]> | null>;
+  prByThreadId: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
@@ -492,9 +492,9 @@ export function SidebarActivityView({
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);
   const [settledOpen, setSettledOpen] = useState(false);
   const [settledExtraPages, setSettledExtraPages] = useState(0);
-  const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<
-    ReadonlyMap<string, number>
-  >(() => new Map());
+  const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
   // Scope options and the unread sweep intentionally ignore the active scope:
@@ -521,9 +521,8 @@ export function SidebarActivityView({
   const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
     model.active,
   );
-  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
-    seenThreads,
-  );
+  const { recent: recentThreads, rest: remainingActiveThreads } =
+    splitRecentActivityThreads(seenThreads);
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
   const projectGroups =
     groupMode === "project"
@@ -608,10 +607,7 @@ export function SidebarActivityView({
     }
   };
 
-  const renderRow = (
-    thread: SidebarThreadSummary,
-    isSettled: boolean,
-  ) => (
+  const renderRow = (thread: SidebarThreadSummary, isSettled: boolean) => (
     <ActivityThreadRow
       key={thread.id}
       thread={thread}
@@ -728,9 +724,7 @@ export function SidebarActivityView({
           {dateBuckets.today.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Today" />
-              <div className="flex flex-col gap-0.5">
-                {dateBuckets.today.map(renderActiveRow)}
-              </div>
+              <div className="flex flex-col gap-0.5">{dateBuckets.today.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {dateBuckets.yesterday.length > 0 ? (
@@ -747,9 +741,7 @@ export function SidebarActivityView({
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
             >
-              {dateBuckets.earlier
-                .slice(0, earlierPaging.previewLimit)
-                .map(renderActiveRow)}
+              {dateBuckets.earlier.slice(0, earlierPaging.previewLimit).map(renderActiveRow)}
               <ActivityShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}

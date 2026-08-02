@@ -495,11 +495,7 @@ describe("splitRecentActivityThreads", () => {
     });
 
     const split = splitPriorityActivityThreads([attention, unseen, running, seen]);
-    expect(split.priority.map((thread) => thread.id)).toEqual([
-      "attention",
-      "unseen",
-      "running",
-    ]);
+    expect(split.priority.map((thread) => thread.id)).toEqual(["attention", "unseen", "running"]);
     expect(split.seen.map((thread) => thread.id)).toEqual(["seen"]);
   });
 

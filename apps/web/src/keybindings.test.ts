@@ -630,21 +630,14 @@ describe("Activity shortcut", () => {
   it("opens Activity with Cmd+Option+U, including from a focused macOS terminal", () => {
     for (const terminalFocus of [false, true]) {
       assert.equal(
-        resolveShortcutCommand(
-          event({ key: "u", metaKey: true, altKey: true }),
-          DEFAULT_BINDINGS,
-          {
-            platform: "MacIntel",
-            context: { terminalFocus },
-          },
-        ),
+        resolveShortcutCommand(event({ key: "u", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
+          platform: "MacIntel",
+          context: { terminalFocus },
+        }),
         "sidebar.activity",
       );
     }
-    assert.equal(
-      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.activity", "MacIntel"),
-      "⌥⌘U",
-    );
+    assert.equal(shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.activity", "MacIntel"), "⌥⌘U");
   });
 
   it("uses Ctrl+Alt+U off macOS without stealing input from a focused terminal", () => {

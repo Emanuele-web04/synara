@@ -4,11 +4,7 @@
 
 import "../index.css";
 
-import {
-  ProjectId,
-  ThreadId,
-  type OrchestrationThreadPullRequest,
-} from "@synara/contracts";
+import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -146,7 +142,7 @@ describe("SidebarActivityView", () => {
     });
     expect(document.querySelector('[title="#42 PR merged: Live merged PR"]')).not.toBeNull();
 
-    page.getByRole("button", { name: "Show more" }).element().click();
+    await page.getByRole("button", { name: "Show more" }).click();
     await vi.waitFor(() => {
       expect(document.querySelectorAll("[data-testid^='activity-thread-']")).toHaveLength(40);
       expect(onVisibleThreadIdsChange.mock.lastCall?.[0]).toHaveLength(40);

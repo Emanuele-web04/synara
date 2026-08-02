@@ -33,7 +33,9 @@ describe("optimistic thread settlement", () => {
     expect(doneProjects.acknowledged).toBe(false);
     expect(doneProjects.mutation.observedDifferentState).toBe(true);
 
-    expect(reconcileOptimisticSettledMutation(doneProjects.mutation, false).acknowledged).toBe(true);
+    expect(reconcileOptimisticSettledMutation(doneProjects.mutation, false).acknowledged).toBe(
+      true,
+    );
   });
 
   it("acknowledges a batched replay once it reaches the durable command sequence", () => {
