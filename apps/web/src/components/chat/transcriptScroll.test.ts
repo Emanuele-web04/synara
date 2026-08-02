@@ -1,11 +1,56 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANCHOR_SLIDE_SNAP_DISTANCE_PX,
+  advanceAnchorSlideOffset,
   scrollTranscriptToSettledEnd,
   stopTranscriptScrollAtCurrentOffset,
   type TranscriptScrollCancellationTarget,
   type TranscriptScrollTarget,
 } from "./transcriptScroll";
+
+describe("advanceAnchorSlideOffset", () => {
+  it("approaches without ever overshooting the target", () => {
+    let current = 0;
+    for (let frame = 0; frame < 60; frame += 1) {
+      const next = advanceAnchorSlideOffset({ current, target: 500, deltaMs: 16 });
+      expect(next).toBeGreaterThanOrEqual(current);
+      expect(next).toBeLessThanOrEqual(500);
+      current = next;
+    }
+    expect(current).toBe(500);
+  });
+
+  it("is framerate independent: sub-frames compose to the same offset", () => {
+    const oneStep = advanceAnchorSlideOffset({ current: 0, target: 1_000, deltaMs: 32 });
+    const half = advanceAnchorSlideOffset({ current: 0, target: 1_000, deltaMs: 16 });
+    const twoSteps = advanceAnchorSlideOffset({ current: half, target: 1_000, deltaMs: 16 });
+    expect(twoSteps).toBeCloseTo(oneStep, 6);
+  });
+
+  it("tracks a target that moves mid-flight instead of landing on a stale one", () => {
+    // The end-space reserve growing during the slide moves the coordinate down.
+    let current = advanceAnchorSlideOffset({ current: 0, target: 200, deltaMs: 16 });
+    for (let frame = 0; frame < 60; frame += 1) {
+      current = advanceAnchorSlideOffset({ current, target: 900, deltaMs: 16 });
+    }
+    expect(current).toBe(900);
+  });
+
+  it("snaps once the remaining distance is sub-pixel so the slide terminates", () => {
+    expect(
+      advanceAnchorSlideOffset({
+        current: 100,
+        target: 100 + ANCHOR_SLIDE_SNAP_DISTANCE_PX,
+        deltaMs: 16,
+      }),
+    ).toBe(100 + ANCHOR_SLIDE_SNAP_DISTANCE_PX);
+  });
+
+  it("takes the target directly when no time has elapsed", () => {
+    expect(advanceAnchorSlideOffset({ current: 0, target: 320, deltaMs: 0 })).toBe(320);
+  });
+});
 
 describe("scrollTranscriptToSettledEnd", () => {
   it("interrupts a native smooth scroll at its current offset", async () => {

@@ -5,26 +5,51 @@
 // Why: The space that lets the message anchor at the top while the response
 //      streams below it is reserved natively by LegendList's `anchoredEndSpace`
 //      (configured in MessagesTimeline), which keeps the reserve in sync with
-//      measured row sizes inside the list's own layout pass. This hook only
-//      performs the one visible motion — scrolling the sent message to its
-//      anchored coordinate — and guards it: while the slide is in flight the
-//      shared flag pauses ChatView's auto-follow re-snaps so the slide has a
-//      single scroll owner. Normal sends animate; steering an already-streaming
-//      turn anchors immediately and then holds the coordinate for a settle
-//      window because the previous assistant row can still receive late chunks
-//      above the new anchor.
+//      measured row sizes inside the list's own layout pass. This hook performs
+//      the one visible motion — moving the sent message to its anchored
+//      coordinate — as a single frame loop that re-reads that coordinate every
+//      frame. Re-targeting is what keeps the motion glitch-free: the anchor's
+//      position moves while the slide is in flight (the end-space reserve grows,
+//      rows above settle from estimated to measured heights, pre-turn status rows
+//      land), and a fixed-target native smooth scroll would land wrong and then
+//      need a visible correction. While the loop runs, the shared flag pauses
+//      ChatView's auto-follow re-snaps so the motion has a single scroll owner.
+//      After the anchor first lands, corrections snap instead of easing, so the
+//      message is rigidly held rather than drifting back into place.
 
 import { type MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 
-// A freshly appended anchor row can take a few frames to be committed and for
-// the native end-space reserve to make its anchored coordinate reachable.
-const ANCHOR_MEASURE_MAX_RETRY_FRAMES = 90;
+import { advanceAnchorSlideOffset } from "./transcriptScroll";
 
-const ANCHOR_SLIDE_MAX_SETTLE_MS = 750;
-const ANCHOR_SLIDE_SETTLED_FRAMES = 3;
+// Absolute bound on the slide plus its hold, so a transcript that never stops
+// moving can never hold the auto-follow pause open.
+const ANCHOR_SLIDE_MAX_MS = 3_000;
+// After the anchor lands, ownership is kept until the transcript stops moving it
+// for this long. Releasing on "landed" alone is not enough: rows above the
+// anchor keep settling to their measured height for a few hundred milliseconds
+// after a send, and each one would shove the message off its coordinate.
+const ANCHOR_HOLD_QUIET_MS = 450;
+// Steering an already-streaming turn keeps holding the coordinate for a beat:
+// the previous assistant row can still receive late chunks above the new anchor.
 const STEER_ANCHOR_MIN_SETTLE_MS = 500;
+// A freshly appended anchor row can take a few frames to be committed. Until it
+// exists there is nothing to measure, so the loop waits rather than giving up.
+const ANCHOR_MOUNT_MAX_WAIT_MS = 1_000;
+// Consecutive frames the response has to overflow the reserve before the hold
+// hands off to follow-the-tail, so a one-frame reserve recompute in the middle
+// of a stream cannot end the hold early.
+const ANCHOR_OVERFLOW_HANDOFF_FRAMES = 3;
+// How far past the viewport bottom the transcript may sit while the anchor is
+// held before that counts as overflow. While the reserve is doing its job the
+// tail sits exactly at the viewport bottom, so this only has to cover
+// reserve-recompute rounding.
+const ANCHOR_OVERFLOW_SLACK_PX = 8;
+// A freshly committed row can report a transient position for one frame before
+// the list assigns its real offset. The first move of the slide waits for the
+// row's content position to repeat, but no longer than this.
+const ANCHOR_POSITION_CONFIRM_MAX_MS = 150;
 
 interface UseTailAnchorScrollOptions {
   listRef: RefObject<LegendListRef | null>;
@@ -52,24 +77,24 @@ function getScrollContainer(listRef: RefObject<LegendListRef | null>): HTMLEleme
 
 /**
  * scrollTop that puts the anchored message's top edge one top-inset below the
- * viewport top. Derived from the anchor's own box so it is exact regardless of
- * the virtualized list's estimated positions. Returns both the desired and the
- * range-clamped value so callers can tell when the native end-space reserve has
- * not yet made the coordinate reachable.
+ * viewport top, clamped to the currently reachable range. Derived from the
+ * anchor's own box so it is exact regardless of the virtualized list's estimated
+ * positions, and re-read every frame so the slide tracks the coordinate as the
+ * native end-space reserve makes more of it reachable.
  */
 function anchoredScrollTargetPx(
   container: HTMLElement,
   anchorElement: HTMLElement | null,
-): { desired: number; clamped: number } | null {
+  topInsetPx: number,
+): { desired: number; clamped: number; maxScrollTopPx: number } | null {
   if (!anchorElement || anchorElement.getClientRects().length === 0) {
     return null;
   }
-  const topInsetPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
   const offsetFromViewportTop =
     anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top;
   const maxScrollTopPx = Math.max(0, container.scrollHeight - container.clientHeight);
   const desired = Math.max(0, container.scrollTop + offsetFromViewportTop - topInsetPx);
-  return { desired, clamped: Math.min(maxScrollTopPx, desired) };
+  return { desired, clamped: Math.min(maxScrollTopPx, desired), maxScrollTopPx };
 }
 
 function prefersReducedMotion(): boolean {
@@ -106,45 +131,47 @@ export function useTailAnchorScroll({
     }
 
     const anchorId = anchorMessageId;
-    const shouldAnimateAnchorSlide = animateAnchorSlideRef.current;
+    // Steering (and reduced motion) skips the eased approach: the coordinate is
+    // taken immediately and then held.
+    const easeToAnchor = animateAnchorSlideRef.current && !prefersReducedMotion();
     if (anchorScrollInFlightRef) {
       anchorScrollInFlightRef.current = true;
     }
 
     let disposed = false;
-    let waitFrameId: number | null = null;
-    let retryFramesLeft = ANCHOR_MEASURE_MAX_RETRY_FRAMES;
-    let anchorSlideFrameId: number | null = null;
-    let anchorSlideFallbackId: number | null = null;
-    let anchorSlideContainer: HTMLElement | null = null;
-    let anchorSlideScrollEndListener: (() => void) | null = null;
-    let advanceAnchorSlide: ((now: number) => boolean) | null = null;
-    let anchorLayoutObserver: MutationObserver | null = null;
+    let frameId: number | null = null;
+    let layoutObserver: MutationObserver | null = null;
+    // The transcript's top padding is fixed for the life of a slide, so the
+    // (layout-forcing) computed-style read is done once instead of every frame.
+    let topInsetPx: number | null = null;
+    const startedAt = performance.now();
+    let lastFrameAt = startedAt;
+    // Flips once the anchor first reaches its coordinate — which requires the
+    // reserve below it to exist, so this stays false while the message is still
+    // parked at the bottom. From then on the hold is rigid (corrections snap
+    // instead of easing), so late layout shifts move the message by at most one
+    // frame instead of drifting it back into place.
+    let hasLanded = false;
+    let lastCorrectionAt = startedAt;
+    let overflowFrames = 0;
+    // Last observed content position of the anchor, used to confirm the row has
+    // really been laid out before the slide commits to a coordinate.
+    let confirmedDesired: number | null = null;
 
-    function clearAnchorSlideCompletion(): void {
-      if (anchorSlideFrameId !== null) {
-        window.cancelAnimationFrame(anchorSlideFrameId);
-        anchorSlideFrameId = null;
+    function stopFrameLoop(): void {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+        frameId = null;
       }
-      if (anchorSlideFallbackId !== null) {
-        window.clearTimeout(anchorSlideFallbackId);
-        anchorSlideFallbackId = null;
-      }
-      if (anchorSlideContainer && anchorSlideScrollEndListener) {
-        anchorSlideContainer.removeEventListener("scrollend", anchorSlideScrollEndListener);
-      }
-      anchorSlideContainer = null;
-      anchorSlideScrollEndListener = null;
-      advanceAnchorSlide = null;
       anchorSlideCorrectionRef.current = null;
-      anchorLayoutObserver?.disconnect();
-      anchorLayoutObserver = null;
+      layoutObserver?.disconnect();
+      layoutObserver = null;
     }
 
     // The slide is over (or was never possible): hand scroll ownership back to
     // ChatView's auto-follow machinery.
     function finishAnchorSlide(): void {
-      clearAnchorSlideCompletion();
+      stopFrameLoop();
       if (anchorScrollInFlightRef) {
         anchorScrollInFlightRef.current = false;
       }
@@ -159,173 +186,146 @@ export function useTailAnchorScroll({
       );
     }
 
-    function settleAnimatedAnchorSlide(): void {
+    /** One step of the slide. Returns true when the anchor is done moving. */
+    function advanceAnchorSlide(now: number): boolean {
       if (disposed) {
-        return;
+        return true;
       }
+      // A pointer/wheel/touch gesture clears the shared flag in ChatView. Do not
+      // pull the transcript back after the user takes over the scroll.
       if (anchorScrollInFlightRef && !anchorScrollInFlightRef.current) {
         finishAnchorSlide();
-        return;
+        return true;
       }
+      const elapsedMs = now - startedAt;
+      const deltaMs = Math.max(0, now - lastFrameAt);
+      lastFrameAt = now;
+
       const container = getScrollContainer(listRef);
-      const target = container ? anchoredScrollTargetPx(container, findAnchorElement()) : null;
-      if (container && target !== null && Math.abs(target.clamped - container.scrollTop) > 1) {
-        container.scrollTop = target.clamped;
+      if (container && topInsetPx === null) {
+        topInsetPx = Number.parseFloat(window.getComputedStyle(container).paddingTop) || 0;
       }
-      finishAnchorSlide();
-    }
-
-    function startAnchorSlide(container: HTMLElement, anchorElement: HTMLElement): void {
-      const target = anchoredScrollTargetPx(container, anchorElement);
-      if (target === null) {
-        finishAnchorSlide();
-        return;
-      }
-      clearAnchorSlideCompletion();
-
-      // Keep the already-stable normal-send motion unchanged. Only steering
-      // needs the live coordinate correction below because it has a growing row
-      // above the new anchor.
-      if (shouldAnimateAnchorSlide) {
-        if (prefersReducedMotion() || Math.abs(target.clamped - container.scrollTop) <= 1) {
-          container.scrollTop = target.clamped;
-          finishAnchorSlide();
-          return;
-        }
-        anchorSlideContainer = container;
-        anchorSlideScrollEndListener = () => {
-          const currentTarget = anchoredScrollTargetPx(container, findAnchorElement());
-          if (
-            currentTarget !== null &&
-            Math.abs(currentTarget.clamped - container.scrollTop) <= 1
-          ) {
-            settleAnimatedAnchorSlide();
-          }
-        };
-        container.addEventListener("scrollend", anchorSlideScrollEndListener);
-        anchorSlideFallbackId = window.setTimeout(
-          settleAnimatedAnchorSlide,
-          ANCHOR_SLIDE_MAX_SETTLE_MS,
-        );
-        container.scrollTo({ top: target.clamped, behavior: "smooth" });
-        return;
-      }
-
-      container.scrollTop = target.clamped;
-      const startedAt = performance.now();
-      const topInsetPx = Number.parseFloat(getComputedStyle(container).paddingTop) || 0;
-      let settledFrames = 0;
-
-      advanceAnchorSlide = (now: number) => {
-        if (disposed) {
-          return true;
-        }
-        // A pointer/wheel/touch gesture clears the shared flag in ChatView. Do
-        // not pull the transcript back after the user takes over the scroll.
-        if (anchorScrollInFlightRef && !anchorScrollInFlightRef.current) {
-          finishAnchorSlide();
-          return true;
-        }
-        const currentContainer = getScrollContainer(listRef);
-        const currentAnchor = findAnchorElement();
-        if (!currentContainer || !currentAnchor || currentAnchor.getClientRects().length === 0) {
-          finishAnchorSlide();
-          return true;
-        }
-
-        const currentOffset =
-          currentAnchor.getBoundingClientRect().top - currentContainer.getBoundingClientRect().top;
-        const correction = currentOffset - topInsetPx;
-        if (Math.abs(correction) > 0.5) {
-          currentContainer.scrollTop += correction;
-        }
-
-        settledFrames = Math.abs(currentOffset - topInsetPx) <= 1 ? settledFrames + 1 : 0;
-        if (
-          (settledFrames < ANCHOR_SLIDE_SETTLED_FRAMES ||
-            now - startedAt < STEER_ANCHOR_MIN_SETTLE_MS) &&
-          now - startedAt < ANCHOR_SLIDE_MAX_SETTLE_MS
-        ) {
+      const target = container
+        ? anchoredScrollTargetPx(container, findAnchorElement(), topInsetPx ?? 0)
+        : null;
+      if (!container || target === null) {
+        // The row has not been committed yet: keep waiting instead of finishing
+        // at whatever offset the transcript happens to sit at.
+        if (elapsedMs < ANCHOR_MOUNT_MAX_WAIT_MS) {
           return false;
         }
         finishAnchorSlide();
         return true;
-      };
-      anchorSlideCorrectionRef.current = () => {
-        advanceAnchorSlide?.(performance.now());
-      };
-      const timelineRoot = timelineRootRef.current;
-      if (timelineRoot && typeof MutationObserver !== "undefined") {
-        anchorLayoutObserver = new MutationObserver(() => {
-          anchorSlideCorrectionRef.current?.();
-        });
-        // LegendList repositions the anchor's absolute wrapper by mutating its
-        // inline style after a preceding streaming row is remeasured. Catch
-        // that mutation before paint instead of waiting for the next rAF.
-        anchorLayoutObserver.observe(timelineRoot, {
-          attributes: true,
-          attributeFilter: ["style"],
-          subtree: true,
-        });
       }
-      const step = (now: number) => {
-        anchorSlideFrameId = null;
-        if (!advanceAnchorSlide?.(now)) {
-          anchorSlideFrameId = window.requestAnimationFrame(step);
+
+      // `desired` is the anchor's own position in the content, so it does not
+      // change just because the transcript scrolls. Before the first move, a
+      // value that does not repeat means the row was measured mid-layout —
+      // acting on it would snap the transcript to a coordinate the message
+      // never had, and the correction back is the visible jump.
+      if (!hasLanded && elapsedMs < ANCHOR_POSITION_CONFIRM_MAX_MS) {
+        const settled =
+          confirmedDesired !== null && Math.abs(target.desired - confirmedDesired) <= 1;
+        confirmedDesired = target.desired;
+        if (!settled) {
+          return false;
         }
-      };
-      anchorSlideFrameId = window.requestAnimationFrame(step);
+      }
+
+      // The coordinate is only reachable once the native end-space reserve is
+      // large enough to lift the anchor to the top; until then the message is
+      // still parked at the bottom and has not landed, however close scrollTop
+      // is to the (clamped) target.
+      const reachable = target.desired <= target.clamped + 1;
+      // The mirror image: holding the anchor at the top leaves the live tail
+      // below the viewport bottom, so the response has outgrown its reserve.
+      // That is the hand-off to the list's own follow-the-tail — from here the
+      // anchor is meant to scroll up and out of view.
+      if (hasLanded && target.maxScrollTopPx - target.desired > ANCHOR_OVERFLOW_SLACK_PX) {
+        overflowFrames += 1;
+        if (overflowFrames >= ANCHOR_OVERFLOW_HANDOFF_FRAMES) {
+          // Complete the motion the hand-off implies rather than releasing at
+          // the held coordinate: the tail is what the reader is following now,
+          // and the list only re-sticks on its next content change, so leaving
+          // it here would strand the transcript short of the live edge.
+          container.scrollTop = target.maxScrollTopPx;
+          finishAnchorSlide();
+          return true;
+        }
+      } else {
+        overflowFrames = 0;
+      }
+
+      // Anything that moved the anchor off its coordinate since the last frame
+      // is a correction; while they keep arriving the hook keeps ownership.
+      if (Math.abs(target.clamped - container.scrollTop) > 0.5) {
+        lastCorrectionAt = now;
+        container.scrollTop =
+          hasLanded || !easeToAnchor
+            ? target.clamped
+            : advanceAnchorSlideOffset({
+                current: container.scrollTop,
+                target: target.clamped,
+                deltaMs,
+              });
+      }
+
+      if (reachable && Math.abs(target.clamped - container.scrollTop) <= 1) {
+        hasLanded = true;
+      } else {
+        lastCorrectionAt = now;
+      }
+
+      const minHoldMs = easeToAnchor ? 0 : STEER_ANCHOR_MIN_SETTLE_MS;
+      const quiet = hasLanded && now - lastCorrectionAt >= ANCHOR_HOLD_QUIET_MS;
+      if ((!quiet || elapsedMs < minHoldMs) && elapsedMs < ANCHOR_SLIDE_MAX_MS) {
+        return false;
+      }
+      finishAnchorSlide();
+      return true;
     }
 
-    // Wait until the anchor row is committed and the native end-space reserve
-    // has made its anchored coordinate reachable, then run the single slide.
-    // Bounded so a degenerate transcript degrades to a clamped slide instead of
-    // holding the auto-follow pause forever.
-    function waitForAnchorAndSlide(): void {
-      if (disposed) {
-        return;
-      }
-      const container = getScrollContainer(listRef);
-      const anchorElement = findAnchorElement();
-      const target = container ? anchoredScrollTargetPx(container, anchorElement) : null;
-      if (
-        container &&
-        anchorElement &&
-        target !== null &&
-        (target.desired <= target.clamped + 1 || retryFramesLeft <= 0)
-      ) {
-        startAnchorSlide(container, anchorElement);
-        return;
-      }
-      if (retryFramesLeft <= 0) {
-        finishAnchorSlide();
-        return;
-      }
-      retryFramesLeft -= 1;
-      waitFrameId = window.requestAnimationFrame(() => {
-        waitFrameId = null;
-        waitForAnchorAndSlide();
+    anchorSlideCorrectionRef.current = () => {
+      advanceAnchorSlide(performance.now());
+    };
+    const timelineRoot = timelineRootRef.current;
+    if (timelineRoot && typeof MutationObserver !== "undefined") {
+      layoutObserver = new MutationObserver(() => {
+        anchorSlideCorrectionRef.current?.();
+      });
+      // LegendList repositions rows — and re-issues its own end-follow scroll —
+      // by mutating inline styles mid-frame, after this loop's rAF step has
+      // already run. Correcting from the mutation itself puts the anchor back on
+      // its coordinate before paint; waiting for the next rAF instead leaves the
+      // anchored message visibly displaced for that frame. The observer only
+      // lives for the duration of the slide and its hold.
+      layoutObserver.observe(timelineRoot, {
+        attributes: true,
+        attributeFilter: ["style"],
+        subtree: true,
       });
     }
 
-    waitForAnchorAndSlide();
+    const step = (now: number) => {
+      frameId = null;
+      if (!advanceAnchorSlide(now)) {
+        frameId = window.requestAnimationFrame(step);
+      }
+    };
+    frameId = window.requestAnimationFrame(step);
 
     return () => {
       disposed = true;
-      clearAnchorSlideCompletion();
+      stopFrameLoop();
       if (anchorScrollInFlightRef) {
         anchorScrollInFlightRef.current = false;
-      }
-      if (waitFrameId !== null) {
-        window.cancelAnimationFrame(waitFrameId);
-        waitFrameId = null;
       }
     };
   }, [anchorMessageId, anchorScrollInFlightRef, listRef, onAnchorSlideFinished, timelineRootRef]);
 
   // React commits streamed text before paint. Re-apply the current slide
-  // coordinate in that layout window so a final pre-steer assistant chunk above
-  // the anchor cannot push the steering message down for one visible frame.
+  // coordinate in that layout window so a chunk landing above the anchor cannot
+  // push the anchored message for one visible frame.
   useLayoutEffect(() => {
     anchorSlideCorrectionRef.current?.();
   }, [contentChangeSignal]);
