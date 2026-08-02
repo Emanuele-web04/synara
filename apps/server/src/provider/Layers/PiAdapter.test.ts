@@ -231,6 +231,31 @@ describe("getPiDiscoverableModels", () => {
     });
   });
 
+  it("omits models whose normalized identity would no longer resolve in the registry", () => {
+    expect(
+      toPiProviderModelDescriptor(
+        {
+          provider: " openrouter",
+          id: "google/gemma-4-26b-a4b-it",
+          name: "Google: Gemma 4 26B A4B",
+          reasoning: false,
+        } as Model<Api>,
+        () => "OpenRouter",
+      ),
+    ).toBeNull();
+    expect(
+      toPiProviderModelDescriptor(
+        {
+          provider: "openrouter",
+          id: " google/gemma-4-26b-a4b-it",
+          name: "Google: Gemma 4 26B A4B",
+          reasoning: false,
+        } as Model<Api>,
+        () => "OpenRouter",
+      ),
+    ).toBeNull();
+  });
+
   it("isolates extension providers between sessions that share an agent directory", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
