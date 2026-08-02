@@ -135,4 +135,17 @@ describe("inspectorCardFor", () => {
       { label: "radius", value: "999px" },
     ]);
   });
+
+  it("reports elliptical radii with valid slash-separated shorthand", () => {
+    const card = inspectorCardFor({
+      tagName: "DIV",
+      width: 120,
+      height: 40,
+      style: {
+        ...BASE_STYLE,
+        radius: ["10px 20px", "10px 20px", "10px 20px", "10px 20px"],
+      },
+    });
+    expect(card.rows.at(-1)).toEqual({ label: "radius", value: "10px / 20px" });
+  });
 });

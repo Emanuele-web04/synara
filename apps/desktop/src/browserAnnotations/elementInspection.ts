@@ -177,8 +177,8 @@ export function inspectorCardFor(input: {
   if (padding) rows.push({ label: "padding", value: padding });
   const margin = formatCssBox(input.style.margin);
   if (margin) rows.push({ label: "margin", value: margin });
-  const radius = formatCssBox(input.style.radius);
-  if (radius) rows.push({ label: "radius", value: radius });
+  const radius = formatCssBorderRadius(input.style.radius);
+  if (radius !== "0") rows.push({ label: "radius", value: radius });
   return {
     tag: input.tagName.toLowerCase(),
     size: formatElementSize(input.width, input.height),
