@@ -63,6 +63,7 @@ import {
 } from "../lib/browserPromptContext";
 import {
   browserAddressDisplayValue,
+  browserWebviewInitialUrl,
   buildBrowserAddressSuggestions,
   createBrowserPanelHideScheduler,
   createBrowserRendererLossHandler,
@@ -970,7 +971,10 @@ export function BrowserPanel({
     webview.addEventListener("render-process-gone", handleRendererLoss);
     webview.addEventListener("destroyed", handleRendererLoss);
     if (shouldLoadInitialUrl) {
-      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+      webview.setAttribute(
+        "src",
+        browserWebviewInitialUrl(initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL),
+      );
     }
     attachVisibleWebview();
 
