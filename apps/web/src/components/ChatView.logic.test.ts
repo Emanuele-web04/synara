@@ -47,6 +47,7 @@ import {
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
   resolveThreadDetailHydration,
+  resolveThreadArtifactWorkspaceRoot,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
@@ -60,6 +61,38 @@ import {
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("thread artifact workspace root", () => {
+  it("uses a materialized worktree for file previews", () => {
+    expect(
+      resolveThreadArtifactWorkspaceRoot({
+        isStudioContainer: false,
+        projectCwd: "/repo/project",
+        threadWorkspaceCwd: "/repo/worktrees/feature",
+      }),
+    ).toBe("/repo/worktrees/feature");
+  });
+
+  it("keeps the project fallback while a normal thread worktree is pending", () => {
+    expect(
+      resolveThreadArtifactWorkspaceRoot({
+        isStudioContainer: false,
+        projectCwd: "/repo/project",
+        threadWorkspaceCwd: null,
+      }),
+    ).toBe("/repo/project");
+  });
+
+  it("does not escape a Studio thread's selected working directory", () => {
+    expect(
+      resolveThreadArtifactWorkspaceRoot({
+        isStudioContainer: true,
+        projectCwd: "/studio/root",
+        threadWorkspaceCwd: null,
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("transcript auto-follow signal", () => {
   it("stays stable when only non-message turn activity changes", () => {

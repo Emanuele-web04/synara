@@ -26,7 +26,7 @@ import {
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -1339,6 +1339,44 @@ async function waitForLayout(): Promise<void> {
   await nextFrame();
 }
 
+function installImmediateScrollToSpy(
+  scrollContainer: HTMLElement,
+  config?: { readonly suspendSmoothScroll?: boolean },
+): {
+  readonly calls: ScrollToOptions[];
+  readonly restore: () => void;
+} {
+  const originalScrollTo = scrollContainer.scrollTo;
+  const calls: ScrollToOptions[] = [];
+  scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+    const normalized: ScrollToOptions =
+      typeof options === "object" && options !== null
+        ? options
+        : {
+            ...(typeof options === "number" ? { left: options } : {}),
+            ...(typeof y === "number" ? { top: y } : {}),
+          };
+    calls.push(normalized);
+    if (config?.suspendSmoothScroll && normalized.behavior === "smooth") {
+      return;
+    }
+    if (typeof normalized.left === "number") {
+      scrollContainer.scrollLeft = normalized.left;
+    }
+    if (typeof normalized.top === "number") {
+      scrollContainer.scrollTop = normalized.top;
+    }
+    scrollContainer.dispatchEvent(new Event("scroll"));
+  }) as typeof scrollContainer.scrollTo;
+
+  return {
+    calls,
+    restore: () => {
+      scrollContainer.scrollTo = originalScrollTo;
+    },
+  };
+}
+
 async function setViewport(viewport: ViewportSpec): Promise<void> {
   await page.viewport(viewport.width, viewport.height);
   await waitForLayout();
@@ -2220,6 +2258,126 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("settles the scroll-to-bottom arrow at the measured transcript end", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    let restoreScrollTo = () => {};
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() => {
+        expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight);
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+          ),
+        "Unable to find the visible scroll-to-bottom button.",
+      );
+
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
+
+      scrollButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
+          expect(scrollSpy.calls.some((call) => call.behavior === "auto")).toBe(true);
+          expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(
+            AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
+  it("stops the arrow's smooth scroll when the user scrolls upward", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    let restoreScrollTo = () => {};
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() => {
+        expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight);
+      });
+      // Let mount-time tail expansion retries (max 260ms) finish before
+      // isolating the arrow scroll and the user's takeover gesture.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await waitForLayout();
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+          ),
+        "Unable to find the visible scroll-to-bottom button.",
+      );
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer, {
+        suspendSmoothScroll: true,
+      });
+      restoreScrollTo = scrollSpy.restore;
+
+      scrollButton.click();
+      await vi.waitFor(() => {
+        expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
+      });
+      const takeoverOffset = scrollContainer.scrollTop;
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+
+      await vi.waitFor(() => {
+        expect(scrollSpy.calls.some((call) => call.behavior === "auto")).toBe(true);
+      });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      const smoothCalls = scrollSpy.calls.filter((call) => call.behavior === "smooth");
+      const takeoverCalls = scrollSpy.calls.filter((call) => call.behavior === "auto");
+      expect(smoothCalls).toHaveLength(1);
+      expect(takeoverCalls.length).toBeGreaterThanOrEqual(1);
+      expect(
+        takeoverCalls.every(
+          (call) =>
+            typeof call.top === "number" &&
+            call.top <= takeoverOffset + AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        ),
+      ).toBe(true);
+    } finally {
+      restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
   it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
@@ -2229,8 +2387,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetText: "bottom stick target",
       }),
     });
-    let patchedScrollContainer: HTMLElement | null = null;
-    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
+    let restoreScrollTo = () => {};
 
     try {
       const scrollContainer = await waitForElement(
@@ -2244,26 +2401,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
       );
 
-      const scrollToCalls: ScrollToOptions[] = [];
-      patchedScrollContainer = scrollContainer;
-      originalScrollTo = scrollContainer.scrollTo;
-      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
-        const normalized: ScrollToOptions =
-          typeof options === "object" && options !== null
-            ? options
-            : {
-                ...(typeof options === "number" ? { left: options } : {}),
-                ...(typeof y === "number" ? { top: y } : {}),
-              };
-        scrollToCalls.push(normalized);
-        if (typeof normalized.left === "number") {
-          scrollContainer.scrollLeft = normalized.left;
-        }
-        if (typeof normalized.top === "number") {
-          scrollContainer.scrollTop = normalized.top;
-        }
-        scrollContainer.dispatchEvent(new Event("scroll"));
-      }) as typeof scrollContainer.scrollTo;
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
 
       const prompt = "keep me pinned after send";
       useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
@@ -2276,18 +2415,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
         async () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.activeElement).toBe(await waitForComposerEditor());
-          expect(scrollToCalls.some((call) => call.behavior === "smooth")).toBe(true);
+          expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
       );
-      scrollContainer.scrollTo = originalScrollTo;
     } finally {
-      if (patchedScrollContainer && originalScrollTo) {
-        patchedScrollContainer.scrollTo = originalScrollTo;
-      }
+      restoreScrollTo();
       await mounted.cleanup();
       restoreNativeApi();
     }
@@ -2499,8 +2635,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       viewport: DEFAULT_VIEWPORT,
       snapshot: currentSnapshot,
     });
-    let patchedScrollContainer: HTMLElement | null = null;
-    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
+    let restoreScrollTo = () => {};
 
     const syncActiveThread = (
       update: (
@@ -2528,27 +2663,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
 
-      const scrollToCalls: ScrollToOptions[] = [];
-      patchedScrollContainer = scrollContainer;
-      originalScrollTo = scrollContainer.scrollTo;
-      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
-        const normalized: ScrollToOptions =
-          typeof options === "object" && options !== null
-            ? options
-            : {
-                ...(typeof options === "number" ? { left: options } : {}),
-                ...(typeof y === "number" ? { top: y } : {}),
-              };
-        scrollToCalls.push(normalized);
-        if (typeof normalized.left === "number") scrollContainer.scrollLeft = normalized.left;
-        if (typeof normalized.top === "number") scrollContainer.scrollTop = normalized.top;
-        scrollContainer.dispatchEvent(new Event("scroll"));
-      }) as typeof scrollContainer.scrollTo;
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
       // Let mount-time tail/image expansion retries (max 260ms) settle before
       // isolating scrolls caused by the state transitions below.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
       await waitForLayout();
-      scrollToCalls.length = 0;
+      scrollSpy.calls.length = 0;
 
       // Buffering/connecting state changes generic turn chrome, but does not add a
       // transcript message and therefore must not re-stick the transcript.
@@ -2564,7 +2685,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
+      expect(scrollSpy.calls).toHaveLength(0);
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
       syncActiveThread((thread) => ({
@@ -2604,7 +2725,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_204),
       }));
       await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
+      expect(scrollSpy.calls).toHaveLength(0);
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -2626,11 +2747,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_205),
       }));
       await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
+      expect(scrollSpy.calls).toHaveLength(0);
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
-      scrollToCalls.length = 0;
+      scrollSpy.calls.length = 0;
       const liveAssistantMessage = {
         ...createAssistantMessage({
           id: MessageId.makeUnsafe("msg-assistant-auto-follow-live"),
@@ -2645,12 +2766,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         messages: [...thread.messages, liveAssistantMessage],
         updatedAt: isoAt(1_206),
       }));
-      await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
         timeout: 4_000,
         interval: 16,
       });
 
-      scrollToCalls.length = 0;
+      scrollSpy.calls.length = 0;
       syncActiveThread((thread) => ({
         ...thread,
         messages: thread.messages.map((message) =>
@@ -2665,14 +2786,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         ),
         updatedAt: isoAt(1_207),
       }));
-      await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
         timeout: 4_000,
         interval: 16,
       });
     } finally {
-      if (patchedScrollContainer && originalScrollTo) {
-        patchedScrollContainer.scrollTo = originalScrollTo;
-      }
+      restoreScrollTo();
       await mounted.cleanup();
     }
   });
@@ -4294,6 +4413,40 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses the latest ordinary project when New chat is clicked from Activity", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-activity-new-chat-latest-project" as MessageId,
+          targetText: "activity new chat latest project",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      const activityNewChatButton = page.getByRole("button", {
+        name: "Start new chat in last used project",
+      });
+      await expect.element(activityNewChatButton).toBeInTheDocument();
+      await activityNewChatButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Activity New chat should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("uses the latest ordinary project from Home for the command-palette New thread action", async () => {
     useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
     const mounted = await mountChatView({
@@ -4307,11 +4460,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
+      // The sidebar header renders Search as an icon button, so its accessible
+      // name is the only stable handle.
       const searchButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
-            button.textContent?.trim().startsWith("Search"),
-          ) ?? null,
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Search"]'),
         "Unable to find the global Search button.",
       );
       searchButton.click();
@@ -4432,11 +4584,37 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toHaveTextContent("project");
-      await projectPickerTrigger.click();
+      const inlineResetButton = page.getByTestId("project-picker-reset-trigger");
+      const inlineFolderIcon = projectPickerTrigger
+        .element()
+        .querySelector<HTMLElement>("[class*='transition-opacity']");
+      expect(inlineFolderIcon).not.toBeNull();
+      projectPickerTrigger.element().focus();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
+      });
+      await userEvent.keyboard("{Tab}");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(inlineResetButton.element());
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("1");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("0");
+      });
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(projectPickerTrigger.element());
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
+      });
+      await userEvent.keyboard("{Enter}");
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
       await expect.element(page.getByText(/Folders on this/)).not.toBeInTheDocument();
+      await page.getByText("New project").hover();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+      });
 
       const currentProjectOption = await waitForElement(
         () =>
@@ -4635,22 +4813,43 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      expect(document.activeElement).toBe(composerEditor);
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
-      await projectPickerTrigger.click();
-      await page.getByText("Don't work in a project").click();
+      const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
+      await projectPickerTrigger.hover();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(resetProjectButton.element()).opacity).toBe("1");
+      });
 
-      await vi.waitFor(
-        () => {
-          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
-            projectId: HOME_PROJECT_ID,
-            envMode: "local",
-            branch: null,
-            worktreePath: null,
-          });
-        },
-        { timeout: 8_000, interval: 16 },
-      );
+      const originalRequestAnimationFrame = window.requestAnimationFrame;
+      let frameRequestCount = 0;
+      window.requestAnimationFrame = (callback) => {
+        frameRequestCount += 1;
+        return originalRequestAnimationFrame(callback);
+      };
+      try {
+        await resetProjectButton.click();
+        await vi.waitFor(
+          () => {
+            expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+              projectId: HOME_PROJECT_ID,
+              envMode: "local",
+              branch: null,
+              worktreePath: null,
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+
+      expect(frameRequestCount).toBe(0);
+      expect(document.activeElement).toBe(composerEditor);
+      await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
