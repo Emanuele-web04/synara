@@ -5,7 +5,7 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -135,6 +135,10 @@ describe("SidebarActivityView", () => {
 
     await page.getByRole("button", { name: "Activity options", exact: true }).click();
     await page.getByRole("menuitemradio", { name: "Project" }).click();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+    });
 
     await vi.waitFor(() => {
       expect(document.querySelectorAll("[data-testid^='activity-thread-']")).toHaveLength(20);

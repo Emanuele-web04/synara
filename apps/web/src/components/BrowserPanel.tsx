@@ -11,7 +11,6 @@ import { useQuery } from "@tanstack/react-query";
 import { IconPointer } from "@tabler/icons-react";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ServerLocalServerProcess,
   type ThreadBrowserState,
   type ThreadId,
@@ -45,7 +44,6 @@ import {
 import { isElectron } from "~/env";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
-import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacPlatform } from "~/lib/utils";
@@ -57,10 +55,7 @@ import {
 } from "../browserStateStore";
 import { useComposerDraftStore, type BrowserAnnotationDraft } from "../composerDraftStore";
 import { anchoredToastManager } from "./ui/toast";
-import {
-  composerImageFromBrowserScreenshot,
-  screenshotAttachmentName,
-} from "../lib/browserPromptContext";
+import { prepareComposerImageFromBrowserScreenshot } from "../lib/browserPromptContext";
 import {
   browserAddressDisplayValue,
   browserWebviewInitialUrl,
@@ -1332,19 +1327,26 @@ export function BrowserPanel({
 
     void runBrowserAction(() =>
       api.browser.captureScreenshot({ threadId, tabId: activeTab.id }),
-    ).then((screenshot) => {
+    ).then(async (screenshot) => {
       if (!screenshot) {
         return;
       }
-      if (screenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        setLocalError(
-          `'${screenshotAttachmentName(screenshot)}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
+      try {
+        const inserted = addComposerDraftImage(
+          threadId,
+          await prepareComposerImageFromBrowserScreenshot(screenshot),
         );
-        return;
+        if (!inserted) {
+          throw new Error(
+            `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+          );
+        }
+        setLocalError(null);
+      } catch (cause) {
+        setLocalError(
+          cause instanceof Error ? cause.message : "The browser screenshot could not be prepared.",
+        );
       }
-
-      addComposerDraftImage(threadId, composerImageFromBrowserScreenshot(screenshot));
-      setLocalError(null);
     });
   }, [
     activeTab,

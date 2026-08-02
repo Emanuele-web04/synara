@@ -135,8 +135,6 @@ import {
 } from "../lib/browserPromptContext";
 import {
   buildComposerFileAttachmentsFromFiles,
-  IMAGE_SIZE_LIMIT_LABEL,
-  buildComposerImageAttachmentsFromFiles,
   stageUploadComposerAttachments,
   cloneComposerImageAttachment,
   effectiveComposerAttachmentCount,
@@ -162,6 +160,7 @@ import {
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
+import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
@@ -300,6 +299,7 @@ import {
   ChevronDownIcon,
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
+  LoaderCircleIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
 } from "~/lib/icons";
@@ -1245,7 +1245,6 @@ export default function ChatView({
   const removeQueuedComposerTurnFromDraft = useComposerDraftStore(
     (store) => store.removeQueuedTurn,
   );
-  const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
@@ -1605,24 +1604,17 @@ export default function ChatView({
     promptHistoryAppliedPromptRef.current = null;
     setComposerDraftPromptHistorySavedDraft(threadId, null);
   }, [setComposerDraftPromptHistorySavedDraft, threadId]);
-  const addComposerImage = useCallback(
-    (image: ComposerImageAttachment) => {
-      discardPromptHistoryNavigationForComposerMutation();
-      addComposerDraftImage(threadId, image);
-    },
-    [addComposerDraftImage, discardPromptHistoryNavigationForComposerMutation, threadId],
-  );
   const addComposerImagesToDraft = useCallback(
     (images: ComposerImageAttachment[]) => {
       discardPromptHistoryNavigationForComposerMutation();
-      addComposerDraftImages(threadId, images);
+      return addComposerDraftImages(threadId, images);
     },
     [addComposerDraftImages, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerFilesToDraft = useCallback(
     (files: ComposerFileAttachment[]) => {
       discardPromptHistoryNavigationForComposerMutation();
-      addComposerDraftFiles(threadId, files);
+      return addComposerDraftFiles(threadId, files);
     },
     [addComposerDraftFiles, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
@@ -4054,6 +4046,30 @@ export default function ChatView({
     },
     [setStoreThreadError],
   );
+  const composerImageAttachmentCount = useCallback(
+    () =>
+      effectiveComposerAttachmentCount(useComposerDraftStore.getState().draftsByThreadId[threadId]),
+    [threadId],
+  );
+  const commitPreparedComposerImages = useCallback(
+    (images: ComposerImageAttachment[]) => addComposerImagesToDraft(images),
+    [addComposerImagesToDraft],
+  );
+  const setComposerImagePreparationError = useCallback(
+    (error: string | null) => setThreadError(threadId, error),
+    [setThreadError, threadId],
+  );
+  const {
+    addImages: enqueueComposerImages,
+    isPreparingImages: isPreparingComposerImages,
+    pendingImageCount: pendingComposerImageCount,
+    waitForPending: waitForPendingComposerImages,
+  } = useComposerImageIntake({
+    threadId,
+    existingAttachmentCount: composerImageAttachmentCount,
+    commitImages: commitPreparedComposerImages,
+    onError: setComposerImagePreparationError,
+  });
 
   const focusComposer = useCallback(() => {
     // Secondary chrome is deferred during thread switches; replay focus once it
@@ -6274,27 +6290,9 @@ export default function ChatView({
         return;
       }
 
-      const { images: nextImages, error } = buildComposerImageAttachmentsFromFiles({
-        files,
-        existingAttachmentCount: effectiveComposerAttachmentCount(
-          useComposerDraftStore.getState().draftsByThreadId[activeThreadId],
-        ),
-      });
-
-      if (nextImages.length === 1 && nextImages[0]) {
-        addComposerImage(nextImages[0]);
-      } else if (nextImages.length > 1) {
-        addComposerImagesToDraft(nextImages);
-      }
-      setThreadError(activeThreadId, error);
+      enqueueComposerImages(files);
     },
-    [
-      activeThreadId,
-      addComposerImage,
-      addComposerImagesToDraft,
-      pendingUserInputs.length,
-      setThreadError,
-    ],
+    [activeThreadId, enqueueComposerImages, pendingUserInputs.length],
   );
 
   const removeComposerImage = (imageId: string) => {
@@ -6320,10 +6318,13 @@ export default function ChatView({
         ),
       });
 
-      if (nextFiles.length > 0) {
-        addComposerFilesToDraft(nextFiles);
-      }
-      setThreadError(activeThreadId, error);
+      const insertedCount = nextFiles.length > 0 ? addComposerFilesToDraft(nextFiles) : 0;
+      setThreadError(
+        activeThreadId,
+        insertedCount < nextFiles.length
+          ? `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`
+          : error,
+      );
     },
     [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
   );
@@ -6960,6 +6961,11 @@ export default function ChatView({
     ) {
       return false;
     }
+    if (!queuedTurn) {
+      sendPreflightInFlightRef.current = true;
+      await waitForPendingComposerImages();
+      sendPreflightInFlightRef.current = false;
+    }
     if (activePendingProgress) {
       const activeQuestion = activePendingProgress.activeQuestion;
       const liveComposerSnapshot = composerEditorRef.current?.readSnapshot() ?? null;
@@ -6999,7 +7005,10 @@ export default function ChatView({
     const liveComposerSnapshot =
       queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
     let promptForSend = queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
-    let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
+    let composerImagesForSend =
+      queuedChatTurn?.images ??
+      useComposerDraftStore.getState().draftsByThreadId[activeThread.id]?.images ??
+      composerImages;
     // AppSnap captures persist as IndexedDB blobs and hydrate into `images`
     // asynchronously (see AppSnapCoordinator). Right after a reload the user can
     // hit send before that hydration finishes; without this, the not-yet-hydrated
@@ -7348,8 +7357,8 @@ export default function ChatView({
           ? "Open the in-app browser first, then try again."
           : browserPromptAttachment.reason === "no-active-tab"
             ? "The in-app browser has no active tab to capture yet."
-            : browserPromptAttachment.reason === "attachment-too-large"
-              ? `The browser screenshot exceeded the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`
+            : browserPromptAttachment.reason === "attachment-processing-failed"
+              ? "The browser screenshot could not be optimized for attachment."
               : "The current browser context could not be attached.";
       toastManager.add({
         type: "warning",
@@ -10791,6 +10800,17 @@ export default function ChatView({
                   ) : null}
                   {!isComposerApprovalState &&
                     pendingUserInputs.length === 0 &&
+                    isPreparingComposerImages && (
+                      <div
+                        className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
+                        role="status"
+                      >
+                        <LoaderCircleIcon className="size-3.5 animate-spin" />
+                        Optimizing {pendingComposerImageCount === 1 ? "image" : "images"}…
+                      </div>
+                    )}
+                  {!isComposerApprovalState &&
+                    pendingUserInputs.length === 0 &&
                     (composerAssistantSelections.length > 0 ||
                       composerBrowserAnnotations.length > 0 ||
                       composerFileComments.length > 0 ||
@@ -11073,6 +11093,7 @@ export default function ChatView({
                                 isSendBusy ||
                                 isConnecting ||
                                 isVoiceTranscribing ||
+                                isPreparingComposerImages ||
                                 !composerSendState.hasSendableContent
                               }
                               aria-label={
@@ -11080,14 +11101,16 @@ export default function ChatView({
                                   ? "Connecting"
                                   : isVoiceTranscribing
                                     ? "Transcribing voice note"
-                                    : isPreparingWorktree
-                                      ? "Preparing worktree"
-                                      : isSendBusy
-                                        ? "Sending"
-                                        : "Send message"
+                                    : isPreparingComposerImages
+                                      ? "Optimizing image"
+                                      : isPreparingWorktree
+                                        ? "Preparing worktree"
+                                        : isSendBusy
+                                          ? "Sending"
+                                          : "Send message"
                               }
                             >
-                              {isConnecting || isSendBusy ? (
+                              {isConnecting || isSendBusy || isPreparingComposerImages ? (
                                 <svg
                                   width="12"
                                   height="12"
