@@ -42,6 +42,7 @@ import {
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  resolveThreadStatusTrailingIndicator,
   isUrgentThreadStatusPill,
   type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
@@ -800,6 +801,36 @@ describe("isUrgentThreadStatusPill", () => {
     expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
     expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
+  });
+});
+
+describe("resolveThreadStatusTrailingIndicator", () => {
+  it("shows nothing when there is no status", () => {
+    expect(resolveThreadStatusTrailingIndicator({ status: null })).toBeNull();
+  });
+
+  it("yields the slot when another affordance owns it", () => {
+    expect(
+      resolveThreadStatusTrailingIndicator({
+        status: statusPill("Working"),
+        slotOccupied: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("hides an unread completion on the open thread but keeps it elsewhere", () => {
+    const completed = statusPill("Completed");
+    expect(resolveThreadStatusTrailingIndicator({ status: completed, isActive: true })).toBeNull();
+    expect(resolveThreadStatusTrailingIndicator({ status: completed, isActive: false })).toBe(
+      completed,
+    );
+  });
+
+  it("keeps live and actionable statuses on the open row", () => {
+    for (const label of ["Working", "Connecting", "Pending Approval", "Awaiting Input"] as const) {
+      const pill = statusPill(label);
+      expect(resolveThreadStatusTrailingIndicator({ status: pill, isActive: true })).toBe(pill);
+    }
   });
 });
 

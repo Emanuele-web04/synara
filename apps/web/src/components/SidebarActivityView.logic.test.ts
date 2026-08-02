@@ -38,6 +38,7 @@ function makeSession(status: ThreadSession["status"]): ThreadSession {
 
 function makeThread(input: {
   id: string;
+  createdAt?: string;
   updatedAt?: string;
   latestTurn?: SidebarThreadSummary["latestTurn"];
   lastVisitedAt?: string;
@@ -60,7 +61,7 @@ function makeThread(input: {
     branch: null,
     worktreePath: null,
     session: input.session ?? null,
-    createdAt: "2026-08-01T09:00:00.000Z",
+    createdAt: input.createdAt ?? "2026-08-01T09:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-08-01T10:00:00.000Z",
     archivedAt: input.archivedAt ?? null,
     settledAt: input.settledAt ?? null,
@@ -158,33 +159,34 @@ describe("resolveActivityStatusGroup", () => {
 
 describe("buildActivityViewModel", () => {
   it("orders active threads attention → unseen → running → seen, newest first per group", () => {
+    const createdAt = "2026-08-01T04:00:00.000Z";
     const seenOld = makeThread({
       id: "seen-old",
-      updatedAt: "2026-08-01T08:00:00.000Z",
+      createdAt,
       latestTurn: completedTurn("2026-08-01T07:30:00.000Z"),
       lastVisitedAt: "2026-08-01T07:45:00.000Z",
     });
     const seenNew = makeThread({
       id: "seen-new",
-      updatedAt: "2026-08-01T09:00:00.000Z",
+      createdAt,
       latestTurn: completedTurn("2026-08-01T08:30:00.000Z"),
       lastVisitedAt: "2026-08-01T08:45:00.000Z",
     });
     const running = makeThread({
       id: "running",
-      updatedAt: "2026-08-01T07:00:00.000Z",
+      createdAt,
       hasLiveTailWork: true,
       latestTurn: completedTurn("2026-08-01T06:30:00.000Z"),
     });
     const unseen = makeThread({
       id: "unseen",
-      updatedAt: "2026-08-01T06:00:00.000Z",
+      createdAt,
       latestTurn: completedTurn("2026-08-01T05:30:00.000Z"),
       lastVisitedAt: "2026-08-01T05:00:00.000Z",
     });
     const attention = makeThread({
       id: "attention",
-      updatedAt: "2026-08-01T05:00:00.000Z",
+      createdAt,
       hasPendingApprovals: true,
       session: makeSession("running"),
       latestTurn: completedTurn("2026-08-01T04:30:00.000Z"),
@@ -204,6 +206,82 @@ describe("buildActivityViewModel", () => {
     ]);
   });
 
+  it("keeps two simultaneously running threads in a fixed order while they work", () => {
+    const runningTurn = (startedAt: string): SidebarThreadSummary["latestTurn"] =>
+      ({
+        turnId: `turn-${startedAt}`,
+        state: "running",
+        requestedAt: startedAt,
+        startedAt,
+        completedAt: null,
+      }) as SidebarThreadSummary["latestTurn"];
+    const makeRunning = (id: string, startedAt: string, updatedAt: string) =>
+      makeThread({
+        id,
+        createdAt: "2026-08-01T04:00:00.000Z",
+        updatedAt,
+        hasLiveTailWork: true,
+        latestTurn: runningTurn(startedAt),
+      });
+    const order = (updatedA: string, updatedB: string) =>
+      buildActivityViewModel({
+        threads: [
+          makeRunning("run-a", "2026-08-01T09:00:00.000Z", updatedA),
+          makeRunning("run-b", "2026-08-01T08:00:00.000Z", updatedB),
+        ],
+        pinnedThreadIdSet: new Set(),
+      }).active.map((thread) => thread.id);
+
+    // Whichever thread streamed most recently, the turn each one started still
+    // decides the order — the rows must not swap mid-run.
+    expect(order("2026-08-01T09:30:00.000Z", "2026-08-01T09:31:00.000Z")).toEqual([
+      "run-a",
+      "run-b",
+    ]);
+    expect(order("2026-08-01T09:32:00.000Z", "2026-08-01T09:31:00.000Z")).toEqual([
+      "run-a",
+      "run-b",
+    ]);
+  });
+
+  it("orders attention rows by when the pending interaction was requested", () => {
+    const pendingApproval = (id: string, startedAt: string, updatedAt: string) =>
+      makeThread({
+        id,
+        createdAt: "2026-08-01T04:00:00.000Z",
+        updatedAt,
+        hasPendingApprovals: true,
+        session: makeSession("running"),
+        latestTurn: {
+          turnId: `turn-${id}`,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+        } as SidebarThreadSummary["latestTurn"],
+      });
+    const olderTurnWithNewerApproval = pendingApproval(
+      "older-turn-newer-approval",
+      "2026-08-01T09:00:00.000Z",
+      "2026-08-01T09:30:00.000Z",
+    );
+    const newerTurnWithOlderApproval = pendingApproval(
+      "newer-turn-older-approval",
+      "2026-08-01T09:15:00.000Z",
+      "2026-08-01T09:20:00.000Z",
+    );
+
+    const model = buildActivityViewModel({
+      threads: [newerTurnWithOlderApproval, olderTurnWithNewerApproval],
+      pinnedThreadIdSet: new Set(),
+    });
+
+    expect(model.active.map((thread) => thread.id)).toEqual([
+      "older-turn-newer-approval",
+      "newer-turn-older-approval",
+    ]);
+  });
+
   it("keeps every pinned thread exclusively in the Pinned section", () => {
     const pinnedUnread = makeThread({
       id: "pinned-unread",
@@ -212,12 +290,12 @@ describe("buildActivityViewModel", () => {
     });
     const pinnedSeen = makeThread({
       id: "pinned-seen",
-      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      latestTurn: completedTurn("2026-08-01T09:20:00.000Z"),
       lastVisitedAt: "2026-08-01T09:45:00.000Z",
     });
     const pinnedSettledSeen = makeThread({
       id: "pinned-settled-seen",
-      latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+      latestTurn: completedTurn("2026-08-01T09:10:00.000Z"),
       lastVisitedAt: "2026-08-01T09:45:00.000Z",
       settledAt: "2026-08-01T09:45:00.000Z",
     });
@@ -302,16 +380,13 @@ describe("date buckets", () => {
   const localIso = (year: number, month: number, day: number, hour: number) =>
     new Date(year, month, day, hour).toISOString();
 
+  const threadAt = (iso: string) =>
+    makeThread({ id: `thread-${iso}`, createdAt: iso, latestTurn: completedTurn(iso) });
+
   it("classifies today, yesterday, and earlier by local calendar day", () => {
-    expect(
-      resolveActivityDateBucket({ updatedAt: localIso(2026, 7, 1, 9), createdAt: "" }, nowMs),
-    ).toBe("today");
-    expect(
-      resolveActivityDateBucket({ updatedAt: localIso(2026, 6, 31, 23), createdAt: "" }, nowMs),
-    ).toBe("yesterday");
-    expect(
-      resolveActivityDateBucket({ updatedAt: localIso(2026, 6, 30, 23), createdAt: "" }, nowMs),
-    ).toBe("earlier");
+    expect(resolveActivityDateBucket(threadAt(localIso(2026, 7, 1, 9)), nowMs)).toBe("today");
+    expect(resolveActivityDateBucket(threadAt(localIso(2026, 6, 31, 23)), nowMs)).toBe("yesterday");
+    expect(resolveActivityDateBucket(threadAt(localIso(2026, 6, 30, 23)), nowMs)).toBe("earlier");
   });
 
   it("shows clock time for today's rows and relative time otherwise", () => {
@@ -319,14 +394,14 @@ describe("date buckets", () => {
     const yesterdayIso = localIso(2026, 6, 31, 9);
     expect(
       formatActivityRowTime({
-        thread: { updatedAt: todayIso, createdAt: "" },
+        thread: threadAt(todayIso),
         nowMs,
         timestampFormat: "24-hour",
       }),
     ).toBe(formatShortTimestamp(todayIso, "24-hour"));
     expect(
       formatActivityRowTime({
-        thread: { updatedAt: yesterdayIso, createdAt: "" },
+        thread: threadAt(yesterdayIso),
         nowMs,
         timestampFormat: "24-hour",
       }),
@@ -334,10 +409,12 @@ describe("date buckets", () => {
   });
 
   it("splits an ordered list preserving order inside each bucket", () => {
-    const todayA = makeThread({ id: "today-a", updatedAt: localIso(2026, 7, 1, 14) });
-    const todayB = makeThread({ id: "today-b", updatedAt: localIso(2026, 7, 1, 8) });
-    const yesterday = makeThread({ id: "yesterday", updatedAt: localIso(2026, 6, 31, 12) });
-    const earlier = makeThread({ id: "earlier", updatedAt: localIso(2026, 6, 20, 12) });
+    const bucketThread = (id: string, iso: string) =>
+      makeThread({ id, createdAt: iso, latestTurn: completedTurn(iso) });
+    const todayA = bucketThread("today-a", localIso(2026, 7, 1, 14));
+    const todayB = bucketThread("today-b", localIso(2026, 7, 1, 8));
+    const yesterday = bucketThread("yesterday", localIso(2026, 6, 31, 12));
+    const earlier = bucketThread("earlier", localIso(2026, 6, 20, 12));
 
     const buckets = splitActivityThreadsByDateBucket([todayA, todayB, yesterday, earlier], nowMs);
     expect(buckets.today.map((thread) => thread.id)).toEqual(["today-a", "today-b"]);
@@ -424,9 +501,21 @@ describe("project filter", () => {
     const CHAT_PROJECT_B = ProjectId.makeUnsafe("chat-project-b");
     const groups = groupActivityThreadsByProject(
       [
-        makeThread({ id: "project", projectId: PROJECT_ID }),
-        makeThread({ id: "chat-a", projectId: CHAT_PROJECT_A }),
-        makeThread({ id: "chat-b", projectId: CHAT_PROJECT_B }),
+        makeThread({
+          id: "project",
+          projectId: PROJECT_ID,
+          latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+        }),
+        makeThread({
+          id: "chat-a",
+          projectId: CHAT_PROJECT_A,
+          latestTurn: completedTurn("2026-08-01T09:20:00.000Z"),
+        }),
+        makeThread({
+          id: "chat-b",
+          projectId: CHAT_PROJECT_B,
+          latestTurn: completedTurn("2026-08-01T09:10:00.000Z"),
+        }),
       ],
       (projectId) => projectId === PROJECT_ID,
     );

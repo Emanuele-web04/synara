@@ -143,7 +143,7 @@
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
-    --seam-line: --alpha(var(--color-black) / 8%);
+    --seam-line: --alpha(var(--color-black) / 12%);
     --seam-shadow-color: rgba(0, 0, 0, 0.1);
     --seam-shadow-x: 0px;
     /* Soft, low-spread depth: a modest blur + negative spread keeps the shadow near the

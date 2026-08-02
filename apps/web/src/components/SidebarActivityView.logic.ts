@@ -32,19 +32,34 @@ export function isThreadRunningForActivity(
   return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
 }
 
-export function resolveActivityStatusGroup(thread: SidebarThreadSummary): ActivityStatusGroup {
+type ActivityAttentionInput = Pick<
+  SidebarThreadSummary,
+  | "hasActionableProposedPlan"
+  | "hasLiveTailWork"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "interactionMode"
+  | "latestTurn"
+  | "session"
+>;
+
+function requiresActivityAttention(thread: ActivityAttentionInput): boolean {
   // Mirrors resolveThreadStatusPill: a dead session cannot receive answers, so
   // its pending requests no longer count as "needs attention".
   const canAnswerPendingRequests = canSessionAnswerPendingRequests(thread.session);
   if ((thread.hasPendingApprovals || thread.hasPendingUserInput) && canAnswerPendingRequests) {
-    return "attention";
+    return true;
   }
-  const hasPlanReadyPrompt =
+  return (
     thread.interactionMode === "plan" &&
     !thread.hasLiveTailWork &&
     isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
+    thread.hasActionableProposedPlan
+  );
+}
+
+export function resolveActivityStatusGroup(thread: SidebarThreadSummary): ActivityStatusGroup {
+  if (requiresActivityAttention(thread)) {
     return "attention";
   }
   if (isThreadRunningForActivity(thread)) {
@@ -80,10 +95,53 @@ function parseTimestampMs(value: string | null | undefined): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-export function resolveActivityRecencyMs(
-  thread: Pick<SidebarThreadSummary, "updatedAt" | "createdAt">,
+/**
+ * The thread fields the feed is allowed to order by.
+ *
+ * `updatedAt` is ignored while work streams because every finalized assistant
+ * message can bump it and make concurrent rows trade places. Once a thread
+ * requires attention, however, output is paused and `updatedAt` is the stable
+ * timestamp of the approval/input/plan event that made the row actionable.
+ * Milestones remain the fallback for every other status.
+ */
+export type ActivityRecencyInput = ActivityAttentionInput &
+  Pick<SidebarThreadSummary, "createdAt" | "latestTurn" | "latestUserMessageAt" | "updatedAt">;
+
+/** The timestamp a row represents, as ISO, so order and row label never disagree. */
+export function resolveActivityRecencyIso(thread: ActivityRecencyInput): string {
+  let bestIso = thread.createdAt;
+  let bestMs = parseTimestampMs(thread.createdAt);
+  for (const candidate of [
+    thread.latestUserMessageAt,
+    thread.latestTurn?.requestedAt,
+    thread.latestTurn?.startedAt,
+    thread.latestTurn?.completedAt,
+    requiresActivityAttention(thread) ? thread.updatedAt : null,
+  ]) {
+    if (!candidate) continue;
+    const candidateMs = parseTimestampMs(candidate);
+    if (candidateMs > bestMs) {
+      bestMs = candidateMs;
+      bestIso = candidate;
+    }
+  }
+  return bestIso;
+}
+
+export function resolveActivityRecencyMs(thread: ActivityRecencyInput): number {
+  return parseTimestampMs(resolveActivityRecencyIso(thread));
+}
+
+/**
+ * Last resort so equal timestamps still produce one fixed order: without it the
+ * rows would follow whatever order the incoming thread list happened to have on
+ * that render, which is exactly the flicker this sort is meant to prevent.
+ */
+function compareThreadIds(
+  left: Pick<SidebarThreadSummary, "id">,
+  right: Pick<SidebarThreadSummary, "id">,
 ): number {
-  return parseTimestampMs(thread.updatedAt ?? thread.createdAt);
+  return left.id.localeCompare(right.id);
 }
 
 export interface ActivityViewModel {
@@ -130,20 +188,27 @@ export function buildActivityViewModel(input: {
     }
   }
 
-  pinned.sort((left, right) => resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left));
+  pinned.sort(
+    (left, right) =>
+      resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+      compareThreadIds(left, right),
+  );
   active.sort((left, right) => {
     const groupDelta =
       ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(left)] -
       ACTIVITY_GROUP_ORDER[resolveActivityStatusGroup(right)];
     if (groupDelta !== 0) return groupDelta;
-    return resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left);
+    return (
+      resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+      compareThreadIds(left, right)
+    );
   });
   settled.sort((left, right) => {
     // Optimistically settled threads have no settledAt yet; their latest
     // activity stands in so they surface at the top of the section.
     const leftSettledMs = parseTimestampMs(left.settledAt) || resolveActivityRecencyMs(left);
     const rightSettledMs = parseTimestampMs(right.settledAt) || resolveActivityRecencyMs(right);
-    return rightSettledMs - leftSettledMs;
+    return rightSettledMs - leftSettledMs || compareThreadIds(left, right);
   });
 
   return { pinned, active, settled };
@@ -152,7 +217,7 @@ export function buildActivityViewModel(input: {
 export type ActivityDateBucket = "today" | "yesterday" | "earlier";
 
 export function resolveActivityDateBucket(
-  thread: Pick<SidebarThreadSummary, "updatedAt" | "createdAt">,
+  thread: ActivityRecencyInput,
   nowMs: number,
 ): ActivityDateBucket {
   const startOfToday = new Date(nowMs);
@@ -242,7 +307,8 @@ export function groupActivityThreadsByProject(
   return Array.from(groupByKey.values()).toSorted(
     (left, right) =>
       Math.max(...right.threads.map(resolveActivityRecencyMs)) -
-      Math.max(...left.threads.map(resolveActivityRecencyMs)),
+        Math.max(...left.threads.map(resolveActivityRecencyMs)) ||
+      left.key.localeCompare(right.key),
   );
 }
 
@@ -358,7 +424,9 @@ export function splitRecentActivityThreads(
   const recent = active
     .filter((thread) => resolveActivityInteractionMs(thread) > 0)
     .toSorted(
-      (left, right) => resolveActivityInteractionMs(right) - resolveActivityInteractionMs(left),
+      (left, right) =>
+        resolveActivityInteractionMs(right) - resolveActivityInteractionMs(left) ||
+        compareThreadIds(left, right),
     )
     .slice(0, limit);
   const recentThreadIds = new Set(recent.map((thread) => thread.id));
@@ -406,11 +474,11 @@ export function collectVisibleActivityThreadIds(input: {
  * keep the coarser relative label.
  */
 export function formatActivityRowTime(input: {
-  thread: Pick<SidebarThreadSummary, "updatedAt" | "createdAt">;
+  thread: ActivityRecencyInput;
   nowMs: number;
   timestampFormat: TimestampFormat;
 }): string {
-  const isoDate = input.thread.updatedAt ?? input.thread.createdAt;
+  const isoDate = resolveActivityRecencyIso(input.thread);
   if (resolveActivityDateBucket(input.thread, input.nowMs) === "today") {
     return formatShortTimestamp(isoDate, input.timestampFormat);
   }

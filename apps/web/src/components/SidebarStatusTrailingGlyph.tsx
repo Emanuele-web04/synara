@@ -21,9 +21,17 @@ export function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPil
     return <SidebarUnreadCompletionGlyph />;
   }
   if (status.pulse) {
-    return <ThreadRunningSpinner />;
+    return (
+      <span role="img" aria-label={status.label} className="inline-flex shrink-0">
+        <ThreadRunningSpinner />
+      </span>
+    );
   }
   return (
-    <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
+    <span
+      role="img"
+      aria-label={status.label}
+      className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
+    />
   );
 }

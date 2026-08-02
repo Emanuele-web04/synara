@@ -95,6 +95,8 @@ function renderActivity(input: {
       onArchiveThread={() => {}}
       onMarkThreadRead={input.onMarkThreadRead ?? (() => {})}
       renderThreadHoverCard={() => null}
+      onCreateChat={() => {}}
+      onAddProject={() => {}}
     />
   );
 }
@@ -280,6 +282,29 @@ describe("SidebarActivityView", () => {
         .element()
         .parentElement?.querySelector('[aria-label="Unread completion"]'),
     ).toBeNull();
+    await mounted.unmount();
+  });
+
+  it("gives pulsing status glyphs an accessible name", async () => {
+    const running = makeThread(400, { hasLiveTailWork: true });
+    const mounted = await render(
+      renderActivity({
+        threads: [running],
+        resolveThreadStatus: () => ({
+          label: "Working",
+          colorClass: "text-sky-600",
+          dotClass: "bg-sky-500",
+          pulse: true,
+        }),
+      }),
+    );
+
+    expect(
+      page
+        .getByTestId(`activity-thread-${running.id}`)
+        .element()
+        .parentElement?.querySelector('[role="img"][aria-label="Working"]'),
+    ).not.toBeNull();
     await mounted.unmount();
   });
 });

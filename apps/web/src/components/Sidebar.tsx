@@ -3,6 +3,7 @@
 // Exports: Sidebar
 
 import {
+  AddPlusIcon,
   ArchiveIcon,
   BookIcon,
   ChatBubbleIcon,
@@ -181,7 +182,7 @@ import {
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
-import { SidebarIconButton } from "./SidebarIconButton";
+import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
@@ -302,6 +303,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
+  resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
   type SidebarDerivedProjectData,
   type SidebarActionBadge,
@@ -400,7 +402,6 @@ import {
 const ExpandAllIcon = createCentralIconComponent("expand-45");
 const CollapseAllIcon = createCentralIconComponent("minimize-45");
 const SortFilterIcon = createCentralIconComponent("filter-2");
-const AddPlusIcon = createCentralIconComponent("plus-medium");
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
@@ -1144,7 +1145,8 @@ function SidebarActivityBellButton({
               onClick();
             }}
             className={cn(
-              "relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors",
+              "relative inline-flex shrink-0 cursor-pointer items-center justify-center transition-colors",
+              sidebarIconButtonSlotClass("header"),
               SIDEBAR_ROW_FOCUS_CLASS_NAME,
               active
                 ? "bg-[color-mix(in_srgb,var(--color-text-accent)_15%,transparent)] text-[var(--color-text-accent)]"
@@ -1255,6 +1257,9 @@ export function SidebarSurfacePicker({
               <MenuRadioItem
                 key={view}
                 value={view}
+                // Base UI radio items keep the menu open by default; this picker is a
+                // one-shot surface switch, so selecting an entry should dismiss it.
+                closeOnClick
                 className="items-center rounded-[10px] data-checked:bg-[var(--color-background-button-secondary-hover)]"
               >
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -4122,6 +4127,12 @@ export default function Sidebar() {
     timestampToneClassName?: string;
     hoverActions: ReactNode;
   }) {
+    // The jump shortcut owns the slot while it is visible; otherwise the shared
+    // rule decides which status glyph shows here.
+    const trailingStatus = resolveThreadStatusTrailingIndicator({
+      status: input.threadStatus,
+      slotOccupied: Boolean(input.threadJumpLabel),
+    });
     return (
       <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
         {input.rightMetaChips.length > 0 ? (
@@ -4136,17 +4147,18 @@ export default function Sidebar() {
             ))}
           </KbdGroup>
         ) : null}
-        {!input.threadJumpLabel && input.threadStatus ? (
+        {trailingStatus ? (
           // The relative time now lives in the row hover card, so the trailing
           // slot only carries the live status/loader glyph; when idle it
           // collapses and the hover action icons sit flush at the end.
           <span
+            title={trailingStatus.label}
             className={threadRowStatusSlotClassName(
               input.isSubagentThread,
               input.timestampToneClassName,
             )}
           >
-            <SidebarStatusTrailingGlyph status={input.threadStatus} />
+            <SidebarStatusTrailingGlyph status={trailingStatus} />
           </span>
         ) : null}
         {input.hoverActions}
@@ -4199,6 +4211,10 @@ export default function Sidebar() {
       thread,
       project: hoverProject,
     });
+    const hoverStatus = resolveThreadStatusTrailingIndicator({
+      status: resolveThreadStatusForSidebar(thread),
+      isActive: activeThreadId === thread.id,
+    });
     return (
       <TooltipPopup
         {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
@@ -4218,6 +4234,7 @@ export default function Sidebar() {
           branch={hoverMetadata.branch}
           worktreeName={hoverMetadata.worktreeName}
           model={resolveThreadModelSummary(thread.modelSelection)}
+          status={hoverStatus}
         />
       </TooltipPopup>
     );
@@ -5723,7 +5740,7 @@ export default function Sidebar() {
                   icon={SearchIcon}
                   label="Search"
                   glyph="leading"
-                  size="md"
+                  size="header"
                   tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
                   tooltipSide="bottom"
                   onClick={() => {
@@ -5857,6 +5874,10 @@ export default function Sidebar() {
                     renderThreadHoverCard={(thread, anchorId) =>
                       renderThreadHoverCardPopup(thread, anchorId)
                     }
+                    onCreateChat={() => {
+                      void handleCreateHomeChat();
+                    }}
+                    onAddProject={handleStartAddProject}
                   />
                 </SidebarGroup>
               ) : (
@@ -6109,7 +6130,7 @@ export default function Sidebar() {
         ) : null}
       </SidebarContent>
 
-      <SidebarFooter className="gap-2 p-2 font-system-ui">
+      <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">

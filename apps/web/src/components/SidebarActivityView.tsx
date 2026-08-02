@@ -8,7 +8,14 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode }
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
 
-import { CircleCheckIcon, GitBranchIcon, SortIcon, Undo2Icon } from "~/lib/icons";
+import {
+  AddPlusIcon,
+  CircleCheckIcon,
+  GitBranchIcon,
+  NewThreadIcon,
+  SortIcon,
+  Undo2Icon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
@@ -25,9 +32,9 @@ import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
-  isUrgentThreadStatusPill,
   resolveSidebarThreadListPaging,
   resolveThreadProjectLabel,
+  resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
 } from "./Sidebar.logic";
 import {
@@ -49,10 +56,10 @@ import {
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import { SidebarIconButton } from "./SidebarIconButton";
-import { SidebarUnreadCompletionGlyph } from "./SidebarStatusTrailingGlyph";
+import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
+import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
-import { ThreadStatusPillChip } from "./ThreadStatusPillChip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import {
@@ -110,7 +117,10 @@ function ActivityThreadRow({
     threadId: thread.id,
   });
   const actionToneClassName = "text-muted-foreground/42";
-  const showCompletedCheck = !isActive && status?.label === "Completed";
+  // One trailing slot, top-right, shared by every status: the accent dot for an
+  // unread completion and the running spinner (or state dot) for everything
+  // else — same rule and same glyphs the classic thread/project rows use.
+  const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
 
   return (
     <Tooltip>
@@ -144,7 +154,7 @@ function ActivityThreadRow({
           >
             <ProviderIcon
               provider={provider}
-              className="size-3 shrink-0 opacity-80"
+              className="size-3 shrink-0"
               fallback={
                 <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
               }
@@ -157,14 +167,6 @@ function ActivityThreadRow({
             >
               {thread.title}
             </span>
-            {status &&
-            status.label !== "Completed" &&
-            (!isSettled || isUrgentThreadStatusPill(status)) ? (
-              <ThreadStatusPillChip
-                pill={status}
-                className={sidebarHoverRevealHideClassName("activity-row")}
-              />
-            ) : null}
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
             <FolderClosed
@@ -185,7 +187,7 @@ function ActivityThreadRow({
             </span>
           </span>
         </button>
-        {showCompletedCheck ? (
+        {trailingStatus ? (
           <span
             data-slot="activity-completion-status"
             className={cn(
@@ -193,7 +195,7 @@ function ActivityThreadRow({
               sidebarHoverRevealHideClassName("activity-row"),
             )}
           >
-            <SidebarUnreadCompletionGlyph />
+            <SidebarStatusTrailingGlyph status={trailingStatus} />
           </span>
         ) : null}
         <span className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
@@ -466,6 +468,8 @@ export function SidebarActivityView({
   renderThreadHoverCard,
   prByThreadId,
   onVisibleThreadIdsChange,
+  onCreateChat,
+  onAddProject,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -484,6 +488,10 @@ export function SidebarActivityView({
   onMarkThreadRead: (threadId: ThreadId, completedAt?: string) => void;
   /** Same rich hover card the classic thread rows show at the sidebar edge. */
   renderThreadHoverCard: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
+  /** Same "New chat" action the Chats section header runs. */
+  onCreateChat: () => void;
+  /** Same "Add project" action the Projects section header runs. */
+  onAddProject: () => void;
 }) {
   const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
@@ -656,13 +664,31 @@ export function SidebarActivityView({
         </ActivityCollapsibleSection>
       ) : null}
 
-      <div className="flex h-7 items-center gap-1 px-2 py-0.5">
+      {/* `group/project-header` is the marker SidebarSectionToolbar reveals on, so
+          the header's create actions fade in exactly like a project row's. */}
+      <div className="group/project-header relative flex h-7 items-center gap-1 px-2 py-0.5">
         <ActivityScopeMenu
           options={scopeOptions}
           projectById={projectById}
           scopeSelection={activeScope}
           onChangeScopeSelection={setScopeSelection}
         />
+        <SidebarSectionToolbar revealOnHover className="mr-0">
+          <SidebarIconButton
+            icon={NewThreadIcon}
+            label="Open new chat home"
+            tooltip="New chat"
+            tooltipSide="bottom"
+            onClick={onCreateChat}
+          />
+          <SidebarIconButton
+            icon={AddPlusIcon}
+            label="Add project"
+            tooltip="Add project"
+            tooltipSide="bottom"
+            onClick={onAddProject}
+          />
+        </SidebarSectionToolbar>
         <ActivityFilterMenu
           groupMode={groupMode}
           onChangeGroupMode={setGroupMode}

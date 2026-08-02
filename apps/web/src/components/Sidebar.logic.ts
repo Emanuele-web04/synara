@@ -277,6 +277,36 @@ export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
   return pill.label !== "Completed";
 }
 
+/**
+ * Which status — if any — a sidebar row shows in its trailing glyph slot.
+ * Single owner of the visibility rule so the classic thread rows, the collapsed
+ * project rows and the Activity rows can never disagree about when a spinner or
+ * an unread-completion dot is on screen; only the surface-specific suppressions
+ * are passed in.
+ *
+ * - `slotOccupied`: another affordance owns the slot right now (e.g. the thread
+ *   jump shortcut label), so the status stays hidden until it clears.
+ * - `isActive`: the row's thread is open, so a completion the user is already
+ *   looking at is not advertised as unread.
+ *
+ * Every other status still asks something of the user (or is live work), so it
+ * survives even on a dimmed/settled row.
+ */
+export function resolveThreadStatusTrailingIndicator(input: {
+  status: ThreadStatusPill | null;
+  slotOccupied?: boolean;
+  isActive?: boolean;
+}): ThreadStatusPill | null {
+  const { status } = input;
+  if (status === null || input.slotOccupied === true) {
+    return null;
+  }
+  if (status.label === "Completed" && input.isActive === true) {
+    return null;
+  }
+  return status;
+}
+
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,
