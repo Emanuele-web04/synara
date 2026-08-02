@@ -268,6 +268,15 @@ export interface ThreadStatusPill {
   dismissalKey?: string;
 }
 
+/**
+ * A status that still asks something of the user or is producing output right
+ * now. Surfaces that dim finished work (the Activity Done section) keep showing
+ * these pills, so a thread that restarts or asks for approval stays visible.
+ */
+export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
+  return pill.label !== "Completed";
+}
+
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,

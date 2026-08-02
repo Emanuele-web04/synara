@@ -24,6 +24,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
+  isUrgentThreadStatusPill,
   resolveSidebarThreadListPaging,
   resolveThreadProjectLabel,
   type ThreadStatusPill,
@@ -146,7 +147,9 @@ function ActivityThreadRow({
             >
               {thread.title}
             </span>
-            {status && !isSettled ? <ThreadStatusPillChip pill={status} /> : null}
+            {status && (!isSettled || isUrgentThreadStatusPill(status)) ? (
+              <ThreadStatusPillChip pill={status} />
+            ) : null}
             {isPinned ? (
               <PinFilledIcon
                 className="size-2.5 shrink-0 text-muted-foreground/60"

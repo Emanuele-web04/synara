@@ -42,6 +42,8 @@ import {
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  isUrgentThreadStatusPill,
+  type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
@@ -783,6 +785,21 @@ describe("pin helpers", () => {
         threadsHydrated: false,
       }),
     ).toBeNull();
+  });
+});
+
+function statusPill(label: ThreadStatusPill["label"]): ThreadStatusPill {
+  return { label, colorClass: "", dotClass: "", pulse: false };
+}
+
+describe("isUrgentThreadStatusPill", () => {
+  it("treats every status but a finished turn as urgent", () => {
+    expect(isUrgentThreadStatusPill(statusPill("Pending Approval"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Awaiting Input"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Plan Ready"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
   });
 });
 
