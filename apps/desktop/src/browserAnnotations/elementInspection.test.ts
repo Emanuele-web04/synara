@@ -30,6 +30,11 @@ describe("formatCssColor", () => {
     expect(formatCssColor("rgba(255, 0, 0, 0.5)")).toBe("#ff0000 50%");
   });
 
+  it("scales percentage channels to 255 while alpha stays a fraction", () => {
+    expect(formatCssColor("rgb(100% 0% 0%)")).toBe("#ff0000");
+    expect(formatCssColor("rgb(100% 0% 0% / 50%)")).toBe("#ff0000 50%");
+  });
+
   it("collapses fully transparent colors", () => {
     expect(formatCssColor("rgba(0, 0, 0, 0)")).toBe("transparent");
   });

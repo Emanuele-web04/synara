@@ -54,10 +54,15 @@ export function formatCssColor(value: string): string | null {
   if (trimmed.length === 0) return null;
   const match = /^rgba?\(([^)]*)\)$/i.exec(trimmed);
   if (!match?.[1]) return trimmed;
+  // Channels are percentages of 255, alpha is a fraction of 1.
   const parts = match[1]
     .split(/[\s,/]+/)
     .filter((part) => part.length > 0)
-    .map((part) => (part.endsWith("%") ? Number.parseFloat(part) / 100 : Number.parseFloat(part)));
+    .map((part, index) => {
+      const numeric = Number.parseFloat(part);
+      if (!part.endsWith("%")) return numeric;
+      return index < 3 ? (numeric * 255) / 100 : numeric / 100;
+    });
   const [red, green, blue, alpha] = parts;
   if (red === undefined || green === undefined || blue === undefined) return trimmed;
   if (![red, green, blue].every((channel) => Number.isFinite(channel))) return trimmed;

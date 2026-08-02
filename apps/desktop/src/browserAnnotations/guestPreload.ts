@@ -19,7 +19,9 @@ import {
   GUEST_ANNOTATION_MAX_COMMENT_LENGTH,
   GUEST_ANNOTATION_MAX_NAME_LENGTH,
   GUEST_ANNOTATION_MAX_PAGE_TITLE_LENGTH,
+  GUEST_ANNOTATION_MAX_ROLE_LENGTH,
   GUEST_ANNOTATION_MAX_SELECTOR_LENGTH,
+  GUEST_ANNOTATION_MAX_TAG_NAME_LENGTH,
   GUEST_ANNOTATION_MAX_TEXT_LENGTH,
   GUEST_ANNOTATION_MAX_URL_LENGTH,
   GUEST_ANNOTATION_PROTOCOL_VERSION,
@@ -32,10 +34,17 @@ const MARKER_REVALIDATE_DELAY_MS = 400;
 const VIEWPORT_GAP = 12;
 const ANCHOR_GAP = 18;
 const INSPECTOR_GAP = 8;
+const NOTICE_GAP = 8;
 const COMMENT_MAX_HEIGHT = 112;
+/** Long enough to read a one-line notice, short enough not to sit in the way. */
+const NOTICE_DURATION_MS = 4_000;
+const UNANCHORABLE_NOTICE = "This element can't be pinned. Try one next to it.";
+const STALE_TARGET_NOTICE = "This element changed. Pick it again — your comment is kept.";
 /** ASCII unit separator: never present in the tag/role parts it joins. */
 const FINGERPRINT_SEPARATOR = String.fromCharCode(31);
 const documentToken = createGuestIdentifier(globalThis.crypto);
+/** Last URL the host was told about, so state-only history entries stay quiet. */
+let lastDocumentHref = globalThis.location.href;
 
 interface ResolvedMarker {
   readonly id: string;
@@ -56,6 +65,7 @@ let textarea: HTMLTextAreaElement | null = null;
 let badgeLayer: HTMLElement | null = null;
 let submitButton: HTMLButtonElement | null = null;
 let cursorBubble: HTMLElement | null = null;
+let notice: HTMLElement | null = null;
 
 let activeSession: { sessionId: string } | null = null;
 let hoveredElement: Element | null = null;
@@ -67,6 +77,10 @@ let inspectedCard: InspectorCard | null = null;
 
 const pointer = { x: 0, y: 0, inside: false, overOverlay: false };
 let pointerNeedsHitTest = false;
+
+let noticeText: string | null = null;
+let noticeAnchor: { x: number; y: number } | null = null;
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 let projectedMarkers: readonly BrowserAnnotationMarker[] = [];
 let projectionVersion = 0;
@@ -107,6 +121,33 @@ function sendReady(): void {
   });
 }
 
+/**
+ * In-page navigation changes the document identity the host keys markers by, so
+ * the current projection is stale the moment the URL changes. Drop it here
+ * rather than leaving badges anchored to the previous document for the round
+ * trip it takes the host to re-project. A hash-only change is invisible to the
+ * guest's own URL comparison — the sanitized source URL carries no fragment —
+ * so the projection has to be discarded outright.
+ */
+function handleDocumentIdentityChange(): void {
+  lastDocumentHref = globalThis.location.href;
+  projectedMarkers = [];
+  projectionAckPending = false;
+  markersNeedResolve = true;
+  scheduleFrame();
+  sendReady();
+}
+
+/**
+ * History events also fire for entries that only swap `history.state`. Those
+ * leave the document identity alone, so resetting on them would blink every
+ * badge for the round trip it takes the host to send the same list back.
+ */
+function handleHistoryNavigation(): void {
+  if (globalThis.location.href === lastDocumentHref) return;
+  handleDocumentIdentityChange();
+}
+
 function cssEscape(value: string): string {
   if (globalThis.CSS?.escape) return globalThis.CSS.escape(value);
   return value.replace(/(^-?\d)|[^a-zA-Z0-9_-]/g, (character, leadingDigit) =>
@@ -124,20 +165,21 @@ function looksSensitiveLocator(value: string): boolean {
   );
 }
 
-function uniqueSelector(element: Element): string | null {
-  if (element.id && !looksSensitiveLocator(element.id)) {
-    const byId = `#${cssEscape(element.id)}`;
-    try {
-      if (
-        byId.length <= GUEST_ANNOTATION_MAX_SELECTOR_LENGTH &&
-        document.querySelectorAll(byId).length === 1
-      ) {
-        return byId;
-      }
-    } catch {
-      // Fall through to the structural selector.
-    }
+/** The `#id` selector for an element, when that id is safe to publish and unique. */
+function uniqueIdSelector(element: Element): string | null {
+  if (!element.id || looksSensitiveLocator(element.id)) return null;
+  const byId = `#${cssEscape(element.id)}`;
+  if (byId.length > GUEST_ANNOTATION_MAX_SELECTOR_LENGTH) return null;
+  try {
+    return document.querySelectorAll(byId).length === 1 ? byId : null;
+  } catch {
+    return null;
   }
+}
+
+function uniqueSelector(element: Element): string | null {
+  const byId = uniqueIdSelector(element);
+  if (byId) return byId;
   const segments: string[] = [];
   let current: Element | null = element;
   while (current && current !== document.documentElement) {
@@ -152,6 +194,16 @@ function uniqueSelector(element: Element): string | null {
     );
     const index = siblings.indexOf(current) + 1;
     segments.unshift(`${tag}:nth-of-type(${Math.max(1, index)})`);
+    // Anchoring at the nearest uniquely identified ancestor keeps deeply nested
+    // targets inside the selector budget. Walking all the way to <html> instead
+    // overflows it in framework trees, and an overflowing selector turns a save
+    // into a silent cancel that discards the comment.
+    const anchor = uniqueIdSelector(parent);
+    if (anchor) {
+      segments.unshift(anchor);
+      const anchored = segments.join(" > ");
+      return anchored.length <= GUEST_ANNOTATION_MAX_SELECTOR_LENGTH ? anchored : null;
+    }
     current = parent;
   }
   segments.unshift("html");
@@ -280,22 +332,38 @@ function isSensitiveElement(element: Element): boolean {
   );
 }
 
+/**
+ * The selector a commit for this element would carry, or `null` when the guest
+ * cannot address it within the contract's bounds. Selection and commit share
+ * this check so the composer never accepts a comment it would have to discard.
+ */
+function annotationSelectorFor(element: Element): string | null {
+  if (currentSource().url.length > GUEST_ANNOTATION_MAX_URL_LENGTH) return null;
+  return uniqueSelector(element);
+}
+
 function describeElement(element: Element, comment: string): BrowserAnnotation | null {
   const sensitive = isSensitiveElement(element);
-  const role = normalizedText(element.getAttribute("role") ?? implicitRole(element), 64) || null;
+  const role =
+    normalizedText(
+      element.getAttribute("role") ?? implicitRole(element),
+      GUEST_ANNOTATION_MAX_ROLE_LENGTH,
+    ) || null;
   const name = sensitive ? null : elementAccessibleName(element) || null;
   const rawText = element instanceof HTMLElement ? element.innerText : element.textContent;
   const text = sensitive
     ? null
     : normalizedText(rawText ?? "", GUEST_ANNOTATION_MAX_TEXT_LENGTH) || null;
-  const source = currentSource();
-  const selector = uniqueSelector(element);
-  if (source.url.length > GUEST_ANNOTATION_MAX_URL_LENGTH || !selector) return null;
+  const selector = annotationSelectorFor(element);
+  if (!selector) return null;
   return {
     id: createGuestIdentifier(globalThis.crypto),
-    source,
+    source: currentSource(),
     selector,
-    tagName: element.tagName,
+    // Custom elements can carry tag names longer than the contract allows, and
+    // the trusted parser drops the whole commit rather than truncating — which
+    // would lose the comment the user just wrote.
+    tagName: element.tagName.slice(0, GUEST_ANNOTATION_MAX_TAG_NAME_LENGTH),
     role,
     name,
     text,
@@ -434,53 +502,85 @@ function boundsOf(element: Element | null): DOMRect | null {
   return bounds.width > 0 && bounds.height > 0 ? bounds : null;
 }
 
-function positionOutline(bounds: DOMRect | null): void {
+/**
+ * Writes a floating card's viewport offset, clamped so the whole card stays
+ * visible. Every overlay card goes through here, which is also what keeps the
+ * render pass free of measurements: the caller supplies the size it already
+ * read during the frame's single measurement phase.
+ */
+function placeCard(card: HTMLElement, size: DOMRect, left: number, top: number): void {
+  card.style.transform = `translate3d(${Math.round(
+    clamp(left, VIEWPORT_GAP, globalThis.innerWidth - size.width - VIEWPORT_GAP),
+  )}px,${Math.round(
+    clamp(top, VIEWPORT_GAP, globalThis.innerHeight - size.height - VIEWPORT_GAP),
+  )}px,0)`;
+}
+
+/** Horizontal offset beside an anchor point, flipping sides when it would overflow. */
+function besideAnchor(anchorX: number, width: number): number {
+  const maxLeft = globalThis.innerWidth - width - VIEWPORT_GAP;
+  return anchorX + ANCHOR_GAP <= maxLeft ? anchorX + ANCHOR_GAP : anchorX - width - ANCHOR_GAP;
+}
+
+function positionOutline(bounds: DOMRect): void {
   if (!outline) return;
-  if (!bounds) {
-    outline.hidden = true;
-    return;
-  }
-  outline.hidden = false;
   outline.style.width = `${bounds.width}px`;
   outline.style.height = `${bounds.height}px`;
   outline.style.transform = `translate3d(${bounds.left}px,${bounds.top}px,0)`;
 }
 
-function positionInspector(bounds: DOMRect): void {
-  if (!inspector || !inspectorSize) return;
-  inspector.hidden = false;
-  const size = formatElementSize(bounds.width, bounds.height);
-  if (inspectorSize.textContent !== size) inspectorSize.textContent = size;
-  const card = inspector.getBoundingClientRect();
-  const left = clamp(bounds.left, VIEWPORT_GAP, globalThis.innerWidth - card.width - VIEWPORT_GAP);
-  const above = bounds.top - card.height - INSPECTOR_GAP;
-  const top =
-    above >= VIEWPORT_GAP
-      ? above
-      : clamp(
-          bounds.bottom + INSPECTOR_GAP,
-          VIEWPORT_GAP,
-          globalThis.innerHeight - card.height - VIEWPORT_GAP,
-        );
-  inspector.style.transform = `translate3d(${Math.round(left)}px,${Math.round(top)}px,0)`;
+function positionInspector(bounds: DOMRect, size: DOMRect): void {
+  if (!inspector) return;
+  const above = bounds.top - size.height - INSPECTOR_GAP;
+  placeCard(
+    inspector,
+    size,
+    bounds.left,
+    above >= VIEWPORT_GAP ? above : bounds.bottom + INSPECTOR_GAP,
+  );
 }
 
-function positionPopover(bounds: DOMRect): void {
+function positionPopover(bounds: DOMRect, size: DOMRect): void {
   if (!popover) return;
-  popover.hidden = false;
   const anchorX = bounds.left + (selectionAnchor?.x ?? bounds.width / 2);
   const anchorY = bounds.top + (selectionAnchor?.y ?? bounds.height / 2);
-  const card = popover.getBoundingClientRect();
-  const maxLeft = globalThis.innerWidth - card.width - VIEWPORT_GAP;
-  const preferred =
-    anchorX + ANCHOR_GAP <= maxLeft ? anchorX + ANCHOR_GAP : anchorX - card.width - ANCHOR_GAP;
-  const left = clamp(preferred, VIEWPORT_GAP, maxLeft);
-  const top = clamp(
-    anchorY - card.height / 2,
-    VIEWPORT_GAP,
-    globalThis.innerHeight - card.height - VIEWPORT_GAP,
-  );
-  popover.style.transform = `translate3d(${Math.round(left)}px,${Math.round(top)}px,0)`;
+  placeCard(popover, size, besideAnchor(anchorX, size.width), anchorY - size.height / 2);
+}
+
+function positionNotice(size: DOMRect, composer: DOMRect | null): void {
+  if (!notice) return;
+  // With the composer open the notice belongs under it; otherwise it sits
+  // beside the pointer exactly like the composer would.
+  if (composer) {
+    placeCard(notice, size, composer.left, composer.bottom + NOTICE_GAP);
+    return;
+  }
+  const anchorX = noticeAnchor?.x ?? 0;
+  const anchorY = noticeAnchor?.y ?? 0;
+  placeCard(notice, size, besideAnchor(anchorX, size.width), anchorY - size.height / 2);
+}
+
+function hideNotice(): void {
+  noticeText = null;
+  noticeAnchor = null;
+  if (noticeTimer !== null) {
+    clearTimeout(noticeTimer);
+    noticeTimer = null;
+  }
+}
+
+/** Explains a refused selection or a failed save without stealing focus. */
+function showNotice(message: string): void {
+  noticeText = message;
+  noticeAnchor = { x: pointer.x, y: pointer.y };
+  if (notice) notice.textContent = message;
+  if (noticeTimer !== null) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    noticeTimer = null;
+    hideNotice();
+    scheduleFrame();
+  }, NOTICE_DURATION_MS);
+  scheduleFrame();
 }
 
 function badgeAt(index: number): HTMLElement {
@@ -543,15 +643,21 @@ function resolveMarkers(): void {
   }
 }
 
-function positionMarkers(): void {
-  for (const marker of resolvedMarkers) {
+function measureMarkers(): readonly (DOMRect | null)[] {
+  return resolvedMarkers.map((marker) => {
     if (!marker.element.isConnected) {
-      marker.badge.hidden = true;
       invalidateMarkersSoon();
-      continue;
+      return null;
     }
-    const bounds = marker.element.getBoundingClientRect();
+    return marker.element.getBoundingClientRect();
+  });
+}
+
+function paintMarkers(measured: readonly (DOMRect | null)[]): void {
+  for (const [index, marker] of resolvedMarkers.entries()) {
+    const bounds = measured[index] ?? null;
     const offscreen =
+      bounds === null ||
       bounds.width <= 0 ||
       bounds.height <= 0 ||
       bounds.right <= 0 ||
@@ -559,11 +665,16 @@ function positionMarkers(): void {
       bounds.left >= globalThis.innerWidth ||
       bounds.top >= globalThis.innerHeight;
     marker.badge.hidden = offscreen;
-    if (offscreen) continue;
+    if (offscreen || !bounds) continue;
     marker.badge.style.transform = `translate3d(${Math.round(bounds.right)}px,${Math.round(bounds.top)}px,0) translate(-50%,-50%)`;
   }
 }
 
+/**
+ * One frame of overlay work, ordered read-then-write. Interleaving the two
+ * makes the browser recompute layout once per card; keeping every measurement
+ * ahead of every transform costs a single layout for the whole frame.
+ */
 function renderOverlay(): void {
   if (!outline || !popover || !badgeLayer || !inspector || !cursorBubble) return;
   if (host && !host.isConnected && document.documentElement) {
@@ -576,28 +687,45 @@ function renderOverlay(): void {
     pointerNeedsHitTest = false;
     hoveredElement = pointer.inside ? targetAtPoint(pointer.x, pointer.y) : null;
   }
+  if (markersNeedResolve) resolveMarkers();
 
+  // Page measurements first: nothing written below has touched the page yet.
   const focus = activeSession ? (selectedElement ?? hoveredElement) : null;
   const bounds = boundsOf(focus);
+  const measuredMarkers = measureMarkers();
+
+  // Then the content and visibility of every card, because a hidden card
+  // measures as a zero box and a late text change would invalidate a
+  // measurement already taken.
   refreshInspection(bounds ? focus : null, bounds);
-  positionOutline(bounds);
-  if (bounds && selectedElement) {
-    inspector.hidden = true;
-    positionPopover(bounds);
-  } else {
-    popover.hidden = true;
-    if (bounds && inspectedCard) positionInspector(bounds);
-    else inspector.hidden = true;
+  const showsComposer = bounds !== null && selectedElement !== null;
+  const showsInspector = bounds !== null && !showsComposer && inspectedCard !== null;
+  const showsCursor = activeSession !== null && pointer.inside && !pointer.overOverlay;
+  outline.hidden = bounds === null;
+  popover.hidden = !showsComposer;
+  inspector.hidden = !showsInspector;
+  cursorBubble.hidden = !showsCursor;
+  if (notice) notice.hidden = noticeText === null;
+  if (bounds && showsInspector && inspectorSize) {
+    const size = formatElementSize(bounds.width, bounds.height);
+    if (inspectorSize.textContent !== size) inspectorSize.textContent = size;
   }
 
-  const showCursor = activeSession !== null && pointer.inside && !pointer.overOverlay;
-  cursorBubble.hidden = !showCursor;
-  if (showCursor) {
+  // Card measurements. Unchanged inspection content writes nothing above, so in
+  // the steady state these reads reuse the layout the page measurements forced.
+  const composerCard = showsComposer ? popover.getBoundingClientRect() : null;
+  const inspectorCard = showsInspector ? inspector.getBoundingClientRect() : null;
+  const noticeCard = notice && noticeText !== null ? notice.getBoundingClientRect() : null;
+
+  // Writes only, from here to the end of the frame.
+  if (bounds) positionOutline(bounds);
+  if (bounds && composerCard) positionPopover(bounds, composerCard);
+  if (bounds && inspectorCard) positionInspector(bounds, inspectorCard);
+  if (showsCursor) {
     cursorBubble.style.transform = `translate3d(${Math.round(pointer.x)}px,${Math.round(pointer.y)}px,0) translate(0,-100%)`;
   }
-
-  if (markersNeedResolve) resolveMarkers();
-  positionMarkers();
+  if (noticeCard) positionNotice(noticeCard, composerCard);
+  paintMarkers(measuredMarkers);
 }
 
 // --- Session lifecycle -----------------------------------------------------
@@ -634,20 +762,28 @@ function autoSizeComment(): void {
   popover.toggleAttribute("data-multiline", height > 24);
 }
 
-function clearSelection(): void {
+function clearSelection(options: { readonly keepComment?: boolean } = {}): void {
   selectedElement = null;
   selectionAnchor = null;
   hoveredElement = null;
   // Re-acquire whatever sits under the resting pointer instead of waiting for
   // the next move event.
   pointerNeedsHitTest = true;
-  if (textarea) {
+  if (textarea && options.keepComment !== true) {
     textarea.value = "";
     autoSizeComment();
   }
 }
 
 function selectTarget(target: Element, point: { x: number; y: number } | null): void {
+  // Refuse targets the guest cannot address before the composer opens. Letting
+  // the user type into a comment that can never be committed is worse than
+  // saying so up front.
+  if (!annotationSelectorFor(target)) {
+    showNotice(UNANCHORABLE_NOTICE);
+    return;
+  }
+  hideNotice();
   const bounds = target.getBoundingClientRect();
   selectedElement = target;
   hoveredElement = target;
@@ -655,10 +791,11 @@ function selectTarget(target: Element, point: { x: number; y: number } | null): 
     x: point ? clamp(point.x - bounds.left, 0, bounds.width) : bounds.width / 2,
     y: point ? clamp(point.y - bounds.top, 0, bounds.height) : bounds.height / 2,
   };
-  if (textarea) {
-    textarea.value = "";
-    autoSizeComment();
-  }
+  // Whatever is already in the box carries over, whether the user is re-aiming
+  // at a different element or recovering from a save that failed on a stale
+  // target. Losing typed text to a stray click is the bug this picker had; the
+  // paths that genuinely end a selection clear the box themselves.
+  autoSizeComment();
   // Open and focus synchronously so the first keystroke after selection cannot
   // land in the page while waiting for the next animation frame.
   renderOverlay();
@@ -669,6 +806,7 @@ function endInteractiveSession(notifyHost: boolean): void {
   const session = activeSession;
   activeSession = null;
   clearSelection();
+  hideNotice();
   inspectedElement = null;
   inspectedCard = null;
   pointer.inside = false;
@@ -692,10 +830,17 @@ function submitAnnotation(): void {
   if (!session || !target || !target.isConnected) return;
   const annotation = describeElement(target, textarea?.value ?? "");
   if (!annotation) {
-    endInteractiveSession(true);
+    // The target stopped being addressable between selection and save. Ending
+    // the session here would throw away the comment the user just wrote and
+    // report it to the host as a deliberate cancel, so release the selection
+    // only, keep the text, and say what happened.
+    clearSelection({ keepComment: true });
+    showNotice(STALE_TARGET_NOTICE);
+    renderOverlay();
     return;
   }
   clearSelection();
+  hideNotice();
   inspectedElement = null;
   renderOverlay();
   ipcRenderer.send(BROWSER_IPC_CHANNELS.annotations.guestMessage, {
@@ -731,6 +876,12 @@ function installInteractionListeners(): void {
     (event) => {
       if (!activeSession) return;
       const overlayTarget = isOverlayTarget(event.target);
+      isolateInteractionEvent(event);
+      // The session hides the native cursor, so the bubble is the only cursor
+      // the user can see. Synthetic moves must never steer it: a page that
+      // could would show the outline and inspector on one element while the
+      // real pointer — and therefore the click — sat on another.
+      if (!event.isTrusted) return;
       pointer.x = event.clientX;
       pointer.y = event.clientY;
       pointer.inside = true;
@@ -739,7 +890,6 @@ function installInteractionListeners(): void {
       // synchronous layout flush per move event.
       if (!overlayTarget && !selectedElement) pointerNeedsHitTest = true;
       scheduleFrame();
-      isolateInteractionEvent(event);
     },
     true,
   );
@@ -782,29 +932,31 @@ function installInteractionListeners(): void {
     "keydown",
     (event) => {
       if (!activeSession) return;
+      const overlayTarget = isOverlayTarget(event.target);
+      isolateInteractionEvent(event, !overlayTarget);
+      // The host element is discoverable in the page's DOM, so a page script can
+      // aim synthetic key events at it. Isolate those like any other event, but
+      // never let them cancel the session or publish the user's comment.
+      if (!event.isTrusted) return;
       suppressedKeyups.add(keyboardEventIdentity(event));
-      if (isOverlayTarget(event.target)) {
-        isolateInteractionEvent(event, false);
-        if (event.key === "Escape") {
-          event.preventDefault();
-          endInteractiveSession(true);
-          return;
-        }
-        const submitsFromComment =
-          shadow?.activeElement === textarea && event.key === "Enter" && !event.shiftKey;
-        const submitsFromButton =
-          submitButton !== null &&
-          shadow?.activeElement === submitButton &&
-          (event.key === "Enter" || event.key === " ");
-        if (submitsFromComment || submitsFromButton) {
-          event.preventDefault();
-          submitAnnotation();
-        }
+      // During IME composition Enter confirms the candidate and Escape abandons
+      // it; neither is a picker command.
+      if (event.isComposing) return;
+      if (event.key === "Escape") {
+        if (overlayTarget) event.preventDefault();
+        endInteractiveSession(true);
         return;
       }
-      isolateInteractionEvent(event);
-      if (event.key === "Escape") {
-        endInteractiveSession(true);
+      if (!overlayTarget) return;
+      const submitsFromComment =
+        shadow?.activeElement === textarea && event.key === "Enter" && !event.shiftKey;
+      const submitsFromButton =
+        submitButton !== null &&
+        shadow?.activeElement === submitButton &&
+        (event.key === "Enter" || event.key === " ");
+      if (submitsFromComment || submitsFromButton) {
+        event.preventDefault();
+        submitAnnotation();
       }
     },
     true,
@@ -861,6 +1013,7 @@ function installInteractionListeners(): void {
         if (!activeSession) return;
         if (
           eventType === "pointerout" &&
+          event.isTrusted &&
           event instanceof PointerEvent &&
           event.relatedTarget === null
         ) {
@@ -910,6 +1063,10 @@ function installInteractionListeners(): void {
       true,
     );
   }
+  // A key held while the window loses focus never delivers its keyup here, so
+  // the pending identity would otherwise swallow the page's own keyup for that
+  // key long after the session ended.
+  globalThis.addEventListener("blur", () => suppressedKeyups.clear());
   document.addEventListener("scroll", scheduleFrame, true);
   globalThis.addEventListener("resize", scheduleFrame);
   document.addEventListener("visibilitychange", scheduleFrame);
@@ -1040,6 +1197,21 @@ const OVERLAY_STYLE = `
   button:active { transform:scale(.94); }
   button:focus-visible { outline:2px solid var(--annotation-focus-border); outline-offset:2px; }
   button svg { width:15px; height:15px; }
+  .notice {
+    position:fixed;
+    left:0;
+    top:0;
+    max-width:min(320px,calc(100vw - 24px));
+    padding:6px 11px 7px;
+    border:1px solid color-mix(in srgb,var(--annotation-border) 55%,transparent);
+    border-radius:12px;
+    background:var(--annotation-surface);
+    color:var(--annotation-text);
+    box-shadow:var(--annotation-card-shadow);
+    font:500 12px/1.45 var(--annotation-sans);
+    pointer-events:none;
+    will-change:transform;
+  }
   .cursor {
     position:fixed;
     left:0;
@@ -1093,6 +1265,7 @@ const OVERLAY_MARKUP = `
       </svg>
     </button>
   </section>
+  <div class="notice" role="status" aria-live="polite" hidden></div>
   <div class="cursor" hidden></div>
 `;
 
@@ -1115,6 +1288,7 @@ function initializeOverlay(): void {
   badgeLayer = shadow.querySelector(".badges");
   submitButton = shadow.querySelector("button");
   cursorBubble = shadow.querySelector(".cursor");
+  notice = shadow.querySelector(".notice");
   document.documentElement.append(host);
   markerResizeObserver = new ResizeObserver(scheduleFrame);
   markerResizeObserver.observe(document.documentElement);
@@ -1133,8 +1307,8 @@ function initializeOverlay(): void {
     }
     invalidateMarkersSoon();
   }).observe(document.documentElement, { childList: true, subtree: true });
-  globalThis.addEventListener("popstate", sendReady);
-  globalThis.addEventListener("hashchange", sendReady);
+  globalThis.addEventListener("popstate", handleHistoryNavigation);
+  globalThis.addEventListener("hashchange", handleHistoryNavigation);
   sendReady();
 }
 
@@ -1147,6 +1321,7 @@ ipcRenderer.on(BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, (_event, rawCommand: un
     host?.setAttribute("data-interactive", "");
     setPageCursorHidden(true);
     clearSelection();
+    hideNotice();
     inspectedElement = null;
     inspectedCard = null;
     scheduleFrame();
@@ -1158,7 +1333,7 @@ ipcRenderer.on(BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, (_event, rawCommand: un
   }
   if (rawCommand.kind === "refresh-document") {
     if (activeSession) endInteractiveSession(false);
-    sendReady();
+    handleDocumentIdentityChange();
     return;
   }
   projectionVersion = rawCommand.projectionVersion;
