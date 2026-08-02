@@ -50,6 +50,8 @@ const FINGERPRINT_SEPARATOR = String.fromCharCode(31);
 const documentToken = createGuestIdentifier(globalThis.crypto);
 /** Last URL the host was told about, so state-only history entries stay quiet. */
 let lastDocumentHref = globalThis.location.href;
+/** Marker identity intentionally ignores URL fragments. */
+let lastDocumentSourceUrl = sanitizeBrowserAnnotationUrl(new URL(globalThis.location.href).href);
 
 interface ResolvedMarker {
   readonly id: string;
@@ -118,30 +120,33 @@ function currentSource(): BrowserAnnotationSource {
   };
 }
 
-function sendReady(): void {
+function sendReady(source = currentSource()): void {
   ipcRenderer.send(BROWSER_IPC_CHANNELS.annotations.guestMessage, {
     version: GUEST_ANNOTATION_PROTOCOL_VERSION,
     kind: "ready",
     documentToken,
-    source: currentSource(),
+    source,
   });
 }
 
 /**
- * In-page navigation changes the document identity the host keys markers by, so
- * the current projection is stale the moment the URL changes. Drop it here
- * rather than leaving badges anchored to the previous document for the round
- * trip it takes the host to re-project. A hash-only change is invisible to the
- * guest's own URL comparison — the sanitized source URL carries no fragment —
- * so the projection has to be discarded outright.
+ * In-page navigation can change the document identity the host keys markers by.
+ * Drop a stale projection immediately when the sanitized source URL changes,
+ * but keep it across fragment-only navigation because fragments are not part
+ * of annotation identity and the same markers remain valid.
  */
 function handleDocumentIdentityChange(): void {
+  const source = currentSource();
+  const sourceChanged = source.url !== lastDocumentSourceUrl;
   lastDocumentHref = globalThis.location.href;
-  projectedMarkers = [];
-  projectionAckPending = false;
-  markersNeedResolve = true;
-  scheduleFrame();
-  sendReady();
+  lastDocumentSourceUrl = source.url;
+  if (sourceChanged) {
+    projectedMarkers = [];
+    projectionAckPending = false;
+    markersNeedResolve = true;
+    scheduleFrame();
+  }
+  sendReady(source);
 }
 
 /**

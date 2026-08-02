@@ -82,7 +82,9 @@ function canonicalWebUrl(value: string): string | null {
 }
 
 function browserAnnotationDocumentKey(liveUrl: string): string {
-  return `sha256:${Crypto.createHash("sha256").update(liveUrl).digest("hex")}`;
+  const identityUrl = new URL(liveUrl);
+  identityUrl.hash = "";
+  return `sha256:${Crypto.createHash("sha256").update(identityUrl.href).digest("hex")}`;
 }
 
 export class BrowserAnnotationCoordinator {

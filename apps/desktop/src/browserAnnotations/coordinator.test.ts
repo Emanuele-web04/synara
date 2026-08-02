@@ -39,7 +39,9 @@ const DARK_ANNOTATION_THEME: BrowserAnnotationTheme = {
 };
 
 function documentKey(url: string): string {
-  return `sha256:${createHash("sha256").update(url).digest("hex")}`;
+  const identityUrl = new URL(url);
+  identityUrl.hash = "";
+  return `sha256:${createHash("sha256").update(identityUrl.href).digest("hex")}`;
 }
 
 function createHarness(initialUrl = "https://example.test/app") {
@@ -243,6 +245,35 @@ describe("BrowserAnnotationCoordinator", () => {
       "https://example.test/next",
       "https://example.test/app",
     ]);
+  });
+
+  it("preserves marker projection across fragment-only in-page navigation", () => {
+    const harness = createHarness();
+    harness.ready("same-document");
+    harness.coordinator.syncMarkers({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      version: 4,
+      markers: [marker()],
+    });
+    harness.coordinator.start({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      theme: LIGHT_ANNOTATION_THEME,
+    });
+
+    harness.setUrl("https://example.test/app#details");
+    harness.coordinator.handleInPageNavigation(THREAD_ID, TAB_ID, harness.webContents.id);
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "refresh-document",
+      documentToken: "same-document",
+    });
+    harness.ready("same-document", "Hash target");
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "sync-markers",
+      projectionVersion: 4,
+      markers: [{ id: "annotation-1" }],
+    });
   });
 
   it("recovers readiness when a top-level navigation aborts on the old document", () => {

@@ -458,13 +458,34 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       tabId,
       theme: DARK_ANNOTATION_THEME,
     });
-    await runInGuest("history.pushState({}, '', '/app#annotation-cancelled')");
+    const markerSyncCountBeforeHash = (await annotationEvents()).filter(
+      (event) => event.kind === "markers-synced",
+    ).length;
+    await runInGuest(
+      "history.pushState({}, '', location.pathname + location.search + '#annotation-cancelled')",
+    );
     await expect
       .poll(
         async () =>
           (await annotationEvents()).some(
             (event) => event.kind === "cancelled" && event.reason === "navigation",
           ),
+        { timeout: 5_000, intervals: [25, 50, 100] },
+      )
+      .toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const markerSyncs = (await annotationEvents()).filter(
+            (event): event is Extract<BrowserAnnotationEvent, { kind: "markers-synced" }> =>
+              event.kind === "markers-synced",
+          );
+          const latest = markerSyncs.at(-1);
+          return (
+            markerSyncs.length > markerSyncCountBeforeHash &&
+            latest?.projectedMarkerIds.includes(committedEvent.annotation.id) === true
+          );
+        },
         { timeout: 5_000, intervals: [25, 50, 100] },
       )
       .toBe(true);
