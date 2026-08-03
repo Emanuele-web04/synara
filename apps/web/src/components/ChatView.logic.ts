@@ -1035,6 +1035,15 @@ export function resolveNextLocalDispatchSnapshot(input: {
   }
 
   if (!worktreeSetupStepId) {
+    // Same in-flight send may call beginLocalDispatch() with no options to keep
+    // the marker. A new expectedUserMessageId means a fresh send — replace the
+    // snapshot so the awaiting-turn bridge and send-busy gate track the new one.
+    if (
+      input.options?.expectedUserMessageId != null &&
+      input.options.expectedUserMessageId !== input.current.expectedUserMessageId
+    ) {
+      return createLocalDispatchSnapshot(input.activeThread, input.options);
+    }
     return input.current;
   }
 
@@ -1101,6 +1110,63 @@ export function hasServerAcknowledgedLocalDispatch(input: {
       return false;
     }
     return true;
+  }
+
+  return false;
+}
+
+/** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
+export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
+
+/**
+ * True once a locally dispatched turn is observably live, finished, or blocked
+ * on user interaction. Echo of the user message and a mere
+ * `latestTurn.requestedAt`/`turnId` bump are NOT takeover — those arrive in the
+ * gap before the provider session is actually running.
+ */
+export function hasLiveTurnTakenOver(input: {
+  localDispatch: LocalDispatchSnapshot | null;
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
+  threadError: string | null | undefined;
+  now?: number;
+}): boolean {
+  if (!input.localDispatch) {
+    return false;
+  }
+  if (input.phase === "running" || input.phase === "connecting") {
+    return true;
+  }
+  if (input.session?.activeTurnId != null) {
+    return true;
+  }
+  if (input.hasPendingApproval || input.hasPendingUserInput || Boolean(input.threadError)) {
+    return true;
+  }
+
+  const latestTurn = input.latestTurn ?? null;
+  const startedAtChanged =
+    input.localDispatch.latestTurnStartedAt !== (latestTurn?.startedAt ?? null);
+  const completedAtChanged =
+    input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null);
+  if (startedAtChanged || completedAtChanged) {
+    return true;
+  }
+
+  // Fail-open so Thinking cannot stick forever when a turn is requested but
+  // never becomes live and never surfaces an error. Worktree setup has its own
+  // lifecycle and must not be cut short by this bound.
+  if (!input.localDispatch.worktreeSetup && input.now !== undefined) {
+    const startedAtMs = Date.parse(input.localDispatch.startedAt);
+    if (
+      Number.isFinite(startedAtMs) &&
+      input.now - startedAtMs >= LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS
+    ) {
+      return true;
+    }
   }
 
   return false;

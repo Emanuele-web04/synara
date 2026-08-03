@@ -2490,6 +2490,156 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps Thinking through the post-ack gap until the turn is running", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-thinking-bridge" as MessageId,
+      targetText: "thinking bridge target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const prompt = "keep thinking through the ack gap";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(prompt);
+          expect(document.body.textContent).toContain("Thinking");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const findSentRow = () => {
+        const rows = document.querySelectorAll<HTMLElement>(
+          "[data-message-id][data-message-role='user']",
+        );
+        for (const row of rows) {
+          if (row.textContent?.includes(prompt)) {
+            return row;
+          }
+        }
+        return null;
+      };
+
+      const sentMessageId = await vi.waitFor(
+        () => {
+          const id = findSentRow()?.dataset.messageId;
+          expect(id, "sent user message id").toBeTruthy();
+          return id!;
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Server ack: durable user message + turn requested, but session still ready
+      // (provider session not live yet). Thinking must survive this gap.
+      const requestedTurnId = TurnId.makeUnsafe("turn-thinking-bridge");
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: MessageId.makeUnsafe(sentMessageId),
+            role: "user" as const,
+            text: prompt,
+            turnId: requestedTurnId,
+            streaming: false,
+            source: "native" as const,
+            createdAt: isoAt(1_300),
+            updatedAt: isoAt(1_300),
+          },
+        ],
+        latestTurn: {
+          turnId: requestedTurnId,
+          state: "running",
+          requestedAt: isoAt(1_300),
+          startedAt: null,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "ready",
+              activeTurnId: null,
+              updatedAt: isoAt(1_300),
+            }
+          : null,
+        updatedAt: isoAt(1_300),
+      }));
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(prompt);
+          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).not.toContain("Working for");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      // Hold the gap briefly so a flicker/empty frame would be visible if the
+      // bridge cleared too early.
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 400);
+      });
+      expect(document.body.textContent).toContain("Thinking");
+      expect(document.body.textContent).not.toContain("Working for");
+
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: thread.latestTurn
+          ? {
+              ...thread.latestTurn,
+              startedAt: isoAt(1_301),
+            }
+          : thread.latestTurn,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "running",
+              activeTurnId: requestedTurnId,
+              updatedAt: isoAt(1_301),
+            }
+          : null,
+        updatedAt: isoAt(1_301),
+      }));
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).toContain("Working for");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
