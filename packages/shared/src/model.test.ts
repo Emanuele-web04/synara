@@ -14,6 +14,7 @@ import {
 import {
   applyClaudePromptEffortPrefix,
   claudeSelectionRequiresRestart,
+  defaultGitTextGenerationSelectionFor,
   formatModelDisplayName,
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
@@ -978,5 +979,22 @@ describe("isClaudeUltrathinkPrompt", () => {
     expect(isClaudeUltrathinkPrompt("Ultrathink:\nInvestigate")).toBe(true);
     expect(isClaudeUltrathinkPrompt("Think hard about this")).toBe(false);
     expect(isClaudeUltrathinkPrompt(undefined)).toBe(false);
+  });
+});
+
+describe("defaultGitTextGenerationSelectionFor", () => {
+  it("returns atomic provider+model defaults for the exposed Git writing providers", () => {
+    expect(defaultGitTextGenerationSelectionFor("codex")).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+    expect(defaultGitTextGenerationSelectionFor("kilo")).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+    });
+    expect(defaultGitTextGenerationSelectionFor("opencode")).toEqual({
+      provider: "opencode",
+      model: "opencode/big-pickle",
+    });
   });
 });
