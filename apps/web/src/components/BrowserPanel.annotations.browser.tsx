@@ -146,10 +146,11 @@ afterEach(() => {
 });
 
 describe("BrowserPanel annotations", () => {
-  it("resolves hex and color-mix theme variables before sending them to the guest", () => {
+  it("resolves theme colors from the opaque overlay surface token", () => {
     const root = document.createElement("div");
     root.classList.add("dark");
     root.style.setProperty("--color-text-accent", "#123456");
+    root.style.setProperty("--color-background-control-opaque", "#234567");
     root.style.setProperty(
       "--composer-surface",
       "color-mix(in srgb, rgb(0 0 0) 25%, rgb(255 255 255))",
@@ -160,9 +161,9 @@ describe("BrowserPanel annotations", () => {
     expect(theme).toMatchObject({
       mode: "dark",
       accent: "rgb(18, 52, 86)",
+      surface: "rgb(35, 69, 103)",
     });
-    expect(theme.surface).toMatch(/^(?:rgba?\(|color\(srgb)/);
-    expect(theme.surface).not.toBe("rgb(27, 27, 29)");
+    expect(theme.surface).not.toMatch(/(?:var|color-mix)\(/);
     root.remove();
   });
 

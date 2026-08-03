@@ -503,7 +503,10 @@ describe("ClaudeAdapterLive", () => {
         return assert.fail("Expected Claude preset system prompt.");
       }
       assert.include(systemPrompt.append ?? "", "Use the browser_* tools autonomously");
-      assert.include(systemPrompt.append ?? "", "exact Electron WebView the user sees");
+      assert.include(
+        systemPrompt.append ?? "",
+        "exact thread-scoped Electron page Synara surfaces to the user",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
