@@ -2568,12 +2568,30 @@ export default function ChatView({
     return () => window.clearTimeout(settle);
   }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities, activeThread?.pendingInteractions),
-    [activeThread?.pendingInteractions, threadActivities],
+    () =>
+      derivePendingApprovals(threadActivities, activeThread?.pendingInteractions, {
+        authoritativeHasPending: activeThread?.hasPendingApprovals,
+        latestTurnId: activeThread?.latestTurn?.turnId,
+      }),
+    [
+      activeThread?.hasPendingApprovals,
+      activeThread?.latestTurn?.turnId,
+      activeThread?.pendingInteractions,
+      threadActivities,
+    ],
   );
   const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions),
-    [activeThread?.pendingInteractions, threadActivities],
+    () =>
+      derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
+        authoritativeHasPending: activeThread?.hasPendingUserInput,
+        latestTurnId: activeThread?.latestTurn?.turnId,
+      }),
+    [
+      activeThread?.hasPendingUserInput,
+      activeThread?.latestTurn?.turnId,
+      activeThread?.pendingInteractions,
+      threadActivities,
+    ],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingUserInputKey = activePendingUserInput

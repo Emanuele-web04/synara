@@ -8,6 +8,7 @@ import {
   type TerminalCliKind,
   type TerminalVisualState,
 } from "@synara/shared/terminalThreads";
+import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
@@ -633,6 +634,28 @@ function approvalSummary(
   }
 }
 
+function requestedActivityInstanceKeys(
+  activities: Thread["activities"],
+  kind: "approval.requested" | "user-input.requested",
+): Set<string> {
+  return new Set(
+    activities.flatMap((activity) => {
+      if (activity.kind !== kind || !activity.payload) return [];
+      const payload = activity.payload as Record<string, unknown>;
+      return typeof payload.requestId === "string"
+        ? [
+            pendingRequestInstanceKey(
+              payload.requestId,
+              typeof payload.lifecycleGeneration === "string"
+                ? payload.lifecycleGeneration
+                : undefined,
+            ),
+          ]
+        : [];
+    }),
+  );
+}
+
 // Compare consecutive activity snapshots and emit only fresh input-needed transitions.
 export function collectThreadAttentionCandidates(
   previousThreads: readonly Thread[],
@@ -648,18 +671,37 @@ export function collectThreadAttentionCandidates(
     }
 
     const previousApprovalIds = new Set(
-      derivePendingApprovals(previousThread.activities, previousThread.pendingInteractions).map(
-        (approval) => approval.requestId,
-      ),
+      derivePendingApprovals(previousThread.activities, previousThread.pendingInteractions, {
+        authoritativeHasPending: previousThread.hasPendingApprovals,
+        latestTurnId: previousThread.latestTurn?.turnId,
+      }).map((approval) => approval.requestId),
     );
     const previousUserInputIds = new Set(
-      derivePendingUserInputs(previousThread.activities, previousThread.pendingInteractions).map(
-        (request) => request.requestId,
-      ),
+      derivePendingUserInputs(previousThread.activities, previousThread.pendingInteractions, {
+        authoritativeHasPending: previousThread.hasPendingUserInput,
+        latestTurnId: previousThread.latestTurn?.turnId,
+      }).map((request) => request.requestId),
+    );
+    const previousApprovalActivityKeys = requestedActivityInstanceKeys(
+      previousThread.activities,
+      "approval.requested",
+    );
+    const previousUserInputActivityKeys = requestedActivityInstanceKeys(
+      previousThread.activities,
+      "user-input.requested",
     );
 
-    for (const approval of derivePendingApprovals(thread.activities, thread.pendingInteractions)) {
-      if (previousApprovalIds.has(approval.requestId)) {
+    for (const approval of derivePendingApprovals(thread.activities, thread.pendingInteractions, {
+      authoritativeHasPending: thread.hasPendingApprovals,
+      latestTurnId: thread.latestTurn?.turnId,
+    })) {
+      if (
+        previousApprovalIds.has(approval.requestId) ||
+        (thread.pendingInteractions === undefined &&
+          previousApprovalActivityKeys.has(
+            pendingRequestInstanceKey(approval.requestId, approval.lifecycleGeneration),
+          ))
+      ) {
         continue;
       }
       candidates.push({
@@ -673,8 +715,17 @@ export function collectThreadAttentionCandidates(
       });
     }
 
-    for (const request of derivePendingUserInputs(thread.activities, thread.pendingInteractions)) {
-      if (previousUserInputIds.has(request.requestId)) {
+    for (const request of derivePendingUserInputs(thread.activities, thread.pendingInteractions, {
+      authoritativeHasPending: thread.hasPendingUserInput,
+      latestTurnId: thread.latestTurn?.turnId,
+    })) {
+      if (
+        previousUserInputIds.has(request.requestId) ||
+        (thread.pendingInteractions === undefined &&
+          previousUserInputActivityKeys.has(
+            pendingRequestInstanceKey(request.requestId, request.lifecycleGeneration),
+          ))
+      ) {
         continue;
       }
       candidates.push({
