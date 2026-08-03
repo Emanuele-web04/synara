@@ -56,4 +56,4 @@ Need support? [Open a GitHub issue](https://github.com/Emanuele-web04/synara/iss
 
 ## Origins
 
-Synara began as a fork of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.
+Synara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.
