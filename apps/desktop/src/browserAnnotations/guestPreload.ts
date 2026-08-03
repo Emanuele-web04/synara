@@ -5,7 +5,10 @@ import type {
   BrowserAnnotationSource,
   BrowserAnnotationTheme,
 } from "@synara/contracts";
-import { sanitizeBrowserAnnotationUrl } from "@synara/shared/browserAnnotations";
+import {
+  browserAnnotationDocumentIdentityUrl,
+  sanitizeBrowserAnnotationUrl,
+} from "@synara/shared/browserAnnotations";
 
 import { BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL, BROWSER_IPC_CHANNELS } from "../ipcChannels";
 import {
@@ -50,8 +53,8 @@ const FINGERPRINT_SEPARATOR = String.fromCharCode(31);
 const documentToken = createGuestIdentifier(globalThis.crypto);
 /** Last URL the host was told about, so state-only history entries stay quiet. */
 let lastDocumentHref = globalThis.location.href;
-/** Marker identity intentionally ignores URL fragments. */
-let lastDocumentSourceUrl = sanitizeBrowserAnnotationUrl(new URL(globalThis.location.href).href);
+/** Private marker identity intentionally ignores only URL fragments. */
+let lastDocumentIdentityUrl = browserAnnotationDocumentIdentityUrl(globalThis.location.href);
 
 interface ResolvedMarker {
   readonly id: string;
@@ -137,10 +140,11 @@ function sendReady(source = currentSource()): void {
  */
 function handleDocumentIdentityChange(): void {
   const source = currentSource();
-  const sourceChanged = source.url !== lastDocumentSourceUrl;
+  const documentIdentityUrl = browserAnnotationDocumentIdentityUrl(globalThis.location.href);
+  const identityChanged = documentIdentityUrl !== lastDocumentIdentityUrl;
   lastDocumentHref = globalThis.location.href;
-  lastDocumentSourceUrl = source.url;
-  if (sourceChanged) {
+  lastDocumentIdentityUrl = documentIdentityUrl;
+  if (identityChanged) {
     projectedMarkers = [];
     projectionAckPending = false;
     markersNeedResolve = true;
@@ -156,6 +160,7 @@ function handleDocumentIdentityChange(): void {
  */
 function handleHistoryNavigation(): void {
   if (globalThis.location.href === lastDocumentHref) return;
+  if (activeSession) endInteractiveSession(false);
   handleDocumentIdentityChange();
 }
 

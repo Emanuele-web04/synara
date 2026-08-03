@@ -39,9 +39,7 @@ const DARK_ANNOTATION_THEME: BrowserAnnotationTheme = {
 };
 
 function documentKey(url: string): string {
-  const identityUrl = new URL(url);
-  identityUrl.hash = "";
-  return `sha256:${createHash("sha256").update(identityUrl.href).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(url).digest("hex")}`;
 }
 
 function createHarness(initialUrl = "https://example.test/app") {
@@ -273,6 +271,48 @@ describe("BrowserAnnotationCoordinator", () => {
       kind: "sync-markers",
       projectionVersion: 4,
       markers: [{ id: "annotation-1" }],
+    });
+    expect(harness.events.at(-1)).toMatchObject({
+      kind: "document-changed",
+      document: { key: documentKey("https://example.test/app") },
+    });
+  });
+
+  it("accepts persisted full-href document keys on an initial fragmented URL", () => {
+    const liveUrl = "https://example.test/app#details";
+    const harness = createHarness(liveUrl);
+    harness.ready("document-with-fragment");
+    harness.coordinator.syncMarkers({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      version: 5,
+      markers: [marker("https://example.test/app", liveUrl)],
+    });
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "sync-markers",
+      projectionVersion: 5,
+      markers: [{ id: "annotation-1" }],
+    });
+  });
+
+  it("keeps private query identities isolated when the public source is unchanged", () => {
+    const firstLiveUrl = "https://example.test/app?token=first";
+    const harness = createHarness(firstLiveUrl);
+    harness.ready("same-document");
+    harness.coordinator.syncMarkers({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      version: 6,
+      markers: [marker("https://example.test/app", firstLiveUrl)],
+    });
+
+    harness.setUrl("https://example.test/app?token=second");
+    harness.coordinator.handleInPageNavigation(THREAD_ID, TAB_ID, harness.webContents.id);
+    harness.ready("same-document", "Another private page");
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "sync-markers",
+      projectionVersion: 6,
+      markers: [],
     });
   });
 

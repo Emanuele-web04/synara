@@ -13,7 +13,10 @@ import type {
   BrowserAnnotationTheme,
   ThreadId,
 } from "@synara/contracts";
-import { sanitizeBrowserAnnotationUrl } from "@synara/shared/browserAnnotations";
+import {
+  browserAnnotationDocumentIdentityUrl,
+  sanitizeBrowserAnnotationUrl,
+} from "@synara/shared/browserAnnotations";
 
 import { BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL } from "../ipcChannels";
 import {
@@ -82,9 +85,7 @@ function canonicalWebUrl(value: string): string | null {
 }
 
 function browserAnnotationDocumentKey(liveUrl: string): string {
-  const identityUrl = new URL(liveUrl);
-  identityUrl.hash = "";
-  return `sha256:${Crypto.createHash("sha256").update(identityUrl.href).digest("hex")}`;
+  return `sha256:${Crypto.createHash("sha256").update(liveUrl).digest("hex")}`;
 }
 
 export class BrowserAnnotationCoordinator {
@@ -227,9 +228,16 @@ export class BrowserAnnotationCoordinator {
       ) {
         this.finishSession(activeSession, "navigation", false);
       }
+      const preservesDocumentKey =
+        previousDocument?.webContentsId === sender.id &&
+        previousDocument.document.token === message.documentToken &&
+        browserAnnotationDocumentIdentityUrl(previousDocument.liveUrl) ===
+          browserAnnotationDocumentIdentityUrl(liveUrl);
       const document: BrowserAnnotationDocument = {
         token: message.documentToken,
-        key: browserAnnotationDocumentKey(liveUrl),
+        key: preservesDocumentKey
+          ? previousDocument.document.key
+          : browserAnnotationDocumentKey(liveUrl),
         url: message.source.url,
       };
       const ready: ReadyDocument = {
