@@ -368,12 +368,19 @@ function interactionFailureSettlementStatus(
 ): "retryable" | "uncertain" {
   return Option.match(Cause.findErrorOption(cause), {
     onNone: () => "uncertain" as const,
-    onSome: (error) =>
-      isUnknownPendingRequest ||
-      error._tag === "ProviderAdapterRequestError" ||
-      error._tag === "ProviderAdapterProcessError"
+    onSome: (error) => {
+      if (
+        error._tag === "ProviderAdapterRequestError" &&
+        error.method === "permission.reply.acknowledge"
+      ) {
+        return "retryable" as const;
+      }
+      return isUnknownPendingRequest ||
+        error._tag === "ProviderAdapterRequestError" ||
+        error._tag === "ProviderAdapterProcessError"
         ? ("uncertain" as const)
-        : ("retryable" as const),
+        : ("retryable" as const);
+    },
   });
 }
 
