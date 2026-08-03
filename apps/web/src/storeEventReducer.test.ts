@@ -209,6 +209,42 @@ describe("store event reducer", () => {
     },
   );
 
+  it("does not settle a running turn from a stale session-set that predates its start", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-running"),
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.session-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:01:00.000Z",
+        },
+      }),
+    ]);
+
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-running"),
+      state: "running",
+      completedAt: null,
+    });
+  });
+
   it("adds projects immediately from live project.created events", () => {
     const next = applyOrchestrationEvents(
       {
