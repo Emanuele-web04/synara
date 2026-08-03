@@ -21,42 +21,35 @@ export function stopTranscriptScrollAtCurrentOffset(
   });
 }
 
-/**
- * Time constant of the anchored-send slide's exponential approach. Each frame
- * closes ~`1 - e^(-dt/τ)` of the remaining distance, so the motion is smooth,
- * never overshoots, and — unlike a fixed-target native smooth scroll — absorbs a
- * target that moves mid-flight (rows above the anchor settling to their real
- * height, the list's end-space reserve growing) instead of landing wrong and
- * needing a visible correction. ~90ms covers ~99% of the distance in 400ms.
- */
-export const ANCHOR_SLIDE_TIME_CONSTANT_MS = 90;
-/** Below this the approach is finished by snapping, so the anchor lands exactly. */
-export const ANCHOR_SLIDE_SNAP_DISTANCE_PX = 0.5;
+/** How long the just-sent message takes to glide up to its anchored position. */
+export const ANCHOR_SLIDE_DURATION_MS = 320;
 
 /**
- * Next scroll offset for one frame of the anchored slide. `target` is read fresh
- * every frame by the caller, which is what makes the motion robust to layout
- * that changes while the slide is in flight.
+ * Where the anchored message sits, measured from the viewport top, this far into
+ * its slide. The animation is expressed in the message's own visible offset —
+ * not in scrollTop — because that is the thing the reader watches move, and it
+ * stays correct while the transcript's scroll geometry changes underneath it
+ * (the list reserving end space, rows above settling from estimated to measured
+ * heights). The caller converts the offset back into a scroll position against
+ * freshly measured layout each frame.
+ *
+ * Cubic ease-out: quick departure, soft arrival, and — unlike an exponential
+ * approach — it lands exactly at `toPx` at a known time instead of trailing off
+ * asymptotically.
  */
-export function advanceAnchorSlideOffset(input: {
-  readonly current: number;
-  readonly target: number;
-  readonly deltaMs: number;
-  readonly timeConstantMs?: number;
+export function anchorSlideOffsetPx(input: {
+  readonly fromPx: number;
+  readonly toPx: number;
+  readonly elapsedMs: number;
+  readonly durationMs?: number;
 }): number {
-  const distance = input.target - input.current;
-  if (Math.abs(distance) <= ANCHOR_SLIDE_SNAP_DISTANCE_PX) {
-    return input.target;
+  const durationMs = input.durationMs ?? ANCHOR_SLIDE_DURATION_MS;
+  if (!(durationMs > 0) || input.elapsedMs >= durationMs) {
+    return input.toPx;
   }
-  const timeConstantMs = input.timeConstantMs ?? ANCHOR_SLIDE_TIME_CONSTANT_MS;
-  if (!(input.deltaMs > 0) || !(timeConstantMs > 0)) {
-    return input.target;
-  }
-  const progress = 1 - Math.exp(-input.deltaMs / timeConstantMs);
-  const next = input.current + distance * progress;
-  // Guarantee convergence (and termination) when a long frame or a tiny
-  // remaining distance would otherwise leave sub-pixel residue forever.
-  return Math.abs(input.target - next) <= ANCHOR_SLIDE_SNAP_DISTANCE_PX ? input.target : next;
+  const progress = Math.max(0, input.elapsedMs) / durationMs;
+  const eased = 1 - (1 - progress) ** 3;
+  return input.fromPx + (input.toPx - input.fromPx) * eased;
 }
 
 /**

@@ -31,6 +31,6 @@ Explicitly not quarantined:
 
 - delayed attachment loading must remain bottom-stuck;
 - optimistic user sends must re-stick to the bottom, and the sent message must
-  reach its anchor in one motion and hold it;
+  glide to its anchor in one motion and hold it;
 - orchestration event replay/deduplication and keybinding config notifications;
 - any browser runtime or unhandled error.

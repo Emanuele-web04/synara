@@ -1,54 +1,48 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ANCHOR_SLIDE_SNAP_DISTANCE_PX,
-  advanceAnchorSlideOffset,
+  ANCHOR_SLIDE_DURATION_MS,
+  anchorSlideOffsetPx,
   scrollTranscriptToSettledEnd,
   stopTranscriptScrollAtCurrentOffset,
   type TranscriptScrollCancellationTarget,
   type TranscriptScrollTarget,
 } from "./transcriptScroll";
 
-describe("advanceAnchorSlideOffset", () => {
-  it("approaches without ever overshooting the target", () => {
-    let current = 0;
-    for (let frame = 0; frame < 60; frame += 1) {
-      const next = advanceAnchorSlideOffset({ current, target: 500, deltaMs: 16 });
-      expect(next).toBeGreaterThanOrEqual(current);
-      expect(next).toBeLessThanOrEqual(500);
-      current = next;
+describe("anchorSlideOffsetPx", () => {
+  const glide = (elapsedMs: number) => anchorSlideOffsetPx({ fromPx: 900, toPx: 20, elapsedMs });
+
+  it("starts at the sent message's original offset and lands exactly on the anchor", () => {
+    expect(glide(0)).toBe(900);
+    expect(glide(ANCHOR_SLIDE_DURATION_MS)).toBe(20);
+  });
+
+  it("moves in one direction only, so the message never bounces on its way up", () => {
+    let previous = glide(0);
+    for (let elapsedMs = 8; elapsedMs <= ANCHOR_SLIDE_DURATION_MS; elapsedMs += 8) {
+      const next = glide(elapsedMs);
+      expect(next).toBeLessThanOrEqual(previous);
+      expect(next).toBeGreaterThanOrEqual(20);
+      previous = next;
     }
-    expect(current).toBe(500);
+    expect(previous).toBe(20);
   });
 
-  it("is framerate independent: sub-frames compose to the same offset", () => {
-    const oneStep = advanceAnchorSlideOffset({ current: 0, target: 1_000, deltaMs: 32 });
-    const half = advanceAnchorSlideOffset({ current: 0, target: 1_000, deltaMs: 16 });
-    const twoSteps = advanceAnchorSlideOffset({ current: half, target: 1_000, deltaMs: 16 });
-    expect(twoSteps).toBeCloseTo(oneStep, 6);
+  it("eases out: it covers more ground early than late", () => {
+    const firstHalf = glide(0) - glide(ANCHOR_SLIDE_DURATION_MS / 2);
+    const secondHalf = glide(ANCHOR_SLIDE_DURATION_MS / 2) - glide(ANCHOR_SLIDE_DURATION_MS);
+    expect(firstHalf).toBeGreaterThan(secondHalf);
+    expect(glide(ANCHOR_SLIDE_DURATION_MS / 2)).toBeCloseTo(900 - 880 * (1 - 0.5 ** 3), 6);
   });
 
-  it("tracks a target that moves mid-flight instead of landing on a stale one", () => {
-    // The end-space reserve growing during the slide moves the coordinate down.
-    let current = advanceAnchorSlideOffset({ current: 0, target: 200, deltaMs: 16 });
-    for (let frame = 0; frame < 60; frame += 1) {
-      current = advanceAnchorSlideOffset({ current, target: 900, deltaMs: 16 });
-    }
-    expect(current).toBe(900);
+  it("holds the anchor once the slide is over instead of drifting past it", () => {
+    expect(glide(ANCHOR_SLIDE_DURATION_MS + 1)).toBe(20);
+    expect(glide(5_000)).toBe(20);
   });
 
-  it("snaps once the remaining distance is sub-pixel so the slide terminates", () => {
-    expect(
-      advanceAnchorSlideOffset({
-        current: 100,
-        target: 100 + ANCHOR_SLIDE_SNAP_DISTANCE_PX,
-        deltaMs: 16,
-      }),
-    ).toBe(100 + ANCHOR_SLIDE_SNAP_DISTANCE_PX);
-  });
-
-  it("takes the target directly when no time has elapsed", () => {
-    expect(advanceAnchorSlideOffset({ current: 0, target: 320, deltaMs: 0 })).toBe(320);
+  it("ignores a negative elapsed time and a zero duration rather than jumping", () => {
+    expect(glide(-50)).toBe(900);
+    expect(anchorSlideOffsetPx({ fromPx: 900, toPx: 20, elapsedMs: 0, durationMs: 0 })).toBe(20);
   });
 });
 

@@ -12,16 +12,19 @@
 //      position moves while the slide is in flight (the end-space reserve grows,
 //      rows above settle from estimated to measured heights, pre-turn status rows
 //      land), and a fixed-target native smooth scroll would land wrong and then
-//      need a visible correction. While the loop runs, the shared flag pauses
-//      ChatView's auto-follow re-snaps so the motion has a single scroll owner.
-//      After the anchor first lands, corrections snap instead of easing, so the
-//      message is rigidly held rather than drifting back into place.
+//      need a visible correction. The motion is eased in the message's own
+//      visible offset rather than in scrollTop, so it stays on schedule while the
+//      transcript's scroll geometry changes underneath it. While the loop runs,
+//      the shared flag pauses ChatView's auto-follow re-snaps so the motion has a
+//      single scroll owner. After the anchor first lands, corrections snap
+//      instead of easing, so the message is rigidly held rather than drifting
+//      back into place.
 
 import { type MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 
-import { advanceAnchorSlideOffset } from "./transcriptScroll";
+import { ANCHOR_SLIDE_DURATION_MS, anchorSlideOffsetPx } from "./transcriptScroll";
 
 // Absolute bound on the slide plus its hold, so a transcript that never stops
 // moving can never hold the auto-follow pause open.
@@ -86,7 +89,12 @@ function anchoredScrollTargetPx(
   container: HTMLElement,
   anchorElement: HTMLElement | null,
   topInsetPx: number,
-): { desired: number; clamped: number; maxScrollTopPx: number } | null {
+): {
+  desired: number;
+  clamped: number;
+  maxScrollTopPx: number;
+  offsetFromViewportTop: number;
+} | null {
   if (!anchorElement || anchorElement.getClientRects().length === 0) {
     return null;
   }
@@ -94,7 +102,12 @@ function anchoredScrollTargetPx(
     anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top;
   const maxScrollTopPx = Math.max(0, container.scrollHeight - container.clientHeight);
   const desired = Math.max(0, container.scrollTop + offsetFromViewportTop - topInsetPx);
-  return { desired, clamped: Math.min(maxScrollTopPx, desired), maxScrollTopPx };
+  return {
+    desired,
+    clamped: Math.min(maxScrollTopPx, desired),
+    maxScrollTopPx,
+    offsetFromViewportTop,
+  };
 }
 
 function prefersReducedMotion(): boolean {
@@ -145,7 +158,6 @@ export function useTailAnchorScroll({
     // (layout-forcing) computed-style read is done once instead of every frame.
     let topInsetPx: number | null = null;
     const startedAt = performance.now();
-    let lastFrameAt = startedAt;
     // Flips once the anchor first reaches its coordinate — which requires the
     // reserve below it to exist, so this stays false while the message is still
     // parked at the bottom. From then on the hold is rigid (corrections snap
@@ -157,6 +169,15 @@ export function useTailAnchorScroll({
     // Last observed content position of the anchor, used to confirm the row has
     // really been laid out before the slide commits to a coordinate.
     let confirmedDesired: number | null = null;
+    // Set on the first frame the anchor row can be measured, together with the
+    // offset the glide starts from. Both are re-seeded if an early frame shows
+    // the row was still mid-layout when they were taken.
+    let glideStartedAt: number | null = null;
+    let glideFromOffsetPx = 0;
+    // Once the reserve has been deep enough to lift the anchor even once, a
+    // later shortfall means the response outgrew it — the hand-off below, not a
+    // reserve that has yet to appear.
+    let hasBeenReachable = false;
 
     function stopFrameLoop(): void {
       if (frameId !== null) {
@@ -198,8 +219,6 @@ export function useTailAnchorScroll({
         return true;
       }
       const elapsedMs = now - startedAt;
-      const deltaMs = Math.max(0, now - lastFrameAt);
-      lastFrameAt = now;
 
       const container = getScrollContainer(listRef);
       if (container && topInsetPx === null) {
@@ -222,8 +241,10 @@ export function useTailAnchorScroll({
       // change just because the transcript scrolls. Before the first move, a
       // value that does not repeat means the row was measured mid-layout —
       // acting on it would snap the transcript to a coordinate the message
-      // never had, and the correction back is the visible jump.
-      if (!hasLanded && elapsedMs < ANCHOR_POSITION_CONFIRM_MAX_MS) {
+      // never had, and the correction back is the visible jump. Only the
+      // snapping path needs this: the glide below re-seeds instead of waiting,
+      // because the frames spent waiting are the frames it has to animate in.
+      if (!easeToAnchor && !hasLanded && elapsedMs < ANCHOR_POSITION_CONFIRM_MAX_MS) {
         const settled =
           confirmedDesired !== null && Math.abs(target.desired - confirmedDesired) <= 1;
         confirmedDesired = target.desired;
@@ -237,6 +258,7 @@ export function useTailAnchorScroll({
       // still parked at the bottom and has not landed, however close scrollTop
       // is to the (clamped) target.
       const reachable = target.desired <= target.clamped + 1;
+      hasBeenReachable = hasBeenReachable || reachable;
       // The mirror image: holding the anchor at the top leaves the live tail
       // below the viewport bottom, so the response has outgrown its reserve.
       // That is the hand-off to the list's own follow-the-tail — from here the
@@ -256,18 +278,80 @@ export function useTailAnchorScroll({
         overflowFrames = 0;
       }
 
+      // The glide is expressed in the anchor's own visible offset, so it starts
+      // from wherever the message is actually painted on the first frame it can
+      // be measured — not from the reserve being ready. Waiting for that would
+      // hand the opening frames to the list, which puts the anchor at the top by
+      // itself, leaving the glide nothing to travel and the reader a jump.
+      // Capped at one viewport so a send from far up the transcript still glides
+      // a readable distance instead of blurring across thousands of pixels.
+      const restOffsetPx = topInsetPx ?? 0;
+      if (easeToAnchor && !hasLanded) {
+        const scheduledOffsetPx =
+          glideStartedAt === null
+            ? Number.POSITIVE_INFINITY
+            : anchorSlideOffsetPx({
+                fromPx: glideFromOffsetPx,
+                toPx: restOffsetPx,
+                elapsedMs: now - glideStartedAt,
+              });
+        // Finding the message below where the glide expects it means the glide
+        // never actually moved it. Two causes, both answered by restarting the
+        // schedule from where the message really is rather than yanking it up:
+        // the reserve is not yet deep enough to lift the anchor at all (the
+        // motion has not started, so its clock should not be running either), or
+        // the seed was taken from a row still mid-layout, which can report a
+        // transient position for a frame after being committed.
+        const belowSchedule = target.offsetFromViewportTop > scheduledOffsetPx + 1;
+        if (
+          glideStartedAt === null ||
+          (belowSchedule && (!hasBeenReachable || elapsedMs < ANCHOR_POSITION_CONFIRM_MAX_MS))
+        ) {
+          glideFromOffsetPx = Math.min(
+            Math.max(target.offsetFromViewportTop, restOffsetPx),
+            container.clientHeight,
+          );
+          glideStartedAt = now;
+        }
+      }
+
+      // The glide is over the instant its schedule is spent, so the frame that
+      // would land it takes the absolute coordinate below instead. Relative
+      // placement accumulates the sub-pixel error of every rect it was measured
+      // against; the hold has to be exact, because from here it is compared
+      // against `target.clamped` to decide the anchor has arrived.
+      const glideElapsedMs = glideStartedAt === null ? 0 : now - glideStartedAt;
+      const gliding =
+        glideStartedAt !== null && !hasLanded && glideElapsedMs < ANCHOR_SLIDE_DURATION_MS;
+      // While it does run, positioning the anchor relative to where it was just
+      // measured keeps the motion on schedule even as the content above it
+      // resizes: the scroll coordinate that holds a given visible offset moves,
+      // the visible offset does not.
+      const nextScrollTopPx = gliding
+        ? Math.min(
+            target.maxScrollTopPx,
+            Math.max(
+              0,
+              container.scrollTop +
+                target.offsetFromViewportTop -
+                anchorSlideOffsetPx({
+                  fromPx: glideFromOffsetPx,
+                  toPx: restOffsetPx,
+                  elapsedMs: glideElapsedMs,
+                }),
+            ),
+          )
+        : target.clamped;
+
       // Anything that moved the anchor off its coordinate since the last frame
       // is a correction; while they keep arriving the hook keeps ownership.
-      if (Math.abs(target.clamped - container.scrollTop) > 0.5) {
+      if (Math.abs(nextScrollTopPx - container.scrollTop) > 0.5) {
         lastCorrectionAt = now;
-        container.scrollTop =
-          hasLanded || !easeToAnchor
-            ? target.clamped
-            : advanceAnchorSlideOffset({
-                current: container.scrollTop,
-                target: target.clamped,
-                deltaMs,
-              });
+        container.scrollTop = nextScrollTopPx;
+      }
+
+      if (gliding) {
+        return false;
       }
 
       if (reachable && Math.abs(target.clamped - container.scrollTop) <= 1) {
@@ -306,9 +390,15 @@ export function useTailAnchorScroll({
       });
     }
 
-    const step = (now: number) => {
+    // Deliberately ignores the timestamp the frame callback is handed: it is the
+    // frame's projected presentation time, which does not share an origin with
+    // the `performance.now()` the mutation-driven corrections below read. Mixing
+    // the two makes the eased progress jump backwards between a frame and the
+    // correction that follows it, which the reader sees as the message dropping
+    // back down mid-glide. One clock for every step keeps the motion monotonic.
+    const step = () => {
       frameId = null;
-      if (!advanceAnchorSlide(now)) {
+      if (!advanceAnchorSlide(performance.now())) {
         frameId = window.requestAnimationFrame(step);
       }
     };
