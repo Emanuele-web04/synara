@@ -2,14 +2,7 @@
 // Purpose: Verifies filesystem checkpoint store behavior around expensive Git capture work.
 // Layer: Checkpointing tests.
 // Exports: Vitest coverage for CheckpointStoreLive.
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
