@@ -45,6 +45,7 @@ interface BrowserAnnotationCoordinatorOptions {
 interface ReadyDocument {
   readonly webContentsId: number;
   readonly liveUrl: string;
+  readonly compatibleDocumentKeys: ReadonlySet<string>;
   readonly document: BrowserAnnotationDocument;
   readonly source: BrowserAnnotationSource;
 }
@@ -228,21 +229,19 @@ export class BrowserAnnotationCoordinator {
       ) {
         this.finishSession(activeSession, "navigation", false);
       }
-      const preservesDocumentKey =
-        previousDocument?.webContentsId === sender.id &&
-        previousDocument.document.token === message.documentToken &&
-        browserAnnotationDocumentIdentityUrl(previousDocument.liveUrl) ===
-          browserAnnotationDocumentIdentityUrl(liveUrl);
+      const identityKey = browserAnnotationDocumentKey(
+        browserAnnotationDocumentIdentityUrl(liveUrl),
+      );
+      const compatibleDocumentKeys = new Set([identityKey, browserAnnotationDocumentKey(liveUrl)]);
       const document: BrowserAnnotationDocument = {
         token: message.documentToken,
-        key: preservesDocumentKey
-          ? previousDocument.document.key
-          : browserAnnotationDocumentKey(liveUrl),
+        key: identityKey,
         url: message.source.url,
       };
       const ready: ReadyDocument = {
         webContentsId: sender.id,
         liveUrl,
+        compatibleDocumentKeys,
         document,
         source: message.source,
       };
@@ -502,7 +501,7 @@ export class BrowserAnnotationCoordinator {
   ): BrowserAnnotationSyncMarkersInput["markers"] {
     return projection.markers.filter((marker) => {
       if (marker.source.url !== documentState.source.url) return false;
-      return marker.documentKey === documentState.document.key;
+      return documentState.compatibleDocumentKeys.has(marker.documentKey);
     });
   }
 

@@ -295,6 +295,31 @@ describe("BrowserAnnotationCoordinator", () => {
     });
   });
 
+  it("accepts hashless markers when an initially fragmented URL clears its fragment", () => {
+    const harness = createHarness("https://example.test/app#details");
+    harness.ready("document-with-fragment");
+    harness.coordinator.syncMarkers({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      version: 6,
+      markers: [marker()],
+    });
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "sync-markers",
+      projectionVersion: 6,
+      markers: [{ id: "annotation-1" }],
+    });
+
+    harness.setUrl("https://example.test/app");
+    harness.coordinator.handleInPageNavigation(THREAD_ID, TAB_ID, harness.webContents.id);
+    harness.ready("document-with-fragment", "Fragment cleared");
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      kind: "sync-markers",
+      projectionVersion: 6,
+      markers: [{ id: "annotation-1" }],
+    });
+  });
+
   it("keeps private query identities isolated when the public source is unchanged", () => {
     const firstLiveUrl = "https://example.test/app?token=first";
     const harness = createHarness(firstLiveUrl);
@@ -302,7 +327,7 @@ describe("BrowserAnnotationCoordinator", () => {
     harness.coordinator.syncMarkers({
       threadId: THREAD_ID,
       tabId: TAB_ID,
-      version: 6,
+      version: 7,
       markers: [marker("https://example.test/app", firstLiveUrl)],
     });
 
@@ -311,7 +336,7 @@ describe("BrowserAnnotationCoordinator", () => {
     harness.ready("same-document", "Another private page");
     expect(harness.sent.at(-1)?.payload).toMatchObject({
       kind: "sync-markers",
-      projectionVersion: 6,
+      projectionVersion: 7,
       markers: [],
     });
   });
