@@ -105,8 +105,12 @@ describe("CheckpointStoreLive", () => {
       if (args === "rev-parse --git-path index") {
         return Effect.succeed({ code: 0, stdout: `${workingIndexPath}\n`, stderr: "" });
       }
+      if (args === "update-index --really-refresh") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "README.md: needs update\n" });
+      }
       if (args === "add -A -- .") {
-        capturedSeed = readFileSync(input.env?.GIT_INDEX_FILE ?? "", "utf8");
+        const captureIndexPath = input.env?.GIT_INDEX_FILE ?? "";
+        capturedSeed = readFileSync(captureIndexPath, "utf8");
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
       if (args === "write-tree") {
@@ -138,6 +142,11 @@ describe("CheckpointStoreLive", () => {
       );
 
       expect(capturedSeed).toBe("working-index-stat-cache");
+      expect(
+        execute.mock.calls.some(
+          ([call]) => call.args.join(" ") === "update-index --really-refresh",
+        ),
+      ).toBe(true);
       expect(
         execute.mock.calls.some(([call]) => call.args.join(" ") === "rev-parse --verify HEAD"),
       ).toBe(false);

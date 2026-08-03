@@ -167,6 +167,20 @@ const makeCheckpointStore = Effect.gen(function* () {
                 env: commitEnv,
               });
             }
+            if (seededFromWorkingIndex) {
+              // A copied index can describe a rapid same-size rewrite as clean
+              // when its cached stat tuple still matches. Really-refresh makes
+              // Git verify those racily-clean entries and leaves changed paths
+              // for the following add to hash, without discarding the cache for
+              // the rest of a large workspace.
+              yield* git.execute({
+                operation,
+                cwd: input.cwd,
+                args: ["update-index", "--really-refresh"],
+                env: commitEnv,
+                allowNonZeroExit: true,
+              });
+            }
 
             yield* git.execute({
               operation,
