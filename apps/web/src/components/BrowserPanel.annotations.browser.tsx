@@ -308,7 +308,7 @@ describe("BrowserPanel annotations", () => {
       />,
     );
     const annotate = mounted.getByRole("button", { name: "Annotate page" });
-    const pointer = annotate.element().querySelector("svg");
+    const pointer = annotate.element().querySelector("[data-slot='central-icon']");
 
     expect(pointer).not.toBeNull();
     expect(annotate.element().classList.contains("bg-primary")).toBe(false);
@@ -321,7 +321,7 @@ describe("BrowserPanel annotations", () => {
     );
     const cancel = mounted.getByRole("button", { name: "Cancel annotation" });
 
-    expect(cancel.element().querySelector("svg")).toBe(pointer);
+    expect(cancel.element().querySelector("[data-slot='central-icon']")).toBe(pointer);
     expect(cancel.element().querySelector(".animate-spin")).toBeNull();
     expect(cancel.element().classList.contains("bg-primary")).toBe(true);
     await expect.element(cancel).toHaveAttribute("aria-busy", "true");

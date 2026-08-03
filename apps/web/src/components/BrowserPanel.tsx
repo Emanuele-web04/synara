@@ -8,7 +8,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { IconPointer } from "@tabler/icons-react";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type ServerLocalServerProcess,
@@ -43,6 +42,7 @@ import {
 } from "@synara/shared/browserShortcuts";
 
 import { isElectron } from "~/env";
+import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
@@ -144,7 +144,7 @@ export function BrowserAnnotationButton(props: {
             type="button"
             variant={props.controller.active ? "default" : "ghost"}
             size="icon-sm"
-            className="size-7 [&_svg]:!opacity-100"
+            className="size-7 [&_[data-slot=central-icon]]:!opacity-100"
             disabled={props.disabled}
             aria-label={label}
             aria-pressed={props.controller.active}
@@ -155,7 +155,7 @@ export function BrowserAnnotationButton(props: {
           />
         }
       >
-        <IconPointer className="size-3.5" aria-hidden="true" />
+        <CentralIcon name="window-cursor" className="size-3.5" />
       </TooltipTrigger>
       <TooltipPopup side="bottom">
         {props.controller.active
