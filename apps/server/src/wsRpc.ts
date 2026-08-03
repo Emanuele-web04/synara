@@ -106,6 +106,7 @@ import {
 } from "./wsStreamAdmission";
 import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
+import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
   CurrentWsSessionRole,
   provideWsConnectionSession,
@@ -1438,14 +1439,14 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to load server diagnostics",
           ),
-        [WS_METHODS.serverTranscribeVoice]: (input) =>
+        [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
             providerAdapterRegistry
               .getByProvider(input.provider)
               .pipe(
                 Effect.flatMap((adapter) =>
-                  adapter.transcribeVoice
-                    ? adapter.transcribeVoice(input)
+                  adapter.prewarmVoice
+                    ? adapter.prewarmVoice(input)
                     : Effect.fail(
                         new Error(
                           `Voice transcription is unavailable for provider '${input.provider}'.`,
@@ -1453,6 +1454,25 @@ const makeWsRpcHandlersLayer = () =>
                       ),
                 ),
               ),
+            "Voice transcription prewarm failed",
+          ),
+        [WS_METHODS.serverTranscribeVoice]: (input) =>
+          rpcEffect(
+            voiceUploadAdmissionGate.run(
+              providerAdapterRegistry
+                .getByProvider(input.provider)
+                .pipe(
+                  Effect.flatMap((adapter) =>
+                    adapter.transcribeVoice
+                      ? adapter.transcribeVoice(input)
+                      : Effect.fail(
+                          new Error(
+                            `Voice transcription is unavailable for provider '${input.provider}'.`,
+                          ),
+                        ),
+                  ),
+                ),
+            ),
             "Voice transcription failed",
           ),
         [WS_METHODS.serverGenerateThreadRecap]: (input) =>

@@ -228,6 +228,9 @@ async function requestVoiceTranscriptionUpload(
     | ServerVoiceTranscriptionResult
     | { readonly error?: unknown }
     | null;
+  if (response.status === 404 || response.status === 405) {
+    throw new VoiceUploadRouteUnavailableError();
+  }
   if (!response.ok || !payload || !("text" in payload)) {
     const message =
       payload && "error" in payload && typeof payload.error === "string"
@@ -237,6 +240,8 @@ async function requestVoiceTranscriptionUpload(
   }
   return payload;
 }
+
+class VoiceUploadRouteUnavailableError extends Error {}
 
 function createFallbackTab(url = "about:blank") {
   return {
@@ -647,11 +652,16 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,
         }),
-      transcribeVoice: (input) => {
-        if (window.desktopBridge?.server?.transcribeVoice) {
-          return window.desktopBridge.server.transcribeVoice(input);
+      prewarmVoice: (input) => transport.request(WS_METHODS.serverPrewarmVoice, input),
+      transcribeVoice: async (input) => {
+        try {
+          return await requestVoiceTranscriptionUpload(input);
+        } catch (error) {
+          if (!(error instanceof VoiceUploadRouteUnavailableError)) {
+            throw error;
+          }
+          return transport.request(WS_METHODS.serverTranscribeVoice, input, { timeoutMs: null });
         }
-        return requestVoiceTranscriptionUpload(input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },

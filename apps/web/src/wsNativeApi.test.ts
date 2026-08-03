@@ -960,18 +960,26 @@ describe("wsNativeApi", () => {
     );
   });
 
-  it("uses the desktop voice bridge when available", async () => {
+  it("uses the bounded server upload even when the desktop bridge is available", async () => {
     const transcribeVoice = vi.fn().mockResolvedValue({ text: "hello" });
     Object.defineProperty(getWindowForTest(), "desktopBridge", {
       configurable: true,
       writable: true,
       value: {
+        getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret",
         server: {
           transcribeVoice,
         },
       },
     });
 
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ text: "hello" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();
     await api.server.transcribeVoice({
@@ -983,18 +991,27 @@ describe("wsNativeApi", () => {
       durationMs: 1000,
     });
 
-    expect(transcribeVoice).toHaveBeenCalledWith({
-      provider: "codex",
-      cwd: "/repo",
-      audioBase64: "UklGRgAAAAAAAAAAAAAAAAAAAAA=",
-      mimeType: "audio/wav",
-      sampleRateHz: 24_000,
-      durationMs: 1000,
-    });
+    expect(transcribeVoice).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/voice/transcribe?"),
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(requestMock).not.toHaveBeenCalledWith(
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),
     );
+  });
+
+  it("prewarms voice state through the persistent server transport", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.server.prewarmVoice?.({ provider: "codex", cwd: "/repo" });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverPrewarmVoice, {
+      provider: "codex",
+      cwd: "/repo",
+    });
   });
 
   it("uses the bounded HTTP upload instead of WebSocket RPC for browser voice", async () => {
@@ -1031,5 +1048,36 @@ describe("wsNativeApi", () => {
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),
     );
+  });
+
+  it("falls back to WebSocket voice RPC when an older server has no upload route", async () => {
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: { getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret" },
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("Not Found", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    requestMock.mockResolvedValueOnce({ text: "legacy transport" });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const input = {
+      provider: "codex" as const,
+      cwd: "/repo",
+      audioBase64: "AQID",
+      mimeType: "audio/wav",
+      sampleRateHz: 24_000,
+      durationMs: 1000,
+    };
+
+    await expect(api.server.transcribeVoice(input)).resolves.toEqual({
+      text: "legacy transport",
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverTranscribeVoice, input, {
+      timeoutMs: null,
+    });
   });
 });
