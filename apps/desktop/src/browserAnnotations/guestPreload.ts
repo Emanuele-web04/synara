@@ -723,7 +723,9 @@ function renderOverlay(): void {
   if (host && !host.isConnected && document.documentElement) {
     document.documentElement.append(host);
   }
-  if (selectedElement && !selectedElement.isConnected) clearSelection();
+  if (selectedElement && !selectedElement.isConnected) {
+    releaseSelectionWithNotice(STALE_TARGET_NOTICE);
+  }
   if (hoveredElement && !hoveredElement.isConnected) hoveredElement = null;
 
   if (activeSession && pointerNeedsHitTest && !selectedElement) {
@@ -739,8 +741,7 @@ function renderOverlay(): void {
     // A selected node can collapse without disconnecting. Do not leave focus in
     // a hidden composer or let Enter publish an invisible target; release the
     // selection while preserving any comment the user already typed.
-    clearSelection({ keepComment: true });
-    showNotice(INVISIBLE_TARGET_NOTICE);
+    releaseSelectionWithNotice(INVISIBLE_TARGET_NOTICE);
   }
   const measuredMarkers = measureMarkers();
 
@@ -825,6 +826,11 @@ function clearSelection(options: { readonly keepComment?: boolean } = {}): void 
   }
 }
 
+function releaseSelectionWithNotice(message: string): void {
+  clearSelection({ keepComment: true });
+  showNotice(message);
+}
+
 function selectTarget(target: Element, point: { x: number; y: number } | null): void {
   const bounds = boundsOf(target);
   if (!bounds) {
@@ -885,15 +891,24 @@ function endInteractiveSession(notifyHost: boolean): void {
 function submitAnnotation(): void {
   const session = activeSession;
   const target = selectedElement;
-  if (!session || !target || !target.isConnected) return;
+  if (!session || !target) return;
+  if (!target.isConnected) {
+    releaseSelectionWithNotice(STALE_TARGET_NOTICE);
+    renderOverlay();
+    return;
+  }
+  if (!boundsOf(target)) {
+    releaseSelectionWithNotice(INVISIBLE_TARGET_NOTICE);
+    renderOverlay();
+    return;
+  }
   const annotation = describeElement(target, textarea?.value ?? "");
   if (!annotation) {
     // The target stopped being addressable between selection and save. Ending
     // the session here would throw away the comment the user just wrote and
     // report it to the host as a deliberate cancel, so release the selection
     // only, keep the text, and say what happened.
-    clearSelection({ keepComment: true });
-    showNotice(STALE_TARGET_NOTICE);
+    releaseSelectionWithNotice(STALE_TARGET_NOTICE);
     renderOverlay();
     return;
   }

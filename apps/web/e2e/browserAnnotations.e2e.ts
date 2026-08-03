@@ -358,7 +358,8 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     await runInGuest(
       "(() => { document.getElementById('collapsing-target').style.display = 'none'; return true; })()",
     );
-    await page.waitForTimeout(100);
+    // Submit immediately, before relying on the next overlay animation frame
+    // to notice the collapsed box.
     await page.keyboard.press("Enter");
     expect(await committedAnnotations()).toHaveLength(3);
     await runInGuest(
