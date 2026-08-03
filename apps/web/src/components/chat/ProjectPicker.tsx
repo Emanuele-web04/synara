@@ -699,9 +699,7 @@ export const ProjectPicker = memo(function ProjectPicker({
             disabled={isPicking}
           >
             <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-            <span className="truncate">
-              {isPicking ? loadingAddProjectLabel : addProjectLabel}
-            </span>
+            <span className="truncate">{isPicking ? loadingAddProjectLabel : addProjectLabel}</span>
           </button>
           {shouldShowResetToHome ? (
             <button
