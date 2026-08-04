@@ -361,6 +361,7 @@ import {
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
@@ -1500,6 +1501,7 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   // Query defaults are applied after destructuring: a default inside the destructuring
   // pattern makes React Compiler bail out on the whole Sidebar component.
   const keybindingsQuery = useQuery({
@@ -3216,13 +3218,10 @@ export default function Sidebar() {
     clearSelection,
     navigate,
     openChatThreadPage,
-    openSidechatSplit: ({ sourceThreadId, ownerProjectId, sidechatThreadId }) =>
-      createSplitViewFromDrop({
-        sourceThreadId,
-        ownerProjectId,
-        droppedThreadId: sidechatThreadId,
-        direction: "horizontal",
-        side: "second",
+    openSidechatDock: ({ sourceThreadId, sidechatThreadId }) =>
+      openRightDockPane(sourceThreadId, {
+        kind: "sidechat",
+        threadId: sidechatThreadId,
       }),
     openTerminalThreadPage,
     prewarmThreadDetailForIntent,
