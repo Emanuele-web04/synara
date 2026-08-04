@@ -324,9 +324,7 @@ const make = Effect.gen(function* () {
             AND thread_id IN ${sql.in(input.threadIds)}
           LIMIT 1
         `.pipe(
-          Effect.mapError(
-            toPersistenceSqlError("ProviderRuntimeEvent.hasPendingEventsForThreads"),
-          ),
+          Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.hasPendingEventsForThreads")),
         );
         return rows.length > 0;
       });

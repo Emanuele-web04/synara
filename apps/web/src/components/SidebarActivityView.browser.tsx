@@ -77,10 +77,7 @@ function renderActivity(input: {
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
   onMarkThreadRead?: (threadId: ThreadId, completedAt?: string) => void;
   onRenameThread?: (threadId: ThreadId) => void;
-  onThreadRenamePointerUp?: (
-    event: ReactPointerEvent<HTMLElement>,
-    threadId: ThreadId,
-  ) => void;
+  onThreadRenamePointerUp?: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onThreadContextMenu?: (threadId: ThreadId, position: { x: number; y: number }) => void;
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
