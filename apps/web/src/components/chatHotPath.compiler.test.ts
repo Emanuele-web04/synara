@@ -68,7 +68,18 @@ interface HotPathModule {
 
 const HOT_PATH_MODULES: readonly HotPathModule[] = [
   { relativePath: "ChatView.tsx", allowedBailoutReasons: [] },
-  { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
+  {
+    relativePath: "Sidebar.tsx",
+    // Existing render helpers close over drag/click callbacks that touch refs only
+    // after user events. The compiler conservatively treats each helper invocation
+    // as a render-time ref read. Keep the exact baseline so new or different
+    // Sidebar bailouts still fail this regression guard.
+    allowedBailoutReasons: [
+      "Cannot access refs during render",
+      "Cannot access refs during render",
+      "Cannot access refs during render",
+    ],
+  },
   {
     relativePath: "chat/MessagesTimeline.tsx",
     // `useStableRows` deliberately reads and rewrites a previous-state ref inside

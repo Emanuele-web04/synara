@@ -83,6 +83,11 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
+  GitHubProjectProvisionResult,
+} from "./githubProjectProvisioning";
+import type {
   PullRequestActionInput,
   PullRequestActionResult,
   PullRequestCommentInput,
@@ -583,6 +588,13 @@ export interface NativeApi {
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
     listDevServers: () => Promise<ProjectListDevServersResult>;
     onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
+    provisionFromGitHub: (
+      input: GitHubProjectProvisionInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<GitHubProjectProvisionResult>;
+    onProvisionProgress: (
+      callback: (event: GitHubProjectProvisionProgressEvent) => void,
+    ) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
