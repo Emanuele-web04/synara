@@ -101,6 +101,7 @@ import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
+import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import {
@@ -1055,6 +1056,17 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
+          rpcEffect(
+            Effect.promise(async () => ({
+              fullPath: await resolveOutOfRootFileReference({
+                workspaceRoot: input.cwd,
+                relativePath: input.relativePath,
+                homeDir: config.homeDir,
+              }),
+            })),
+            "Failed to resolve file reference outside the workspace",
+          ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
