@@ -130,7 +130,12 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
     useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
   );
 
-  return resolveVisibleToastThreadIds({ activeThreadId, splitView, rightDockState });
+  return resolveVisibleToastThreadIds({
+    activeThreadId,
+    splitView,
+    rightDockRendered: routeSearch.view !== "editor",
+    rightDockState,
+  });
 }
 
 function ThreadToastVisibleAutoDismiss({
