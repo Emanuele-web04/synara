@@ -364,14 +364,22 @@ export function useComposerSlashCommands(input: {
         });
       }
 
-      const snapshot = await api.orchestration.getShellSnapshot();
-      syncServerShellSnapshot(snapshot);
       // Side chats now live as a tab in the host thread's right dock instead of a
-      // split-view pane, so the user stays on the main conversation.
+      // split-view pane, so the user stays on the main conversation. Open it
+      // before the snapshot refresh: a transient snapshot failure must never
+      // orphan an already-created Side chat.
       useRightDockStore.getState().openPane(activeThread.id, {
         kind: "sidechat",
         threadId: nextThreadId,
       });
+      try {
+        const snapshot = await api.orchestration.getShellSnapshot();
+        syncServerShellSnapshot(snapshot);
+      } catch (error) {
+        // The command's push events still reconcile the new thread. Keep the
+        // pane open rather than reporting the successful creation as failed.
+        console.warn("Side chat snapshot refresh failed; waiting for live sync", error);
+      }
       return true;
     },
     [

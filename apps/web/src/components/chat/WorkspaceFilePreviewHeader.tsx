@@ -15,10 +15,22 @@ import { Fragment } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, EllipsisIcon, EyeIcon, FileIcon } from "~/lib/icons";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  EllipsisIcon,
+  EyeIcon,
+  FileIcon,
+  PencilIcon,
+  XIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
-import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
+import {
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+  ChatHeaderButton,
+  ChatHeaderIconButton,
+} from "./chatHeaderControls";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 
@@ -35,6 +47,13 @@ interface WorkspaceFilePreviewHeaderProps {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  /** Inline workspace editing is intentionally opt-in: binary/partial previews stay read-only. */
+  editable?: boolean;
+  editing?: boolean;
+  saving?: boolean;
+  onStartEditing?: (() => void) | undefined;
+  onCancelEditing?: (() => void) | undefined;
+  onSaveEditing?: (() => void) | undefined;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -132,6 +151,37 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
       ) : null}
 
       <div className="flex shrink-0 items-center gap-1.5">
+        {props.editing ? (
+          <>
+            <ChatHeaderIconButton
+              label={props.saving ? "Saving file" : "Save file"}
+              disabled={props.saving}
+              tone="plain"
+              onClick={props.onSaveEditing}
+            >
+              <CheckIcon aria-hidden="true" className="size-3.5" />
+            </ChatHeaderIconButton>
+            <ChatHeaderIconButton
+              label="Discard edits"
+              disabled={props.saving}
+              tone="plain"
+              onClick={props.onCancelEditing}
+            >
+              <XIcon aria-hidden="true" className="size-3.5" />
+            </ChatHeaderIconButton>
+          </>
+        ) : props.editable ? (
+          <ChatHeaderButton
+            aria-label="Edit file"
+            title="Edit file"
+            tone="plain"
+            className="gap-1 px-2"
+            onClick={props.onStartEditing}
+          >
+            <PencilIcon aria-hidden="true" className="size-3.5" />
+            <span className="hidden @md/header-actions:inline">Edit</span>
+          </ChatHeaderButton>
+        ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"

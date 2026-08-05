@@ -71,6 +71,13 @@ function isWindowForeground(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
+// OS notifications interrupt work. Keep completion feedback in the transcript
+// while Synara is the focused app; notify only when the result would otherwise
+// be easy to miss.
+export function shouldAttemptSystemTaskNotification(): boolean {
+  return !isWindowForeground();
+}
+
 interface ThreadNotificationCopy {
   title: string;
   body: string;
@@ -236,8 +243,7 @@ export function TaskCompletionNotifications() {
     }
 
     const shouldAttemptSystemNotification =
-      settings.enableSystemTaskCompletionNotifications &&
-      (window.desktopBridge ? true : !isWindowForeground());
+      settings.enableSystemTaskCompletionNotifications && shouldAttemptSystemTaskNotification();
 
     for (const completion of completions) {
       notifiedCompletionKeysRef.current.add(completedThreadNotificationKey(completion));

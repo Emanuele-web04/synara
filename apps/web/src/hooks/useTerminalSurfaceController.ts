@@ -103,6 +103,19 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     bumpFocusRequest();
   };
 
+  // A PTY that has already emitted `exited` must not go back through the
+  // interactive close path: it would ask for confirmation and attempt a second
+  // server-side close. Remove only its local runtime and tab state.
+  const onSessionExited = (terminalId: string) => {
+    void disposeAndCloseTerminalSession({
+      api: undefined,
+      threadId,
+      terminalId,
+    });
+    closeTerminalStore(threadId, terminalId);
+    bumpFocusRequest();
+  };
+
   const closeTerminalGroup = (groupId: string) => closeTerminalGroupStore(threadId, groupId);
 
   const setTerminalHeight = (height: number) => setTerminalHeightStore(threadId, height);
@@ -128,6 +141,7 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     moveTerminalToNewGroup,
     activateTerminal,
     closeTerminal,
+    onSessionExited,
     closeTerminalGroup,
     setTerminalHeight,
     resizeTerminalSplit,

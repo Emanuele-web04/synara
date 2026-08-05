@@ -326,6 +326,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     filePath: string | null;
     rendered: boolean;
   } | null>(null);
+  const [editingFilePath, setEditingFilePath] = useState<string | null>(null);
+  const [draftContents, setDraftContents] = useState("");
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const markdownPreviewEnabled =
     markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
       ? markdownPreviewOverride.rendered
@@ -341,22 +345,29 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ? (localPreviewGrantQuery.data?.grant ?? null)
       : null;
   const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}`;
-  const fileQuery = useQuery(
-    projectReadFileQueryOptions({
-      cwd: props.workspaceRoot,
-      relativePath: filePath,
-      previewGrant: localPreviewGrant,
-      // Images and PDFs are binary: they stream through the local-image HTTP
-      // route instead of the text file-read RPC.
-      enabled:
-        filePath !== null &&
-        !fileIsImage &&
-        !fileIsPdf &&
-        (props.workspaceRoot !== null || localPreviewGrant !== null),
-    }),
-  );
+  const fileQueryOptions = projectReadFileQueryOptions({
+    cwd: props.workspaceRoot,
+    relativePath: filePath,
+    previewGrant: localPreviewGrant,
+    // Images and PDFs are binary: they stream through the local-image HTTP
+    // route instead of the text file-read RPC.
+    enabled:
+      filePath !== null &&
+      !fileIsImage &&
+      !fileIsPdf &&
+      (props.workspaceRoot !== null || localPreviewGrant !== null),
+  });
+  const fileQuery = useQuery(fileQueryOptions);
 
   const fileContents = fileQuery.data?.contents ?? "";
+  const isEditing = editingFilePath === filePath;
+  const canEditFile =
+    props.workspaceRoot !== null &&
+    fileIsWorkspaceRelative &&
+    !fileIsImage &&
+    !fileIsPdf &&
+    fileQuery.data !== undefined &&
+    !fileQuery.data.truncated;
   const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
   const lineCount = fileContents.length === 0 ? 0 : fileContents.split("\n").length;
   // Highlight -> floating "Add to chat" -> reference that points at exactly what
@@ -470,6 +481,43 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const handleMarkdownPreviewChange = (rendered: boolean) => {
     setMarkdownPreviewOverride({ filePath, rendered });
   };
+  const startEditing = () => {
+    if (!canEditFile || !filePath) return;
+    setDraftContents(fileContents);
+    setDraftSaveError(null);
+    setEditingFilePath(filePath);
+  };
+  const cancelEditing = () => {
+    setDraftSaveError(null);
+    setEditingFilePath(null);
+  };
+  const saveEditing = async () => {
+    if (!workspaceRoot || !filePath || !fileQuery.data || isSavingDraft) return;
+    const api = readNativeApi();
+    if (!api) {
+      setDraftSaveError("The connection to Synara is unavailable.");
+      return;
+    }
+    setIsSavingDraft(true);
+    setDraftSaveError(null);
+    try {
+      await api.projects.writeFile({
+        cwd: workspaceRoot,
+        relativePath: fileQuery.data.relativePath,
+        contents: draftContents,
+      });
+      queryClient.setQueryData(
+        fileQueryOptions.queryKey,
+        (current: typeof fileQuery.data | undefined) =>
+          current ? { ...current, contents: draftContents } : current,
+      );
+      setEditingFilePath(null);
+    } catch (error) {
+      setDraftSaveError(error instanceof Error ? error.message : "Could not save file.");
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
   const canToggleTasks =
@@ -542,6 +590,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onReferenceInChat={onReferenceInChat}
         onAskWhyInChat={onAskWhyInChat}
         truncated={fileQuery.data?.truncated ?? false}
+        editable={canEditFile}
+        editing={isEditing}
+        saving={isSavingDraft}
+        onStartEditing={startEditing}
+        onCancelEditing={cancelEditing}
+        onSaveEditing={() => void saveEditing()}
       />
       {fileIsImage ? (
         <div
@@ -578,7 +632,32 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           onMouseMove={lineCommenting.onContainerMouseMove}
           onMouseLeave={lineCommenting.onContainerMouseLeave}
         >
-          {showMarkdownPreview ? (
+          {isEditing ? (
+            <div className="flex min-h-full min-w-full flex-col">
+              <textarea
+                aria-label={`Edit ${filePath}`}
+                className="editor-file-viewer__textarea min-h-0 min-w-full flex-1 resize-none"
+                value={draftContents}
+                spellCheck={false}
+                onChange={(event) => setDraftContents(event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+                    event.preventDefault();
+                    void saveEditing();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelEditing();
+                  }
+                }}
+              />
+              {draftSaveError ? (
+                <p role="alert" className="px-3 pb-2 text-xs text-destructive">
+                  {draftSaveError}
+                </p>
+              ) : null}
+            </div>
+          ) : showMarkdownPreview ? (
             <div className="editor-markdown-preview">
               <ChatMarkdown
                 text={fileContents}

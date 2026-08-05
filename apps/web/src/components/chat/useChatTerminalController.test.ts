@@ -251,4 +251,22 @@ describe("useChatTerminalController", () => {
     expect(onDeletePlaceholderThread).toHaveBeenCalledWith(THREAD_ID);
     expect(result.terminalFocusRequestId).toBe(1);
   });
+
+  it("removes an exited terminal without reopening its close flow", () => {
+    terminalLogic.shouldAutoDelete.mockReturnValue(true);
+    let result = render();
+
+    result.onSessionExited("terminal-1");
+    result = render();
+
+    expect(nativeApi.confirm).not.toHaveBeenCalled();
+    expect(terminalSession.disposeAndClose).toHaveBeenCalledWith({
+      api: undefined,
+      threadId: THREAD_ID,
+      terminalId: "terminal-1",
+    });
+    expect(terminalHarness.actions.closeTerminal).toHaveBeenCalledWith(THREAD_ID, "terminal-1");
+    expect(onDeletePlaceholderThread).toHaveBeenCalledWith(THREAD_ID);
+    expect(result.terminalFocusRequestId).toBe(1);
+  });
 });

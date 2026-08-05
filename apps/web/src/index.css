@@ -1111,6 +1111,18 @@ label:has(> select#reasoning-effort) select {
   color: color-mix(in srgb, var(--foreground) 88%, transparent);
 }
 
+.editor-file-viewer__textarea {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 1rem;
+  color: color-mix(in srgb, var(--foreground) 92%, transparent);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  tab-size: 2;
+}
+
 .editor-file-viewer__highlight {
   min-height: 100%;
   width: max-content;
