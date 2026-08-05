@@ -112,11 +112,7 @@ export function shouldOccludeBrowserWebview(input: {
   browserActionsMenuOpen: boolean;
   hasObscuringOverlay: boolean;
 }): boolean {
-  return (
-    input.showLocalServersHome ||
-    input.browserActionsMenuOpen ||
-    input.hasObscuringOverlay
-  );
+  return input.showLocalServersHome || input.browserActionsMenuOpen || input.hasObscuringOverlay;
 }
 
 interface ResolveBrowserAddressSyncInput {

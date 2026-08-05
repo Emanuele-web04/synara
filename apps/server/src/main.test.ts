@@ -29,12 +29,7 @@ vi.mock("./threadRetention", async () => {
   };
 });
 
-import {
-  CliConfig,
-  makeServerStartupLogData,
-  synaraCli,
-  type CliConfigShape,
-} from "./main";
+import { CliConfig, makeServerStartupLogData, synaraCli, type CliConfigShape } from "./main";
 
 const start = vi.fn(() => undefined);
 const stop = vi.fn(() => undefined);
