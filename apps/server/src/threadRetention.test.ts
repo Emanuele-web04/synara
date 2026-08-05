@@ -172,6 +172,32 @@ describe("thread retention", () => {
     ).toEqual([parentId]);
   });
 
+  it("treats an inactive thread whose parent is absent as an archive root", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const missingParentId = ThreadId.makeUnsafe("thread-missing-parent");
+    const orphanId = ThreadId.makeUnsafe("thread-orphan");
+    const childId = ThreadId.makeUnsafe("thread-orphan-child");
+
+    expect(
+      getRetentionArchiveRootIds(
+        makeReadModel([
+          makeReadModelThread({
+            id: orphanId,
+            parentThreadId: missingParentId,
+            latestUserMessageAt: oldActivityAt,
+          }),
+          makeReadModelThread({
+            id: childId,
+            parentThreadId: orphanId,
+            latestUserMessageAt: oldActivityAt,
+          }),
+        ]),
+        nowMs,
+      ),
+    ).toEqual([orphanId]);
+  });
+
   it("does not archive a stale parent over a recent child", () => {
     const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
     const parentId = ThreadId.makeUnsafe("thread-parent");
@@ -225,6 +251,7 @@ describe("thread retention", () => {
   it("dispatches reversible archive commands and publishes completed progress", async () => {
     const archivedThreadId = ThreadId.makeUnsafe("thread-to-archive");
     const dispatchedCommands: OrchestrationCommand[] = [];
+    let pruneCount = 0;
     const shellSnapshot = makeReadModel([
       makeReadModelThread({
         id: archivedThreadId,
@@ -249,7 +276,14 @@ describe("thread retention", () => {
 
     const maintenanceEvent = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* runThreadRetentionSweep(engine, snapshotQuery, automationRepository);
+        yield* runThreadRetentionSweep(
+          engine,
+          snapshotQuery,
+          automationRepository,
+          Effect.sync(() => {
+            pruneCount += 1;
+          }),
+        );
         const lifecycle = yield* ServerLifecycleEvents;
         return (yield* lifecycle.snapshot).events.find(
           (event) => event.type === "maintenance",
@@ -265,6 +299,7 @@ describe("thread retention", () => {
     expect(dispatchedCommands[0]?.commandId).toMatch(
       new RegExp(`^${THREAD_RETENTION_COMMAND_ID_PREFIX}`),
     );
+    expect(pruneCount).toBe(1);
     expect(maintenanceEvent).toMatchObject({
       type: "maintenance",
       payload: {

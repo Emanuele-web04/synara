@@ -13,6 +13,9 @@ import { automationContinuationThreadId } from "@synara/shared/automationMode";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 
+import { ServerConfig } from "./config";
+import { GitCore } from "./git/Services/GitCore";
+import { pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery";
 import {
@@ -210,10 +213,12 @@ export function getRetentionArchiveRootIds(
   };
 
   return [...activeThreads.values()]
-    .filter(
-      (thread) =>
-        (thread.parentThreadId ?? null) === null && canArchiveSubtree(thread.id),
-    )
+    .filter((thread) => {
+      const parentThreadId = thread.parentThreadId ?? null;
+      const isActiveSubtreeRoot =
+        parentThreadId === null || !activeThreads.has(parentThreadId);
+      return isActiveSubtreeRoot && canArchiveSubtree(thread.id);
+    })
     .map((thread) => thread.id);
 }
 
@@ -221,6 +226,7 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
   orchestrationEngine: OrchestrationEngineShape,
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
   automationRepository: AutomationRepositoryShape,
+  pruneArchivedManagedWorktrees: Effect.Effect<void, unknown>,
 ) {
   const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
   const protectedThreadIds = yield* listRetentionProtectedThreadIds(automationRepository);
@@ -284,6 +290,16 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
     { concurrency: 1 },
   ).pipe(Effect.asVoid);
 
+  if (archivedCount > 0) {
+    yield* pruneArchivedManagedWorktrees.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("managed worktree retention failed after thread retention sweep", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
+  }
+
   if (totalCandidateCount > 0) {
     yield* publishRetentionMaintenance("completed", {
       deletedCount: archivedCount,
@@ -297,6 +313,14 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
 ) {
   const automationRepository = yield* AutomationRepository;
+  const config = yield* ServerConfig;
+  const git = yield* GitCore;
+  const pruneArchivedManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
+    homeDir: config.homeDir,
+    worktreesDir: config.worktreesDir,
+    snapshotQuery: projectionSnapshotQuery,
+    git,
+  }).pipe(Effect.asVoid);
   // Give startup/projection bootstrap a short settling window, then run one
   // archive pass promptly so desktop installs do not need to stay open for 24 hours.
   yield* Effect.gen(function* () {
@@ -305,6 +329,7 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
       orchestrationEngine,
       projectionSnapshotQuery,
       automationRepository,
+      pruneArchivedManagedWorktrees,
     );
     yield* Effect.forever(
       Effect.sleep(THREAD_RETENTION_SWEEP_INTERVAL_MS).pipe(
@@ -313,6 +338,7 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
             orchestrationEngine,
             projectionSnapshotQuery,
             automationRepository,
+            pruneArchivedManagedWorktrees,
           ),
         ),
       ),
