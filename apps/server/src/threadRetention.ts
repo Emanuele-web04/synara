@@ -215,8 +215,7 @@ export function getRetentionArchiveRootIds(
   return [...activeThreads.values()]
     .filter((thread) => {
       const parentThreadId = thread.parentThreadId ?? null;
-      const isActiveSubtreeRoot =
-        parentThreadId === null || !activeThreads.has(parentThreadId);
+      const isActiveSubtreeRoot = parentThreadId === null || !activeThreads.has(parentThreadId);
       return isActiveSubtreeRoot && canArchiveSubtree(thread.id);
     })
     .map((thread) => thread.id);
@@ -230,11 +229,7 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
 ) {
   const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
   const protectedThreadIds = yield* listRetentionProtectedThreadIds(automationRepository);
-  const archiveRootIds = getRetentionArchiveRootIds(
-    shellSnapshot,
-    Date.now(),
-    protectedThreadIds,
-  );
+  const archiveRootIds = getRetentionArchiveRootIds(shellSnapshot, Date.now(), protectedThreadIds);
   const totalCandidateCount = archiveRootIds.length;
   let archivedCount = 0;
 

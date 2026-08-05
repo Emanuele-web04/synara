@@ -70,9 +70,9 @@ describe("thread retention", () => {
       latestUserMessageAt: new Date(nowMs - THREAD_RETENTION_UNUSED_MS + 1).toISOString(),
     });
 
-    expect(
-      getRetentionArchiveRootIds(makeReadModel([staleThread, recentThread]), nowMs),
-    ).toEqual([staleThread.id]);
+    expect(getRetentionArchiveRootIds(makeReadModel([staleThread, recentThread]), nowMs)).toEqual([
+      staleThread.id,
+    ]);
   });
 
   it("does not select busy or pending threads even when they are old", () => {
@@ -208,9 +208,7 @@ describe("thread retention", () => {
         makeReadModel([
           makeReadModelThread({
             id: parentId,
-            latestUserMessageAt: new Date(
-              nowMs - THREAD_RETENTION_UNUSED_MS - 1,
-            ).toISOString(),
+            latestUserMessageAt: new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString(),
           }),
           makeReadModelThread({
             id: childId,
@@ -238,9 +236,7 @@ describe("thread retention", () => {
           makeReadModelThread({
             id: childId,
             parentThreadId: parentId,
-            latestUserMessageAt: new Date(
-              nowMs - THREAD_RETENTION_UNUSED_MS - 1,
-            ).toISOString(),
+            latestUserMessageAt: new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString(),
           }),
         ]),
         nowMs,
@@ -255,9 +251,7 @@ describe("thread retention", () => {
     const shellSnapshot = makeReadModel([
       makeReadModelThread({
         id: archivedThreadId,
-        latestUserMessageAt: new Date(
-          Date.now() - THREAD_RETENTION_UNUSED_MS - 1,
-        ).toISOString(),
+        latestUserMessageAt: new Date(Date.now() - THREAD_RETENTION_UNUSED_MS - 1).toISOString(),
       }),
     ]) as unknown as OrchestrationShellSnapshot;
     const engine = {
@@ -285,9 +279,7 @@ describe("thread retention", () => {
           }),
         );
         const lifecycle = yield* ServerLifecycleEvents;
-        return (yield* lifecycle.snapshot).events.find(
-          (event) => event.type === "maintenance",
-        );
+        return (yield* lifecycle.snapshot).events.find((event) => event.type === "maintenance");
       }).pipe(Effect.provide(ServerLifecycleEventsLive)),
     );
 
