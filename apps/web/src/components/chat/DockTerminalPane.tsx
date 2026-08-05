@@ -96,7 +96,7 @@ export function DockTerminalPane(props: {
       closedBySessionExitRef.current = true;
       props.onClosePanel?.();
     }
-    terminal.onSessionExited(terminalId);
+    terminal.handleTerminalSessionExited(terminalId);
   };
 
   return (
@@ -125,7 +125,7 @@ export function DockTerminalPane(props: {
       onMoveTerminalToGroup={terminal.moveTerminalToNewGroup}
       onActiveTerminalChange={terminal.activateTerminal}
       onCloseTerminal={terminal.closeTerminal}
-      onSessionExited={onSessionExited}
+      onTerminalSessionExited={onSessionExited}
       onCloseTerminalGroup={terminal.closeTerminalGroup}
       onHeightChange={terminal.setTerminalHeight}
       onResizeTerminalSplit={terminal.resizeTerminalSplit}

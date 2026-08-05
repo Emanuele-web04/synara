@@ -112,6 +112,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceInput,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
@@ -459,6 +461,7 @@ export interface DesktopNotificationInput {
   title: string;
   body?: string;
   silent?: boolean;
+  suppressWhenForeground?: boolean;
   threadId?: ThreadId;
 }
 
@@ -580,6 +583,9 @@ export interface NativeApi {
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    resolveOutOfRootFileReference: (
+      input: ProjectResolveOutOfRootFileReferenceInput,
+    ) => Promise<ProjectResolveOutOfRootFileReferenceResult>;
     createLocalFilePreviewGrant: (
       input: ProjectCreateLocalFilePreviewGrantInput,
     ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;

@@ -297,39 +297,21 @@ export function useChatTerminalController({
       terminalState.terminalTitleOverridesById,
     ],
   );
-  // `exit` arrives after the PTY is already gone. It must never re-enter the
-  // user-close path (confirmation plus a second close request).
-  const onSessionExited = useCallback(
+  const handleTerminalSessionExited = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
       const isFinalTerminal = terminalState.terminalIds.length <= 1;
-      const shouldDeletePlaceholderThread = shouldAutoDeleteTerminalThreadOnLastClose({
-        isLastTerminal: isFinalTerminal,
-        isServerThread,
-        terminalEntryPoint: terminalState.entryPoint,
-        thread: activeThread,
-      });
       disposeAndCloseTerminalSession({
-        api: undefined,
+        api: readNativeApi(),
         threadId: activeThreadId,
         terminalId,
+        clearHistoryBeforeClose: isFinalTerminal,
+        processAlreadyExited: true,
       });
       closeTerminalInStore(activeThreadId, terminalId);
       requestTerminalFocus();
-      if (shouldDeletePlaceholderThread) {
-        void onDeletePlaceholderThread(activeThreadId);
-      }
     },
-    [
-      activeThread,
-      activeThreadId,
-      closeTerminalInStore,
-      isServerThread,
-      onDeletePlaceholderThread,
-      requestTerminalFocus,
-      terminalState.entryPoint,
-      terminalState.terminalIds.length,
-    ],
+    [activeThreadId, closeTerminalInStore, requestTerminalFocus, terminalState.terminalIds.length],
   );
   const closeActiveWorkspaceView = useCallback(() => {
     if (!activeThreadId || !terminalWorkspaceOpen) return;
@@ -389,7 +371,7 @@ export function useChatTerminalController({
     openNewFullWidthTerminal,
     activateTerminal,
     closeTerminal,
-    onSessionExited,
+    handleTerminalSessionExited,
     closeActiveWorkspaceView,
   };
 }

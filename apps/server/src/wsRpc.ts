@@ -101,6 +101,7 @@ import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
+import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import {
@@ -954,14 +955,15 @@ const makeWsRpcHandlersLayer = () =>
               // head stays above the cursor, so the gap check alone would
               // accept the resume and stream nothing. Falling through to the
               // snapshot path surfaces THREAD_SNAPSHOT_NOT_FOUND instead.
-              resumeSubjectExists: projectionReadModelQuery
-                .getThreadDetailSnapshotById(input.threadId)
-                .pipe(
-                  Effect.map(Option.isSome),
-                  Effect.mapError((cause) =>
-                    toWsRpcError(cause, "Failed to verify thread before cursor resume"),
-                  ),
+              // The shell read shares the detail loader's active-thread
+              // predicate but skips hydrating and validating the transcript,
+              // which the resume path would discard for a boolean anyway.
+              resumeSubjectExists: projectionReadModelQuery.getThreadShellById(input.threadId).pipe(
+                Effect.map(Option.isSome),
+                Effect.mapError((cause) =>
+                  toWsRpcError(cause, "Failed to verify thread before cursor resume"),
                 ),
+              ),
               onResnapshotRequired: (report) =>
                 recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
@@ -1055,6 +1057,17 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
+          rpcEffect(
+            Effect.promise(async () => ({
+              fullPath: await resolveOutOfRootFileReference({
+                workspaceRoot: input.cwd,
+                relativePath: input.relativePath,
+                homeDir: config.homeDir,
+              }),
+            })),
+            "Failed to resolve file reference outside the workspace",
+          ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),

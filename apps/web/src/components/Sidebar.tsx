@@ -198,7 +198,6 @@ import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
-import { createSidebarThreadRowGestures } from "./sidebarThreadRowGestures";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
@@ -363,6 +362,7 @@ import {
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
@@ -1502,6 +1502,7 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   // Query defaults are applied after destructuring: a default inside the destructuring
   // pattern makes React Compiler bail out on the whole Sidebar component.
   const keybindingsQuery = useQuery({
@@ -3218,13 +3219,10 @@ export default function Sidebar() {
     clearSelection,
     navigate,
     openChatThreadPage,
-    openSidechatSplit: ({ sourceThreadId, ownerProjectId, sidechatThreadId }) =>
-      createSplitViewFromDrop({
-        sourceThreadId,
-        ownerProjectId,
-        droppedThreadId: sidechatThreadId,
-        direction: "horizontal",
-        side: "second",
+    openSidechatDock: ({ sourceThreadId, sidechatThreadId }) =>
+      openRightDockPane(sourceThreadId, {
+        kind: "sidechat",
+        threadId: sidechatThreadId,
       }),
     openTerminalThreadPage,
     prewarmThreadDetailForIntent,
@@ -4473,20 +4471,25 @@ export default function Sidebar() {
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
             onClick={() => activateThreadFromSidebarIntent(thread.id)}
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openRenameThreadDialog(thread.id);
+            }}
+            onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activateThreadFromSidebarIntent(thread.id);
               }
             }}
-            {...createSidebarThreadRowGestures({
-              threadId: thread.id,
-              onRename: openRenameThreadDialog,
-              onRenamePointerUp: handleThreadRenamePointerUp,
-              onContextMenu: (threadId, position) => {
-                void handleThreadContextMenu(threadId, position);
-              },
-            })}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              void handleThreadContextMenu(thread.id, {
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
           >
             <SidebarThreadRowContent
               thread={thread}
@@ -4652,28 +4655,36 @@ export default function Sidebar() {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}
                 onPointerDown={(event) => primeThreadActivation(event, thread.id)}
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openRenameThreadDialog(thread.id);
+                }}
+                onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
                   activateThreadFromSidebarIntent(thread.id);
                 }}
-                {...createSidebarThreadRowGestures({
-                  threadId: thread.id,
-                  onRename: openRenameThreadDialog,
-                  onRenamePointerUp: handleThreadRenamePointerUp,
-                  onContextMenu: (threadId, position) => {
-                    // A right-click inside an active multi-selection acts on the whole
-                    // selection; anywhere else it drops the selection and targets the row.
-                    if (selectedThreadIds.size > 0 && selectedThreadIds.has(threadId)) {
-                      void handleMultiSelectContextMenu(position);
-                      return;
-                    }
-                    if (selectedThreadIds.size > 0) {
-                      clearSelection();
-                    }
-                    void handleThreadContextMenu(threadId, position);
-                  },
-                })}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  // A right-click inside an active multi-selection acts on the whole
+                  // selection; anywhere else it drops the selection and targets the row.
+                  if (selectedThreadIds.size > 0 && selectedThreadIds.has(thread.id)) {
+                    void handleMultiSelectContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                    return;
+                  }
+                  if (selectedThreadIds.size > 0) {
+                    clearSelection();
+                  }
+                  void handleThreadContextMenu(thread.id, {
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
+                }}
               />
             }
           >

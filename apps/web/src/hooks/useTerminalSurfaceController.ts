@@ -39,7 +39,9 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
   const splitTerminalRightStore = useTerminalStateStore((s) => s.splitTerminalRight);
   const splitTerminalDownStore = useTerminalStateStore((s) => s.splitTerminalDown);
   const setActiveTerminalStore = useTerminalStateStore((s) => s.setActiveTerminal);
-  const closeTerminalStore = useTerminalStateStore((s) => s.closeTerminal);
+  const closeTerminalAndEnsureReplacementStore = useTerminalStateStore(
+    (s) => s.closeTerminalAndEnsureReplacement,
+  );
   const closeTerminalGroupStore = useTerminalStateStore((s) => s.closeTerminalGroup);
   const setTerminalHeightStore = useTerminalStateStore((s) => s.setTerminalHeight);
   const resizeTerminalSplitStore = useTerminalStateStore((s) => s.resizeTerminalSplit);
@@ -99,20 +101,18 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
       return;
     }
     disposeAndCloseTerminalSession({ api, threadId, terminalId });
-    closeTerminalStore(threadId, terminalId);
+    closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
     bumpFocusRequest();
   };
 
-  // A PTY that has already emitted `exited` must not go back through the
-  // interactive close path: it would ask for confirmation and attempt a second
-  // server-side close. Remove only its local runtime and tab state.
-  const onSessionExited = (terminalId: string) => {
-    void disposeAndCloseTerminalSession({
-      api: undefined,
+  const handleTerminalSessionExited = (terminalId: string) => {
+    disposeAndCloseTerminalSession({
+      api: readNativeApi(),
       threadId,
       terminalId,
+      processAlreadyExited: true,
     });
-    closeTerminalStore(threadId, terminalId);
+    closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
     bumpFocusRequest();
   };
 
@@ -141,7 +141,7 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     moveTerminalToNewGroup,
     activateTerminal,
     closeTerminal,
-    onSessionExited,
+    handleTerminalSessionExited,
     closeTerminalGroup,
     setTerminalHeight,
     resizeTerminalSplit,

@@ -1,6 +1,7 @@
 export const APP_BASE_NAME = "Synara";
 const isCanaryDesktop =
-  typeof window !== "undefined" && window.location.protocol === "synara-canary:";
+  typeof window !== "undefined" &&
+  window.location?.protocol === "synara-canary:";
 export const APP_DISPLAY_NAME = isCanaryDesktop
   ? "Synara Canary"
   : import.meta.env.DEV

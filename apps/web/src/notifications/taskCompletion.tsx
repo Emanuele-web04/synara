@@ -12,6 +12,7 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -27,6 +28,7 @@ import {
   collectInputNeededThreadCandidates,
   collectTerminalAttentionCandidates,
   isNotificationRuntimeFreshTimestamp,
+  shouldAttemptSystemTaskNotification,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 
@@ -71,13 +73,6 @@ function isWindowForeground(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
-// OS notifications interrupt work. Keep completion feedback in the transcript
-// while Synara is the focused app; notify only when the result would otherwise
-// be easy to miss.
-export function shouldAttemptSystemTaskNotification(): boolean {
-  return !isWindowForeground();
-}
-
 interface ThreadNotificationCopy {
   title: string;
   body: string;
@@ -105,7 +100,13 @@ async function showSystemThreadNotification(
     if (!supported) {
       return false;
     }
-    return window.desktopBridge.notifications.show({ title, body, silent: false, threadId });
+    return window.desktopBridge.notifications.show({
+      title,
+      body,
+      silent: false,
+      suppressWhenForeground: true,
+      threadId,
+    });
   }
 
   if (readBrowserNotificationPermissionState() !== "granted") {
@@ -160,11 +161,19 @@ export function TaskCompletionNotifications() {
   const splitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
+  const rightDockState = useRightDockStore(
+    useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
+  );
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
-  const visibleThreadIds = resolveVisibleToastThreadIds({ activeThreadId, splitView });
+  const visibleThreadIds = resolveVisibleToastThreadIds({
+    activeThreadId,
+    splitView,
+    rightDockRendered: routeSearch.view !== "editor",
+    rightDockState,
+  });
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
   // Lazy state init: evaluated once, keeping the impure Date.now() call out
@@ -242,8 +251,10 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const shouldAttemptSystemNotification =
-      settings.enableSystemTaskCompletionNotifications && shouldAttemptSystemTaskNotification();
+    const shouldAttemptSystemNotification = shouldAttemptSystemTaskNotification({
+      enabled: settings.enableSystemTaskCompletionNotifications,
+      isWindowForeground: isWindowForeground(),
+    });
 
     for (const completion of completions) {
       notifiedCompletionKeysRef.current.add(completedThreadNotificationKey(completion));
