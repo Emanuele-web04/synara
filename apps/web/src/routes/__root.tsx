@@ -109,6 +109,9 @@ import {
 } from "../hooks/useProviderAuthRefreshOnFocus";
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
+import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
+import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import { useAppSettings } from "../appSettings";
@@ -1016,18 +1019,47 @@ function EventRouter() {
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
-  const visibleThreadIds = activeSplitView
-    ? resolveSplitViewThreadIds(activeSplitView)
-    : routeThreadId
-      ? [routeThreadId]
-      : [];
+  const hostThreadIds = useMemo(
+    () =>
+      activeSplitView
+        ? resolveSplitViewThreadIds(activeSplitView)
+        : routeThreadId
+          ? [routeThreadId]
+          : [],
+    [activeSplitView, routeThreadId],
+  );
+  // Right-dock sidechat panes render a full ChatView for their embedded thread,
+  // so they need a detail lease exactly like split-view panes: without one the
+  // sidechat's snapshot never syncs and its transcript stays on the loading state.
+  const dockStateByThreadId = useRightDockStore((store) => store.dockStateByThreadId);
+  const visibleThreadIds = useMemo(
+    () => [
+      ...hostThreadIds,
+      ...resolveVisibleDockSidechatThreadIds({
+        dockRendered: routeSearch.view !== "editor",
+        dockStateByThreadId,
+        hostThreadIds,
+      }),
+    ],
+    [dockStateByThreadId, hostThreadIds, routeSearch.view],
+  );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIds = new Set(serverThreads.map((thread) => thread.id));
-  const subscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
+  // Stabilize the lease array by content: `serverThreads` re-emits on every
+  // streaming update, and an identity-changing lease list would enqueue a no-op
+  // subscription reconcile per render onto the serialized subscribe chain.
+  const nextSubscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
     visibleThreadIds,
     retainedThreadIds,
     serverThreadIds,
   });
+  const subscribedThreadIdsRef = useRef(nextSubscribedThreadIds);
+  const subscribedThreadIds = arraysShallowEqual(
+    subscribedThreadIdsRef.current,
+    nextSubscribedThreadIds,
+  )
+    ? subscribedThreadIdsRef.current
+    : nextSubscribedThreadIds;
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
@@ -1042,6 +1074,7 @@ function EventRouter() {
   useEffect(() => {
     pathnameRef.current = pathname;
     visibleThreadIdsRef.current = subscribedThreadIds;
+    subscribedThreadIdsRef.current = subscribedThreadIds;
     // Retention must know what is on screen: an evicted visible thread keeps its
     // shell row and renders as an empty conversation until a snapshot lands.
     setVisibleThreadDetailIds(visibleThreadIds);
