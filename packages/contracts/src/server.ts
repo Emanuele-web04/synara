@@ -403,6 +403,7 @@ export const ServerLifecycleStreamEvent = Schema.Union([
       task: Schema.Literal("thread-retention"),
       state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
+      // Legacy wire name retained so older clients can read retention progress.
       deletedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),
