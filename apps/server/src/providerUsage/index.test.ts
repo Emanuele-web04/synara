@@ -175,7 +175,7 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not replace a fresh healthy cache entry with a failed refresh", async () => {
+  it("returns a fresh healthy cache entry when a refresh fails", async () => {
     fetchMock.mockResolvedValueOnce(okSnapshot(NOW_MS, "healthy")).mockResolvedValueOnce({
       ...okSnapshot(NOW_MS + 1_000, "failed-refresh"),
       status: "error",
@@ -189,7 +189,7 @@ describe("collectProviderUsageSnapshots caching", () => {
     const polled = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 2_000));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(failedRefresh[0]?.source).toBe("failed-refresh");
+    expect(failedRefresh[0]?.source).toBe("healthy");
     expect(polled[0]?.source).toBe("healthy");
   });
 
