@@ -113,10 +113,21 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
     }
   }
 
-  const keychain = await readKeychainPassword({
-    service: KEYCHAIN_SERVICE,
-    platform: ctx.platform,
-  });
+  const keychainAccount = asString(ctx.env.USER) ?? asString(ctx.env.LOGNAME);
+  const accountKeychain =
+    keychainAccount === undefined
+      ? null
+      : await readKeychainPassword({
+          service: KEYCHAIN_SERVICE,
+          account: keychainAccount,
+          platform: ctx.platform,
+        });
+  const keychain =
+    accountKeychain ??
+    (await readKeychainPassword({
+      service: KEYCHAIN_SERVICE,
+      platform: ctx.platform,
+    }));
   if (keychain) {
     const creds = readClaudeCreds(asRecord(decodeKeychainJson(keychain)), { kind: "keychain" });
     if (creds) {

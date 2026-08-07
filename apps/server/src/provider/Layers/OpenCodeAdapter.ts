@@ -990,7 +990,7 @@ function isMatchingHarnessPolicyDelivery(
 function buildOpenCodeResumeCursor(input: {
   readonly openCodeSessionId: string;
   readonly cwd: string;
-  readonly harnessPolicyDelivered?: boolean;
+  readonly harnessPolicyDelivered: boolean | undefined;
   readonly gatewayControlAvailable: boolean;
 }): OpenCodeResumeCursor {
   return {
@@ -3963,7 +3963,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
         const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(
-          { harnessPolicyDelivered: context.harnessPolicyDelivered },
+          context.harnessPolicyDelivered === true ? { harnessPolicyDelivered: true } : {},
           {
             provider,
             scopedGatewayConnectionAvailable: context.gatewayControlAvailable,

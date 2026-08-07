@@ -16,6 +16,15 @@ import {
   claudeUsageFetcher,
 } from "./claude";
 
+const { readKeychainPasswordMock } = vi.hoisted(() => ({
+  readKeychainPasswordMock: vi.fn(),
+}));
+
+vi.mock("../credentials", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../credentials")>()),
+  readKeychainPassword: readKeychainPasswordMock,
+}));
+
 const NOW_MS = 1_780_000_000_000;
 
 const tempDirs: string[] = [];
@@ -94,6 +103,8 @@ function stubAuthNudge(
 
 beforeEach(() => {
   __resetClaudeUsageRateLimitState();
+  readKeychainPasswordMock.mockReset();
+  readKeychainPasswordMock.mockResolvedValue(null);
   stubAuthNudge();
 });
 
@@ -108,6 +119,44 @@ afterEach(() => {
 });
 
 describe("claudeUsageFetcher", () => {
+  it("prefers the current macOS account before the service-only keychain fallback", async () => {
+    const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-claude-keychain-"));
+    tempDirs.push(homeDir);
+    readKeychainPasswordMock.mockResolvedValueOnce(null).mockResolvedValueOnce(
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "keychain-access-token",
+          expiresAt: NOW_MS + 60 * 60 * 1000,
+          scopes: ["user:profile"],
+        },
+      }),
+    );
+    stubOutboundFetch(async (_url, init) => {
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer keychain-access-token",
+      );
+      return jsonResponse({ five_hour: { utilization: 7 } });
+    });
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { USER: "current-user" },
+      platform: "darwin",
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe("ok");
+    expect(readKeychainPasswordMock).toHaveBeenNthCalledWith(1, {
+      service: "Claude Code-credentials",
+      account: "current-user",
+      platform: "darwin",
+    });
+    expect(readKeychainPasswordMock).toHaveBeenNthCalledWith(2, {
+      service: "Claude Code-credentials",
+      platform: "darwin",
+    });
+  });
+
   it("delegates an expired credential to the Claude CLI and never calls the OAuth token endpoint", async () => {
     const { homeDir, credentialsPath } = makeClaudeHome({
       accessToken: "expired-access-token",

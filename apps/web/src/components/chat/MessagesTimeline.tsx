@@ -450,7 +450,7 @@ interface MessagesTimelineProps {
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
   isWorking,
-  workingLabel = "Thinking",
+  workingLabel,
   activeTurnInProgress,
   activeTurnStartedAt,
   worktreeSetup: worktreeSetupProp,
@@ -503,6 +503,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   emptyStateContent,
   contentInsetRightPx,
 }: MessagesTimelineProps) {
+  const resolvedWorkingLabel = workingLabel ?? "Thinking";
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
   // entire component (silently, since `panicThreshold` is unset), which would drop
@@ -2147,7 +2148,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          {workingLabel}
+          {resolvedWorkingLabel}
         </div>
       )}
 
