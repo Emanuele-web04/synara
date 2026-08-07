@@ -11755,7 +11755,7 @@ export default function ChatView({
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
-                    workingLabel={isAwaitingTurnStart ? "Loading" : "Thinking"}
+                    workingLabel={isSendBusy ? "Loading" : "Thinking"}
                     worktreeSetup={activeWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}

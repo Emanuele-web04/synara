@@ -3052,7 +3052,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).toContain("Loading");
         },
         { timeout: 8_000, interval: 16 },
       );
