@@ -12,6 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { outboundHttp } from "@synara/shared/outboundHttp";
 import { codexUsageFetcher } from "./codex";
 
+const { readKeychainPasswordMock } = vi.hoisted(() => ({
+  readKeychainPasswordMock: vi.fn(),
+}));
+
+vi.mock("../credentials", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../credentials")>()),
+  readKeychainPassword: readKeychainPasswordMock,
+}));
+
 const NOW_MS = 1_780_000_000_000;
 
 const tempDirs: string[] = [];
@@ -80,12 +89,41 @@ const USAGE_BODY = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  readKeychainPasswordMock.mockReset();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("codexUsageFetcher", () => {
+  it("tries a still-valid keychain token when read-only refresh cannot rotate it", async () => {
+    const codexHome = mkdtempSync(nodePath.join(os.tmpdir(), "synara-codex-keychain-"));
+    tempDirs.push(codexHome);
+    const staleJwt = makeJwt(NOW_MS + 60_000);
+    readKeychainPasswordMock.mockResolvedValue(
+      JSON.stringify({
+        tokens: { access_token: staleJwt, refresh_token: "keychain-refresh-token" },
+      }),
+    );
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).not.toContain("auth.openai.com/oauth/token");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(`Bearer ${staleJwt}`);
+      return jsonResponse(USAGE_BODY);
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await codexUsageFetcher.fetch({
+      homeDir: nodePath.join(codexHome, "no-home"),
+      env: { CODEX_HOME: codexHome },
+      platform: "darwin",
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(readKeychainPasswordMock).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes an expired token form-encoded and persists the rotated pair to auth.json", async () => {
     const freshJwt = makeJwt(NOW_MS + 8 * 24 * 60 * 60 * 1000);
     const { codexHome, authPath } = makeCodexHome({

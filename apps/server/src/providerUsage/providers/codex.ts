@@ -245,7 +245,7 @@ async function refreshCodexAuth(
     const live = await reloadCodexAuth(ctx, state.source);
     return live && live.accessToken !== state.accessToken
       ? { kind: "updated", state: live, redeemed: false }
-      : { kind: "needs-auth" };
+      : { kind: "unavailable" };
   }
 
   const path = state.source.path;
