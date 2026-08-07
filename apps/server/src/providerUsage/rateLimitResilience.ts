@@ -3,8 +3,8 @@
 // usage endpoint throttles (HTTP 429) or blips, blanking the panel is worse than showing slightly
 // stale numbers — so we remember the last clean snapshot per account and keep serving it (with a
 // staleness note) during a cooldown that honors Retry-After, while skipping live calls so we don't
-// pile on more 429s. Mirrors OpenUsage's ClaudeProvider (PR #849). Any fetcher can opt in via
-// createRateLimitResilience; keeping the state here avoids duplicating the bookkeeping per provider.
+// pile on more 429s. Any fetcher can opt in via createRateLimitResilience; keeping the state
+// here avoids duplicating the bookkeeping per provider.
 
 import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 

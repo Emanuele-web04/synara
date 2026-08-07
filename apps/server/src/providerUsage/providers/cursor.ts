@@ -2,7 +2,7 @@
 // Purpose: Live Cursor usage fetcher. Reads the Cursor access token from its VS Code-style
 // state.vscdb (key cursorAuth/accessToken) or the macOS keychain ("cursor-access-token")
 // read-only, then calls the Cursor DashboardService (Connect RPC) for the current billing
-// period usage + credit grants. Reference: openusage plugins/cursor/plugin.js.
+// period usage + credit grants.
 
 import nodePath from "node:path";
 

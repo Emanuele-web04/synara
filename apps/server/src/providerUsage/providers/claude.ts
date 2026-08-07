@@ -2,10 +2,18 @@
 // Purpose: Live Claude (Anthropic) usage fetcher. Reads the Claude Code OAuth token from
 // ~/.claude/.credentials.json or the macOS keychain ("Claude Code-credentials", possibly
 // hex-encoded) read-only, and calls the OAuth usage endpoint, mapping the 5h/weekly/sonnet
-// utilization windows + extra-usage credits. Reference: openusage plugins/claude/plugin.js.
+// utilization windows + extra-usage credits.
+//
+// Token freshness is delegated to the Claude CLI (`claude auth status` under the shared
+// auth-status lock). Anthropic rotates the single-use refresh token on every redemption, so
+// this process must never call the OAuth token endpoint with a credential the CLI owns:
+// consuming that refresh token without writing the rotation back to the CLI's store would
+// invalidate the on-disk/keychain login and force the user to re-authenticate.
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import nodePath from "node:path";
+import { promisify } from "node:util";
 
 import type {
   ServerProviderUsageLimit,
@@ -13,12 +21,10 @@ import type {
   ServerProviderUsageSnapshot,
 } from "@synara/contracts";
 
-import {
-  decodeKeychainJson,
-  readJsonFile,
-  readKeychainPassword,
-  refreshOAuthAccessToken,
-} from "../credentials";
+import { createLogger } from "../../logger";
+import { acquireClaudeAuthStatusLock } from "../../provider/claudeAuthStatusLock";
+import { buildClaudeProcessEnv } from "../../provider/claudeProcessEnv";
+import { decodeKeychainJson, readJsonFile, readKeychainPassword } from "../credentials";
 import { fetchJson, isAuthFailureStatus, isRateLimitStatus, parseRetryAfterMs } from "../http";
 import {
   asFiniteNumber,
@@ -35,14 +41,19 @@ import {
 import { createRateLimitResilience } from "../rateLimitResilience";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
+const execFileAsync = promisify(execFile);
+const log = createLogger("provider-usage:claude");
+
 const SOURCE = "claude-oauth-usage";
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
-const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
-const SCOPES =
-  "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const AUTH_NUDGE_TIMEOUT_MS = 20_000;
+// A successful CLI refresh keeps the token fresh for hours; the cooldown only bounds how often a
+// *failing* nudge (logged-out user, missing binary) can re-spawn the CLI under steady polling.
+const AUTH_NUDGE_COOLDOWN_MS = 5 * 60 * 1000;
+
+type ClaudeCredSource = { kind: "file"; path: string } | { kind: "keychain" };
 
 interface ClaudeCreds {
   accessToken: string;
@@ -51,6 +62,7 @@ interface ClaudeCreds {
   subscriptionType: string | undefined;
   rateLimitTier: string | undefined;
   scopes: ReadonlyArray<string>;
+  source: ClaudeCredSource;
 }
 
 function readScopes(oauth: Record<string, unknown> | null): ReadonlyArray<string> {
@@ -61,7 +73,10 @@ function readScopes(oauth: Record<string, unknown> | null): ReadonlyArray<string
   return scopeText ? scopeText.split(/\s+/u).filter((scope) => scope.length > 0) : [];
 }
 
-function readClaudeCreds(record: Record<string, unknown> | null): ClaudeCreds | null {
+function readClaudeCreds(
+  record: Record<string, unknown> | null,
+  source: ClaudeCredSource,
+): ClaudeCreds | null {
   const oauth = asRecord(record?.claudeAiOauth);
   const accessToken = asString(oauth?.accessToken);
   if (!accessToken) {
@@ -74,6 +89,7 @@ function readClaudeCreds(record: Record<string, unknown> | null): ClaudeCreds | 
     subscriptionType: asString(oauth?.subscriptionType),
     rateLimitTier: asString(oauth?.rateLimitTier),
     scopes: readScopes(oauth),
+    source,
   };
 }
 
@@ -87,31 +103,18 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
 
   for (const path of paths) {
     const record = asRecord(await readJsonFile(path));
-    const creds = readClaudeCreds(record);
+    const creds = readClaudeCreds(record, { kind: "file", path });
     if (creds) {
       candidates.push(creds);
     }
   }
 
-  // Claude Code may store the same service under the current macOS account; try that before
-  // the legacy service-only lookup so file-less installs still resolve like OpenUsage.
-  const keychainAccount = asString(ctx.env.USER) ?? asString(ctx.env.LOGNAME);
-  const keychain =
-    keychainAccount !== undefined
-      ? await readKeychainPassword({
-          service: KEYCHAIN_SERVICE,
-          account: keychainAccount,
-          platform: ctx.platform,
-        })
-      : null;
-  const keychainFallback =
-    keychain ??
-    (await readKeychainPassword({
-      service: KEYCHAIN_SERVICE,
-      platform: ctx.platform,
-    }));
-  if (keychainFallback) {
-    const creds = readClaudeCreds(asRecord(decodeKeychainJson(keychainFallback)));
+  const keychain = await readKeychainPassword({
+    service: KEYCHAIN_SERVICE,
+    platform: ctx.platform,
+  });
+  if (keychain) {
+    const creds = readClaudeCreds(asRecord(decodeKeychainJson(keychain)), { kind: "keychain" });
     if (creds) {
       candidates.push(creds);
     }
@@ -119,11 +122,18 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
   return candidates;
 }
 
+function sameCredSource(a: ClaudeCredSource, b: ClaudeCredSource): boolean {
+  if (a.kind === "file" && b.kind === "file") {
+    return a.path === b.path;
+  }
+  return a.kind === "keychain" && b.kind === "keychain";
+}
+
 function hasProfileScope(creds: ClaudeCreds): boolean {
   return creds.scopes.length === 0 || creds.scopes.includes("user:profile");
 }
 
-function shouldRefreshClaudeCreds(creds: ClaudeCreds, nowMs: number): boolean {
+function isStaleClaudeCreds(creds: ClaudeCreds, nowMs: number): boolean {
   return creds.expiresAtMs !== undefined && creds.expiresAtMs <= nowMs + REFRESH_BUFFER_MS;
 }
 
@@ -146,31 +156,75 @@ function claudeCredentialCacheKey(ctx: ProviderUsageContext, creds: ClaudeCreds)
   return `${ctx.homeDir}:${digest}`;
 }
 
-function applyRefreshedClaudeCreds(
-  creds: ClaudeCreds,
-  refreshed: { accessToken: string; refreshToken?: string; expiresAtMs?: number },
-): ClaudeCreds {
-  return {
-    ...creds,
-    accessToken: refreshed.accessToken,
-    refreshToken: refreshed.refreshToken ?? creds.refreshToken,
-    expiresAtMs: refreshed.expiresAtMs ?? creds.expiresAtMs,
-  };
+// --- CLI-delegated token refresh ------------------------------------------------------------------
+// `claude auth status` validates the stored OAuth token and, when it is at/near expiry, redeems the
+// refresh token and persists the rotated pair back to its own store (file or keychain, with the
+// CLI's own keychain ACL). Serialized through the shared lock so it can never race the credential
+// keepalive, a provider-health probe, or a session start redeeming the same single-use token.
+
+interface ClaudeAuthNudgeDeps {
+  acquireLock: () => Promise<() => void>;
+  runAuthStatus: (input: {
+    binaryPath: string;
+    homeDir: string;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<void>;
 }
 
-async function refreshClaudeCreds(creds: ClaudeCreds): Promise<ClaudeCreds | null> {
-  if (!creds.refreshToken) {
-    return null;
+const defaultAuthNudgeDeps: ClaudeAuthNudgeDeps = {
+  acquireLock: acquireClaudeAuthStatusLock,
+  async runAuthStatus(input) {
+    await execFileAsync(input.binaryPath, ["auth", "status"], {
+      timeout: AUTH_NUDGE_TIMEOUT_MS,
+      env: buildClaudeProcessEnv({
+        env: input.env,
+        ...(input.homeDir ? { homeDir: input.homeDir } : {}),
+      }),
+    });
+  },
+};
+
+let authNudgeDeps: ClaudeAuthNudgeDeps = defaultAuthNudgeDeps;
+const authNudgeNotBeforeMs = new Map<string, number>();
+
+function authNudgeKey(ctx: ProviderUsageContext): string {
+  return `${ctx.homeDir}:${ctx.env.CLAUDE_CONFIG_DIR ?? ""}`;
+}
+
+/** Let the Claude CLI refresh its own credential. Resolves true when the nudge ran (successfully
+ * or not, the stored credential may have changed and should be re-read). */
+async function nudgeClaudeCliAuthRefresh(ctx: ProviderUsageContext): Promise<boolean> {
+  const key = authNudgeKey(ctx);
+  const notBefore = authNudgeNotBeforeMs.get(key) ?? 0;
+  if (ctx.nowMs < notBefore) {
+    return false;
   }
-  const refreshed = await refreshOAuthAccessToken({
-    service: "provider-oauth-claude",
-    refreshUrl: REFRESH_URL,
-    allowedOrigins: [new URL(REFRESH_URL).origin],
-    refreshToken: creds.refreshToken,
-    clientId: CLIENT_ID,
-    scope: SCOPES,
-  });
-  return refreshed ? applyRefreshedClaudeCreds(creds, refreshed) : null;
+  authNudgeNotBeforeMs.set(key, ctx.nowMs + AUTH_NUDGE_COOLDOWN_MS);
+  const release = await authNudgeDeps.acquireLock();
+  try {
+    await authNudgeDeps.runAuthStatus({
+      binaryPath: ctx.claudeBinaryPath?.trim() || "claude",
+      homeDir: ctx.homeDir,
+      env: ctx.env,
+    });
+    return true;
+  } catch (cause) {
+    // A missing binary or a genuinely logged-out user: keep going with the stored credential
+    // (an expired token surfaces as needs-auth downstream). Logged so a silent auth decay is
+    // diagnosable without a debug build.
+    log.warn("claude auth status nudge failed; using stored credentials as-is", {
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+    return true;
+  } finally {
+    release();
+  }
+}
+
+/** Test-only: replace the CLI nudge (lock + exec) and clear its cooldown memory. */
+export function __setClaudeAuthNudgeDepsForTests(deps: Partial<ClaudeAuthNudgeDeps> | null): void {
+  authNudgeDeps = { ...defaultAuthNudgeDeps, ...(deps ?? {}) };
+  authNudgeNotBeforeMs.clear();
 }
 
 export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName?: string }) {
@@ -226,7 +280,7 @@ export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName
   });
 }
 
-// --- Rate-limit resilience (mirrors OpenUsage's ClaudeProvider, PR #849) --------------------------
+// --- Rate-limit resilience ------------------------------------------------------------------------
 // Anthropic throttles the usage endpoint for heavy Claude Code users; a bare 429 (or a transient
 // blip) must not blank the usage panel. The shared helper remembers the last clean fetch per account
 // and keeps serving it — with a staleness note — while backing off. Keyed by a credential fingerprint
@@ -251,12 +305,25 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
       return needsAuthSnapshot("claudeAgent", ctx.nowMs, SOURCE);
     }
 
+    // At most one CLI nudge per fetch, shared by the proactive (near-expiry) and reactive (401)
+    // paths; the re-read candidate set is memoized so every source retries against it.
+    let nudgedCandidates: ReadonlyArray<ClaudeCreds> | null | undefined;
+    const nudgeOnce = async (): Promise<ReadonlyArray<ClaudeCreds> | null> => {
+      if (nudgedCandidates !== undefined) {
+        return nudgedCandidates;
+      }
+      nudgedCandidates = (await nudgeClaudeCliAuthRefresh(ctx))
+        ? await resolveClaudeCredCandidates(ctx)
+        : null;
+      return nudgedCandidates;
+    };
+
     let inferenceOnlySnapshot: ReturnType<typeof buildSnapshot> | null = null;
     let lastErrorSnapshot: ServerProviderUsageSnapshot | null = null;
 
-    for (const creds of candidates) {
-      if (!hasProfileScope(creds)) {
-        const planName = claudePlanName(creds);
+    for (const original of candidates) {
+      if (!hasProfileScope(original)) {
+        const planName = claudePlanName(original);
         inferenceOnlySnapshot = buildSnapshot({
           provider: "claudeAgent",
           nowMs: ctx.nowMs,
@@ -267,18 +334,21 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
         continue;
       }
 
-      const rateLimitKey = claudeCredentialCacheKey(ctx, creds);
-      let activeCreds = creds;
-      if (shouldRefreshClaudeCreds(activeCreds, ctx.nowMs)) {
-        const refreshed = await refreshClaudeCreds(activeCreds);
-        if (refreshed) {
-          activeCreds = refreshed;
-        } else if (activeCreds.expiresAtMs !== undefined && activeCreds.expiresAtMs <= ctx.nowMs) {
+      let activeCreds = original;
+      if (isStaleClaudeCreds(activeCreds, ctx.nowMs)) {
+        const refreshed = await nudgeOnce();
+        const updated = refreshed?.find((creds) => sameCredSource(creds.source, original.source));
+        if (updated) {
+          activeCreds = updated;
+        }
+        if (activeCreds.expiresAtMs !== undefined && activeCreds.expiresAtMs <= ctx.nowMs) {
+          // Still expired after the CLI had its chance to refresh: the token can only 401.
           continue;
         }
       }
 
       // Inside an active rate-limit cooldown, skip only for the credential that originally hit it.
+      const rateLimitKey = claudeCredentialCacheKey(ctx, activeCreds);
       const cooldownSnapshot = claudeRateLimit.serveDuringCooldown(rateLimitKey, ctx.nowMs);
       if (cooldownSnapshot) {
         return cooldownSnapshot;
@@ -286,26 +356,34 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
 
       try {
         let result = await fetchClaudeUsage(activeCreds.accessToken);
-        if (isAuthFailureStatus(result.status) && activeCreds.refreshToken) {
-          const refreshed = await refreshClaudeCreds(activeCreds);
-          if (refreshed) {
-            activeCreds = refreshed;
+        if (isAuthFailureStatus(result.status)) {
+          // The stored expiry can lag reality (revocation, clock skew). Let the CLI refresh its
+          // credential, re-read, and retry once with a genuinely different token.
+          const refreshed = await nudgeOnce();
+          const updated = refreshed?.find((creds) => sameCredSource(creds.source, original.source));
+          if (updated && updated.accessToken !== activeCreds.accessToken) {
+            activeCreds = updated;
             result = await fetchClaudeUsage(activeCreds.accessToken);
           }
         }
         if (isAuthFailureStatus(result.status)) {
+          log.warn("claude usage request unauthorized after CLI refresh; trying next source", {
+            status: result.status,
+            source: activeCreds.source.kind,
+          });
           continue;
         }
         if (isRateLimitStatus(result.status)) {
           // Account/IP-level throttle: back off (respecting Retry-After) and keep the last values
           // instead of blanking. Trying the next credential would only earn more 429s.
           return claudeRateLimit.enterCooldown(
-            rateLimitKey,
+            claudeCredentialCacheKey(ctx, activeCreds),
             ctx.nowMs,
             parseRetryAfterMs(result.headers, ctx.nowMs),
           );
         }
         if (!result.ok) {
+          log.warn("claude usage request failed", { status: result.status });
           lastErrorSnapshot = errorSnapshot(
             "claudeAgent",
             ctx.nowMs,
@@ -320,9 +398,12 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
           nowMs: ctx.nowMs,
           ...(planName ? { planName } : {}),
         });
-        claudeRateLimit.rememberLastGood(rateLimitKey, snapshot);
+        claudeRateLimit.rememberLastGood(claudeCredentialCacheKey(ctx, activeCreds), snapshot);
         return snapshot;
-      } catch {
+      } catch (cause) {
+        log.warn("claude usage endpoint unreachable", {
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
         lastErrorSnapshot = errorSnapshot(
           "claudeAgent",
           ctx.nowMs,
