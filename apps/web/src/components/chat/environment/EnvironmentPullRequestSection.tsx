@@ -198,6 +198,7 @@ export function EnvironmentPullRequestSection({
   activeThreadId,
   projectId,
   configuredRepositories,
+  showDiffColors: showDiffColorsProp,
   onOpenUrl,
   onClose,
 }: {
@@ -207,10 +208,12 @@ export function EnvironmentPullRequestSection({
   activeThreadId: ThreadId | null;
   projectId: ProjectId | null;
   configuredRepositories: ReadonlyArray<{ readonly nameWithOwner: string }>;
+  showDiffColors?: boolean;
   /** Open non-PR URLs in the in-app browser panel. */
   onOpenUrl: (url: string) => void;
   onClose: () => void;
 }) {
+  const showDiffColors = showDiffColorsProp ?? true;
   const openPane = useRightDockStore((store) => store.openPane);
   // Shares the cached git status the git block already fetches — no extra RPC.
   const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
@@ -325,7 +328,7 @@ export function EnvironmentPullRequestSection({
               <PullRequestDiffStat
                 additions={diffStat.additions}
                 deletions={diffStat.deletions}
-                tone="diff"
+                tone={showDiffColors ? "diff" : "muted"}
               />
               {diffStat.filesLabel ? (
                 <span className="truncate text-muted-foreground">{diffStat.filesLabel}</span>
