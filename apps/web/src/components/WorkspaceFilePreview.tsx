@@ -610,9 +610,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       })
       .catch((error: unknown) => {
         setEditBuffer((current) =>
-          current?.key === documentKey
-            ? { ...current, error: readFileSaveError(error) }
-            : current,
+          current?.key === documentKey ? { ...current, error: readFileSaveError(error) } : current,
         );
       });
   };
