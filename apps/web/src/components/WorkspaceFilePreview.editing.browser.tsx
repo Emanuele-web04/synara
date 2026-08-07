@@ -134,7 +134,8 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
 it("keeps markdown task previews and guarded versions in sync after an editor save", async () => {
   const markdownPath = "README.md";
   const taskVersion = `sha256:${"3".repeat(64)}`;
-  let completeTaskWrite: ((result: { relativePath: string; version: string }) => void) | null = null;
+  let completeTaskWrite: ((result: { relativePath: string; version: string }) => void) | null =
+    null;
   const pendingTaskWrite = new Promise<{ relativePath: string; version: string }>((resolve) => {
     completeTaskWrite = resolve;
   });
@@ -207,11 +208,7 @@ it("keeps oversized and mixed-line-ending files read-only", async () => {
 
     await screen.rerender(
       <QueryClientProvider client={queryClient}>
-        <WorkspaceFilePreview
-          workspaceRoot={WORKSPACE_ROOT}
-          filePath="src/mixed.ts"
-          editable
-        />
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="src/mixed.ts" editable />
       </QueryClientProvider>,
     );
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
