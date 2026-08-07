@@ -15,6 +15,7 @@ import {
 } from "react";
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
+import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 
 import {
   AddPlusIcon,
@@ -23,6 +24,7 @@ import {
   NewThreadIcon,
   SortIcon,
   Undo2Icon,
+  WorktreeIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -130,6 +132,12 @@ function ActivityThreadRow({
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const branch = thread.associatedWorktreeBranch?.trim() || thread.branch?.trim() || null;
+  const isWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: thread.envMode,
+      worktreePath: thread.worktreePath,
+    }) === "worktree";
+  const ProjectGlyph = isWorktree ? WorktreeIcon : FolderClosed;
   const hoverAnchorId = createSidebarThreadHoverAnchorId({
     scope: "activity",
     threadId: thread.id,
@@ -197,7 +205,7 @@ function ActivityThreadRow({
             </span>
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
-            <FolderClosed
+            <ProjectGlyph
               className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
               aria-hidden
             />
