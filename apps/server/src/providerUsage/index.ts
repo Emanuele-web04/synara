@@ -14,6 +14,7 @@ import { Effect } from "effect";
 
 import { ServerConfig } from "../config";
 import { buildProviderChildEnvironment, type ProviderChildKind } from "../providerChildEnvironment";
+import { ServerSettingsService } from "../serverSettings";
 import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
 import { errorSnapshot } from "./parse";
 import { PROVIDER_USAGE_FETCHERS } from "./registry";
@@ -96,12 +97,15 @@ export async function collectProviderUsageSnapshots(
 
 export const listProviderUsage = Effect.fn(function* (input: ServerListProviderUsageInput) {
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
   return yield* Effect.tryPromise({
     try: () =>
       collectProviderUsageSnapshots(
         {
           ...buildContext(),
           homeDir: serverConfig.homeDir,
+          claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
         },
         {
           forceRefresh: input.forceRefresh === true,
