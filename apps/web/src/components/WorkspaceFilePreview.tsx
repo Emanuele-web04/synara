@@ -690,6 +690,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     ) {
       return;
     }
+    // Capture the narrowed disk metadata in locals: the write below runs in a
+    // deferred closure where TypeScript no longer sees the null guards above.
+    const loadedVersion = current.version;
+    const loadedEncoding = current.encoding;
+    const loadedLineEnding = current.lineEnding;
     const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
     if (nextContents === null) {
       return;
@@ -706,15 +711,15 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     // not the opened reference, so the toggle lands on the file we read from
     // instead of creating a stray file at the workspace root.
     const writeRelativePath = current.relativePath;
+    const writeVersionOnDisk = current.version;
+    const writeEncoding = current.encoding;
+    const writeLineEnding = current.lineEnding;
     // Writes carry the full file contents, so serialize them: a slower earlier
     // checkbox write must never land after a newer toggle and erase it.
     const fileKey = `${workspaceRoot}\0${filePath}`;
     if (!taskFileDiskVersionRef.current.has(fileKey)) {
-      taskFileDiskVersionRef.current.set(fileKey, current.version);
+      taskFileDiskVersionRef.current.set(fileKey, writeVersionOnDisk);
     }
-    const currentVersion = current.version;
-    const currentEncoding = current.encoding;
-    const currentLineEnding = current.lineEnding;
     const writeVersion = latestTaskWriteVersionRef.current.next + 1;
     latestTaskWriteVersionRef.current.next = writeVersion;
     latestTaskWriteVersionRef.current.byFile.set(fileKey, writeVersion);
@@ -725,9 +730,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           cwd: workspaceRoot,
           relativePath: writeRelativePath,
           contents: nextContents,
-          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? currentVersion,
-          encoding: currentEncoding,
-          lineEnding: currentLineEnding,
+          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? writeVersionOnDisk,
+          encoding: writeEncoding,
+          lineEnding: writeLineEnding,
         });
         taskFileDiskVersionRef.current.set(fileKey, result.version);
         queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (cached) =>

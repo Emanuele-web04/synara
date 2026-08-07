@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkLogEntry } from "../session-logic";
+
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
@@ -18,6 +19,7 @@ import {
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
   createLocalDispatchSnapshot,
+  createWorktreeSetupResolution,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
@@ -1787,6 +1789,27 @@ describe("worktree setup snapshots", () => {
   it("reports no error for null or healthy snapshots", () => {
     expect(worktreeSetupHasError(null)).toBe(false);
     expect(worktreeSetupHasError(createWorktreeSetupSnapshot("create-worktree"))).toBe(false);
+  });
+
+  it("resolves a worktree setup resolution once and ignores later attempts", async () => {
+    const resolution = createWorktreeSetupResolution();
+    expect(resolution.action).toBeNull();
+
+    resolution.resolve("work-locally");
+    resolution.resolve("cancel");
+
+    expect(resolution.action).toBe("work-locally");
+    await expect(resolution.promise).resolves.toBe("work-locally");
+  });
+
+  it("exposes a cancel resolution through both the getter and the promise", async () => {
+    const resolution = createWorktreeSetupResolution();
+    const settled = resolution.promise;
+
+    resolution.resolve("cancel");
+
+    expect(resolution.action).toBe("cancel");
+    await expect(settled).resolves.toBe("cancel");
   });
 
   it("replaces a held failed setup when a fresh local dispatch starts", () => {
