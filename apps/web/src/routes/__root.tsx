@@ -92,6 +92,7 @@ import {
   getThreadDetailResumeCursor,
   setThreadDetailResumeCursor,
 } from "../threadDetailResumeCursors";
+import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -950,10 +951,22 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
   );
 }
 
+// Both catch-up predicates also honor the composer's pending-dispatch signal:
+// the store-derived checks describe what the client already believes, and the
+// exact failure being repaired is a lost `thread.session-set(running)` event
+// that leaves that belief stale. A turn dispatched with no observed echo must
+// force re-sync regardless of what the store says.
+//
+// A store-derived busy state may belong to an earlier queued turn, so it cannot
+// safely retire the marker for the new dispatch. The marker therefore remains
+// independent until its age cap expires or the dispatch site proves that no
+// server turn remains.
 function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "running" || thread?.latestTurn?.state === "running"
+    thread?.session?.orchestrationStatus === "running" ||
+    thread?.latestTurn?.state === "running" ||
+    hasPendingTurnDispatch(threadId)
   );
 }
 
@@ -963,7 +976,9 @@ function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
     thread?.session?.orchestrationStatus === "starting" ||
     thread?.session?.orchestrationStatus === "running" ||
     thread?.latestTurn?.state === "running" ||
-    thread?.messages.some((message) => message.role === "assistant" && message.streaming) === true
+    thread?.messages.some((message) => message.role === "assistant" && message.streaming) ===
+      true ||
+    hasPendingTurnDispatch(threadId)
   );
 }
 
@@ -1144,6 +1159,29 @@ function EventRouter() {
       );
     };
 
+    // Single choke point for handing a thread detail event to the reducer.
+    // The reducer silently ignores detail events for a thread the store no
+    // longer holds (pruned by a shell full sync, evicted, deleted), and domain
+    // events never create thread records, so advancing the fence and resume
+    // cursor first would vouch for events that never landed — a later cursor
+    // resume would then skip them forever. When the thread is missing, drop
+    // the resume bookkeeping and re-snapshot through the projection instead.
+    const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
+      if (!getThreadFromState(useStore.getState(), threadId)) {
+        threadSnapshotSequenceById.delete(threadId);
+        pendingThreadEventsById.delete(threadId);
+        clearThreadDetailResumeCursor(threadId);
+        if (subscribedThreadIds.has(threadId)) {
+          void reconcileThreadProjection(threadId).catch(() => undefined);
+        }
+        return false;
+      }
+      threadSnapshotSequenceById.set(threadId, event.sequence);
+      advanceThreadDetailResumeCursor(threadId, event.sequence);
+      queueDomainEvent(event);
+      return true;
+    };
+
     const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
       const pendingEvents = pendingThreadEventsById.get(threadId) ?? [];
       pendingThreadEventsById.delete(threadId);
@@ -1151,9 +1189,9 @@ function EventRouter() {
       for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
-          threadSnapshotSequenceById.set(threadId, latestThreadSequence);
-          advanceThreadDetailResumeCursor(threadId, latestThreadSequence);
-          queueDomainEvent(event);
+          if (!applyFencedThreadEvent(threadId, event)) {
+            return;
+          }
         }
       }
     };
@@ -1497,9 +1535,9 @@ function EventRouter() {
             if (event.sequence <= latestThreadSequence) {
               continue;
             }
-            threadSnapshotSequenceById.set(threadId, event.sequence);
-            advanceThreadDetailResumeCursor(threadId, event.sequence);
-            queueDomainEvent(event);
+            if (!applyFencedThreadEvent(threadId, event)) {
+              break;
+            }
           }
         })
         .finally(() => {
@@ -1718,13 +1756,13 @@ function EventRouter() {
       if (item.event.sequence <= latestThreadSequence) {
         return;
       }
-      threadSnapshotSequenceById.set(threadId, item.event.sequence);
-      advanceThreadDetailResumeCursor(threadId, item.event.sequence);
+      if (!applyFencedThreadEvent(threadId, item.event)) {
+        return;
+      }
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
       );
-      queueDomainEvent(item.event);
     });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);

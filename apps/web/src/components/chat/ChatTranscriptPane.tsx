@@ -199,7 +199,7 @@ export function ChatTranscriptPane({
             key={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}
-            workingLabel={workingLabel}
+            {...(workingLabel ? { workingLabel } : {})}
             worktreeSetup={worktreeSetup}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}

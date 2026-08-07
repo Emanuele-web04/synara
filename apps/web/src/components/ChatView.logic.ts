@@ -995,6 +995,14 @@ export function worktreeSetupHasError(snapshot: WorktreeSetupSnapshot | null): b
   return snapshot?.steps.some((step) => step.status === "error") ?? false;
 }
 
+// Once the turn RPC has resolved the server provably owns the turn; the
+// dispatch marker then only waits for the thread stream to echo the change
+// (session running / message echo / turn change). A dead or stalled stream
+// would otherwise leave the composer spinner stuck forever, so the marker is
+// force-cleared after this bound and the catch-up watchdog re-syncs the real
+// thread state.
+export const LOCAL_DISPATCH_ACK_TIMEOUT_MS = 10_000;
+
 export interface LocalDispatchSnapshot {
   startedAt: string;
   worktreeSetup: WorktreeSetupSnapshot | null;
