@@ -3014,7 +3014,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps Thinking through the post-ack gap until the turn is running", async () => {
+  it("shows Loading until ack, then keeps Thinking through the post-ack gap", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,
@@ -3052,7 +3052,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).toContain("Loading");
         },
         { timeout: 8_000, interval: 16 },
       );
