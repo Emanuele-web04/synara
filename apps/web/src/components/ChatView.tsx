@@ -8287,9 +8287,10 @@ export default function ChatView({
             // Setup scripts can run for minutes; let Cancel / Work locally win
             // the wait. The script itself keeps running — a cancelled worktree
             // is force-removed, a local switch just stops waiting on it.
-            await (worktreeSetupResolution
-              ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
-              : setupActivityWait
+            await (
+              worktreeSetupResolution
+                ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
+                : setupActivityWait
             ).finally(() => setupActivityAbortController.abort());
           }
         }
