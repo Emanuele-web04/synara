@@ -175,6 +175,24 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not replace a fresh healthy cache entry with a failed refresh", async () => {
+    fetchMock.mockResolvedValueOnce(okSnapshot(NOW_MS, "healthy")).mockResolvedValueOnce({
+      ...okSnapshot(NOW_MS + 1_000, "failed-refresh"),
+      status: "error",
+      detail: "Usage fetch failed unexpectedly.",
+    });
+
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
+    const failedRefresh = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000), {
+      forceRefresh: true,
+    });
+    const polled = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 2_000));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(failedRefresh[0]?.source).toBe("failed-refresh");
+    expect(polled[0]?.source).toBe("healthy");
+  });
+
   it("does not retain stale snapshots in the outer cache", async () => {
     fetchMock.mockImplementation(async (ctx) => ({ ...okSnapshot(ctx.nowMs), stale: true }));
 

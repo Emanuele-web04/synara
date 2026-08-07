@@ -149,11 +149,19 @@ async function getProviderUsageSnapshot(
     const enriched = snapshot ? await enrichWithLocalUsage(snapshot, ctx) : null;
     const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
     if (enriched && credentialKey !== null && refreshedCredentialKey === credentialKey) {
-      snapshotCache.set(provider, {
-        snapshot: enriched,
-        fetchedAtMs: ctx.nowMs,
-        credentialKey,
-      });
+      const current = snapshotCache.get(provider);
+      const hasFreshHealthySnapshot =
+        current?.credentialKey === credentialKey &&
+        snapshotCacheTtlMs(current.snapshot) === SNAPSHOT_CACHE_TTL_MS &&
+        ctx.nowMs - current.fetchedAtMs < SNAPSHOT_CACHE_TTL_MS;
+      const fetchedHealthySnapshot = snapshotCacheTtlMs(enriched) === SNAPSHOT_CACHE_TTL_MS;
+      if (fetchedHealthySnapshot || !hasFreshHealthySnapshot) {
+        snapshotCache.set(provider, {
+          snapshot: enriched,
+          fetchedAtMs: ctx.nowMs,
+          credentialKey,
+        });
+      }
     }
     return enriched;
   })();
