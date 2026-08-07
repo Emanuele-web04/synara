@@ -48,7 +48,7 @@ function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectRead
   };
 }
 
-function pressKeyboardSave(element: HTMLElement | SVGElement): void {
+function pressKeyboardSave(element: Element): void {
   element.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "s",

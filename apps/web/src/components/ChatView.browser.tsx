@@ -3014,7 +3014,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("shows Loading before ack and keeps Thinking through the post-ack gap", async () => {
+  it("shows Loading until ack, then keeps Thinking through the post-ack gap", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,

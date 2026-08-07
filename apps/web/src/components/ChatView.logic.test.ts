@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkLogEntry } from "../session-logic";
+
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
