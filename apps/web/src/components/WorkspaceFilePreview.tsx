@@ -610,9 +610,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       })
       .catch((error: unknown) => {
         setEditBuffer((current) =>
-          current?.key === documentKey
-            ? { ...current, error: readFileSaveError(error) }
-            : current,
+          current?.key === documentKey ? { ...current, error: readFileSaveError(error) } : current,
         );
       });
   };
@@ -692,6 +690,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     ) {
       return;
     }
+    // Capture the narrowed disk metadata in locals: the write below runs in a
+    // deferred closure where TypeScript no longer sees the null guards above.
+    const loadedVersion = current.version;
+    const loadedEncoding = current.encoding;
+    const loadedLineEnding = current.lineEnding;
     const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
     if (nextContents === null) {
       return;
@@ -712,7 +715,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     // checkbox write must never land after a newer toggle and erase it.
     const fileKey = `${workspaceRoot}\0${filePath}`;
     if (!taskFileDiskVersionRef.current.has(fileKey)) {
-      taskFileDiskVersionRef.current.set(fileKey, current.version);
+      taskFileDiskVersionRef.current.set(fileKey, loadedVersion);
     }
     const writeVersion = latestTaskWriteVersionRef.current.next + 1;
     latestTaskWriteVersionRef.current.next = writeVersion;
@@ -724,9 +727,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           cwd: workspaceRoot,
           relativePath: writeRelativePath,
           contents: nextContents,
-          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? current.version,
-          encoding: current.encoding,
-          lineEnding: current.lineEnding,
+          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? loadedVersion,
+          encoding: loadedEncoding,
+          lineEnding: loadedLineEnding,
         });
         taskFileDiskVersionRef.current.set(fileKey, result.version);
         queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (cached) =>

@@ -2466,9 +2466,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         expect(arrowCenterX - buttonCenterX).toBeCloseTo(0, 2);
         expect(arrowCenterY - buttonCenterY).toBeCloseTo(1, 2);
         expect(getComputedStyle(sendButton).boxShadow).toBe("none");
-        expect(getComputedStyle(sendArrow).mask).toContain(
-          "/central-icons-reversed/arrow-up.svg",
-        );
+        expect(getComputedStyle(sendArrow).mask).toContain("/central-icons-reversed/arrow-up.svg");
       };
 
       expect(sendButton.disabled).toBe(true);
