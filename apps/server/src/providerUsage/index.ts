@@ -148,11 +148,11 @@ async function getProviderUsageSnapshot(
     const snapshot = await fetchProviderUsage(provider, providerContext);
     const enriched = snapshot ? await enrichWithLocalUsage(snapshot, ctx) : null;
     const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
-    if (enriched && refreshedCredentialKey !== null) {
+    if (enriched && credentialKey !== null && refreshedCredentialKey === credentialKey) {
       snapshotCache.set(provider, {
         snapshot: enriched,
         fetchedAtMs: ctx.nowMs,
-        credentialKey: refreshedCredentialKey,
+        credentialKey,
       });
     }
     return enriched;

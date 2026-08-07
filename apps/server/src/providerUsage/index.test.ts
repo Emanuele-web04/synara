@@ -11,12 +11,13 @@ import { __resetProviderUsageCacheForTests, collectProviderUsageSnapshots } from
 import type { ProviderUsageContext, ProviderUsageFetcher } from "./types";
 
 const fetchMock = vi.fn<(ctx: ProviderUsageContext) => Promise<ServerProviderUsageSnapshot>>();
+const cacheKeyMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string>>();
 
 vi.mock("./registry", () => ({
   PROVIDER_USAGE_FETCHERS: {
     codex: {
       provider: "codex",
-      cacheKey: async (ctx: ProviderUsageContext) => ctx.env.TEST_USAGE_ACCOUNT ?? "account-a",
+      cacheKey: (ctx: ProviderUsageContext) => cacheKeyMock(ctx),
       fetch: (ctx: ProviderUsageContext) => fetchMock(ctx),
     } satisfies ProviderUsageFetcher,
   },
@@ -47,6 +48,8 @@ function okSnapshot(nowMs: number, source = "live"): ServerProviderUsageSnapshot
 beforeEach(() => {
   __resetProviderUsageCacheForTests();
   fetchMock.mockReset();
+  cacheKeyMock.mockReset();
+  cacheKeyMock.mockImplementation(async (ctx) => ctx.env.TEST_USAGE_ACCOUNT ?? "account-a");
 });
 
 afterEach(() => {
@@ -111,6 +114,27 @@ describe("collectProviderUsageSnapshots caching", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(switched[0]?.source).toBe("account-b");
+  });
+
+  it("does not cache a snapshot when credentials change during the fetch", async () => {
+    let account = "account-a";
+    let release: (snapshot: ServerProviderUsageSnapshot) => void = () => {};
+    cacheKeyMock.mockImplementation(async () => account);
+    fetchMock.mockImplementationOnce(
+      () => new Promise<ServerProviderUsageSnapshot>((resolve) => (release = resolve)),
+    );
+
+    const firstPromise = collectProviderUsageSnapshots(makeCtx(NOW_MS));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    account = "account-b";
+    release(okSnapshot(NOW_MS, "account-a"));
+    await firstPromise;
+
+    fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs, account));
+    const second = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(second[0]?.source).toBe("account-b");
   });
 
   it("expires degraded snapshots faster than healthy ones", async () => {
