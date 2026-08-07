@@ -46,6 +46,7 @@ interface ChatTranscriptPaneProps {
   isRevertingCheckpoint: boolean;
   isTemporaryThread?: boolean;
   isWorking: boolean;
+  workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
   listRef: RefObject<LegendListRef | null>;
   timelineControllerRef?: RefObject<MessagesTimelineController | null>;
@@ -109,6 +110,7 @@ export function ChatTranscriptPane({
   isRevertingCheckpoint,
   isTemporaryThread,
   isWorking,
+  workingLabel,
   followLiveOutput,
   listRef,
   timelineControllerRef,
@@ -197,6 +199,7 @@ export function ChatTranscriptPane({
             key={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}
+            workingLabel={workingLabel}
             worktreeSetup={worktreeSetup}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
