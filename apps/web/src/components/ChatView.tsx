@@ -640,6 +640,7 @@ function waitForSetupScriptTerminalActivity(input: {
   terminalId: string;
   observeStartTimeoutMs?: number;
   maxRuntimeMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   if (typeof window === "undefined") {
     return Promise.resolve();
@@ -675,6 +676,7 @@ function waitForSetupScriptTerminalActivity(input: {
       resolved = true;
       clearTimers();
       unsubscribe();
+      input.signal?.removeEventListener("abort", finish);
       resolve();
     };
 
@@ -699,6 +701,11 @@ function waitForSetupScriptTerminalActivity(input: {
       }
     }
 
+    if (input.signal?.aborted) {
+      finish();
+      return;
+    }
+    input.signal?.addEventListener("abort", finish, { once: true });
     checkRunningState();
     if (!observedRunning) {
       observeStartTimer = window.setTimeout(finish, observeStartTimeoutMs);
@@ -8271,16 +8278,19 @@ export default function ChatView({
           }
           const setupTerminal = await runProjectScript(setupScript, setupScriptOptions);
           if (setupTerminal) {
+            const setupActivityAbortController = new AbortController();
             const setupActivityWait = waitForSetupScriptTerminalActivity({
               threadId: threadIdForSend,
               terminalId: setupTerminal.terminalId,
+              signal: setupActivityAbortController.signal,
             });
             // Setup scripts can run for minutes; let Cancel / Work locally win
             // the wait. The script itself keeps running — a cancelled worktree
             // is force-removed, a local switch just stops waiting on it.
             await (worktreeSetupResolution
               ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
-              : setupActivityWait);
+              : setupActivityWait
+            ).finally(() => setupActivityAbortController.abort());
           }
         }
       }
@@ -8298,6 +8308,11 @@ export default function ChatView({
         });
       }
 
+      const stagedTurnAttachments = await turnAttachmentsPromise;
+      // Keep setup resolvable while attachment uploads are still preparing the
+      // turn. Once they settle, consume the last possible choice before the
+      // card advances to the non-resolvable "Starting session" step.
+      await consumeWorktreeSetupResolution();
       // Carry the expected message id so a snapshot rebuilt after an interim
       // reset (thread switch, ack effect) keeps the message-echo ack signal.
       beginLocalDispatch({
@@ -8306,11 +8321,6 @@ export default function ChatView({
           ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
           : {}),
       });
-      const stagedTurnAttachments = await turnAttachmentsPromise;
-      // Final checkpoint: the setup card hides its actions once "Starting
-      // session" paints, so any resolution set by now is the last one possible
-      // before the turn is dispatched.
-      await consumeWorktreeSetupResolution();
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
         provider: selectedModelSelectionForSend.provider,
