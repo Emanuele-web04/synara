@@ -2436,6 +2436,64 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("[geometry:linux] optically aligns the composer send arrow across responsive states", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-send-arrow-alignment" as MessageId,
+        targetText: "send arrow alignment target",
+      }),
+    });
+
+    try {
+      const sendButton = await waitForSendButton();
+      const sendArrow = await waitForElement(
+        () => sendButton.querySelector<HTMLElement>("[data-slot='central-icon']"),
+        "Unable to find composer send arrow.",
+      );
+      const expectOpticalAlignment = () => {
+        const buttonRect = sendButton.getBoundingClientRect();
+        const arrowRect = sendArrow.getBoundingClientRect();
+        const buttonCenterX = buttonRect.x + buttonRect.width / 2;
+        const buttonCenterY = buttonRect.y + buttonRect.height / 2;
+        const arrowCenterX = arrowRect.x + arrowRect.width / 2;
+        const arrowCenterY = arrowRect.y + arrowRect.height / 2;
+
+        expect(buttonRect.width).toBeCloseTo(28, 2);
+        expect(buttonRect.height).toBeCloseTo(28, 2);
+        expect(arrowRect.width).toBeCloseTo(20, 2);
+        expect(arrowRect.height).toBeCloseTo(20, 2);
+        expect(arrowCenterX - buttonCenterX).toBeCloseTo(0, 2);
+        expect(arrowCenterY - buttonCenterY).toBeCloseTo(1, 2);
+        expect(getComputedStyle(sendButton).boxShadow).toBe("none");
+        expect(getComputedStyle(sendArrow).mask).toContain(
+          "/central-icons-reversed/arrow-up.svg",
+        );
+      };
+
+      expect(sendButton.disabled).toBe(true);
+      expectOpticalAlignment();
+
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Optical alignment check");
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      expectOpticalAlignment();
+
+      document.documentElement.classList.add("dark");
+      await waitForLayout();
+      expectOpticalAlignment();
+
+      await mounted.setViewport(TEXT_VIEWPORT_MATRIX[2]);
+      expectOpticalAlignment();
+
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "");
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(true));
+      expectOpticalAlignment();
+    } finally {
+      document.documentElement.classList.remove("dark");
+      await mounted.cleanup();
+    }
+  });
+
   it("renders the active thread title", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
