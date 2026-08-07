@@ -235,6 +235,31 @@ const WORKSPACE_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
 ] as const;
 
+export interface EditableShortcutDefinition {
+  command: KeybindingCommand;
+  label: string;
+  description: string;
+}
+
+/** All built-in commands that can be assigned from Settings → Keybindings. */
+export function listEditableShortcutDefinitions(): EditableShortcutDefinition[] {
+  const seen = new Set<KeybindingCommand>();
+  const definitions: EditableShortcutDefinition[] = [];
+  for (const definition of [
+    ...AVAILABLE_NOW_DEFINITIONS,
+    ...WORKSPACE_DEFINITIONS,
+    ...THREAD_JUMP_DEFINITIONS,
+  ]) {
+    const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
+    for (const command of commands) {
+      if (seen.has(command)) continue;
+      seen.add(command);
+      definitions.push({ command, label: definition.label, description: definition.description });
+    }
+  }
+  return definitions;
+}
+
 function modSlashLabel(platform: string): string {
   return isMacPlatform(platform) ? "⌘/" : "Ctrl+/";
 }
@@ -298,7 +323,7 @@ export function buildShortcutSheetSections(
   const currentEntries: ShortcutSheetEntry[] = [
     {
       id: "shortcuts.show",
-      label: "Show keyboard shortcuts",
+      label: "Show keybindings",
       description: "Open this sheet from anywhere without leaving your current context.",
       shortcutLabel: modSlashLabel(options.platform),
     },
