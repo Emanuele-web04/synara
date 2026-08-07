@@ -14,6 +14,13 @@ import { errorSnapshot } from "./parse";
 export const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000;
 /** Upper bound on a cooldown so a huge/hostile Retry-After can't freeze usage on stale data for hours. */
 export const MAX_RATE_LIMIT_COOLDOWN_MS = 15 * 60 * 1000;
+/**
+ * Cap on tracked credential fingerprints per resilience instance. Keys are derived from on-disk
+ * credentials, so churn (re-logins rotating tokens) would otherwise grow the map without bound
+ * over a long-lived server process. Writes re-insert their entry so Map iteration order is
+ * least-recently-written first, making oldest-key eviction safe.
+ */
+const MAX_TRACKED_KEYS = 32;
 
 interface ResilienceEntry {
   lastGoodSnapshot: ServerProviderUsageSnapshot | null;
@@ -48,11 +55,21 @@ export function createRateLimitResilience(options: {
   const store = new Map<string, ResilienceEntry>();
 
   const entryFor = (key: string): ResilienceEntry => {
-    let entry = store.get(key);
-    if (!entry) {
-      entry = { lastGoodSnapshot: null, cooldownUntilMs: 0 };
-      store.set(key, entry);
+    const existing = store.get(key);
+    if (existing) {
+      // Re-insert so iteration order tracks write recency for eviction.
+      store.delete(key);
+      store.set(key, existing);
+      return existing;
     }
+    if (store.size >= MAX_TRACKED_KEYS) {
+      const oldestKey = store.keys().next().value;
+      if (oldestKey !== undefined) {
+        store.delete(oldestKey);
+      }
+    }
+    const entry: ResilienceEntry = { lastGoodSnapshot: null, cooldownUntilMs: 0 };
+    store.set(key, entry);
     return entry;
   };
 
@@ -61,14 +78,15 @@ export function createRateLimitResilience(options: {
 
   // The last clean fetch with a staleness note when we have it, otherwise an error snapshot that at
   // least explains the throttle. The last-good note rides on `status: "ok"` so the UI keeps rendering
-  // the limits instead of hiding the section on a non-ok snapshot.
+  // the limits instead of hiding the section on a non-ok snapshot; `stale: true` (with the original
+  // `updatedAt`) lets consumers tell a re-served snapshot from a fresh read.
   const snapshotForCooldown = (
     entry: ResilienceEntry,
     nowMs: number,
   ): ServerProviderUsageSnapshot => {
     const lastGood = entry.lastGoodSnapshot;
     return lastGood
-      ? { ...lastGood, status: "ok", detail: detailFor(entry, nowMs) }
+      ? { ...lastGood, status: "ok", detail: detailFor(entry, nowMs), stale: true }
       : errorSnapshot(options.provider, nowMs, options.source, detailFor(entry, nowMs));
   };
 

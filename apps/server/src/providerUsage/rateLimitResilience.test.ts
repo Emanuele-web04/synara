@@ -76,6 +76,30 @@ describe("createRateLimitResilience", () => {
     expect(resilience.serveDuringCooldown("account-b", NOW_MS)).toBeNull();
   });
 
+  it("marks re-served snapshots stale and keeps their original fetch time", () => {
+    const resilience = makeResilience();
+    resilience.rememberLastGood("home", goodSnapshot());
+
+    const served = resilience.enterCooldown("home", NOW_MS, 120_000);
+    expect(served.stale).toBe(true);
+    // `updatedAt` still says when the data was actually fetched, not when it was re-served.
+    expect(served.updatedAt).toBe("2026-06-09T12:00:00.000Z");
+    // Fresh snapshots never carry the flag.
+    expect(goodSnapshot().stale).toBeUndefined();
+  });
+
+  it("evicts the least recently written key once the tracking cap is hit", () => {
+    const resilience = makeResilience();
+    for (let index = 0; index < 40; index += 1) {
+      resilience.rememberLastGood(`account-${index}`, goodSnapshot());
+      resilience.enterCooldown(`account-${index}`, NOW_MS, 120_000);
+    }
+
+    // Early keys were evicted to bound memory; recent keys are still tracked.
+    expect(resilience.serveDuringCooldown("account-0", NOW_MS)).toBeNull();
+    expect(resilience.serveDuringCooldown("account-39", NOW_MS)).not.toBeNull();
+  });
+
   it("returns nothing outside a cooldown and after reset", () => {
     const resilience = makeResilience();
     resilience.rememberLastGood("home", goodSnapshot());
