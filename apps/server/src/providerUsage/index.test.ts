@@ -106,6 +106,28 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(refreshed[0]?.updatedAt).toBe(new Date(NOW_MS + 1_000).toISOString());
   });
 
+  it("joins an in-flight refresh instead of serving the previous cached snapshot", async () => {
+    fetchMock.mockResolvedValueOnce(okSnapshot(NOW_MS, "cached"));
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
+
+    let release: (snapshot: ServerProviderUsageSnapshot) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<ServerProviderUsageSnapshot>((resolve) => (release = resolve)),
+    );
+    const refreshPromise = collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000), {
+      forceRefresh: true,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const pollPromise = collectProviderUsageSnapshots(makeCtx(NOW_MS + 2_000));
+    release(okSnapshot(NOW_MS + 1_000, "refreshed"));
+    const [refreshed, polled] = await Promise.all([refreshPromise, pollPromise]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(refreshed[0]?.source).toBe("refreshed");
+    expect(polled).toEqual(refreshed);
+  });
+
   it("invalidates a fresh snapshot when the selected credentials change", async () => {
     fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs, ctx.env.TEST_USAGE_ACCOUNT));
 

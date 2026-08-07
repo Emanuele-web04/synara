@@ -128,6 +128,11 @@ async function getProviderUsageSnapshot(
 ): Promise<ServerProviderUsageSnapshot | null> {
   const providerContext = buildProviderContext(provider, ctx);
   const credentialKey = await resolveCredentialKey(provider, providerContext);
+  const pending = inFlightFetches.get(provider);
+  if (credentialKey !== null && pending?.credentialKey === credentialKey) {
+    return pending.promise;
+  }
+
   if (!forceRefresh && credentialKey !== null) {
     const cached = snapshotCache.get(provider);
     if (
@@ -137,11 +142,6 @@ async function getProviderUsageSnapshot(
     ) {
       return cached.snapshot;
     }
-  }
-
-  const pending = inFlightFetches.get(provider);
-  if (credentialKey !== null && pending?.credentialKey === credentialKey) {
-    return pending.promise;
   }
 
   const fetchPromise = (async () => {
