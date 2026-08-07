@@ -706,14 +706,14 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     // not the opened reference, so the toggle lands on the file we read from
     // instead of creating a stray file at the workspace root.
     const writeRelativePath = current.relativePath;
-    const writeVersionOnDisk = current.version;
-    const writeEncoding = current.encoding;
-    const writeLineEnding = current.lineEnding;
+    const expectedVersion = current.version;
+    const encoding = current.encoding;
+    const lineEnding = current.lineEnding;
     // Writes carry the full file contents, so serialize them: a slower earlier
     // checkbox write must never land after a newer toggle and erase it.
     const fileKey = `${workspaceRoot}\0${filePath}`;
     if (!taskFileDiskVersionRef.current.has(fileKey)) {
-      taskFileDiskVersionRef.current.set(fileKey, writeVersionOnDisk);
+      taskFileDiskVersionRef.current.set(fileKey, current.version);
     }
     const writeVersion = latestTaskWriteVersionRef.current.next + 1;
     latestTaskWriteVersionRef.current.next = writeVersion;
@@ -725,9 +725,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           cwd: workspaceRoot,
           relativePath: writeRelativePath,
           contents: nextContents,
-          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? writeVersionOnDisk,
-          encoding: writeEncoding,
-          lineEnding: writeLineEnding,
+          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? expectedVersion,
+          encoding,
+          lineEnding,
         });
         taskFileDiskVersionRef.current.set(fileKey, result.version);
         queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (cached) =>
