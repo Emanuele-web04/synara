@@ -8283,6 +8283,158 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("keeps full-context AskUserQuestion rejection retryable across session recovery", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "item/tool/respondToUserInput",
+          detail:
+            "API Error: 400 input_length and max_tokens exceed context limit; prompt is too long.",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested-full-context"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-full-context",
+            questions: [],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+        answers: { continue: "Yes" },
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ) === true,
+    );
+    const failureActivity = (await readHarnessThread(harness))?.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId: "user-input-request-full-context",
+      responseCommandId: "cmd-user-input-respond-full-context",
+      settlementStatus: "retryable",
+      detail: expect.stringContaining("context limit"),
+    });
+    const failedResponse = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "userInput",
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+      }),
+    );
+    expect(Option.getOrUndefined(failedResponse)).toMatchObject({
+      status: "retryable",
+      responseCommandId: "cmd-user-input-respond-full-context",
+    });
+
+    const stoppedAt = new Date(Date.now() + 1).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-stopped-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "stopped",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: stoppedAt,
+        },
+        createdAt: stoppedAt,
+      }),
+    );
+
+    const recoveredAt = new Date(Date.now() + 2).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-recovered-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: recoveredAt,
+        },
+        createdAt: recoveredAt,
+      }),
+    );
+    harness.respondToUserInput.mockImplementation(() => Effect.void);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-retry-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+        answers: { continue: "Yes" },
+        createdAt: recoveredAt,
+      }),
+    );
+
+    await waitFor(() => harness.respondToUserInput.mock.calls.length === 2);
+    const retriedResponse = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "userInput",
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+      }),
+    );
+    expect(Option.getOrUndefined(retriedResponse)).toMatchObject({
+      status: "responding",
+      responseCommandId: "cmd-user-input-retry-full-context",
+    });
+  });
+
   it("surfaces unclaimable user-input responses instead of dropping them silently", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

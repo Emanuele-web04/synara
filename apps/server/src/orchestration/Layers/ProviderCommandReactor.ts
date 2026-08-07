@@ -365,6 +365,25 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
   return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
 }
 
+function isClaudeContextWindowUserInputRejection(error: ProviderServiceError): boolean {
+  if (
+    error._tag !== "ProviderAdapterRequestError" ||
+    error.provider !== "claudeAgent" ||
+    error.method !== "item/tool/respondToUserInput"
+  ) {
+    return false;
+  }
+  const detail = error.detail.toLowerCase();
+  return (
+    detail.includes("context window") ||
+    detail.includes("context limit") ||
+    detail.includes("context length") ||
+    detail.includes("context_length_exceeded") ||
+    detail.includes("prompt is too long") ||
+    detail.includes("input_length and max_tokens")
+  );
+}
+
 function interactionFailureSettlementStatus(
   cause: Cause.Cause<ProviderServiceError>,
   isUnknownPendingRequest: boolean,
@@ -373,8 +392,9 @@ function interactionFailureSettlementStatus(
     onNone: () => "uncertain" as const,
     onSome: (error) => {
       if (
-        error._tag === "ProviderAdapterRequestError" &&
-        error.method === "permission.reply.acknowledge"
+        (error._tag === "ProviderAdapterRequestError" &&
+          error.method === "permission.reply.acknowledge") ||
+        isClaudeContextWindowUserInputRejection(error)
       ) {
         return "retryable" as const;
       }

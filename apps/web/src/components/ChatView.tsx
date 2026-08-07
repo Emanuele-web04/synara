@@ -39,6 +39,7 @@ import {
   RuntimeMode,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import { respondingInteractionReclaimAt } from "@synara/shared/pendingInteractions";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import {
@@ -2604,17 +2605,51 @@ export default function ChatView({
       threadActivities,
     ],
   );
+  const nextUserInputResponseReclaimAt = useMemo(() => {
+    let earliest: string | null = null;
+    for (const interaction of activeThread?.pendingInteractions ?? []) {
+      if (
+        interaction.interactionKind !== "userInput" ||
+        interaction.status !== "responding"
+      ) {
+        continue;
+      }
+      if (interaction.responseRequestedAt === null) {
+        return new Date(0).toISOString();
+      }
+      const reclaimAt = respondingInteractionReclaimAt(interaction.responseRequestedAt);
+      if (earliest === null || reclaimAt < earliest) {
+        earliest = reclaimAt;
+      }
+    }
+    return earliest;
+  }, [activeThread?.pendingInteractions]);
+  const [userInputResponseClaimReferenceAt, setUserInputResponseClaimReferenceAt] = useState(() =>
+    new Date().toISOString(),
+  );
+  useEffect(() => {
+    if (nextUserInputResponseReclaimAt === null) {
+      return;
+    }
+    const delayMs = Math.max(0, Date.parse(nextUserInputResponseReclaimAt) - Date.now());
+    const timeoutId = window.setTimeout(() => {
+      setUserInputResponseClaimReferenceAt(new Date().toISOString());
+    }, delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [nextUserInputResponseReclaimAt]);
   const pendingUserInputs = useMemo(
     () =>
       derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
         authoritativeHasPending: activeThread?.hasPendingUserInput,
         latestTurnId: activeThread?.latestTurn?.turnId,
+        responseClaimReferenceAt: userInputResponseClaimReferenceAt,
       }),
     [
       activeThread?.hasPendingUserInput,
       activeThread?.latestTurn?.turnId,
       activeThread?.pendingInteractions,
       threadActivities,
+      userInputResponseClaimReferenceAt,
     ],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
