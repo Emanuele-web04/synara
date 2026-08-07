@@ -86,10 +86,10 @@ type TranscriptStep = {
 };
 
 type PendingTool = {
+  readonly stepIndex: number;
   readonly itemId: RuntimeItemId;
   readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
   readonly name: string;
-  readonly args: unknown;
 };
 
 type StoredTurn = {
@@ -117,6 +117,7 @@ type AntigravitySessionContext = {
   processedTranscriptPath?: string | undefined;
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
+  nextToolSequence: number;
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
@@ -208,7 +209,29 @@ process.stdin.on("end", () => {
     process.stdout.write((event === "pre-tool" ? '{"decision":"ask"}' : "{}") + "\\n");
     return;
   }
-  fs.appendFileSync(target, event + "\\t" + payload.trim() + "\\n");
+  let capturedPayload = payload.trim();
+  if (event === "pre-tool" || event === "post-tool") {
+    try {
+      const input = JSON.parse(capturedPayload);
+      const sanitized = {};
+      for (const key of ["conversationId", "transcriptPath", "modelName"]) {
+        if (typeof input[key] === "string" && input[key].trim()) sanitized[key] = input[key];
+      }
+      if (Number.isInteger(input.stepIdx) && input.stepIdx >= 0) sanitized.stepIdx = input.stepIdx;
+      if (event === "pre-tool") {
+        const name = input.toolCall && typeof input.toolCall.name === "string"
+          ? input.toolCall.name.trim()
+          : "";
+        if (name) sanitized.toolCall = { name };
+      } else {
+        sanitized.failed = typeof input.error === "string" && input.error.trim().length > 0;
+      }
+      capturedPayload = JSON.stringify(sanitized);
+    } catch {
+      capturedPayload = "{}";
+    }
+  }
+  fs.appendFileSync(target, event + "\\t" + capturedPayload + "\\n");
   if (event === "pre-tool") {
     const decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
     process.stdout.write(JSON.stringify({ decision }) + "\\n");
@@ -529,21 +552,6 @@ function toolItemType(name: string): PendingTool["itemType"] {
   return "dynamic_tool_call";
 }
 
-function resultStreamKind(itemType: PendingTool["itemType"]) {
-  if (itemType === "command_execution") return "command_output" as const;
-  if (itemType === "file_change") return "file_change_output" as const;
-  return "unknown" as const;
-}
-
-function isToolResultStep(step: TranscriptStep): boolean {
-  return (
-    step.source === "MODEL" &&
-    step.type !== "PLANNER_RESPONSE" &&
-    step.type !== "CONVERSATION_HISTORY" &&
-    step.type !== "CHECKPOINT"
-  );
-}
-
 export function makeAntigravityRuntimeEventBase(input: {
   readonly threadId: ThreadId;
   readonly lifecycleGeneration?: string;
@@ -773,55 +781,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
         if (calls.length > 0) {
           emitTextItem(context, step, "reasoning", "reasoning_text");
-          for (const [index, call] of calls.entries()) {
-            const name = trim(call.name) ?? "tool";
-            const itemId = RuntimeItemId.makeUnsafe(
-              `antigravity-${context.activeTurnId ?? "turn"}-${stepIndex}-tool-${index}`,
-            );
-            const itemType = toolItemType(name);
-            const pending = { itemId, itemType, name, args: call.args ?? {} } satisfies PendingTool;
-            context.pendingTools.push(pending);
-            offer({
-              ...base(context, { itemId }),
-              type: "item.started",
-              payload: {
-                itemType,
-                status: "inProgress",
-                title: name,
-                data: { name, args: pending.args },
-              },
-              raw: raw("tool-call", call),
-            } satisfies ProviderRuntimeEvent);
-          }
         } else {
           emitTextItem(context, step, "assistant_message", "assistant_text");
         }
         return;
-      }
-
-      if (isToolResultStep(step)) {
-        const pending = context.pendingTools.shift();
-        if (!pending) return;
-        const content = typeof step.content === "string" ? step.content : "";
-        if (content) {
-          offer({
-            ...base(context, { itemId: pending.itemId }),
-            type: "content.delta",
-            payload: { streamKind: resultStreamKind(pending.itemType), delta: content },
-            raw: raw(step.type ?? "tool-result", step),
-          } satisfies ProviderRuntimeEvent);
-        }
-        offer({
-          ...base(context, { itemId: pending.itemId }),
-          type: "item.completed",
-          payload: {
-            itemType: pending.itemType,
-            status: step.status === "ERROR" ? "failed" : "completed",
-            title: pending.name,
-            data: { name: pending.name, args: pending.args, result: step },
-          },
-          raw: raw(step.type ?? "tool-result", step),
-        } satisfies ProviderRuntimeEvent);
       }
     };
 
@@ -920,6 +883,69 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             raw: raw(eventName, payload),
           } satisfies ProviderRuntimeEvent);
         }
+        const stepIndex =
+          typeof payload.stepIdx === "number" &&
+          Number.isInteger(payload.stepIdx) &&
+          payload.stepIdx >= 0
+            ? payload.stepIdx
+            : undefined;
+        if (eventName === "pre-tool" && stepIndex !== undefined) {
+          const toolCall =
+            payload.toolCall && typeof payload.toolCall === "object"
+              ? (payload.toolCall as Record<string, unknown>)
+              : undefined;
+          const name = typeof toolCall?.name === "string" ? trim(toolCall.name) : undefined;
+          if (name) {
+            const itemId = RuntimeItemId.makeUnsafe(
+              `antigravity-${context.activeTurnId ?? "turn"}-tool-${context.nextToolSequence++}`,
+            );
+            const pending = {
+              stepIndex,
+              itemId,
+              itemType: toolItemType(name),
+              name,
+            } satisfies PendingTool;
+            context.pendingTools.push(pending);
+            offer({
+              ...base(context, { itemId }),
+              type: "item.started",
+              payload: {
+                itemType: pending.itemType,
+                status: "inProgress",
+                title: pending.name,
+                data: { toolCallId: pending.itemId, toolName: pending.name },
+              },
+              raw: raw("tool-lifecycle", { eventName, stepIdx: stepIndex, name }),
+            } satisfies ProviderRuntimeEvent);
+          }
+        } else if (eventName === "post-tool" && stepIndex !== undefined) {
+          const pendingIndex = context.pendingTools.findIndex(
+            (pending) => pending.stepIndex === stepIndex,
+          );
+          const pending =
+            pendingIndex >= 0 ? context.pendingTools.splice(pendingIndex, 1)[0] : undefined;
+          if (pending) {
+            const failed =
+              payload.failed === true ||
+              (typeof payload.error === "string" && payload.error.trim().length > 0);
+            offer({
+              ...base(context, { itemId: pending.itemId }),
+              type: "item.completed",
+              payload: {
+                itemType: pending.itemType,
+                status: failed ? "failed" : "completed",
+                title: pending.name,
+                data: { toolCallId: pending.itemId, toolName: pending.name },
+              },
+              raw: raw("tool-lifecycle", {
+                eventName,
+                stepIdx: stepIndex,
+                name: pending.name,
+                failed,
+              }),
+            } satisfies ProviderRuntimeEvent);
+          }
+        }
         // Agent finished: if the print process lingers, tear it down so the
         // close handler (or interrupt fallback) can settle the turn (#465).
         if (eventName === "stop" && context.activeProcess && !context.turnTerminalEmitted) {
@@ -1001,6 +1027,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           processedTranscriptBytes: 0,
           processedSteps: new Set(),
           pendingTools: [],
+          nextToolSequence: 0,
           sawAssistant: false,
           interrupted: false,
           stopped: false,
@@ -1120,6 +1147,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.processedSteps.clear();
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
+        context.nextToolSequence = 0;
         context.sawAssistant = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;

@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
@@ -504,7 +504,15 @@ describe("Antigravity CLI integration helpers", () => {
     try {
       await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
       const command = buildAntigravityCaptureCommand(process.execPath, scriptPath, "pre-tool");
-      const payload = JSON.stringify({ tool: "shell" });
+      const payload = JSON.stringify({
+        stepIdx: 12,
+        conversationId: "conversation-1",
+        transcriptPath: "/tmp/transcript.jsonl",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "echo super-secret-token" },
+        },
+      });
       const result = runCaptureCommand(command, payload, {
         SYNARA_ANTIGRAVITY_EVENTS: eventPath,
         SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
@@ -513,7 +521,11 @@ describe("Antigravity CLI integration helpers", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe('{"decision":"allow"}');
-      expect(await fs.readFile(eventPath, "utf8")).toBe(`pre-tool\t${payload}\n`);
+      const captured = await fs.readFile(eventPath, "utf8");
+      expect(captured).toBe(
+        'pre-tool\t{"conversationId":"conversation-1","transcriptPath":"/tmp/transcript.jsonl","stepIdx":12,"toolCall":{"name":"run_command"}}\n',
+      );
+      expect(captured).not.toContain("super-secret-token");
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
@@ -585,6 +597,138 @@ describe("Antigravity CLI integration helpers", () => {
       expect(second).toEqual({ lines: ['{"second":true}'], nextOffset: 31 });
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("streams hook tool names and terminal states without arguments", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-tool-events-"));
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const toolEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) => event.type === "item.started" || event.type === "item.completed",
+            ),
+            Stream.take(4),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-tool-events");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "exercise tools",
+            attachments: [],
+          });
+          expect(eventFile).toBeTruthy();
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'pre-tool\t{"stepIdx":7,"toolCall":{"name":"run_command","args":{"token":"super-secret-token"}}}',
+                'post-tool\t{"stepIdx":7,"error":"super-secret-error"}',
+                'pre-tool\t{"stepIdx":8,"toolCall":{"name":"write_to_file","args":{"content":"super-secret-content"}}}',
+                'post-tool\t{"stepIdx":8,"error":""}',
+                "",
+              ].join("\n"),
+            ),
+          );
+
+          const events = Array.from(
+            yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(events).toHaveLength(4);
+          expect(events.map((event) => event.type)).toEqual([
+            "item.started",
+            "item.completed",
+            "item.started",
+            "item.completed",
+          ]);
+          expect(events.map((event) => event.payload)).toEqual([
+            {
+              itemType: "command_execution",
+              status: "inProgress",
+              title: "run_command",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-0`,
+                toolName: "run_command",
+              },
+            },
+            {
+              itemType: "command_execution",
+              status: "failed",
+              title: "run_command",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-0`,
+                toolName: "run_command",
+              },
+            },
+            {
+              itemType: "file_change",
+              status: "inProgress",
+              title: "write_to_file",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-1`,
+                toolName: "write_to_file",
+              },
+            },
+            {
+              itemType: "file_change",
+              status: "completed",
+              title: "write_to_file",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-1`,
+                toolName: "write_to_file",
+              },
+            },
+          ]);
+          expect(JSON.stringify(events)).not.toContain("super-secret");
+
+          child?.emit("close", 0, null);
+          yield* Effect.sleep("25 millis");
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-tool-events-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 
