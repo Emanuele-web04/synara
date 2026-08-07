@@ -3014,7 +3014,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("shows Loading before ack and Thinking through the post-ack gap", async () => {
+  it("shows Loading only before ack or turn takeover, then Thinking", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,
@@ -3077,6 +3077,28 @@ describe("ChatView timeline estimator parity (full app)", () => {
           return id!;
         },
         { timeout: 8_000, interval: 16 },
+      );
+
+      // A provider can take over before the durable user-message echo arrives.
+      // Once it is connecting, this is no longer a local-send Loading state.
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "connecting",
+              updatedAt: isoAt(1_250),
+            }
+          : null,
+        updatedAt: isoAt(1_250),
+      }));
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).not.toContain("Loading");
+        },
+        { timeout: 4_000, interval: 16 },
       );
 
       // Server ack: durable user message + turn requested, but session still ready
