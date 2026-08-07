@@ -67,6 +67,14 @@ export const GitBranch = Schema.Struct({
 });
 export type GitBranch = typeof GitBranch.Type;
 
+export const GitRecentCommit = Schema.Struct({
+  sha: TrimmedNonEmptyStringSchema,
+  shortSha: TrimmedNonEmptyStringSchema,
+  subject: Schema.String,
+  committedAt: Schema.String,
+});
+export type GitRecentCommit = typeof GitRecentCommit.Type;
+
 const GitWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -136,16 +144,52 @@ export type GitHubRepositoryInput = typeof GitHubRepositoryInput.Type;
 
 export const GitReadWorkingTreeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  scope: Schema.optional(Schema.Literals(["workingTree", "unstaged", "staged", "branch"])).pipe(
-    Schema.withConstructorDefault(() => Option.some("workingTree" as const)),
-  ),
+  scope: Schema.optional(
+    Schema.Literals(["workingTree", "unstaged", "staged", "branch", "ref"]),
+  ).pipe(Schema.withConstructorDefault(() => Option.some("workingTree" as const))),
+  compareRef: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type GitReadWorkingTreeDiffInput = typeof GitReadWorkingTreeDiffInput.Type;
+
+export const GitBlameLineInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  filePath: TrimmedNonEmptyStringSchema,
+  line: PositiveInt,
+  rev: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type GitBlameLineInput = typeof GitBlameLineInput.Type;
 
 export const GitPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
 export type GitPullInput = typeof GitPullInput.Type;
+
+export const GIT_READ_FILE_AT_REV_MAX_BYTES = 1_000_000;
+const GIT_READ_FILE_AT_REV_PATH_MAX_LENGTH = 2048;
+const GIT_REV_MAX_LENGTH = 256;
+
+export const GitReadFileAtRevInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  filePath: TrimmedNonEmptyStringSchema.check(
+    Schema.isMaxLength(GIT_READ_FILE_AT_REV_PATH_MAX_LENGTH),
+  ),
+  rev: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(GIT_REV_MAX_LENGTH))),
+  mergeBaseWith: Schema.optional(
+    TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(GIT_REV_MAX_LENGTH)),
+  ),
+  maxBytes: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_READ_FILE_AT_REV_MAX_BYTES)),
+  ),
+});
+export type GitReadFileAtRevInput = typeof GitReadFileAtRevInput.Type;
+
+export const GitReadFileAtRevResult = Schema.Struct({
+  contents: Schema.String,
+  resolvedRev: Schema.String,
+  missing: Schema.Boolean,
+  truncated: Schema.Boolean,
+});
+export type GitReadFileAtRevResult = typeof GitReadFileAtRevResult.Type;
 
 // Read-only diff summary requests reuse the shared git text-generation model settings.
 export const GitSummarizeDiffInput = Schema.Struct({
@@ -184,6 +228,16 @@ export const GitListBranchesInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
 export type GitListBranchesInput = typeof GitListBranchesInput.Type;
+
+export const DEFAULT_GIT_RECENT_COMMIT_LIMIT = 20;
+
+export const GitListRecentCommitsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  limit: Schema.optional(PositiveInt).pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_RECENT_COMMIT_LIMIT)),
+  ),
+});
+export type GitListRecentCommitsInput = typeof GitListRecentCommitsInput.Type;
 
 export const GitCreateWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -384,6 +438,17 @@ export const GitReadWorkingTreeDiffResult = Schema.Struct({
 });
 export type GitReadWorkingTreeDiffResult = typeof GitReadWorkingTreeDiffResult.Type;
 
+export const GitBlameLineResult = Schema.Struct({
+  sha: Schema.String,
+  shortSha: Schema.String,
+  author: Schema.String,
+  authorEmail: Schema.String,
+  authorTime: Schema.String,
+  summary: Schema.String,
+  uncommitted: Schema.Boolean,
+});
+export type GitBlameLineResult = typeof GitBlameLineResult.Type;
+
 /**
  * Line counts for a scope's patch, without the patch itself.
  *
@@ -414,6 +479,11 @@ export const GitListBranchesResult = Schema.Struct({
   hasOriginRemote: Schema.Boolean,
 });
 export type GitListBranchesResult = typeof GitListBranchesResult.Type;
+
+export const GitListRecentCommitsResult = Schema.Struct({
+  commits: Schema.Array(GitRecentCommit),
+});
+export type GitListRecentCommitsResult = typeof GitListRecentCommitsResult.Type;
 
 export const GitCreateWorktreeResult = Schema.Struct({
   worktree: GitWorktree,

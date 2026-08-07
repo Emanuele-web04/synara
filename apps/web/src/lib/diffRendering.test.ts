@@ -13,6 +13,7 @@ import {
   resolveFileDiffStatByChangedPath,
   resolveFileDiffPath,
   sortFileDiffsByPath,
+  splitPatchIntoFileSegments,
   splitRepoRelativePath,
   summarizePatchTotals,
 } from "./diffRendering";
@@ -43,6 +44,94 @@ describe("buildPatchCacheKey", () => {
     expect(buildPatchCacheKey(patch, "diff-panel:light")).not.toBe(
       buildPatchCacheKey(patch, "diff-panel:dark"),
     );
+  });
+});
+
+const FILE_A_PATCH = [
+  "diff --git a/a.ts b/a.ts",
+  "index 0000001..0000002 100644",
+  "--- a/a.ts",
+  "+++ b/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " const shared = 1;",
+  "-const a = 1;",
+  "+const a = 2;",
+].join("\n");
+
+const FILE_B_PATCH = [
+  "diff --git a/b.ts b/b.ts",
+  "index 0000003..0000004 100644",
+  "--- a/b.ts",
+  "+++ b/b.ts",
+  "@@ -1,1 +1,2 @@",
+  " const b = 1;",
+  "+const added = 2;",
+].join("\n");
+
+const FILE_B_PATCH_EDITED = FILE_B_PATCH.replace("const added = 2;", "const added = 3;");
+
+describe("splitPatchIntoFileSegments", () => {
+  it("splits a multi-file patch on file boundaries", () => {
+    const segments = splitPatchIntoFileSegments(`${FILE_A_PATCH}\n${FILE_B_PATCH}`);
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toContain("a/a.ts");
+    expect(segments[0]).not.toContain("a/b.ts");
+    expect(segments[1]).toContain("a/b.ts");
+  });
+
+  it("returns a single-file patch unchanged", () => {
+    expect(splitPatchIntoFileSegments(FILE_A_PATCH)).toEqual([FILE_A_PATCH]);
+  });
+
+  it("keeps leading metadata attached to the first segment", () => {
+    const segments = splitPatchIntoFileSegments(`commit message\n${FILE_A_PATCH}\n${FILE_B_PATCH}`);
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toContain("commit message");
+  });
+
+  it("does not split on hunk lines that mention diff --git", () => {
+    const patch = [
+      "diff --git a/notes.md b/notes.md",
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1,1 +1,2 @@",
+      " existing",
+      "+diff --git is a header prefix",
+    ].join("\n");
+
+    expect(splitPatchIntoFileSegments(patch)).toEqual([patch]);
+  });
+});
+
+describe("getRenderablePatch per-file cache keys", () => {
+  it("keeps a file's render key stable when another file changes", () => {
+    const before = getRenderablePatch(`${FILE_A_PATCH}\n${FILE_B_PATCH}`);
+    const after = getRenderablePatch(`${FILE_A_PATCH}\n${FILE_B_PATCH_EDITED}`);
+    if (before?.kind !== "files" || after?.kind !== "files") {
+      throw new Error("expected parsed files");
+    }
+
+    const keyOf = (renderable: typeof before, path: string) => {
+      const file = renderable.files.find((candidate) => resolveFileDiffPath(candidate) === path);
+      if (!file) throw new Error(`missing ${path}`);
+      return buildFileDiffRenderKey(file);
+    };
+
+    expect(keyOf(after, "a.ts")).toBe(keyOf(before, "a.ts"));
+    expect(keyOf(after, "b.ts")).not.toBe(keyOf(before, "b.ts"));
+  });
+
+  it("parses the same files and stats as before splitting", () => {
+    const patch = `${FILE_A_PATCH}\n${FILE_B_PATCH}`;
+    const renderable = getRenderablePatch(patch);
+    if (renderable?.kind !== "files") {
+      throw new Error("expected parsed files");
+    }
+
+    expect(renderable.files.map((file) => resolveFileDiffPath(file))).toEqual(["a.ts", "b.ts"]);
+    expect(summarizePatchTotals(patch)).toEqual({ additions: 2, deletions: 1, fileCount: 2 });
   });
 });
 

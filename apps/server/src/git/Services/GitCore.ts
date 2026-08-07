@@ -9,6 +9,10 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 import type {
+  GitBlameLineInput,
+  GitReadFileAtRevInput,
+  GitReadFileAtRevResult,
+  GitBlameLineResult,
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
@@ -18,6 +22,8 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListRecentCommitsInput,
+  GitListRecentCommitsResult,
   GitPullResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
@@ -226,6 +232,19 @@ export interface GitCoreShape {
    */
   readonly readBranchPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
+  readonly blameLine: (
+    input: GitBlameLineInput,
+  ) => Effect.Effect<GitBlameLineResult, GitCommandError>;
+
+  readonly readFileAtRev: (
+    input: GitReadFileAtRevInput,
+  ) => Effect.Effect<GitReadFileAtRevResult, GitCommandError>;
+
+  readonly readRefPatch: (
+    cwd: string,
+    ref: string,
+  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
   /**
    * Build staged change context for commit generation.
    */
@@ -274,6 +293,10 @@ export interface GitCoreShape {
   readonly listBranches: (
     input: GitListBranchesInput,
   ) => Effect.Effect<GitListBranchesResult, GitCommandError>;
+
+  readonly listRecentCommits: (
+    input: GitListRecentCommitsInput,
+  ) => Effect.Effect<GitListRecentCommitsResult, GitCommandError>;
 
   /**
    * Pull current branch from upstream using fast-forward only.

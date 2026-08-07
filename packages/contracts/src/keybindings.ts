@@ -38,6 +38,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "terminal.workspace.chat",
   "browser.toggle",
   "diff.toggle",
+  "diff.change.next",
+  "diff.change.previous",
   "composer.focus.toggle",
   "modelPicker.toggle",
   "model.next",
@@ -67,6 +69,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.visible.next",
   "chat.visible.previous",
   "editor.openFavorite",
+  "editor.file.save",
   "git.commitAndPush",
 ] as const;
 

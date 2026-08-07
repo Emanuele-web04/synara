@@ -36,6 +36,8 @@ import {
 } from "~/lib/diffRendering";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import type { ChatFileReference } from "~/lib/chatReferences";
+import type { DiffEditBaseRev } from "~/lib/diffEditBaseRev";
+import { editorCenterModeFamily, type EditorCenterMode } from "~/lib/editorCenterMode";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
@@ -58,10 +60,12 @@ import {
   WorkspaceSearchSidebar,
 } from "./chat/workspaceExplorer";
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
+import { WorkspaceFileDiffEditorPane } from "./chat/WorkspaceFileDiffEditorPane";
+import { WorkspaceFileEditorDiscardDialog } from "./chat/WorkspaceFileEditorChrome";
+import { WorkspaceFileEditorPane } from "./chat/WorkspaceFileEditorPane";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
-type EditorCenterMode = "file" | "diff";
-type EditorActivityBarItem = EditorCenterMode | "search";
+type EditorActivityBarItem = "file" | "diff" | "search";
 
 const EDITOR_CHAT_PANE_STORAGE_KEY = "synara.editor.chatPaneWidth";
 const EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY = "synara.editor.sidebarVisible";
@@ -88,7 +92,11 @@ interface EditorWorkspaceViewProps {
   onSelectFile: (path: string) => void;
   onSelectDiffFile: (path: string) => void;
   onToggleDirectory: (path: string) => void;
+  editFilePath: string | null;
+  editDiffBaseRev: DiffEditBaseRev | null;
   onCenterModeChange: (mode: EditorCenterMode) => void;
+  onEditFile: (filePath: string) => void;
+  onCloseEdit: () => void;
   onExitEditorView: () => void;
   onReferenceInChat?: (reference: ChatFileReference) => void;
   onAskWhyInChat?: (reference: ChatFileReference) => void;
@@ -325,8 +333,9 @@ function EditorActivityBar(props: {
   sidebarVisible: boolean;
   onSelectItem: (item: EditorActivityBarItem) => void;
 }) {
-  const filesActive = props.sidebarVisible && !props.searchActive && props.centerMode === "file";
-  const diffActive = props.sidebarVisible && !props.searchActive && props.centerMode === "diff";
+  const centerFamily = editorCenterModeFamily(props.centerMode);
+  const filesActive = props.sidebarVisible && !props.searchActive && centerFamily === "file";
+  const diffActive = props.sidebarVisible && !props.searchActive && centerFamily === "diff";
   const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
@@ -363,6 +372,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   // global sidebar is collapsed, so it has to clear the macOS traffic lights the
   // same way every other chat-surface header does.
   const trafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const { resolvedTheme: editorResolvedTheme } = useTheme();
   const [chatPaneWidth, setChatPaneWidth] = useState(readStoredEditorChatPaneWidth);
   const chatPaneResizeStateRef = useRef<EditorChatPaneResizeState | null>(null);
   // Both side surfaces can be hidden so the main content takes the full width:
@@ -383,10 +393,21 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
+  const centerFamily = editorCenterModeFamily(centerMode);
+  const [editDirty, setEditDirty] = useState(false);
+  const [pendingLeaveEdit, setPendingLeaveEdit] = useState<{ run: () => void } | null>(null);
+  const inEditMode = centerMode === "fileEdit" || centerMode === "diffEdit";
+  const guardLeavingEdit = (run: () => void) => {
+    if (inEditMode && editDirty) {
+      setPendingLeaveEdit({ run });
+      return;
+    }
+    run();
+  };
   const handleActivityBarSelectItem = (item: EditorActivityBarItem) => {
     const itemActive =
       sidebarVisible &&
-      (item === "search" ? searchPaneActive : !searchPaneActive && centerMode === item);
+      (item === "search" ? searchPaneActive : !searchPaneActive && centerFamily === item);
     if (itemActive) {
       setSidebarVisible(false);
       storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, false);
@@ -489,6 +510,14 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     window.addEventListener("pointercancel", resizeState.onPointerEnd);
   };
 
+  const guardedSelectFile = (filePath: string) => {
+    guardLeavingEdit(() => props.onSelectFile(filePath));
+  };
+
+  const guardedSelectDiffFile = (filePath: string) => {
+    guardLeavingEdit(() => props.onSelectDiffFile(filePath));
+  };
+
   const handleChatPaneResizeDoubleClick = () => {
     setChatPaneWidth(EDITOR_CHAT_PANE_DEFAULT_WIDTH);
     storeEditorChatPaneWidth(EDITOR_CHAT_PANE_DEFAULT_WIDTH);
@@ -585,7 +614,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           centerMode={props.centerMode}
           searchActive={searchPaneActive}
           sidebarVisible={sidebarVisible}
-          onSelectItem={handleActivityBarSelectItem}
+          onSelectItem={(item) => guardLeavingEdit(() => handleActivityBarSelectItem(item))}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
           {!sidebarVisible ? null : searchPaneActive ? (
@@ -594,16 +623,16 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               query={searchQuery}
               onQueryChange={setSearchQuery}
               selectedFilePath={props.selectedFilePath}
-              onSelectFile={props.onSelectFile}
+              onSelectFile={guardedSelectFile}
               onReferenceInChat={props.onReferenceInChat}
             />
-          ) : props.centerMode === "diff" ? (
+          ) : centerFamily === "diff" ? (
             <DiffFilesSidebar
               files={props.diffFiles}
               isLoading={props.diffFilesLoading ?? false}
               selectedFilePath={props.selectedDiffFilePath}
               optionsControl={props.diffOptionsControl}
-              onSelectFile={props.onSelectDiffFile}
+              onSelectFile={guardedSelectDiffFile}
               onReferenceInChat={props.onReferenceInChat}
               onAskWhyInChat={props.onAskWhyInChat}
             />
@@ -612,7 +641,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               workspaceRoot={props.workspaceRoot}
               selectedFilePath={props.selectedFilePath}
               expandedDirectories={props.expandedDirectories}
-              onSelectFile={props.onSelectFile}
+              onSelectFile={guardedSelectFile}
               onToggleDirectory={props.onToggleDirectory}
               onReferenceInChat={props.onReferenceInChat}
             />
@@ -624,7 +653,28 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
             <div className={cn("min-h-0 min-w-0 flex-1", props.centerMode !== "diff" && "hidden")}>
               {props.diffPanel}
             </div>
-            {props.centerMode === "file" ? (
+            {props.centerMode === "fileEdit" && props.editFilePath !== null ? (
+              <div className="flex min-h-0 min-w-0 flex-1">
+                <WorkspaceFileEditorPane
+                  workspaceRoot={props.workspaceRoot}
+                  filePath={props.editFilePath}
+                  resolvedTheme={editorResolvedTheme}
+                  onClose={props.onCloseEdit}
+                  onDirtyChange={setEditDirty}
+                />
+              </div>
+            ) : props.centerMode === "diffEdit" && props.editFilePath !== null ? (
+              <div className="flex min-h-0 min-w-0 flex-1">
+                <WorkspaceFileDiffEditorPane
+                  workspaceRoot={props.workspaceRoot}
+                  filePath={props.editFilePath}
+                  baseRev={props.editDiffBaseRev ?? { rev: "HEAD" }}
+                  resolvedTheme={editorResolvedTheme}
+                  onClose={props.onCloseEdit}
+                  onDirtyChange={setEditDirty}
+                />
+              </div>
+            ) : props.centerMode === "file" ? (
               <div className="flex min-h-0 min-w-0 flex-1">
                 <WorkspaceFilePreview
                   workspaceRoot={props.workspaceRoot}
@@ -632,6 +682,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
                   onCommentInChat={props.onCommentInChat}
+                  onEditFile={props.onEditFile}
                 />
               </div>
             ) : null}
@@ -679,6 +730,23 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           </aside>
         </div>
       </div>
+      <WorkspaceFileEditorDiscardDialog
+        open={pendingLeaveEdit !== null}
+        title="Discard unsaved changes?"
+        description="Leaving this file drops the changes you have not saved yet."
+        confirmLabel="Discard changes"
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingLeaveEdit(null);
+          }
+        }}
+        onConfirm={() => {
+          const pending = pendingLeaveEdit;
+          setPendingLeaveEdit(null);
+          setEditDirty(false);
+          pending?.run();
+        }}
+      />
     </div>
   );
 }

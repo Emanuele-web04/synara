@@ -183,6 +183,99 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  describe("readFileAtRev", () => {
+    it.effect("reads the committed blob, not the working tree copy", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "committed\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add src"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "working tree\n");
+
+        const result = yield* core.readFileAtRev({ cwd: tmp, filePath: "src.ts" });
+
+        expect(result.contents).toBe("committed\n");
+        expect(result.missing).toBe(false);
+        expect(result.truncated).toBe(false);
+        expect(result.resolvedRev).toMatch(/^[0-9a-f]{40}$/);
+      }),
+    );
+
+    it.effect("reports a path that does not exist at the revision as missing", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "added.ts"), "brand new\n");
+
+        const result = yield* core.readFileAtRev({ cwd: tmp, filePath: "added.ts" });
+
+        expect(result).toMatchObject({ contents: "", missing: true, truncated: false });
+      }),
+    );
+
+    it.effect("resolves the merge base when comparing against another branch", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "base\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "base"]);
+        const mergeBase = yield* git(tmp, ["rev-parse", "HEAD"]);
+        yield* git(tmp, ["checkout", "-b", "feature"]);
+        yield* writeTextFile(path.join(tmp, "src.ts"), "feature\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "feature"]);
+
+        const result = yield* core.readFileAtRev({
+          cwd: tmp,
+          filePath: "src.ts",
+          mergeBaseWith: initialBranch,
+        });
+
+        expect(result.resolvedRev).toBe(mergeBase);
+        expect(result.contents).toBe("base\n");
+      }),
+    );
+
+    it.effect("marks a blob larger than the byte budget as truncated", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "big.txt"), "x".repeat(500));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "big"]);
+
+        const result = yield* core.readFileAtRev({
+          cwd: tmp,
+          filePath: "big.txt",
+          maxBytes: 100,
+        });
+
+        expect(result.truncated).toBe(true);
+        expect(result.contents.length).toBeLessThanOrEqual(100);
+      }),
+    );
+
+    it.effect("rejects paths that escape the workspace", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const error = yield* core
+          .readFileAtRev({ cwd: tmp, filePath: "../outside.ts" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("workspace-relative");
+      }),
+    );
+  });
+
   // ── initGitRepo ──
 
   describe("initGitRepo", () => {
@@ -1980,6 +2073,99 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(unstagedPatch).toContain("diff --git a/README.md b/README.md");
         expect(unstagedPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
         expect(unstagedPatch).not.toContain("staged.txt");
+      }),
+    );
+
+    it.effect("reads the working tree as a patch against an older commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        const baseSha = yield* git(tmp, ["rev-parse", "HEAD"]);
+
+        yield* writeTextFile(path.join(tmp, "committed.txt"), "committed change\n");
+        yield* git(tmp, ["add", "committed.txt"]);
+        yield* git(tmp, ["commit", "-m", "committed change"]);
+
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged change\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged change\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked change\n");
+
+        const refPatch = (yield* core.readRefPatch(tmp, baseSha)).patch;
+        expect(refPatch).toContain("diff --git a/committed.txt b/committed.txt");
+        expect(refPatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(refPatch).toContain("diff --git a/README.md b/README.md");
+        expect(refPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
+
+        const headPatch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(headPatch).not.toContain("diff --git a/committed.txt b/committed.txt");
+        expect(headPatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(headPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
+      }),
+    );
+
+    it.effect("reads a patch against a branch name", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* core.createBranch({ cwd: tmp, branch: "feature/compare-with" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/compare-with" });
+        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature change\n");
+        yield* git(tmp, ["add", "feature.txt"]);
+        yield* git(tmp, ["commit", "-m", "feature change"]);
+
+        const patch = (yield* core.readRefPatch(tmp, initialBranch)).patch;
+        expect(patch).toContain("diff --git a/feature.txt b/feature.txt");
+      }),
+    );
+
+    it.effect("fails with a clear error when the compare ref does not resolve", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        const exit = yield* core.readRefPatch(tmp, "does/not/exist").pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          const rendered = String(exit.cause);
+          expect(rendered).toContain("GitCore.readRefPatch.verifyRef");
+          expect(rendered).toContain("Cannot resolve");
+          expect(rendered).toContain("does/not/exist");
+          expect(rendered).toContain("to a commit in this repository.");
+        }
+      }),
+    );
+
+    it.effect("lists recent commits newest first and tolerates an empty repository", () =>
+      Effect.gen(function* () {
+        const empty = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(empty);
+        const core = yield* GitCore;
+        expect((yield* core.listRecentCommits({ cwd: empty, limit: 5 })).commits).toEqual([]);
+
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "second.txt"), "second\n");
+        yield* git(tmp, ["add", "second.txt"]);
+        yield* git(tmp, ["commit", "-m", "second commit"]);
+
+        const result = yield* core.listRecentCommits({ cwd: tmp, limit: 5 });
+        expect(result.commits).toHaveLength(2);
+        expect(result.commits[0]?.subject).toBe("second commit");
+        expect(result.commits[1]?.subject).toBe("initial commit");
+        expect(result.commits[0]?.sha).toMatch(/^[0-9a-f]{40}$/);
+        expect(result.commits[0]?.sha.startsWith(result.commits[0].shortSha)).toBe(true);
+        expect(result.commits[0]?.committedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+        const limited = yield* core.listRecentCommits({ cwd: tmp, limit: 1 });
+        expect(limited.commits).toHaveLength(1);
+        expect(limited.commits[0]?.subject).toBe("second commit");
       }),
     );
 

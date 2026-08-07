@@ -15,7 +15,7 @@ import { Fragment } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, EllipsisIcon, EyeIcon, FileIcon } from "~/lib/icons";
+import { ChevronRightIcon, EllipsisIcon, EyeIcon, FileIcon, PencilIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -35,6 +35,7 @@ interface WorkspaceFilePreviewHeaderProps {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  onEditFile?: (() => void) | undefined;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -163,6 +164,18 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
               );
             })}
           </div>
+        ) : null}
+
+        {props.onEditFile ? (
+          <ChatHeaderIconButton
+            type="button"
+            tone="plain"
+            label="Edit file"
+            title="Edit file"
+            onClick={props.onEditFile}
+          >
+            <PencilIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
         ) : null}
 
         {hasChatActions ? (

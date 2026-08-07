@@ -562,7 +562,9 @@ export function createWsNativeApi(): NativeApi {
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
+      readFileAtRev: (input) => transport.request(WS_METHODS.gitReadFileAtRev, input),
       workingTreeDiffStats: (input) => transport.request(WS_METHODS.gitWorkingTreeDiffStats, input),
+      blameLine: (input) => transport.request(WS_METHODS.gitBlameLine, input),
       summarizeDiff: (input) =>
         transport.request(WS_METHODS.gitSummarizeDiff, input, {
           timeoutMs: null,
@@ -572,6 +574,7 @@ export function createWsNativeApi(): NativeApi {
           timeoutMs: null,
         }),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
+      listRecentCommits: (input) => transport.request(WS_METHODS.gitListRecentCommits, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
       createDetachedWorktree: (input) =>
         transport.request(WS_METHODS.gitCreateDetachedWorktree, input),

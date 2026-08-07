@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as NodeFsConstants } from "node:fs";
 import * as NodeFs from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import { isLocalAbsolutePath } from "@synara/shared/path";
+import { WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE } from "@synara/shared/workspaceFileWrite";
 import { Effect, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";
@@ -29,6 +30,25 @@ function isBinaryLike(bytes: Uint8Array): boolean {
 
 function isFileNotFoundError(cause: unknown): boolean {
   return (cause as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
+async function assertFileMatchesExpectedHash(
+  filePath: string,
+  expectedContentsSha256: string,
+): Promise<void> {
+  const currentContents = await NodeFs.readFile(filePath, "utf8").catch((cause: unknown) => {
+    if (isFileNotFoundError(cause)) return null;
+    throw cause;
+  });
+  if (currentContents === null) {
+    throw new Error(WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE);
+  }
+  const currentSha256 = createHash("sha256")
+    .update(Buffer.from(currentContents, "utf8"))
+    .digest("hex");
+  if (currentSha256 !== expectedContentsSha256) {
+    throw new Error(WORKSPACE_FILE_WRITE_CONFLICT_MESSAGE);
+  }
 }
 
 async function writeFileStringAtomically(
@@ -351,6 +371,10 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         );
         if (finalRealTarget === null) {
           return "outside" as const;
+        }
+
+        if (input.expectedContentsSha256 !== undefined) {
+          await assertFileMatchesExpectedHash(finalRealTarget, input.expectedContentsSha256);
         }
 
         await writeFileStringAtomically(input.cwd, finalRealTarget, input.contents);

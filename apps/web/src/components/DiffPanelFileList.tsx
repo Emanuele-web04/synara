@@ -5,10 +5,17 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDownIcon, CopyIcon, EllipsisIcon, MessageCircleIcon } from "~/lib/icons";
+import {
+  ChevronDownIcon,
+  CopyIcon,
+  EllipsisIcon,
+  MessageCircleIcon,
+  PencilIcon,
+} from "~/lib/icons";
 
 import { buildFileDiffRenderKey, resolveFileDiffPath } from "~/lib/diffRendering";
-import { FileDiffCard, FileDiffSurface } from "./chat/FileDiffView";
+import { FileDiffCard, FileDiffSurface, type DiffLineClickProps } from "./chat/FileDiffView";
+import { resolveDiffLineBlameTarget, type DiffLineBlameTarget } from "./DiffLineBlamePopover";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -20,6 +27,7 @@ type DiffRenderMode = "stacked" | "split";
 export interface DiffFileChatActions {
   onReferenceInChat: (filePath: string) => void;
   onAskWhyChanged: (filePath: string) => void;
+  onEditFile?: ((filePath: string) => void) | undefined;
 }
 
 const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
@@ -44,6 +52,16 @@ function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffF
         }
       />
       <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="w-60 min-w-60">
+        {props.chatActions.onEditFile ? (
+          <MenuItem
+            onClick={() => {
+              props.chatActions.onEditFile?.(props.filePath);
+            }}
+          >
+            <PencilIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
+            <span>Edit file</span>
+          </MenuItem>
+        ) : null}
         <MenuItem
           onClick={() => {
             props.chatActions.onReferenceInChat(props.filePath);
@@ -105,6 +123,7 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   isCollapsed: boolean;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
+  onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
@@ -121,6 +140,13 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
       <DiffFileCollapseChevron collapsed={isCollapsed} />
     </>
   );
+  const { onBlameLine } = props;
+  const handleLineClick = onBlameLine
+    ? (line: DiffLineClickProps) => {
+        const target = resolveDiffLineBlameTarget(filePath, line);
+        if (target) onBlameLine(target);
+      }
+    : undefined;
   const handleClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
     const nativeEvent = event.nativeEvent;
     const composedPath = nativeEvent.composedPath?.() ?? [];
@@ -155,6 +181,7 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
         overflow={props.diffWordWrap ? "wrap" : "scroll"}
         collapsed={props.isCollapsed}
         renderHeaderTrailing={renderHeaderTrailing}
+        onLineClick={handleLineClick}
       />
       {shouldPreviewImage ? (
         <LocalImagePreview
@@ -178,6 +205,7 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
   collapsedFiles: ReadonlySet<string>;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
+  onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
 }) {
   if (props.renderableFiles.length === 0) {
     return (
@@ -207,6 +235,7 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
             isCollapsed={props.collapsedFiles.has(fileKey)}
             onToggleFileCollapsed={props.onToggleFileCollapsed}
             chatActions={props.chatActions}
+            onBlameLine={props.onBlameLine}
           />
         );
       })}
