@@ -40,6 +40,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
     provider,
     threads,
     codexHomePath: settings.codexHomePath || null,
+    fetchOpenUsageData: false,
   });
   const usageRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const primaryRow = selectPrimaryProviderUsageDisplayRow(usageRows);

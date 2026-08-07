@@ -31,7 +31,7 @@ function goodSnapshot(): ServerProviderUsageSnapshot {
 describe("createRateLimitResilience", () => {
   it("serves the last good snapshot with a staleness note while throttled", () => {
     const resilience = makeResilience();
-    resilience.rememberLastGood("home", goodSnapshot());
+    resilience.rememberLastGood("home", goodSnapshot(), NOW_MS);
 
     const served = resilience.enterCooldown("home", NOW_MS, 120_000);
     expect(served.status).toBe("ok");
@@ -69,7 +69,7 @@ describe("createRateLimitResilience", () => {
 
   it("keys cooldowns per account so one login can't leak into another", () => {
     const resilience = makeResilience();
-    resilience.rememberLastGood("account-a", goodSnapshot());
+    resilience.rememberLastGood("account-a", goodSnapshot(), NOW_MS);
     resilience.enterCooldown("account-a", NOW_MS, 120_000);
 
     expect(resilience.serveDuringCooldown("account-a", NOW_MS)).not.toBeNull();
@@ -78,7 +78,7 @@ describe("createRateLimitResilience", () => {
 
   it("marks re-served snapshots stale and keeps their original fetch time", () => {
     const resilience = makeResilience();
-    resilience.rememberLastGood("home", goodSnapshot());
+    resilience.rememberLastGood("home", goodSnapshot(), NOW_MS);
 
     const served = resilience.enterCooldown("home", NOW_MS, 120_000);
     expect(served.stale).toBe(true);
@@ -88,21 +88,35 @@ describe("createRateLimitResilience", () => {
     expect(goodSnapshot().stale).toBeUndefined();
   });
 
-  it("evicts the least recently written key once the tracking cap is hit", () => {
+  it("keeps active cooldowns even when the soft tracking cap is exceeded", () => {
     const resilience = makeResilience();
     for (let index = 0; index < 40; index += 1) {
-      resilience.rememberLastGood(`account-${index}`, goodSnapshot());
+      resilience.rememberLastGood(`account-${index}`, goodSnapshot(), NOW_MS);
       resilience.enterCooldown(`account-${index}`, NOW_MS, 120_000);
     }
 
-    // Early keys were evicted to bound memory; recent keys are still tracked.
-    expect(resilience.serveDuringCooldown("account-0", NOW_MS)).toBeNull();
+    expect(resilience.serveDuringCooldown("account-0", NOW_MS)).not.toBeNull();
     expect(resilience.serveDuringCooldown("account-39", NOW_MS)).not.toBeNull();
+  });
+
+  it("evicts an expired cooldown before exceeding the soft tracking cap", () => {
+    const resilience = makeResilience();
+    for (let index = 0; index < 32; index += 1) {
+      resilience.rememberLastGood(`account-${index}`, goodSnapshot(), NOW_MS);
+      resilience.enterCooldown(`account-${index}`, NOW_MS, 60_000);
+    }
+
+    const later = NOW_MS + 90_000;
+    resilience.rememberLastGood("new-account", goodSnapshot(), later);
+    resilience.enterCooldown("new-account", later, 60_000);
+
+    expect(resilience.serveDuringCooldown("account-0", later)).toBeNull();
+    expect(resilience.serveDuringCooldown("new-account", later)).not.toBeNull();
   });
 
   it("returns nothing outside a cooldown and after reset", () => {
     const resilience = makeResilience();
-    resilience.rememberLastGood("home", goodSnapshot());
+    resilience.rememberLastGood("home", goodSnapshot(), NOW_MS);
     expect(resilience.serveDuringCooldown("home", NOW_MS)).toBeNull();
 
     resilience.enterCooldown("home", NOW_MS, 120_000);

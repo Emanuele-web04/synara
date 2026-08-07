@@ -16,6 +16,7 @@ vi.mock("./registry", () => ({
   PROVIDER_USAGE_FETCHERS: {
     codex: {
       provider: "codex",
+      cacheKey: async (ctx: ProviderUsageContext) => ctx.env.TEST_USAGE_ACCOUNT ?? "account-a",
       fetch: (ctx: ProviderUsageContext) => fetchMock(ctx),
     } satisfies ProviderUsageFetcher,
   },
@@ -23,8 +24,13 @@ vi.mock("./registry", () => ({
 
 const NOW_MS = 1_780_000_000_000;
 
-function makeCtx(nowMs: number): ProviderUsageContext {
-  return { homeDir: "/nonexistent-home", env: {}, platform: "linux", nowMs };
+function makeCtx(nowMs: number, account = "account-a"): ProviderUsageContext {
+  return {
+    homeDir: "/nonexistent-home",
+    env: { TEST_USAGE_ACCOUNT: account },
+    platform: "linux",
+    nowMs,
+  };
 }
 
 function okSnapshot(nowMs: number, source = "live"): ServerProviderUsageSnapshot {
@@ -77,6 +83,7 @@ describe("collectProviderUsageSnapshots caching", () => {
 
     const firstPromise = collectProviderUsageSnapshots(makeCtx(NOW_MS));
     const secondPromise = collectProviderUsageSnapshots(makeCtx(NOW_MS));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     release(okSnapshot(NOW_MS));
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
@@ -96,6 +103,16 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(refreshed[0]?.updatedAt).toBe(new Date(NOW_MS + 1_000).toISOString());
   });
 
+  it("invalidates a fresh snapshot when the selected credentials change", async () => {
+    fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs, ctx.env.TEST_USAGE_ACCOUNT));
+
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS, "account-a"));
+    const switched = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000, "account-b"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(switched[0]?.source).toBe("account-b");
+  });
+
   it("expires degraded snapshots faster than healthy ones", async () => {
     fetchMock.mockImplementation(async (ctx) => ({
       ...okSnapshot(ctx.nowMs),
@@ -112,8 +129,20 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("treats re-served last-good (stale) snapshots as degraded for expiry", async () => {
+  it("does not retain stale snapshots in the outer cache", async () => {
     fetchMock.mockImplementation(async (ctx) => ({ ...okSnapshot(ctx.nowMs), stale: true }));
+
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires needs-auth snapshots on the degraded TTL", async () => {
+    fetchMock.mockImplementation(async (ctx) => ({
+      ...okSnapshot(ctx.nowMs),
+      status: "needs-auth",
+    }));
 
     await collectProviderUsageSnapshots(makeCtx(NOW_MS));
     await collectProviderUsageSnapshots(makeCtx(NOW_MS + 90_000));

@@ -37,25 +37,36 @@ function buildContext(): ProviderUsageContext {
 
 async function fetchProviderUsage(
   provider: ProviderKind,
-  ctx: ProviderUsageContext,
+  providerContext: ProviderUsageContext,
 ): Promise<ServerProviderUsageSnapshot | null> {
   const fetcher = PROVIDER_USAGE_FETCHERS[provider];
   if (!fetcher) {
     return null;
   }
 
-  const providerContext: ProviderUsageContext = {
+  return fetcher
+    .fetch(providerContext)
+    .catch(() =>
+      errorSnapshot(
+        provider,
+        providerContext.nowMs,
+        "live-usage",
+        "Usage fetch failed unexpectedly.",
+      ),
+    );
+}
+
+function buildProviderContext(
+  provider: ProviderKind,
+  ctx: ProviderUsageContext,
+): ProviderUsageContext {
+  return {
     ...ctx,
     env: buildProviderChildEnvironment({
       provider: providerChildKind(provider),
       baseEnv: ctx.env,
     }),
   };
-  return fetcher
-    .fetch(providerContext)
-    .catch(() =>
-      errorSnapshot(provider, ctx.nowMs, "live-usage", "Usage fetch failed unexpectedly."),
-    );
 }
 
 // Every UI surface (header chip, branch toolbar, settings panel) plus their periodic refetches
@@ -71,15 +82,38 @@ const SNAPSHOT_CACHE_DEGRADED_TTL_MS = 60 * 1000;
 interface CachedSnapshot {
   snapshot: ServerProviderUsageSnapshot;
   fetchedAtMs: number;
+  credentialKey: string;
+}
+
+interface InFlightSnapshot {
+  credentialKey: string;
+  promise: Promise<ServerProviderUsageSnapshot | null>;
 }
 
 const snapshotCache = new Map<ProviderKind, CachedSnapshot>();
-const inFlightFetches = new Map<ProviderKind, Promise<ServerProviderUsageSnapshot | null>>();
+const inFlightFetches = new Map<ProviderKind, InFlightSnapshot>();
 
 const snapshotCacheTtlMs = (snapshot: ServerProviderUsageSnapshot): number =>
-  (snapshot.status ?? "ok") === "error" || snapshot.stale === true
-    ? SNAPSHOT_CACHE_DEGRADED_TTL_MS
-    : SNAPSHOT_CACHE_TTL_MS;
+  snapshot.stale === true
+    ? 0
+    : (snapshot.status ?? "ok") === "error" || (snapshot.status ?? "ok") === "needs-auth"
+      ? SNAPSHOT_CACHE_DEGRADED_TTL_MS
+      : SNAPSHOT_CACHE_TTL_MS;
+
+async function resolveCredentialKey(
+  provider: ProviderKind,
+  ctx: ProviderUsageContext,
+): Promise<string | null> {
+  const fetcher = PROVIDER_USAGE_FETCHERS[provider];
+  if (!fetcher?.cacheKey) {
+    return provider;
+  }
+  try {
+    return await fetcher.cacheKey(ctx);
+  } catch {
+    return null;
+  }
+}
 
 /** Test-only: drop the snapshot cache and any in-flight coalescing state. */
 export function __resetProviderUsageCacheForTests(): void {
@@ -92,31 +126,46 @@ async function getProviderUsageSnapshot(
   ctx: ProviderUsageContext,
   forceRefresh: boolean,
 ): Promise<ServerProviderUsageSnapshot | null> {
-  if (!forceRefresh) {
+  const providerContext = buildProviderContext(provider, ctx);
+  const credentialKey = await resolveCredentialKey(provider, providerContext);
+  if (!forceRefresh && credentialKey !== null) {
     const cached = snapshotCache.get(provider);
-    if (cached && ctx.nowMs - cached.fetchedAtMs < snapshotCacheTtlMs(cached.snapshot)) {
+    if (
+      cached &&
+      cached.credentialKey === credentialKey &&
+      ctx.nowMs - cached.fetchedAtMs < snapshotCacheTtlMs(cached.snapshot)
+    ) {
       return cached.snapshot;
     }
   }
 
   const pending = inFlightFetches.get(provider);
-  if (pending) {
-    return pending;
+  if (credentialKey !== null && pending?.credentialKey === credentialKey) {
+    return pending.promise;
   }
 
   const fetchPromise = (async () => {
-    const snapshot = await fetchProviderUsage(provider, ctx);
+    const snapshot = await fetchProviderUsage(provider, providerContext);
     const enriched = snapshot ? await enrichWithLocalUsage(snapshot, ctx) : null;
-    if (enriched) {
-      snapshotCache.set(provider, { snapshot: enriched, fetchedAtMs: ctx.nowMs });
+    const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
+    if (enriched && refreshedCredentialKey !== null) {
+      snapshotCache.set(provider, {
+        snapshot: enriched,
+        fetchedAtMs: ctx.nowMs,
+        credentialKey: refreshedCredentialKey,
+      });
     }
     return enriched;
   })();
-  inFlightFetches.set(provider, fetchPromise);
+  if (credentialKey !== null) {
+    inFlightFetches.set(provider, { credentialKey, promise: fetchPromise });
+  }
   try {
     return await fetchPromise;
   } finally {
-    inFlightFetches.delete(provider);
+    if (inFlightFetches.get(provider)?.promise === fetchPromise) {
+      inFlightFetches.delete(provider);
+    }
   }
 }
 

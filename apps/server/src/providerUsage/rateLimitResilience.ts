@@ -31,7 +31,7 @@ export interface RateLimitResilience {
   /** Snapshot to serve while `key` is throttled, or null when no cooldown is active for it. */
   serveDuringCooldown(key: string, nowMs: number): ServerProviderUsageSnapshot | null;
   /** Record a clean fetch and clear any cooldown for `key`. */
-  rememberLastGood(key: string, snapshot: ServerProviderUsageSnapshot): void;
+  rememberLastGood(key: string, snapshot: ServerProviderUsageSnapshot, nowMs: number): void;
   /** Begin a cooldown for `key` honoring Retry-After (clamped), then return the snapshot to serve. */
   enterCooldown(
     key: string,
@@ -54,7 +54,7 @@ export function createRateLimitResilience(options: {
   const maxCooldownMs = options.maxCooldownMs ?? MAX_RATE_LIMIT_COOLDOWN_MS;
   const store = new Map<string, ResilienceEntry>();
 
-  const entryFor = (key: string): ResilienceEntry => {
+  const entryFor = (key: string, nowMs: number): ResilienceEntry => {
     const existing = store.get(key);
     if (existing) {
       // Re-insert so iteration order tracks write recency for eviction.
@@ -62,10 +62,16 @@ export function createRateLimitResilience(options: {
       store.set(key, existing);
       return existing;
     }
+    // Prefer the oldest inactive entry, but never discard an account while its cooldown is
+    // active: doing so would resume requests against an endpoint that explicitly throttled us.
+    // The store may temporarily exceed the soft cap when more than 32 accounts are simultaneously
+    // cooling down; later insertions prune expired entries back toward the bound.
     if (store.size >= MAX_TRACKED_KEYS) {
-      const oldestKey = store.keys().next().value;
-      if (oldestKey !== undefined) {
-        store.delete(oldestKey);
+      for (const [candidateKey, candidate] of store) {
+        if (candidate.cooldownUntilMs <= nowMs) {
+          store.delete(candidateKey);
+          break;
+        }
       }
     }
     const entry: ResilienceEntry = { lastGoodSnapshot: null, cooldownUntilMs: 0 };
@@ -98,13 +104,13 @@ export function createRateLimitResilience(options: {
       }
       return snapshotForCooldown(entry, nowMs);
     },
-    rememberLastGood(key, snapshot) {
-      const entry = entryFor(key);
+    rememberLastGood(key, snapshot, nowMs) {
+      const entry = entryFor(key, nowMs);
       entry.lastGoodSnapshot = snapshot;
       entry.cooldownUntilMs = 0;
     },
     enterCooldown(key, nowMs, retryAfterMs) {
-      const entry = entryFor(key);
+      const entry = entryFor(key, nowMs);
       const backoffMs = Math.min(
         Math.max(retryAfterMs ?? defaultCooldownMs, 0) || defaultCooldownMs,
         maxCooldownMs,

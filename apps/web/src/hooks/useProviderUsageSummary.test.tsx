@@ -6,11 +6,20 @@ import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderRateLimit } from "~/lib/rateLimits";
+import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProviderUsageSummary } from "./useProviderUsageSummary";
+
+vi.mock("~/lib/openUsageReactQuery", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/openUsageReactQuery")>();
+  return {
+    ...actual,
+    openUsageProviderSnapshotQueryOptions: vi.fn(actual.openUsageProviderSnapshotQueryOptions),
+  };
+});
 
 function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProviderUsageSnapshot {
   return {
@@ -47,6 +56,7 @@ function readProviderUsageSummary(input: {
   queryClient: QueryClient;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
+  fetchOpenUsageData?: boolean;
 }) {
   // Capture into a ref-style holder: the hook only runs inside the closure, so a
   // plain `let` would narrow to `never` after the guard (TS can't see <Probe/> run).
@@ -60,6 +70,7 @@ function readProviderUsageSummary(input: {
       threads: [],
       threadRateLimits: input.threadRateLimits,
       providerSnapshot: input.providerSnapshot,
+      fetchOpenUsageData: input.fetchOpenUsageData,
     });
     return <span />;
   }
@@ -83,6 +94,19 @@ function createQueryClient() {
 }
 
 describe("useProviderUsageSummary", () => {
+  it("can keep OpenUsage polling disabled while using the server batch query", () => {
+    const queryClient = createQueryClient();
+
+    readProviderUsageSummary({ queryClient, fetchOpenUsageData: false });
+
+    expect(openUsageProviderSnapshotQueryOptions).toHaveBeenCalledWith("claudeAgent", {
+      enabled: false,
+    });
+    expect(
+      queryClient.getQueryCache().find({ queryKey: serverQueryKeys.allProviderUsage() }),
+    ).toBeDefined();
+  });
+
   it("does not show local fallback rows when the live batch reports a non-ok status", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
