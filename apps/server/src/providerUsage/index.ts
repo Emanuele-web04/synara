@@ -154,8 +154,8 @@ async function getProviderUsageSnapshot(
         current?.credentialKey === credentialKey &&
         snapshotCacheTtlMs(current.snapshot) === SNAPSHOT_CACHE_TTL_MS &&
         ctx.nowMs - current.fetchedAtMs < SNAPSHOT_CACHE_TTL_MS;
-      const fetchedHealthySnapshot = snapshotCacheTtlMs(enriched) === SNAPSHOT_CACHE_TTL_MS;
-      if (fetchedHealthySnapshot || !hasFreshHealthySnapshot) {
+      const fetchedFailedSnapshot = (enriched.status ?? "ok") === "error";
+      if (!fetchedFailedSnapshot || !hasFreshHealthySnapshot) {
         snapshotCache.set(provider, {
           snapshot: enriched,
           fetchedAtMs: ctx.nowMs,

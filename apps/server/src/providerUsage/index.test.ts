@@ -193,6 +193,34 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(polled[0]?.source).toBe("healthy");
   });
 
+  it("replaces a healthy cache entry when refresh discovers authentication is required", async () => {
+    fetchMock.mockResolvedValueOnce(okSnapshot(NOW_MS, "healthy")).mockResolvedValueOnce({
+      ...okSnapshot(NOW_MS + 1_000, "auth-required"),
+      status: "needs-auth",
+    });
+
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000), { forceRefresh: true });
+    const polled = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 2_000));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(polled[0]?.source).toBe("auth-required");
+  });
+
+  it("expires a stale refresh instead of restoring the previous healthy cache entry", async () => {
+    fetchMock
+      .mockResolvedValueOnce(okSnapshot(NOW_MS, "healthy"))
+      .mockResolvedValueOnce({ ...okSnapshot(NOW_MS + 1_000, "throttled"), stale: true })
+      .mockResolvedValueOnce(okSnapshot(NOW_MS + 2_000, "recovered"));
+
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
+    await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000), { forceRefresh: true });
+    const polled = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 2_000));
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(polled[0]?.source).toBe("recovered");
+  });
+
   it("does not retain stale snapshots in the outer cache", async () => {
     fetchMock.mockImplementation(async (ctx) => ({ ...okSnapshot(ctx.nowMs), stale: true }));
 
