@@ -181,6 +181,7 @@ import {
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveComposerStripWorkLogEntries,
   resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
@@ -2499,18 +2500,27 @@ export default function ChatView({
       ? null
       : (activeLatestTurn?.turnId ?? null);
   // Composer-strip source: the strip needs the routed subagent entries the
-  // transcript drops, so it derives from the parent thread's own activities.
+  // transcript drops. A top-level thread has already derived that exact source
+  // above; reuse it so every live activity does not scan and normalize the full
+  // history twice. Subagent views still derive from their distinct parent source.
   const stripRawWorkLogEntries = useMemo(
     () =>
-      deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
-        visibleTurnIds: stripVisibleTurnIds,
-        activeTurnId: stripLiveTurnId,
-        activeTurnStartedAt: stripSourceLatestTurnStartedAt,
-        latestTurnState: stripSourceLatestTurnState,
-        latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
+      resolveComposerStripWorkLogEntries({
+        hasDistinctParentSource: stripParentThread !== undefined,
+        activeWorkLogEntries: rawWorkLogEntries,
+        deriveParentWorkLogEntries: () =>
+          deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
+            visibleTurnIds: stripVisibleTurnIds,
+            activeTurnId: stripLiveTurnId,
+            activeTurnStartedAt: stripSourceLatestTurnStartedAt,
+            latestTurnState: stripSourceLatestTurnState,
+            latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
+          }),
       }),
     [
+      rawWorkLogEntries,
       stripLiveTurnId,
+      stripParentThread,
       stripSourceActivities,
       stripSourceLatestTurnCompletedAt,
       stripSourceLatestTurnId,

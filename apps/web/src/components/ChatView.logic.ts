@@ -1559,6 +1559,16 @@ function resolveTimelineSubagentThread(input: {
   return undefined;
 }
 
+export function resolveComposerStripWorkLogEntries(input: {
+  hasDistinctParentSource: boolean;
+  activeWorkLogEntries: WorkLogEntry[];
+  deriveParentWorkLogEntries: () => WorkLogEntry[];
+}): WorkLogEntry[] {
+  return input.hasDistinctParentSource
+    ? input.deriveParentWorkLogEntries()
+    : input.activeWorkLogEntries;
+}
+
 export function enrichSubagentWorkEntries(
   workEntries: ReadonlyArray<WorkLogEntry>,
   threads: ReadonlyArray<Thread>,

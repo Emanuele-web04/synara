@@ -27,6 +27,7 @@ import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { page, userEvent } from "vitest/browser";
+import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -57,6 +58,7 @@ import {
   sendEffectRpcChunk,
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
+import { makeDomainEvent } from "../storeTestFixtures";
 import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -339,6 +341,48 @@ function createSnapshotForTargetUser(options: {
       },
     ],
     updatedAt: NOW_ISO,
+  };
+}
+
+function createIssue550Snapshot(options: {
+  messageCount: number;
+  activityCount: number;
+}): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-issue-550" as MessageId,
+    targetText: "issue 550 baseline",
+  });
+  const messages = Array.from({ length: options.messageCount }, (_, index) =>
+    index % 2 === 0
+      ? createUserMessage({
+          id: MessageId.makeUnsafe(`msg-issue-550-user-${index}`),
+          text: `user message ${index}`,
+          offsetSeconds: index * 2,
+        })
+      : createAssistantMessage({
+          id: MessageId.makeUnsafe(`msg-issue-550-assistant-${index}`),
+          text: `assistant message ${index}`,
+          offsetSeconds: index * 2,
+        }),
+  );
+  const activities = Array.from({ length: options.activityCount }, (_, index) => ({
+    id: EventId.makeUnsafe(`activity-issue-550-${index}`),
+    createdAt: isoAt(options.messageCount * 2 + index),
+    kind: "tool.completed" as const,
+    summary: `tool ${index}`,
+    tone: "tool" as const,
+    turnId: null,
+    payload: {
+      itemType: "dynamic_tool_call",
+      toolName: `tool-${index}`,
+    },
+  }));
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID ? { ...thread, messages, activities } : thread,
+    ),
   };
 }
 
@@ -1883,6 +1927,7 @@ async function mountChatView(options: {
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
   initialEntry?: string;
+  onRender?: ProfilerOnRenderCallback;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -1899,7 +1944,14 @@ async function mountChatView(options: {
     }),
   );
 
-  const screen = await render(<RouterProvider router={router} />, {
+  const content = options.onRender ? (
+    <Profiler id="issue-550-root" onRender={options.onRender}>
+      <RouterProvider router={router} />
+    </Profiler>
+  ) : (
+    <RouterProvider router={router} />
+  );
+  const screen = await render(content, {
     container: host,
   });
 
@@ -2038,6 +2090,98 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("keeps near-cap composer work bounded while live activities arrive", async () => {
+    const percentile = (samples: readonly number[], fraction: number): number => {
+      const ordered = [...samples].sort((left, right) => left - right);
+      return ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * fraction))] ?? 0;
+    };
+    const cases = [
+      { name: "short", messageCount: 10, activityCount: 20 },
+      { name: "near-cap", messageCount: 81, activityCount: 1_609 },
+    ] as const;
+    const reports: Array<{
+      name: (typeof cases)[number]["name"];
+      inputP95Ms: number;
+      reactCommitTotalMs: number;
+    }> = [];
+
+    const warmup = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createIssue550Snapshot(cases[0]),
+    });
+    await warmup.cleanup();
+    useComposerDraftStore.setState({ draftsByThreadId: {} });
+
+    for (const benchmarkCase of cases) {
+      const commits: number[] = [];
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createIssue550Snapshot(benchmarkCase),
+        onRender: (_id, phase, actualDuration) => {
+          if (phase === "update") commits.push(actualDuration);
+        },
+      });
+      try {
+        const editor = await waitForComposerEditor();
+        await userEvent.click(editor);
+        commits.length = 0;
+
+        const inputToPaintMs: number[] = [];
+        for (let index = 0; index < 12; index += 1) {
+          const startedAt = performance.now();
+          useStore.getState().applyOrchestrationEventsHotPath([
+            makeDomainEvent(
+              "thread.activity-appended",
+              {
+                threadId: THREAD_ID,
+                activity: {
+                  id: EventId.makeUnsafe(`activity-issue-550-live-${index}`),
+                  createdAt: isoAt(
+                    benchmarkCase.messageCount * 2 + benchmarkCase.activityCount + index,
+                  ),
+                  kind: "tool.completed",
+                  summary: `live tool ${index}`,
+                  tone: "tool",
+                  turnId: null,
+                  payload: {
+                    itemType: "dynamic_tool_call",
+                    toolName: `live-tool-${index}`,
+                  },
+                },
+              },
+              { sequence: benchmarkCase.activityCount + index + 1 },
+            ),
+          ]);
+          await userEvent.keyboard("x");
+          await nextFrame();
+          inputToPaintMs.push(performance.now() - startedAt);
+        }
+
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          "x".repeat(12),
+        );
+        expect(useStore.getState().activityIdsByThreadId?.[THREAD_ID]).toHaveLength(
+          benchmarkCase.activityCount + 12,
+        );
+        reports.push({
+          name: benchmarkCase.name,
+          inputP95Ms: percentile(inputToPaintMs, 0.95),
+          reactCommitTotalMs: commits.reduce((total, duration) => total + duration, 0),
+        });
+      } finally {
+        await mounted.cleanup();
+        useComposerDraftStore.setState({ draftsByThreadId: {} });
+      }
+    }
+
+    const short = reports.find((report) => report.name === "short")!;
+    const nearCap = reports.find((report) => report.name === "near-cap")!;
+    expect(
+      nearCap.reactCommitTotalMs,
+      `Issue #550 benchmark: ${JSON.stringify(reports)}`,
+    ).toBeLessThan(short.reactCommitTotalMs * 1.6);
   });
 
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
