@@ -990,7 +990,7 @@ function isMatchingHarnessPolicyDelivery(
 function buildOpenCodeResumeCursor(input: {
   readonly openCodeSessionId: string;
   readonly cwd: string;
-  readonly harnessPolicyDelivered: boolean | undefined;
+  readonly harnessPolicyDelivered?: boolean | undefined;
   readonly gatewayControlAvailable: boolean;
 }): OpenCodeResumeCursor {
   return {
@@ -3963,7 +3963,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
         const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(
-          context.harnessPolicyDelivered === true ? { harnessPolicyDelivered: true } : {},
+          {
+            ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+          },
           {
             provider,
             scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
@@ -4012,7 +4014,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             resumeCursor: buildOpenCodeResumeCursor({
               openCodeSessionId: context.openCodeSessionId,
               cwd: context.directory,
-              harnessPolicyDelivered: context.harnessPolicyDelivered,
+              ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
               gatewayControlAvailable: context.gatewayControlAvailable,
             }),
           },
@@ -4090,7 +4092,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           resumeCursor: buildOpenCodeResumeCursor({
             openCodeSessionId: context.openCodeSessionId,
             cwd: context.directory,
-            harnessPolicyDelivered: context.harnessPolicyDelivered,
+            ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
             gatewayControlAvailable: context.gatewayControlAvailable,
           }),
         };
