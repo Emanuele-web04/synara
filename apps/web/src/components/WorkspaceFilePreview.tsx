@@ -712,6 +712,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     if (!taskFileDiskVersionRef.current.has(fileKey)) {
       taskFileDiskVersionRef.current.set(fileKey, current.version);
     }
+    const currentVersion = current.version;
+    const currentEncoding = current.encoding;
+    const currentLineEnding = current.lineEnding;
     const writeVersion = latestTaskWriteVersionRef.current.next + 1;
     latestTaskWriteVersionRef.current.next = writeVersion;
     latestTaskWriteVersionRef.current.byFile.set(fileKey, writeVersion);
@@ -722,9 +725,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           cwd: workspaceRoot,
           relativePath: writeRelativePath,
           contents: nextContents,
-          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? current.version,
-          encoding: current.encoding,
-          lineEnding: current.lineEnding,
+          expectedVersion: taskFileDiskVersionRef.current.get(fileKey) ?? currentVersion,
+          encoding: currentEncoding,
+          lineEnding: currentLineEnding,
         });
         taskFileDiskVersionRef.current.set(fileKey, result.version);
         queryClient.setQueryData<ProjectReadFileResult>(options.queryKey, (cached) =>

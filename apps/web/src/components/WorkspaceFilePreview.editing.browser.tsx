@@ -48,7 +48,7 @@ function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectRead
   };
 }
 
-function pressKeyboardSave(element: HTMLElement): void {
+function pressKeyboardSave(element: Element): void {
   element.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "s",
@@ -134,8 +134,7 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
 it("keeps markdown task previews and guarded versions in sync after an editor save", async () => {
   const markdownPath = "README.md";
   const taskVersion = `sha256:${"3".repeat(64)}`;
-  let completeTaskWrite: ((result: { relativePath: string; version: string }) => void) | null =
-    null;
+  let completeTaskWrite!: (result: { relativePath: string; version: string }) => void;
   const pendingTaskWrite = new Promise<{ relativePath: string; version: string }>((resolve) => {
     completeTaskWrite = resolve;
   });
@@ -179,7 +178,7 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
         lineEnding: "lf",
       }),
     );
-    completeTaskWrite?.({ relativePath: markdownPath, version: taskVersion });
+    completeTaskWrite({ relativePath: markdownPath, version: taskVersion });
   } finally {
     restoreNativeApi();
   }
