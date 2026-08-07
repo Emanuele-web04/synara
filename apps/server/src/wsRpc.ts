@@ -103,7 +103,11 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
-import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import {
+  WorkspaceFileConflictError,
+  WorkspaceFileDeletedError,
+  WorkspaceFileSystem,
+} from "./workspace/Services/WorkspaceFileSystem";
 import {
   MAX_STREAMS_PER_RPC_CLIENT,
   MAX_THREAD_STREAMS_PER_RPC_CLIENT,
@@ -1100,7 +1104,23 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to create local file preview grant",
           ),
         [WS_METHODS.projectsWriteFile]: (input) =>
-          rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
+          workspaceFileSystem.writeFile(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof WorkspaceFileConflictError
+                ? new WsRpcError({
+                    message: cause.message,
+                    code: "WORKSPACE_FILE_CONFLICT",
+                    retryable: false,
+                  })
+                : cause instanceof WorkspaceFileDeletedError
+                  ? new WsRpcError({
+                      message: cause.message,
+                      code: "WORKSPACE_FILE_DELETED",
+                      retryable: false,
+                    })
+                  : toWsRpcError(cause, "Failed to write workspace file"),
+            ),
+          ),
         [WS_METHODS.projectsRunDevServer]: (input) =>
           rpcEffect(devServerManager.run(input), "Failed to start dev server"),
         [WS_METHODS.projectsStopDevServer]: (input) =>
