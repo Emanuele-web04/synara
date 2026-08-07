@@ -1262,6 +1262,63 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("creates a branch-backed managed worktree when newBranch is provided", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const expectedHead = yield* git(tmp, ["rev-parse", "HEAD"]);
+        const wtPath = path.join(tmp, "wt-branch-backed");
+        const result = yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          newBranch: "synara/abcd1234",
+        });
+
+        expect(result.worktree).toEqual({
+          path: wtPath,
+          ref: expectedHead,
+          branch: "synara/abcd1234",
+        });
+        expect(yield* git(wtPath, ["symbolic-ref", "--short", "HEAD"])).toBe("synara/abcd1234");
+        expect(yield* git(tmp, ["rev-parse", "refs/heads/synara/abcd1234"])).toBe(expectedHead);
+
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+        const remainingBranches = yield* git(tmp, ["branch", "--list", "synara/abcd1234"]);
+        expect(remainingBranches).toBe("");
+      }),
+    );
+
+    it.effect("removeWorktree reclamation never deletes user-named branches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-user-branch");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          newBranch: "feature/user-owned",
+        });
+
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+        const remainingBranches = yield* git(tmp, ["branch", "--list", "feature/user-owned"]);
+        expect(remainingBranches).toContain("feature/user-owned");
+      }),
+    );
+
     it.effect("atomically replaces an incomplete worktree snapshot", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

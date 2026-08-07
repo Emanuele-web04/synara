@@ -42,6 +42,8 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AgentGatewayOperationRepositoryLive } from "../../agentGateway/Layers/AgentGatewayOperationRepository.ts";
+import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import {
@@ -203,6 +205,7 @@ describe("ProviderCommandReactor", () => {
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
     readonly commandEventTimeout?: Duration.Duration;
+    readonly gatewayOperationId?: string;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -520,6 +523,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
+      Layer.provideMerge(AgentGatewayOperationRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const runtime = ManagedRuntime.make(layer);
@@ -556,6 +560,9 @@ describe("ProviderCommandReactor", () => {
     const pendingInteractionRepository = await runtime.runPromise(
       Effect.service(ProjectionPendingInteractionRepository),
     );
+    const gatewayOperations = await runtime.runPromise(
+      Effect.service(AgentGatewayOperationRepository),
+    );
     scope = await Effect.runPromise(Scope.make("sequential"));
     let reactorStarted = false;
     const startReactor = async () => {
@@ -591,6 +598,13 @@ describe("ProviderCommandReactor", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        ...(input?.gatewayOperationId
+          ? {
+              creationSource: "synara_mcp" as const,
+              gatewayOperationId: input.gatewayOperationId,
+              gatewayOperationIndex: 0,
+            }
+          : {}),
         createdAt: now,
       }),
     );
@@ -682,6 +696,30 @@ describe("ProviderCommandReactor", () => {
       startReactor,
       deliveryRepository,
       pendingInteractionRepository,
+      reserveGatewayOperation: (operationId: string) =>
+        runtime.runPromise(
+          gatewayOperations.reserve({
+            operationId,
+            callerThreadId: "caller-thread",
+            callerTurnId: "caller-turn",
+            operationKind: "create_threads",
+            requestId: `request-${operationId}`,
+            fingerprint: `fingerprint-${operationId}`,
+            requestedCount: 1,
+            planJson: "[]",
+            now,
+          }),
+        ),
+      markGatewayOperationDispatching: (operationId: string) =>
+        runtime.runPromise(gatewayOperations.markDispatching({ operationId, now })),
+      completeGatewayOperation: (operationId: string) =>
+        runtime.runPromise(
+          gatewayOperations.complete({
+            operationId,
+            resultJson: "{}",
+            now: new Date().toISOString(),
+          }),
+        ),
       persistWithoutLivePublication: async (
         events: ReadonlyArray<Omit<OrchestrationEvent, "sequence">>,
       ) => {
@@ -4374,6 +4412,97 @@ describe("ProviderCommandReactor", () => {
       associatedWorktreeBranch: "synara/app-startup-crash",
       associatedWorktreeRef: "synara/app-startup-crash",
     });
+  });
+
+  it("waits for gateway operation completion before renaming its temporary branch", async () => {
+    const operationId = "gateway-operation-worktree-rename";
+    const harness = await createHarness({ gatewayOperationId: operationId });
+    const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "gateway-worktree-rename" }),
+    );
+    await harness.reserveGatewayOperation(operationId);
+    await harness.markGatewayOperationDispatching(operationId);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-gateway-worktree-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-gateway-turn-start-worktree-rename"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-gateway-worktree-rename"),
+          role: "user",
+          text: "Rename this gateway worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+
+    await harness.completeGatewayOperation(operationId);
+    await waitFor(() => harness.renameBranch.mock.calls.length === 1);
+    await waitFor(() => harness.publishBranch.mock.calls.length === 1);
+  });
+
+  it("does not rename a gateway branch when the operation record is missing", async () => {
+    const harness = await createHarness({ gatewayOperationId: "missing-gateway-operation" });
+    const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "must-not-be-used" }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-missing-gateway-worktree-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-missing-gateway-turn-start-worktree-rename"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-missing-gateway-worktree-rename"),
+          role: "user",
+          text: "Do not rename this worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+    expect(harness.publishBranch).not.toHaveBeenCalled();
   });
 
   it("falls back to prompt-based worktree branch names when the provider cannot generate one", async () => {

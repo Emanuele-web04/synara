@@ -1180,7 +1180,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       worktree: {
         path: "/repo/.codex/worktrees/generated/synara",
         ref: "0123456789abcdef0123456789abcdef01234567",
-        branch: null,
+        branch: typeof body.newBranch === "string" ? body.newBranch : null,
       },
     };
   }
@@ -6061,6 +6061,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
               request.copyChangesFrom === "/repo/project",
           );
           expect(createWorktreeRequest).toBeTruthy();
+          const temporaryBranch = createWorktreeRequest?.newBranch;
+          expect(typeof temporaryBranch).toBe("string");
+          expect(temporaryBranch).toMatch(/^synara\/[0-9a-f]{8}$/);
 
           const createThreadRequest = wsRequests.find(
             (request) =>
@@ -6075,10 +6078,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(createThreadRequest).toBeTruthy();
           expect(createThreadRequest?.command).toMatchObject({
             envMode: "worktree",
-            branch: null,
+            branch: temporaryBranch,
             worktreePath: "/repo/.codex/worktrees/generated/synara",
             associatedWorktreePath: "/repo/.codex/worktrees/generated/synara",
-            associatedWorktreeBranch: null,
+            associatedWorktreeBranch: temporaryBranch,
             associatedWorktreeRef: "0123456789abcdef0123456789abcdef01234567",
           });
         },
