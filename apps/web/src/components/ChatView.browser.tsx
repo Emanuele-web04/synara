@@ -3014,7 +3014,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps Thinking through the post-ack gap until the turn is running", async () => {
+  it("keeps Loading through the post-ack gap, then shows Thinking once running", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,
@@ -3052,7 +3052,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).toContain("Loading");
+          expect(document.body.textContent).not.toContain("Thinking");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -3079,7 +3080,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       // Server ack: durable user message + turn requested, but session still ready
-      // (provider session not live yet). Thinking must survive this gap.
+      // (provider session not live yet). Loading must survive this gap.
       const requestedTurnId = TurnId.makeUnsafe("turn-thinking-bridge");
       syncActiveThread((thread) => ({
         ...thread,
@@ -3118,7 +3119,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).toContain("Thinking");
+          expect(document.body.textContent).toContain("Loading");
+          expect(document.body.textContent).not.toContain("Thinking");
           expect(document.body.textContent).not.toContain("Working for");
         },
         { timeout: 4_000, interval: 16 },
@@ -3129,7 +3131,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 400);
       });
-      expect(document.body.textContent).toContain("Thinking");
+      expect(document.body.textContent).toContain("Loading");
+      expect(document.body.textContent).not.toContain("Thinking");
       expect(document.body.textContent).not.toContain("Working for");
 
       syncActiveThread((thread) => ({
