@@ -451,6 +451,7 @@ import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   acknowledgedRiskIdsForFormWarnings,
   AutomationDialog,
@@ -6234,6 +6235,8 @@ export default function ChatView({
     ],
   );
 
+  const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -6479,6 +6482,15 @@ export default function ChatView({
         return;
       }
 
+      // The handler already bailed out when no thread is open, so the active thread id
+      // is always the one the user is looking at (the focused pane when split).
+      if (command === "thread.copyId") {
+        event.preventDefault();
+        event.stopPropagation();
+        copyThreadIdToClipboard(activeThreadId);
+        return;
+      }
+
       const scriptId = projectScriptIdFromCommand(command);
       if (!scriptId || !activeProject) return;
       const script = activeProject.scripts.find((entry) => entry.id === scriptId);
@@ -6534,6 +6546,7 @@ export default function ChatView({
     selectedModel,
     modelOptionsByProvider,
     onProviderModelSelect,
+    copyThreadIdToClipboard,
   ]);
 
   // Preserve the original "single mic button" contract:
