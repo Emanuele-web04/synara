@@ -1253,10 +1253,7 @@ interface TerminalStateStoreState {
     terminalId: string,
     replacementTerminalId: string,
   ) => void;
-  closeExitedTerminal: (
-    threadId: ThreadId,
-    terminalId: string,
-  ) => TerminalExitDisposition;
+  closeExitedTerminal: (threadId: ThreadId, terminalId: string) => TerminalExitDisposition;
   closeTerminalGroup: (threadId: ThreadId, groupId: string) => void;
   resizeTerminalSplit: (
     threadId: ThreadId,

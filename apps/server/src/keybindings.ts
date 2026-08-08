@@ -1255,9 +1255,7 @@ const makeKeybindings = Effect.gen(function* () {
           if (replacing) yield* validateUpsertRule(replacing);
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const nextConfig = [
-            ...customConfig.filter((entry) =>
-              keepExistingRuleDuringUpsert(entry, rule, replacing),
-            ),
+            ...customConfig.filter((entry) => keepExistingRuleDuringUpsert(entry, rule, replacing)),
             rule,
           ];
           const cappedConfig =
