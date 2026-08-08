@@ -7,7 +7,8 @@ import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effec
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { resolveWindowsComSpec } from "@synara/shared/windowsProcess";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
@@ -68,10 +69,17 @@ function mockOpenCodeServerHandle(input: {
   });
 }
 
-function mockOpenCodeServerSpawnerLayer(input: { stdout: string; stderr: string }) {
+function mockOpenCodeServerSpawnerLayer(input: {
+  stdout: string;
+  stderr: string;
+  spawnedCommands?: Array<ChildProcess.StandardCommand>;
+}) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() => Effect.succeed(mockOpenCodeServerHandle(input))),
+    ChildProcessSpawner.make((command) => {
+      if (command._tag === "StandardCommand") input.spawnedCommands?.push(command);
+      return Effect.succeed(mockOpenCodeServerHandle(input));
+    }),
   );
 }
 
@@ -223,6 +231,62 @@ describe("buildOpenCodeServerProcessEnv", () => {
 });
 
 describe("OpenCodeRuntime startup diagnostics", () => {
+  it("wraps Windows .cmd server shims before spawning", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const spawnedCommands: Array<ChildProcess.StandardCommand> = [];
+
+    try {
+      const server = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* OpenCodeRuntime;
+            return yield* runtime.startOpenCodeServerProcess({
+              binaryPath: "C:\\Users\\Test User\\AppData\\Roaming\\npm\\opencode.cmd",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            });
+          }),
+        ).pipe(
+          Effect.provide(
+            makeOpenCodeRuntimeLive({
+              teardownProcessTree: async () => ({
+                escalated: false,
+                signalErrors: [],
+              }),
+            }).pipe(
+              Layer.provide(
+                mockOpenCodeServerSpawnerLayer({
+                  stdout: "opencode server listening on http://127.0.0.1:58123\n",
+                  stderr: "",
+                  spawnedCommands,
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(server.url).toBe("http://127.0.0.1:58123");
+      expect(spawnedCommands).toHaveLength(1);
+      expect(spawnedCommands[0]).toMatchObject({
+        command: resolveWindowsComSpec(),
+        args: [
+          "/d",
+          "/s",
+          "/v:off",
+          "/c",
+          'call "C:\\Users\\Test User\\AppData\\Roaming\\npm\\opencode.cmd" "serve" "--hostname" "127.0.0.1" "--port" "58123"',
+        ],
+        options: {
+          shell: false,
+          windowsVerbatimArguments: true,
+        },
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("includes command and partial process output when server startup times out", async () => {
     const error = await Effect.runPromise(
       Effect.scoped(

@@ -967,16 +967,25 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ));
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
+        const childEnv = buildOpenCodeServerProcessEnv({
+          cliSpec,
+          ...(input.experimentalWebSockets !== undefined
+            ? { experimentalWebSockets: input.experimentalWebSockets }
+            : {}),
+        });
+        // Match runOpenCodeCommand: bare npm/pi-node shims like `opencode.cmd` need
+        // Windows-safe resolution before Effect/Node spawn can launch them.
+        const prepared = prepareWindowsSafeProcess(input.binaryPath, args, {
+          cwd: input.cwd,
+          env: childEnv,
+        });
 
         const child = yield* spawner
           .spawn(
-            ChildProcess.make(input.binaryPath, args, {
-              env: buildOpenCodeServerProcessEnv({
-                cliSpec,
-                ...(input.experimentalWebSockets !== undefined
-                  ? { experimentalWebSockets: input.experimentalWebSockets }
-                  : {}),
-              }),
+            ChildProcess.make(prepared.command, prepared.args, {
+              shell: prepared.shell,
+              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+              env: childEnv,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               detached: false,
               killSignal: "SIGKILL",
