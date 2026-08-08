@@ -4,7 +4,11 @@
 // Layer: Settings UI components
 // Depends on: shared shortcut-sheet builder/filter, key capture, server keybindings config, and the Kbd pill.
 
-import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@synara/contracts";
+import type {
+  KeybindingCommand,
+  KeybindingRule,
+  ResolvedKeybindingsConfig,
+} from "@synara/contracts";
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -55,6 +59,7 @@ export function KeyboardShortcutsSettingsPanel() {
   const [newCommand, setNewCommand] = useState<KeybindingCommand>(DEFAULT_NEW_SHORTCUT_COMMAND);
   const [keyValue, setKeyValue] = useState("");
   const [whenValue, setWhenValue] = useState("");
+  const [replacingRule, setReplacingRule] = useState<KeybindingRule | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -76,8 +81,11 @@ export function KeyboardShortcutsSettingsPanel() {
     if (!entry.command || !entry.binding) return;
     setIsAdding(false);
     setEditingCommand(entry.command);
-    setKeyValue(keybindingValueFromShortcut(entry.binding.shortcut));
-    setWhenValue(formatKeybindingWhenExpression(entry.binding.whenAst));
+    const key = keybindingValueFromShortcut(entry.binding.shortcut);
+    const when = formatKeybindingWhenExpression(entry.binding.whenAst);
+    setKeyValue(key);
+    setWhenValue(when);
+    setReplacingRule({ command: entry.command, key, ...(when ? { when } : {}) });
     setCaptureError(null);
   };
   const beginAdding = () => {
@@ -85,6 +93,7 @@ export function KeyboardShortcutsSettingsPanel() {
     setIsAdding(true);
     setKeyValue("");
     setWhenValue("");
+    setReplacingRule(null);
     setCaptureError(null);
   };
   const cancelCapture = () => {
@@ -92,6 +101,7 @@ export function KeyboardShortcutsSettingsPanel() {
     setIsAdding(false);
     setKeyValue("");
     setWhenValue("");
+    setReplacingRule(null);
     setCaptureError(null);
   };
   const activeCommand = editingCommand ?? (isAdding ? newCommand : null);
@@ -111,9 +121,12 @@ export function KeyboardShortcutsSettingsPanel() {
     setIsSaving(true);
     try {
       const result = await ensureNativeApi().server.upsertKeybinding({
-        command: activeCommand,
-        key: keyValue.trim().toLowerCase(),
-        ...(whenValue.trim() ? { when: whenValue.trim() } : {}),
+        rule: {
+          command: activeCommand,
+          key: keyValue.trim().toLowerCase(),
+          ...(whenValue.trim() ? { when: whenValue.trim() } : {}),
+        },
+        ...(replacingRule ? { replacing: replacingRule } : {}),
       });
       queryClient.setQueryData(serverQueryKeys.config(), (current: typeof serverConfigQuery.data) =>
         current ? { ...current, keybindings: result.keybindings, issues: result.issues } : current,

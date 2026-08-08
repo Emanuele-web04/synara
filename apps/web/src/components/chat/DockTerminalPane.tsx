@@ -92,13 +92,11 @@ export function DockTerminalPane(props: {
   };
 
   const onSessionExited = (terminalId: string) => {
-    if (terminalState.terminalIds.length <= 1) {
+    const disposition = terminal.handleDockTerminalSessionExited(terminalId);
+    if (disposition === "final") {
       closedBySessionExitRef.current = true;
       props.onClosePanel();
-      terminal.handleFinalTerminalSessionExited(terminalId);
-      return;
     }
-    terminal.handleTerminalSessionExited(terminalId);
   };
 
   return (
