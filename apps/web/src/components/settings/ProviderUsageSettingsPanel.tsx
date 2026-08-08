@@ -12,10 +12,10 @@ import {
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
+import { ProviderUsageActivityCard } from "~/components/settings/ProviderUsageActivityCard";
 import { SettingsCard, SettingsSectionShell } from "~/components/settings/SettingsPanelPrimitives";
 import { Button } from "~/components/ui/button";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
@@ -25,6 +25,7 @@ import { deriveAccountRateLimits, type ProviderRateLimit } from "~/lib/rateLimit
 import {
   fetchAllProviderUsage,
   serverAllProviderUsageQueryOptions,
+  serverProfileTokenStatsQueryOptions,
   serverQueryKeys,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -57,24 +58,22 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
 function ProviderUsageCard({
   snapshot,
   threadRateLimits,
-  codexHomePath,
 }: {
   snapshot: ServerProviderUsageSnapshot;
   threadRateLimits: ReadonlyArray<ProviderRateLimit>;
-  codexHomePath: string | null;
 }) {
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
   const usageSummary = useProviderUsageSummary({
     provider,
     threadRateLimits,
-    codexHomePath,
     providerSnapshot: snapshot,
   });
   const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const usageLines = usageSummary.usageLines;
 
   const hasUsage = meterRows.length > 0 || usageLines.length > 0;
+  const canShowUsage = hasUsage && (status === "ok" || status === "unsupported");
   const pill = status === "ok" ? null : statusPill(snapshot.status);
 
   return (
@@ -98,7 +97,7 @@ function ProviderUsageCard({
           ) : null}
         </div>
 
-        {status === "ok" && hasUsage ? (
+        {canShowUsage ? (
           <>
             {usageSummary.usageNotice ? (
               <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-600 dark:text-amber-300/90">
@@ -159,12 +158,11 @@ function mergeProviderUsageRefresh(
 
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
-  const { settings } = useAppSettings();
-  const codexHomePath = settings.codexHomePath || null;
   const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   // Account/thread fallback rows are shared by every provider card; derive them once per panel.
   const threadRateLimits = deriveAccountRateLimits(threads);
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
+  const tokenUsageQuery = useQuery(serverProfileTokenStatsQueryOptions());
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
     onSuccess: (data) => {
@@ -172,6 +170,9 @@ export function ProviderUsageSettingsPanel() {
         serverQueryKeys.allProviderUsage(),
         (previous) => mergeProviderUsageRefresh(previous, data),
       );
+      void queryClient.invalidateQueries({
+        queryKey: serverProfileTokenStatsQueryOptions().queryKey,
+      });
     },
   });
 
@@ -216,16 +217,23 @@ export function ProviderUsageSettingsPanel() {
               key={snapshot.provider}
               snapshot={snapshot}
               threadRateLimits={threadRateLimits}
-              codexHomePath={codexHomePath}
             />
           ))}
         </div>
       )}
 
+      <ProviderUsageActivityCard
+        usage={tokenUsageQuery.data?.providerUsage ?? []}
+        isLoading={tokenUsageQuery.isPending}
+        isError={tokenUsageQuery.isError}
+        onRetry={() => void tokenUsageQuery.refetch()}
+      />
+
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-        Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. Short-lived tokens are refreshed through the provider&apos;s own CLI or
-        official token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
+        Account limits are read from provider credentials when a safe provider source is
+        available. Actual usage is local Synara history; optional OpenUsage snapshots can add
+        compatible local provider data. If a provider shows “Not signed in”, re-authenticate with
+        its CLI.
       </p>
     </SettingsSectionShell>
   );

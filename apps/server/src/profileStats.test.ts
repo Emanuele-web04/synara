@@ -1455,6 +1455,85 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("delta-calculates cumulative turn costs and counts a day thread once", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-provider-usage-cost', 'project-profile', 'Provider usage cost',
+            '{"provider":"opencode","model":"openai/gpt-5"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'activity-provider-usage-turn-1', 'thread-provider-usage-cost', 'turn-provider-usage-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.25,"modelUsage":{"openai/gpt-5":{"totalTokens":75}}}', 1,
+              '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-2', 'thread-provider-usage-cost', 'turn-provider-usage-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":3.75,"modelUsage":{"anthropic/claude-sonnet-4-6":{"totalTokens":125}}}', 2,
+              '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'activity-provider-usage-tokens-1', 'thread-provider-usage-cost', 'turn-provider-usage-1',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"opencode"}', 3,
+              '2026-06-15T09:06:00.000Z'
+            ),
+            (
+              'activity-provider-usage-tokens-2', 'thread-provider-usage-cost', 'turn-provider-usage-2',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":220,"provider":"opencode"}', 4,
+              '2026-06-15T09:16:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "opencode");
+
+        expect(usage).toMatchObject({
+          tokens: 200,
+          tokensReported: true,
+          turnCount: 2,
+          threadCount: 1,
+          costUsd: 2.5,
+        });
+        expect(usage?.history).toEqual([
+          {
+            day: "2026-06-15",
+            tokens: 200,
+            turnCount: 2,
+            threadCount: 1,
+            costUsd: 2.5,
+          },
+        ]);
+        expect(usage?.models).toEqual([
+          expect.objectContaining({
+            model: "anthropic/claude-sonnet-4-6",
+            tokens: 125,
+            upstreamProviderId: "anthropic",
+          }),
+          expect.objectContaining({ model: "openai/gpt-5", tokens: 75, upstreamProviderId: "openai" }),
+        ]);
+      }),
+    );
+  });
+
   it("uses the activity provider stamp when a legacy thread has malformed model JSON", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

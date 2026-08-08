@@ -51,8 +51,37 @@ export const ProfileTokenModelUsage = Schema.Struct({
   model: TrimmedNonEmptyString,
   tokens: NonNegativeInt,
   percent: Schema.Number,
+  // Present in the detailed provider-usage view. Kept optional so older
+  // profile consumers can decode the same token-stats response.
+  turnCount: Schema.optional(NonNegativeInt),
+  threadCount: Schema.optional(NonNegativeInt),
+  costUsd: Schema.optional(Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)))),
+  upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProfileTokenModelUsage = typeof ProfileTokenModelUsage.Type;
+
+export const ProfileTokenHistoryEntry = Schema.Struct({
+  day: TrimmedNonEmptyString,
+  tokens: NonNegativeInt,
+  turnCount: NonNegativeInt,
+  threadCount: NonNegativeInt,
+  costUsd: Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+});
+export type ProfileTokenHistoryEntry = typeof ProfileTokenHistoryEntry.Type;
+
+export const ProfileTokenProviderUsage = Schema.Struct({
+  provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  tokens: NonNegativeInt,
+  // False means the provider has recorded turns but no token telemetry for them.
+  tokensReported: Schema.Boolean,
+  turnCount: NonNegativeInt,
+  threadCount: NonNegativeInt,
+  costUsd: Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  lastUsedAt: Schema.NullOr(IsoDateTime),
+  models: Schema.Array(ProfileTokenModelUsage),
+  history: Schema.Array(ProfileTokenHistoryEntry),
+});
+export type ProfileTokenProviderUsage = typeof ProfileTokenProviderUsage.Type;
 
 export const ProfileSkillUsage = Schema.Struct({
   name: TrimmedNonEmptyString,
@@ -166,6 +195,10 @@ export const ProfileTokenStats = Schema.Struct({
   // Per-model token shares; clients prefer this over the turn-based
   // ProfileStats.providerModels when token telemetry is available.
   models: Schema.Array(ProfileTokenModelUsage),
+  // Detailed local activity keyed by Synara provider. Unlike live limits, this
+  // is measured from Synara's projected turns and may include unsupported
+  // providers and turns with no token telemetry.
+  providerUsage: Schema.optional(Schema.Array(ProfileTokenProviderUsage)),
   heatmapMetric: Schema.Literal("tokens"),
   heatmap: Schema.Array(ProfileHeatmapCell),
 });

@@ -17,6 +17,8 @@ export interface ProviderUsageContext {
   readonly platform: NodeJS.Platform;
   /** Reference "now" in epoch ms, used for token-expiry checks (kept injectable for tests). */
   readonly nowMs: number;
+  /** Server-validated Codex home override; never trust a client-supplied path directly. */
+  readonly codexHomePath?: string;
   /** Claude CLI binary (settings.providers.claudeAgent.binaryPath); defaults to "claude". */
   readonly claudeBinaryPath?: string;
 }

@@ -188,6 +188,10 @@ async function enrichWithLocalUsage(
   const localLines = await loadLocalProviderUsageLines({
     provider: snapshot.provider,
     homeDir: ctx.homeDir,
+    env: ctx.env,
+    ...(snapshot.provider === "codex" && ctx.codexHomePath
+      ? { homePath: ctx.codexHomePath }
+      : {}),
   });
   if (localLines.length === 0) {
     return snapshot;
@@ -225,6 +229,9 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
           ...buildContext(),
           homeDir: serverConfig.homeDir,
           claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          ...(settings.providers.codex.homePath
+            ? { codexHomePath: settings.providers.codex.homePath }
+            : {}),
         },
         {
           forceRefresh: input.forceRefresh === true,

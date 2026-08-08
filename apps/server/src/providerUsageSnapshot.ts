@@ -2,8 +2,10 @@
 // Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
 import type { Dirent, Stats } from "node:fs";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
+import { createInterface } from "node:readline";
 
 import type {
   ProviderKind,
@@ -15,6 +17,7 @@ import type {
 import { Effect } from "effect";
 
 import { ServerConfig } from "./config";
+import { ServerSettingsService } from "./serverSettings";
 
 const LOOKBACK_DAYS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -25,6 +28,11 @@ const USAGE_CACHE_TTL_MS = 30_000;
 // for heavy local usage without scanning the full historical archive every refresh.
 const MAX_RECENT_USAGE_FILES = 2_000;
 const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
+// A malformed or unexpectedly large transcript must not turn a refresh into a
+// multi-gigabyte allocation. The provider archives currently observed by
+// Synara are well below this bound; oversized files are skipped as partial
+// evidence instead of being presented as complete usage.
+const MAX_USAGE_FILE_BYTES = 64 * 1024 * 1024;
 
 type UsageSnapshot = Exclude<ServerGetProviderUsageSnapshotResult, null>;
 
@@ -282,54 +290,63 @@ async function listRecentCodexSessionFiles(sessionsRoot: string): Promise<Readon
 }
 
 async function readCodexSessionSummary(path: string): Promise<CodexSessionSummary | null> {
-  let fileContents: string;
   try {
-    fileContents = await fs.readFile(path, "utf8");
+    const stats = await fs.stat(path);
+    if (!stats.isFile() || stats.size > MAX_USAGE_FILE_BYTES) {
+      return null;
+    }
   } catch {
     return null;
   }
+  const stream = createReadStream(path, { encoding: "utf8" });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  let latestSummary: CodexSessionSummary | null = null;
+  try {
+    for await (const line of lines) {
+      if (stream.bytesRead > MAX_USAGE_FILE_BYTES) {
+        return null;
+      }
+      if (!line || !line.trim()) {
+        continue;
+      }
 
-  const lines = fileContents.split(/\r?\n/u);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line || !line.trim()) {
-      continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const record = asRecord(parsed);
+      if (!record || record.type !== "event_msg") {
+        continue;
+      }
+
+      const payload = asRecord(record.payload);
+      if (!payload || payload.type !== "token_count") {
+        continue;
+      }
+
+      const timestampMs = parseTimestampMs(record.timestamp ?? payload.timestamp);
+      if (timestampMs === null) {
+        continue;
+      }
+
+      latestSummary = {
+        timestampMs,
+        totalTokens: readCodexTotalTokens(payload),
+        limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
+      } satisfies CodexSessionSummary;
     }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    const record = asRecord(parsed);
-    if (!record || record.type !== "event_msg") {
-      continue;
-    }
-
-    const payload = asRecord(record.payload);
-    if (!payload || payload.type !== "token_count") {
-      continue;
-    }
-
-    const timestampMs = parseTimestampMs(record.timestamp ?? payload.timestamp);
-    if (timestampMs === null) {
-      continue;
-    }
-
-    const summary = {
-      timestampMs,
-      totalTokens: readCodexTotalTokens(payload),
-      limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
-    } satisfies CodexSessionSummary;
-
-    // Codex session JSONL is chronological; only the final token_count event is
-    // needed for lifetime accounting and the latest quota snapshot per file.
-    return summary;
+  } catch {
+    return null;
+  } finally {
+    lines.close();
+    stream.destroy();
   }
-
-  return null;
+  // Codex session JSONL is chronological; the last token_count event is the
+  // lifetime total and latest quota snapshot for the file.
+  return latestSummary;
 }
 
 function readClaudeTotalTokens(value: unknown): number {
@@ -416,8 +433,8 @@ function readClaudeToolResultSample(input: {
 // Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
 // `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
 // the active Claude provider does (the adapter inherits `process.env`).
-function resolveClaudeProjectsRoot(homeDir: string): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+function resolveClaudeProjectsRoot(homeDir: string, env: NodeJS.ProcessEnv): string {
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
   return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
 }
 
@@ -446,58 +463,73 @@ async function listRecentClaudeTranscriptFiles(
 }
 
 async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<ClaudeUsageSample>> {
-  let fileContents: string;
   try {
-    fileContents = await fs.readFile(path, "utf8");
+    const stats = await fs.stat(path);
+    if (!stats.isFile() || stats.size > MAX_USAGE_FILE_BYTES) {
+      return [];
+    }
   } catch {
     return [];
   }
-
+  const stream = createReadStream(path, { encoding: "utf8" });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
   const samples: ClaudeUsageSample[] = [];
   const seenKeys = new Set<string>();
-  const lines = fileContents.split(/\r?\n/u);
+  try {
+    let index = 0;
+    for await (const line of lines) {
+      if (stream.bytesRead > MAX_USAGE_FILE_BYTES) {
+        return [];
+      }
+      if (!line || !line.trim()) {
+        index += 1;
+        continue;
+      }
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line || !line.trim()) {
-      continue;
-    }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        index += 1;
+        continue;
+      }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
+      const record = asRecord(parsed);
+      if (!record) {
+        index += 1;
+        continue;
+      }
 
-    const record = asRecord(parsed);
-    if (!record) {
-      continue;
-    }
+      const fallbackKey = `${path}:${index}`;
+      const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
+      if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
+        seenKeys.add(assistantSample.dedupeKey);
+        samples.push(assistantSample.sample);
+      }
 
-    const fallbackKey = `${path}:${index}`;
-    const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
-    if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
-      seenKeys.add(assistantSample.dedupeKey);
-      samples.push(assistantSample.sample);
+      const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
+      if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
+        seenKeys.add(toolResultSample.dedupeKey);
+        samples.push(toolResultSample.sample);
+      }
+      index += 1;
     }
-
-    const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
-    if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
-      seenKeys.add(toolResultSample.dedupeKey);
-      samples.push(toolResultSample.sample);
-    }
+  } catch {
+    return [];
+  } finally {
+    lines.close();
+    stream.destroy();
   }
-
   return samples;
 }
 
 async function loadCodexUsageSnapshot(input: {
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<UsageSnapshot | null> {
   const codexHomeDir =
-    input.homePath?.trim() || process.env.CODEX_HOME || nodePath.join(input.homeDir, ".codex");
+    input.homePath?.trim() || input.env?.CODEX_HOME || nodePath.join(input.homeDir, ".codex");
   const sessionsRoot = nodePath.join(codexHomeDir, "sessions");
   const sessionFiles = await listRecentCodexSessionFiles(sessionsRoot);
   if (sessionFiles.length === 0) {
@@ -544,8 +576,11 @@ async function loadCodexUsageSnapshot(input: {
   };
 }
 
-async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<UsageSnapshot | null> {
-  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir);
+async function loadClaudeUsageSnapshot(input: {
+  homeDir: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<UsageSnapshot | null> {
+  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir, input.env ?? process.env);
   const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot);
   if (transcriptFiles.length === 0) {
     return null;
@@ -594,15 +629,20 @@ async function loadProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
   switch (input.provider) {
     case "codex":
       return loadCodexUsageSnapshot({
         homeDir: input.homeDir,
         ...(input.homePath ? { homePath: input.homePath } : {}),
+        ...(input.env ? { env: input.env } : {}),
       });
     case "claudeAgent":
-      return loadClaudeUsageSnapshot({ homeDir: input.homeDir });
+      return loadClaudeUsageSnapshot({
+        homeDir: input.homeDir,
+        ...(input.env ? { env: input.env } : {}),
+      });
     default:
       return null;
   }
@@ -612,8 +652,11 @@ async function getCachedProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
-  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:${process.env.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
+  const cacheKey =
+    `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:` +
+    `${input.env?.CODEX_HOME?.trim() ?? ""}:${input.env?.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
   const nowMs = Date.now();
   const existing = usageSnapshotCache.get(cacheKey);
 
@@ -648,12 +691,19 @@ export const getProviderUsageSnapshot = Effect.fn(function* (
   input: ServerGetProviderUsageSnapshotInput,
 ) {
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
   return yield* Effect.tryPromise({
     try: () =>
       getCachedProviderUsageSnapshot({
         provider: input.provider,
         homeDir: serverConfig.homeDir,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
+        // Keep the legacy request field, but never let a client choose an
+        // arbitrary local path to scan. The configured Codex home is server-owned.
+        ...(input.provider === "codex" && settings.providers.codex.homePath
+          ? { homePath: settings.providers.codex.homePath }
+          : {}),
+        env: process.env,
       }),
     catch: () => null,
   });
@@ -665,6 +715,7 @@ export async function loadLocalProviderUsageLines(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ReadonlyArray<ServerProviderUsageLine>> {
   try {
     const snapshot = await getCachedProviderUsageSnapshot(input);

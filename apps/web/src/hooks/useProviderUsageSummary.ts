@@ -15,7 +15,6 @@ import {
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import {
-  isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
   normalizeServerProviderUsageRateLimit,
 } from "~/lib/providerUsageSnapshot";
@@ -35,7 +34,6 @@ export function useProviderUsageSummary(input: {
   provider: ProviderKind | null | undefined;
   threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
-  codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
@@ -50,7 +48,6 @@ export function useProviderUsageSummary(input: {
   const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
       provider,
-      homePath: provider === "codex" ? input.codexHomePath || null : null,
       enabled: shouldFetchLocalProviderUsage,
     }),
   );
@@ -64,7 +61,12 @@ export function useProviderUsageSummary(input: {
   );
   const authoritativeLiveSnapshot = liveProviderSnapshot ?? input.providerSnapshot ?? null;
   // Explicit live failures are authoritative; only fall back when no live snapshot exists.
-  const blocksProviderUsageFallback = isProviderUsageSnapshotNonOk(authoritativeLiveSnapshot);
+  // "Unsupported" is an honest capability result, not a failed fetch. Keep
+  // runtime/local activity and thread-reported limits visible for providers
+  // that do not expose a safe account endpoint yet.
+  const blocksProviderUsageFallback =
+    authoritativeLiveSnapshot?.status === "needs-auth" ||
+    authoritativeLiveSnapshot?.status === "error";
   const accountRateLimits = input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []);
 
   let rateLimits: ReadonlyArray<ProviderRateLimit> = [];
