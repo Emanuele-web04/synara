@@ -34,6 +34,7 @@ function makeSettings(
     openCodeBinaryPath: "",
     piBinaryPath: "",
     piAgentDir: "",
+    devinBinaryPath: "",
     ...overrides,
   };
 }
