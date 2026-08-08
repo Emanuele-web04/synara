@@ -24,6 +24,12 @@ import {
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
 import {
+  ServerListExternalProjectCandidatesInput,
+  ServerListExternalProjectCandidatesResult,
+  ServerListExternalSessionsInput,
+  ServerListExternalSessionsResult,
+} from "./externalSessions";
+import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpCreateIntegrationResult,
   ExternalMcpIntegration,
@@ -801,6 +807,21 @@ export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProvid
   error: WsRpcError,
 });
 
+export const WsServerListExternalSessionsRpc = Rpc.make(WS_METHODS.serverListExternalSessions, {
+  payload: ServerListExternalSessionsInput,
+  success: ServerListExternalSessionsResult,
+  error: WsRpcError,
+});
+
+export const WsServerListExternalProjectCandidatesRpc = Rpc.make(
+  WS_METHODS.serverListExternalProjectCandidates,
+  {
+    payload: ServerListExternalProjectCandidatesInput,
+    success: ServerListExternalProjectCandidatesResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsStatsGetProfileStatsRpc = Rpc.make(WS_METHODS.statsGetProfileStats, {
   payload: StatsGetProfileStatsInput,
   success: StatsGetProfileStatsResult,
@@ -1096,6 +1117,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
+  WsServerListExternalSessionsRpc,
+  WsServerListExternalProjectCandidatesRpc,
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,

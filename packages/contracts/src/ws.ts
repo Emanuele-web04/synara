@@ -86,6 +86,10 @@ import {
 } from "./project";
 import { StudioListThreadOutputsInput } from "./studio";
 import { FilesystemBrowseInput } from "./filesystem";
+import {
+  ServerListExternalProjectCandidatesInput,
+  ServerListExternalSessionsInput,
+} from "./externalSessions";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
@@ -219,6 +223,8 @@ export const WS_METHODS = {
   serverStopLocalServer: "server.stopLocalServer",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverListProviderUsage: "server.listProviderUsage",
+  serverListExternalSessions: "server.listExternalSessions",
+  serverListExternalProjectCandidates: "server.listExternalProjectCandidates",
   statsGetProfileStats: "stats.getProfileStats",
   statsGetProfileTokenStats: "stats.getProfileTokenStats",
   serverGetDiagnostics: "server.getDiagnostics",
@@ -400,6 +406,11 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverListProviderUsage, ServerListProviderUsageInput),
+  tagRequestBody(WS_METHODS.serverListExternalSessions, ServerListExternalSessionsInput),
+  tagRequestBody(
+    WS_METHODS.serverListExternalProjectCandidates,
+    ServerListExternalProjectCandidatesInput,
+  ),
   tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
   tagRequestBody(WS_METHODS.statsGetProfileTokenStats, StatsGetProfileTokenStatsInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
