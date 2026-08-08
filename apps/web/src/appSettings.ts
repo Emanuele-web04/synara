@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema, SchemaTransformation } from "effect";
 import {
   type AssistantDeliveryMode,
+  DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
@@ -944,13 +945,15 @@ export function getAppModelOptions(
 
 type GitTextGenerationDiscoveredProvider = "codex" | "kilo" | "opencode" | "cursor";
 
-/** The providers the Git writing picker exposes, in display order. */
-export const GIT_TEXT_GENERATION_PICKER_PROVIDERS = [
-  "codex",
-  "kilo",
-  "opencode",
-  "cursor",
-] as const satisfies readonly GitTextGenerationDiscoveredProvider[];
+/**
+ * The providers the Git writing picker exposes, in display order. Derived from
+ * the registry keys so the picker list cannot drift from the registered
+ * defaults (registry insertion order == picker order).
+ */
+export const GIT_TEXT_GENERATION_PICKER_PROVIDERS: readonly GitTextGenerationDiscoveredProvider[] =
+  Object.keys(
+    DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
+  ) as GitTextGenerationDiscoveredProvider[];
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
