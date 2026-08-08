@@ -4648,7 +4648,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               callID: "task-call-1",
               state: {
                 status: "running",
-                title: "Find changelog implementation",
+                title: "\nFind changelog implementation\n",
                 input: {
                   description: "Find changelog implementation",
                   prompt: "Explore changelog files.",
@@ -4679,7 +4679,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
                 input: {
                   pattern: "changelog",
                 },
-                output: "Found 18 matches",
+                output: "\nFound 18 matches\n",
                 time: {
                   start: 2,
                   end: 3,

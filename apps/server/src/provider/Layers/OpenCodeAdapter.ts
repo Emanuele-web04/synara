@@ -660,14 +660,19 @@ function messageRoleForPart(
   return part.type === "tool" ? "assistant" : undefined;
 }
 
+function normalizedToolDetail(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 function detailFromToolPart(part: Extract<Part, { type: "tool" }>): string | undefined {
   switch (part.state.status) {
     case "completed":
-      return part.state.output;
+      return normalizedToolDetail(part.state.output);
     case "error":
-      return part.state.error;
+      return normalizedToolDetail(part.state.error);
     case "running":
-      return part.state.title;
+      return normalizedToolDetail(part.state.title);
     default:
       return undefined;
   }
@@ -2547,7 +2552,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               rememberRelatedOpenCodeSession(context, part);
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
-                part.state.status === "running" ? (part.state.title ?? part.tool) : part.tool;
+                part.state.status === "running"
+                  ? (normalizedToolDetail(part.state.title) ?? part.tool)
+                  : part.tool;
               const detail = detailFromToolPart(part);
               const payload = {
                 itemType,
