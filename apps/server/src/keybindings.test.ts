@@ -858,6 +858,30 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("rejects invalid conditions without overwriting the existing binding", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const existingRule = {
+        key: "mod+r",
+        command: "script.run-tests.run",
+        when: "!terminalFocus",
+      } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [existingRule]);
+
+      const result = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.upsertKeybindingRule({
+          key: "mod+shift+r",
+          command: "script.run-tests.run",
+          when: "!terminalFocus &&",
+        });
+      }).pipe(toDetailResult);
+
+      assertFailure(result, "invalid shortcut or condition expression");
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [existingRule]);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("refuses to overwrite malformed keybindings config", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

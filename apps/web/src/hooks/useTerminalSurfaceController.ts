@@ -42,6 +42,7 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
   const closeTerminalAndEnsureReplacementStore = useTerminalStateStore(
     (s) => s.closeTerminalAndEnsureReplacement,
   );
+  const closeTerminalStore = useTerminalStateStore((s) => s.closeTerminal);
   const closeTerminalGroupStore = useTerminalStateStore((s) => s.closeTerminalGroup);
   const setTerminalHeightStore = useTerminalStateStore((s) => s.setTerminalHeight);
   const resizeTerminalSplitStore = useTerminalStateStore((s) => s.resizeTerminalSplit);
@@ -105,14 +106,24 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     bumpFocusRequest();
   };
 
-  const handleTerminalSessionExited = (terminalId: string) => {
+  const disposeExitedTerminal = (terminalId: string) => {
     disposeAndCloseTerminalSession({
       api: readNativeApi(),
       threadId,
       terminalId,
       processAlreadyExited: true,
     });
+  };
+
+  const handleTerminalSessionExited = (terminalId: string) => {
+    disposeExitedTerminal(terminalId);
     closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
+    bumpFocusRequest();
+  };
+
+  const handleFinalTerminalSessionExited = (terminalId: string) => {
+    disposeExitedTerminal(terminalId);
+    closeTerminalStore(threadId, terminalId);
     bumpFocusRequest();
   };
 
@@ -142,6 +153,7 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     activateTerminal,
     closeTerminal,
     handleTerminalSessionExited,
+    handleFinalTerminalSessionExited,
     closeTerminalGroup,
     setTerminalHeight,
     resizeTerminalSplit,

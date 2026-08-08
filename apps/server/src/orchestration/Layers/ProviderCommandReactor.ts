@@ -65,6 +65,7 @@ import {
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {
   ProviderAdapterRequestError,
@@ -107,6 +108,7 @@ import {
   listImportedForkMessages,
   listPriorTranscriptMessages,
 } from "../handoff.ts";
+import type { OrchestrationDispatchError } from "../Errors.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -297,6 +299,7 @@ const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
+const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -362,6 +365,25 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
   return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
 }
 
+function isClaudeContextWindowUserInputRejection(error: ProviderServiceError): boolean {
+  if (
+    error._tag !== "ProviderAdapterRequestError" ||
+    error.provider !== "claudeAgent" ||
+    error.method !== "item/tool/respondToUserInput"
+  ) {
+    return false;
+  }
+  const detail = error.detail.toLowerCase();
+  return (
+    detail.includes("context window") ||
+    detail.includes("context limit") ||
+    detail.includes("context length") ||
+    detail.includes("context_length_exceeded") ||
+    detail.includes("prompt is too long") ||
+    detail.includes("input_length and max_tokens")
+  );
+}
+
 function interactionFailureSettlementStatus(
   cause: Cause.Cause<ProviderServiceError>,
   isUnknownPendingRequest: boolean,
@@ -370,8 +392,9 @@ function interactionFailureSettlementStatus(
     onNone: () => "uncertain" as const,
     onSome: (error) => {
       if (
-        error._tag === "ProviderAdapterRequestError" &&
-        error.method === "permission.reply.acknowledge"
+        (error._tag === "ProviderAdapterRequestError" &&
+          error.method === "permission.reply.acknowledge") ||
+        isClaudeContextWindowUserInputRejection(error)
       ) {
         return "retryable" as const;
       }
@@ -463,8 +486,44 @@ const make = Effect.gen(function* () {
   const checkpointStore = yield* CheckpointStore;
   const studioOutputReactor = yield* StudioOutputReactor;
   const git = yield* GitCore;
+  const gatewayOperations = yield* AgentGatewayOperationRepository;
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
+
+  const waitForGatewayOperationCompletion = Effect.fnUntraced(function* (operationId: string) {
+    const completed = yield* Effect.gen(function* () {
+      while (true) {
+        const operation = yield* gatewayOperations
+          .getById(operationId)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                "provider command reactor could not read creating gateway operation; skipping worktree branch rename",
+                { operationId, error: error instanceof Error ? error.message : String(error) },
+              ).pipe(Effect.as(null)),
+            ),
+          );
+        if (operation === null) {
+          return false;
+        }
+        if (operation.status === "completed") {
+          return true;
+        }
+        if (operation.status === "failed" || operation.status === "compensating") {
+          return false;
+        }
+        yield* Effect.sleep(Duration.millis(100));
+      }
+    }).pipe(Effect.timeoutOption(GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT));
+    if (Option.isNone(completed)) {
+      yield* Effect.logWarning(
+        "provider command reactor timed out waiting for creating gateway operation; skipping worktree branch rename",
+        { operationId },
+      );
+      return false;
+    }
+    return completed.value;
+  });
   const managedAttachments = yield* ManagedAttachmentRepository;
   const serverConfig = yield* ServerConfig;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -606,6 +665,14 @@ const make = Effect.gen(function* () {
     completePendingContextBootstrapAttempt(event.threadId, attempt, event);
   };
 
+  const resolveConfiguredTextGenerationInput = Effect.fnUntraced(function* () {
+    const settings = yield* serverSettings.getSettings;
+    return resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      providerStartOptionsFromServerSettings(settings),
+    );
+  });
+
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly modelSelection?: ModelSelection;
@@ -628,11 +695,7 @@ const make = Effect.gen(function* () {
     }
 
     // Non-generating chat providers still get AI titles via the configured git-writing model.
-    const settings = yield* serverSettings.getSettings;
-    return resolveTextGenerationInputForSelection(
-      settings.textGenerationModelSelection,
-      providerOptions,
-    );
+    return yield* resolveConfiguredTextGenerationInput();
   });
 
   const appendProviderFailureActivity = (input: {
@@ -1829,9 +1892,24 @@ const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly oldBranch: string;
     readonly targetBranch: string;
+    readonly gatewayOperationId: string | null;
   }) {
     if (input.targetBranch === input.oldBranch) {
       return;
+    }
+
+    // Gateway-created threads: the creating operation's durable ownership
+    // proof records the temporary branch name. Renaming before the operation
+    // reaches a terminal state would make live compensation and startup
+    // recovery reject the worktree as tampered ("worktree branch changed"),
+    // stranding it. Wait for durable completion rather than dropping the
+    // first-turn rename; failed, compensating, missing, or unreadable
+    // operations never authorize the mutation.
+    if (input.gatewayOperationId !== null) {
+      const completed = yield* waitForGatewayOperationCompletion(input.gatewayOperationId);
+      if (!completed) {
+        return;
+      }
     }
 
     const renamed = yield* git.withMutation(
@@ -1886,8 +1964,6 @@ const make = Effect.gen(function* () {
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
-    readonly modelSelection?: ModelSelection;
-    readonly providerOptions?: ProviderStartOptions;
   }) {
     if (!input.branch || !input.worktreePath) {
       return;
@@ -1902,33 +1978,18 @@ const make = Effect.gen(function* () {
     const oldBranch = input.branch;
     const cwd = input.worktreePath;
     const attachments = input.attachments ?? [];
-    const textGenerationInput = yield* resolveThreadTextGenerationInput({
-      threadId: input.threadId,
-      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-    });
+    // Branch naming is a Git-writing concern, just like commit and PR text.
+    // Keep it on the dedicated configured model instead of coupling it to the
+    // conversation provider, which may not support structured text generation.
+    const textGenerationInput = yield* resolveConfiguredTextGenerationInput();
     if (!textGenerationInput) {
-      const targetBranch = buildGeneratedWorktreeBranchName(
-        input.messageText.trim() || attachmentTitleSeed(attachments[0]) || "",
-      );
-      yield* renameTemporaryWorktreeBranch({
-        threadId: input.threadId,
-        cwd,
-        oldBranch,
-        targetBranch,
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            "provider command reactor failed to apply fallback worktree branch name",
-            {
-              threadId: input.threadId,
-              cwd,
-              oldBranch,
-              targetBranch,
-              cause: Cause.pretty(cause),
-            },
-          ),
-        ),
+      yield* Effect.logDebug(
+        "provider command reactor has no Git-writing model for worktree branch naming; keeping temporary branch",
+        {
+          threadId: input.threadId,
+          cwd,
+          branch: oldBranch,
+        },
       );
       return;
     }
@@ -1944,7 +2005,7 @@ const make = Effect.gen(function* () {
     yield* textGeneration.generateBranchName(branchNameGenerationInput).pipe(
       Effect.catch((error) =>
         Effect.logWarning(
-          "provider command reactor failed to generate worktree branch name; skipping rename",
+          "provider command reactor failed to generate worktree branch name; keeping temporary branch",
           { threadId: input.threadId, cwd, oldBranch, reason: error.message },
         ),
       ),
@@ -1957,6 +2018,7 @@ const make = Effect.gen(function* () {
           cwd,
           oldBranch,
           targetBranch,
+          gatewayOperationId: thread.gatewayOperationId ?? null,
         });
       }),
       Effect.catchCause((cause) =>
@@ -2217,12 +2279,6 @@ const make = Effect.gen(function* () {
         messageId: message.id,
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-        ...(event.payload.modelSelection !== undefined
-          ? { modelSelection: event.payload.modelSelection }
-          : {}),
-        ...(event.payload.providerOptions !== undefined
-          ? { providerOptions: event.payload.providerOptions }
-          : {}),
       }).pipe(Effect.forkScoped);
       yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
         threadId: event.payload.threadId,
@@ -2679,7 +2735,7 @@ const make = Effect.gen(function* () {
       readonly detail: string;
       readonly settlementStatus: "retryable" | "uncertain";
     },
-  ) =>
+  ): Effect.Effect<void, OrchestrationDispatchError> =>
     event.commandId === null
       ? Effect.void
       : appendProviderFailureActivity({

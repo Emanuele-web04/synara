@@ -1,3 +1,5 @@
+import type { KeybindingShortcut } from "@synara/contracts";
+
 import { isMacPlatform } from "~/lib/utils";
 
 /**
@@ -24,7 +26,7 @@ export function normalizeShortcutKeyToken(key: string): string | null {
   if (normalized === "arrowleft") return "arrowleft";
   if (normalized === "arrowright") return "arrowright";
   if (normalized.length === 1) return normalized;
-  if (normalized.startsWith("f") && normalized.length <= 3) return normalized;
+  if (/^f(?:[1-9]|1\d|2[0-4])$/.test(normalized)) return normalized;
   if (
     normalized === "enter" ||
     normalized === "tab" ||
@@ -65,4 +67,15 @@ export function keybindingFromKeyboardEvent(
   parts.push(keyToken);
 
   return parts.length <= 3 ? parts.join("+") : null;
+}
+
+export function keybindingValueFromShortcut(shortcut: KeybindingShortcut): string {
+  const parts: string[] = [];
+  if (shortcut.modKey) parts.push("mod");
+  if (shortcut.ctrlKey) parts.push("ctrl");
+  if (shortcut.metaKey) parts.push("meta");
+  if (shortcut.altKey) parts.push("alt");
+  if (shortcut.shiftKey) parts.push("shift");
+  parts.push(shortcut.key === " " ? "space" : shortcut.key === "escape" ? "esc" : shortcut.key);
+  return parts.join("+");
 }

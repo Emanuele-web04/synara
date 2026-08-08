@@ -7,7 +7,7 @@ export const MAX_WHEN_EXPRESSION_DEPTH = 64;
 export const MAX_SCRIPT_ID_LENGTH = 24;
 export const MAX_KEYBINDINGS_COUNT = 256;
 
-const STATIC_KEYBINDING_COMMANDS = [
+export const STATIC_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "sidebar.search",
   "sidebar.activity",
@@ -64,6 +64,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "thread.jump.7",
   "thread.jump.8",
   "thread.jump.9",
+  "thread.copyId",
   "chat.visible.next",
   "chat.visible.previous",
   "editor.openFavorite",

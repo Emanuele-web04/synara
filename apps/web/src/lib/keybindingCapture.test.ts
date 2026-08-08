@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { keybindingFromKeyboardEvent } from "./keybindingCapture";
+import { keybindingFromKeyboardEvent, keybindingValueFromShortcut } from "./keybindingCapture";
 
 describe("keybindingFromKeyboardEvent", () => {
   it("captures a single key", () => {
@@ -52,5 +52,32 @@ describe("keybindingFromKeyboardEvent", () => {
         altKey: false,
       }),
     ).toBeNull();
+  });
+
+  it("rejects unsupported named keys that merely begin with f", () => {
+    expect(
+      keybindingFromKeyboardEvent({
+        key: "Fn",
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("keybindingValueFromShortcut", () => {
+  it("serializes a resolved shortcut back to config syntax", () => {
+    expect(
+      keybindingValueFromShortcut({
+        key: "escape",
+        modKey: true,
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+      }),
+    ).toBe("mod+shift+esc");
   });
 });

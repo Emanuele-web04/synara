@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 - 2026-08-05
+
+**A review of the Synara codebase found an analytics configuration that came from the original T3 Code codebase when Synara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**
+
+**The configuration has been removed. Synara no longer sends remote product analytics. The events did not include prompts, source code, filenames, or file contents.**
+
+**We're sorry this wasn't caught earlier**
+
 ## 0.6.7 - 2026-08-05
 
 ### Added

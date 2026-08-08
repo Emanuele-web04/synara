@@ -30,7 +30,7 @@ export function DockTerminalPane(props: {
   // When false the pane stays mounted but hidden (another dock tab is active),
   // so the xterm runtime sleeps its visual work without detaching its DOM.
   isActive?: boolean;
-  onClosePanel?: () => void;
+  onClosePanel: () => void;
 }) {
   const scopeId = dockTerminalThreadId(props.hostThreadId);
   const threadWorkspace = useStore(
@@ -94,7 +94,9 @@ export function DockTerminalPane(props: {
   const onSessionExited = (terminalId: string) => {
     if (terminalState.terminalIds.length <= 1) {
       closedBySessionExitRef.current = true;
-      props.onClosePanel?.();
+      props.onClosePanel();
+      terminal.handleFinalTerminalSessionExited(terminalId);
+      return;
     }
     terminal.handleTerminalSessionExited(terminalId);
   };

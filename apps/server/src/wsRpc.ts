@@ -48,6 +48,10 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import {
+  isThreadDetailEventFor,
+  THREAD_DETAIL_EVENT_TYPES,
+} from "@synara/shared/threadDetailEvents";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
   ensureStudioWorkspaceInstructionsFiles,
@@ -103,7 +107,11 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
-import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import {
+  WorkspaceFileConflictError,
+  WorkspaceFileDeletedError,
+  WorkspaceFileSystem,
+} from "./workspace/Services/WorkspaceFileSystem";
 import {
   MAX_STREAMS_PER_RPC_CLIENT,
   MAX_THREAD_STREAMS_PER_RPC_CLIENT,
@@ -146,6 +154,13 @@ export function canManageExternalMcp(role: "owner" | "client"): boolean {
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+
+// Bounded window a thread subscription waits for the projector to commit the
+// thread's detail read model before failing with THREAD_SNAPSHOT_NOT_FOUND.
+// Covers subscribe-vs-projection races on freshly created threads; a thread
+// that truly does not exist still fails, just this much later.
+const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS = 5_000;
+const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
 
 class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
   "synara/WsRequestAdmissionMiddleware",
@@ -284,31 +299,6 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
-function isThreadDetailEventFor(threadId: ThreadId, event: OrchestrationEvent): boolean {
-  return (
-    event.aggregateKind === "thread" &&
-    event.aggregateId === threadId &&
-    (event.type === "thread.message-sent" ||
-      event.type === "thread.proposed-plan-upserted" ||
-      event.type === "thread.activity-appended" ||
-      event.type === "thread.turn-diff-completed" ||
-      event.type === "thread.reverted" ||
-      event.type === "thread.conversation-rolled-back" ||
-      event.type === "thread.session-set" ||
-      event.type === "thread.meta-updated" ||
-      event.type === "thread.pinned-message-added" ||
-      event.type === "thread.pinned-message-removed" ||
-      event.type === "thread.pinned-message-done-set" ||
-      event.type === "thread.pinned-message-label-set" ||
-      event.type === "thread.marker-added" ||
-      event.type === "thread.marker-removed" ||
-      event.type === "thread.marker-done-set" ||
-      event.type === "thread.marker-label-set" ||
-      event.type === "thread.archived" ||
-      event.type === "thread.unarchived")
-  );
-}
-
 const makeWsRpcHandlersLayer = () =>
   AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -431,6 +421,25 @@ const makeWsRpcHandlersLayer = () =>
               }),
             ),
           );
+
+      // A thread subscription can race the projector: the client subscribes the
+      // moment a create/turn RPC resolves, while the detail read model commits
+      // asynchronously behind the journal. Failing straight away with
+      // THREAD_SNAPSHOT_NOT_FOUND tears the stream down for a thread the server
+      // is actively running. Waiting here is safe because the cursor-safe
+      // stream attaches its live tap before evaluating the snapshot effect, so
+      // no event that commits during the wait is lost.
+      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
+          while (true) {
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
+            if (Option.isSome(detail) || Date.now() >= deadline) {
+              return detail;
+            }
+            yield* Effect.sleep(THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS);
+          }
+        });
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
         error instanceof GitHubCliError &&
@@ -651,6 +660,13 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
+      const refreshGitStatusInBackground = (cwd: string) =>
+        gitStatusBroadcaster.refreshStatus(cwd).pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
+
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
         homeDir: config.homeDir,
         worktreesDir: config.worktreesDir,
@@ -849,18 +865,24 @@ const makeWsRpcHandlersLayer = () =>
             checkpointDiffQuery.getFullThreadDiff(input),
             "Failed to load full thread diff",
           ),
-        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
-          rpcEffect(
-            Stream.runCollect(
-              orchestrationEngine.readEvents(
-                clamp(input.fromSequenceExclusive, {
-                  maximum: Number.MAX_SAFE_INTEGER,
-                  minimum: 0,
-                }),
-              ),
-            ).pipe(Effect.map((events) => Array.from(events))),
+        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) => {
+          const fromSequenceExclusive = clamp(input.fromSequenceExclusive, {
+            maximum: Number.MAX_SAFE_INTEGER,
+            minimum: 0,
+          });
+          const replay =
+            input.threadId === undefined
+              ? orchestrationEngine.readEvents(fromSequenceExclusive)
+              : orchestrationEngine.readThreadEvents(
+                  input.threadId,
+                  fromSequenceExclusive,
+                  THREAD_DETAIL_EVENT_TYPES,
+                );
+          return rpcEffect(
+            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
             "Failed to replay orchestration events",
-          ),
+          );
+        },
         [ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers]: (input) =>
           rpcEffect(
             providerCommandReactor.listBlockingDeliveries({
@@ -970,7 +992,7 @@ const makeWsRpcHandlersLayer = () =>
                 Effect.map((stream) =>
                   bufferLiveUiStream(
                     stream.pipe(
-                      Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
                     ),
                     {
                       label: "orchestration.thread-detail",
@@ -979,7 +1001,7 @@ const makeWsRpcHandlersLayer = () =>
                   ),
                 ),
               ),
-              snapshot: projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1002,9 +1024,14 @@ const makeWsRpcHandlersLayer = () =>
               getHighWaterSequence: getOrchestrationHighWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
-                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+                  .readThreadEventsThrough(
+                    input.threadId,
+                    fromSequenceExclusive,
+                    throughSequenceInclusive,
+                    THREAD_DETAIL_EVENT_TYPES,
+                  )
                   .pipe(
-                    Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
                     Stream.mapError((cause) =>
                       toWsRpcError(cause, "Failed to replay thread events"),
                     ),
@@ -1074,7 +1101,23 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to create local file preview grant",
           ),
         [WS_METHODS.projectsWriteFile]: (input) =>
-          rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
+          workspaceFileSystem.writeFile(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof WorkspaceFileConflictError
+                ? new WsRpcError({
+                    message: cause.message,
+                    code: "WORKSPACE_FILE_CONFLICT",
+                    retryable: false,
+                  })
+                : cause instanceof WorkspaceFileDeletedError
+                  ? new WsRpcError({
+                      message: cause.message,
+                      code: "WORKSPACE_FILE_DELETED",
+                      retryable: false,
+                    })
+                  : toWsRpcError(cause, "Failed to write workspace file"),
+            ),
+          ),
         [WS_METHODS.projectsRunDevServer]: (input) =>
           rpcEffect(devServerManager.run(input), "Failed to start dev server"),
         [WS_METHODS.projectsStopDevServer]: (input) =>
@@ -1280,20 +1323,21 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              refreshGitStatusAfter(
-                input.cwd,
-                gitManager.runStackedAction(input, {
+              gitManager
+                .runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
                     publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                   },
-                }),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                }),
-              ),
+                })
+                .pipe(
+                  Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                  }),
+                ),
             ),
             { label: "git.stacked-action" },
           ),

@@ -15,22 +15,10 @@ import { Fragment } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  EllipsisIcon,
-  EyeIcon,
-  FileIcon,
-  PencilIcon,
-  XIcon,
-} from "~/lib/icons";
+import { ChevronRightIcon, EllipsisIcon, EyeIcon, FileIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
-import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  ChatHeaderButton,
-  ChatHeaderIconButton,
-} from "./chatHeaderControls";
+import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 
@@ -47,13 +35,10 @@ interface WorkspaceFilePreviewHeaderProps {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
-  /** Inline workspace editing is intentionally opt-in: binary/partial previews stay read-only. */
-  editable?: boolean;
-  editing?: boolean;
-  saving?: boolean;
-  onStartEditing?: (() => void) | undefined;
-  onCancelEditing?: (() => void) | undefined;
-  onSaveEditing?: (() => void) | undefined;
+  /** Marks the currently open source buffer as different from its saved version. */
+  dirty?: boolean;
+  /** Short reason the current source cannot be edited safely. */
+  readOnlyReason?: string | null;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -142,46 +127,30 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
         <span className="min-w-0 shrink truncate font-medium text-foreground" title={filePath}>
           {fileSegment}
         </span>
+        {props.dirty ? (
+          <span
+            className="ml-1.5 size-1.5 shrink-0 rounded-full bg-foreground/75"
+            role="status"
+            aria-label="Unsaved changes"
+            title="Unsaved changes"
+          />
+        ) : null}
       </nav>
 
       {props.truncated ? (
         <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 @sm/header-actions:inline">
           Shown partially
         </span>
+      ) : props.readOnlyReason ? (
+        <span
+          className="hidden max-w-32 shrink-0 truncate text-[10px] text-muted-foreground/70 @sm/header-actions:inline"
+          title={props.readOnlyReason}
+        >
+          Read-only
+        </span>
       ) : null}
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {props.editing ? (
-          <>
-            <ChatHeaderIconButton
-              label={props.saving ? "Saving file" : "Save file"}
-              disabled={props.saving}
-              tone="plain"
-              onClick={props.onSaveEditing}
-            >
-              <CheckIcon aria-hidden="true" className="size-3.5" />
-            </ChatHeaderIconButton>
-            <ChatHeaderIconButton
-              label="Discard edits"
-              disabled={props.saving}
-              tone="plain"
-              onClick={props.onCancelEditing}
-            >
-              <XIcon aria-hidden="true" className="size-3.5" />
-            </ChatHeaderIconButton>
-          </>
-        ) : props.editable ? (
-          <ChatHeaderButton
-            aria-label="Edit file"
-            title="Edit file"
-            tone="plain"
-            className="gap-1 px-2"
-            onClick={props.onStartEditing}
-          >
-            <PencilIcon aria-hidden="true" className="size-3.5" />
-            <span className="hidden @md/header-actions:inline">Edit</span>
-          </ChatHeaderButton>
-        ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"

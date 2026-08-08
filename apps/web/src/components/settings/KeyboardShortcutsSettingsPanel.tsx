@@ -12,8 +12,9 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ShortcutKbd } from "~/components/ui/shortcut-kbd";
 import { toastManager } from "~/components/ui/toast";
+import { formatKeybindingWhenExpression } from "~/keybindings";
 import { CentralIcon } from "~/lib/central-icons";
-import { keybindingFromKeyboardEvent } from "~/lib/keybindingCapture";
+import { keybindingFromKeyboardEvent, keybindingValueFromShortcut } from "~/lib/keybindingCapture";
 import { ensureNativeApi } from "~/nativeApi";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -22,6 +23,7 @@ import {
   filterShortcutSheetSections,
   listEditableShortcutDefinitions,
   type ShortcutSheetContext,
+  type ShortcutSheetEntry,
 } from "~/shortcutsSheet";
 import {
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -70,11 +72,12 @@ export function KeyboardShortcutsSettingsPanel() {
   });
 
   const filteredSections = filterShortcutSheetSections(sections, query);
-  const beginEditing = (command: KeybindingCommand) => {
+  const beginEditing = (entry: ShortcutSheetEntry) => {
+    if (!entry.command || !entry.binding) return;
     setIsAdding(false);
-    setEditingCommand(command);
-    setKeyValue("");
-    setWhenValue("");
+    setEditingCommand(entry.command);
+    setKeyValue(keybindingValueFromShortcut(entry.binding.shortcut));
+    setWhenValue(formatKeybindingWhenExpression(entry.binding.whenAst));
     setCaptureError(null);
   };
   const beginAdding = () => {
@@ -95,13 +98,9 @@ export function KeyboardShortcutsSettingsPanel() {
   const captureKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    if (event.key === "Escape") {
-      cancelCapture();
-      return;
-    }
     const next = keybindingFromKeyboardEvent(event.nativeEvent);
     if (!next) {
-      setCaptureError("Use uma tecla ou combinação de até 3 teclas.");
+      setCaptureError("Use up to two modifiers and one key.");
       return;
     }
     setCaptureError(null);
@@ -140,23 +139,23 @@ export function KeyboardShortcutsSettingsPanel() {
   return (
     <div className="space-y-4">
       <div className="rounded-lg bg-muted/45 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
-        Press a key or a combination of up to 3 keys to edit. Changes are saved directly to{" "}
+        Capture up to two modifiers and one key. Changes are saved directly to{" "}
         <code>keybindings.json</code>.
       </div>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-[13px] font-medium text-foreground">Keybindings</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Customize commands or add a new binding.
+            Customize built-in commands and their context conditions.
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={beginAdding} disabled={isAdding || isSaving}>
-          Add keybinding
+          Set keybinding
         </Button>
       </div>
       {isAdding ? (
         <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="grid gap-2 sm:grid-cols-3">
             <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">Command</span>
               <select
@@ -185,14 +184,25 @@ export function KeyboardShortcutsSettingsPanel() {
                 onKeyDown={captureKeyDown}
               />
             </label>
+            <label className="space-y-1 text-[11px] text-muted-foreground">
+              <span className="block">Condition (optional)</span>
+              <Input
+                size="sm"
+                nativeInput
+                placeholder="For example, !terminalFocus"
+                aria-label="Condition for new keybinding"
+                value={whenValue}
+                onChange={(event) => setWhenValue(event.target.value)}
+              />
+            </label>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-[11px] text-muted-foreground">
-              {captureError ?? "Use até 2 modificadores + uma tecla."}
+              {captureError ?? "Use up to two modifiers and one key."}
             </p>
             <div className="flex gap-2">
               <Button size="sm" disabled={!keyValue || isSaving} onClick={() => void saveBinding()}>
-                {isSaving ? "Saving..." : "Save binding"}
+                {isSaving ? "Saving..." : "Save keybinding"}
               </Button>
               <Button size="sm" variant="outline" disabled={isSaving} onClick={cancelCapture}>
                 Cancel
@@ -235,8 +245,7 @@ export function KeyboardShortcutsSettingsPanel() {
           {filteredSections.flatMap((section) => {
             const muted = section.tone === "muted";
             return section.entries.map((entry) => {
-              const command =
-                entry.id === "shortcuts.show" ? null : (entry.id as KeybindingCommand);
+              const command = entry.command;
               const isEditing = command === editingCommand && !isAdding;
               return (
                 <div
@@ -255,7 +264,7 @@ export function KeyboardShortcutsSettingsPanel() {
                     <div className="flex shrink-0 items-center gap-2">
                       <ShortcutKbd shortcutLabel={entry.shortcutLabel} groupClassName="shrink-0" />
                       {command ? (
-                        <Button size="xs" variant="outline" onClick={() => beginEditing(command)}>
+                        <Button size="xs" variant="outline" onClick={() => beginEditing(entry)}>
                           Edit
                         </Button>
                       ) : null}
