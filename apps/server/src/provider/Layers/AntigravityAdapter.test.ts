@@ -99,9 +99,54 @@ GPT-OSS 120B (Medium)
     ]);
   });
 
+  it("collapses tab-separated slug/label rows from newer agy models output", () => {
+    expect(
+      parseAntigravityModelLines(`
+gemini-3.6-flash-high\tGemini 3.6 Flash (High)
+gemini-3.6-flash-medium\tGemini 3.6 Flash (Medium)
+gemini-3.6-flash-low\tGemini 3.6 Flash (Low)
+gemini-3.1-pro-high\tGemini 3.1 Pro (High)
+gemini-3.1-pro-low\tGemini 3.1 Pro (Low)
+claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
+`),
+    ).toEqual([
+      {
+        slug: "Gemini 3.6 Flash",
+        name: "Gemini 3.6 Flash",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+        ],
+        defaultReasoningEffort: "medium",
+      },
+      {
+        slug: "Gemini 3.1 Pro",
+        name: "Gemini 3.1 Pro",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+      {
+        slug: "Claude Sonnet 4.6",
+        name: "Claude Sonnet 4.6",
+        supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
+        defaultReasoningEffort: "thinking",
+      },
+    ]);
+  });
+
   it("rebuilds the exact CLI model label only at dispatch", () => {
     expect(parseAntigravityCliModelLabel("Gemini 3.5 Flash (High)")).toEqual({
       model: "Gemini 3.5 Flash",
+      effort: "high",
+    });
+    expect(
+      parseAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)"),
+    ).toEqual({
+      model: "Gemini 3.6 Flash",
       effort: "high",
     });
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash")).toBe("Gemini 3.5 Flash (Medium)");
@@ -111,6 +156,9 @@ GPT-OSS 120B (Medium)
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash (Low)")).toBe(
       "Gemini 3.5 Flash (Low)",
     );
+    expect(
+      resolveAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)"),
+    ).toBe("Gemini 3.6 Flash (High)");
   });
 
   it("accepts bullet-prefixed model output", () => {
