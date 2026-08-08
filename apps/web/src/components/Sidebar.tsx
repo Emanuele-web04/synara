@@ -1292,12 +1292,7 @@ export function SidebarSurfacePicker({
           />
         }
       >
-        <span
-          className={cn(
-            "font-display min-w-0 truncate text-foreground",
-            activeView === "threads" ? "text-[17px]" : "text-[15px]",
-          )}
-        >
+        <span className="font-display min-w-0 truncate text-[17px] text-foreground">
           {activeCopy.title}
         </span>
         <DisclosureChevron open className="text-muted-foreground/70" />
