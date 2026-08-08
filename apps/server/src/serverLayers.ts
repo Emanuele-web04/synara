@@ -22,6 +22,7 @@ import { TurnCheckpointCoordinatorLive } from "./orchestration/Layers/TurnCheckp
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
 import { DevServerManagerLive } from "./devServerManager";
+import { DeviceServiceLive } from "./device/Layers/DeviceService";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
@@ -183,6 +184,9 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(BrowserAutomationHostLive),
+    // The gateway exposes device_* tools only where a backend can exist, but it
+    // resolves the service on every platform to make that decision.
+    Layer.provideMerge(DeviceServiceLive),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
@@ -211,6 +215,7 @@ export function makeServerRuntimeServicesLayer(
     threadGitMetadataReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,
+    DeviceServiceLive,
     GitLayerLive,
     TextGenerationLayerLive,
     TerminalLayerLive,

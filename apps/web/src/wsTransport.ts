@@ -17,8 +17,11 @@ import {
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  DEVICE_WS_CHANNELS,
+  DEVICE_WS_METHODS,
   WsBootstrapNegotiateResult,
   WsBootstrapRpcGroup,
+  WsDeviceRpcGroup,
   WS_METHODS,
   WsCompatibilityError,
   WsFeatureRpcGroup,
@@ -35,6 +38,7 @@ import {
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
   type ServerSettingsUpdatedPayload,
+  type DeviceEvent,
   type TerminalEvent,
   type WsPush,
   type WsPushChannel,
@@ -57,6 +61,7 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
+import { useDeviceStateStore } from "./deviceStateStore";
 import {
   buildThreadSubscribeInput,
   resetThreadDetailResumeCursors,
@@ -159,7 +164,12 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
   });
 }
 
-const makeRpcClient = RpcClient.make(WsFeatureRpcGroup);
+// The device group is declared separately in contracts because its engine is
+// macOS-only, but the client must carry the methods on every platform: the
+// server is the authority that refuses them off darwin, and the pane needs a
+// real RPC error (or an `unsupported-platform` availability) to render its
+// blocked state. Merging here keeps one socket and one client.
+const makeRpcClient = RpcClient.make(WsFeatureRpcGroup.merge(WsDeviceRpcGroup));
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
@@ -181,7 +191,7 @@ function rawSocketUrl(explicitUrl: string | null): string {
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
 }
 
-function makeSocketUrl(explicitUrl: string | null, path: string): string {
+export function makeSocketUrl(explicitUrl: string | null, path: string): string {
   return resolveRpcUrl(rawSocketUrl(explicitUrl), path);
 }
 
@@ -868,6 +878,11 @@ export class WsTransport {
       // plain restarts of the same journal, acceptable until the protocol
       // carries a durable journal epoch.
       resetThreadDetailResumeCursors();
+      // Device thread state is gated on a per-thread version that the server
+      // restarts at 0. A stale higher version would reject the new instance's
+      // snapshots as stragglers and leave the pane showing pre-restart devices
+      // and attachments forever, so the cache is dropped with the cursors.
+      useDeviceStateStore.getState().clear();
     }
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
@@ -1246,6 +1261,14 @@ export class WsTransport {
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
+        } else if (channel === DEVICE_WS_CHANNELS.event) {
+          this.startStream(
+            client,
+            "device.events",
+            client[DEVICE_WS_METHODS.subscribeEvents]({}),
+            (event: DeviceEvent) => this.emit(DEVICE_WS_CHANNELS.event, event),
+            restartChannel,
+          );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
           this.startStream(
             client,
@@ -1279,6 +1302,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
+    else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }
