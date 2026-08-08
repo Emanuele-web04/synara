@@ -160,7 +160,6 @@ export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Typ
 
 export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
   provider: ProviderKind,
-  homePath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageSnapshotInput.Type;
 

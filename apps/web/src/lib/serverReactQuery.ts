@@ -20,8 +20,8 @@ export const serverQueryKeys = {
   settings: () => ["server", "settings"] as const,
   worktrees: () => ["server", "worktrees"] as const,
   localServers: () => ["server", "localServers"] as const,
-  providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
-    ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
+  providerUsage: (provider: ProviderKind | null | undefined) =>
+    ["server", "providerUsage", provider ?? null] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
@@ -253,11 +253,10 @@ export function serverStopLocalServerMutationOptions(input: { queryClient: Query
 
 export function serverProviderUsageSnapshotQueryOptions(input: {
   provider: ProviderKind | null | undefined;
-  homePath?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: serverQueryKeys.providerUsage(input.provider, input.homePath),
+    queryKey: serverQueryKeys.providerUsage(input.provider),
     enabled: (input.enabled ?? true) && input.provider !== null && input.provider !== undefined,
     staleTime: 30_000,
     refetchInterval: 30_000,
@@ -266,10 +265,7 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
     queryFn: async () => {
       if (!input.provider) return null;
       const api = ensureNativeApi();
-      return api.server.getProviderUsageSnapshot({
-        provider: input.provider,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-      });
+      return api.server.getProviderUsageSnapshot({ provider: input.provider });
     },
   });
 }

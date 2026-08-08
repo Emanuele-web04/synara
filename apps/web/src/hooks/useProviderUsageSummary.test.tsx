@@ -113,7 +113,7 @@ describe("useProviderUsageSummary", () => {
       snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
     ]);
     queryClient.setQueryData(
-      serverQueryKeys.providerUsage("claudeAgent", null),
+      serverQueryKeys.providerUsage("claudeAgent"),
       fallbackSnapshot(),
     );
 
@@ -127,7 +127,7 @@ describe("useProviderUsageSummary", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
     queryClient.setQueryData(
-      serverQueryKeys.providerUsage("claudeAgent", null),
+      serverQueryKeys.providerUsage("claudeAgent"),
       fallbackSnapshot(),
     );
 
@@ -138,6 +138,27 @@ describe("useProviderUsageSummary", () => {
     expect(summary.usageLines).toEqual([
       { label: "24h", value: "123M tokens", subtitle: "12 recent sessions" },
     ]);
+  });
+
+  it("keeps runtime limits visible when a provider has no safe live source", () => {
+    const queryClient = createQueryClient();
+    const summary = readProviderUsageSummary({
+      queryClient,
+      providerSnapshot: snapshot({
+        status: "unsupported",
+        detail: "No safe live limit source is configured yet.",
+      }),
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+          limits: [{ window: "5h", usedPercent: 12 }],
+        },
+      ],
+    });
+
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.usageNotice).toContain("No safe live limit source");
   });
 
   it("accepts precomputed thread fallback rows from aggregate provider surfaces", () => {
@@ -205,7 +226,7 @@ describe("useProviderUsageSummary", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
     queryClient.setQueryData(
-      serverQueryKeys.providerUsage("claudeAgent", null),
+      serverQueryKeys.providerUsage("claudeAgent"),
       fallbackSnapshot(),
     );
 
