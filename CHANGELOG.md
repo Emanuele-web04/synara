@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0 - 2026-08-08
+
+### Added
+
+- Added per-provider default Git writing models for commit messages, PR titles and branches, and diff summaries. Codex now defaults to `gpt-5.6-luna`, Kilo to `kilo/kilo-auto/free`, OpenCode to `opencode/big-pickle`, and Cursor to its `auto` default model.
+
+### Changed
+
+- Changed Git writing model selection resolution so provider and model always resolve as one atomic pair. A model-only patch that names a model the active provider cannot use is now rejected and the current selection stays unchanged instead of being silently rewritten into a mismatched provider/model pair.
+- Preserved persisted Git writing selections on load. The new per-provider defaults apply only when a provider or model part is missing, unset, or reset, so upgrading never silently migrates an existing selection.
+- Bounded the settings patch `options` field with JSON depth and size limits so option overrides stay well-formed and cannot grow without bound.
+
+### Fixed
+
+- Fixed settings patches with nested `options` being encoded as `null` over the JSON-RPC codec. The `options` field now round-trips as an object through `Schema.Json` instead of being flattened to `null`.
+
+### Upgrade note
+
+- No migration is needed. Existing Git writing model selections are kept exactly as they are. The new per-provider defaults appear only for provider or model parts that are missing, unset, or reset.
+
 ## 0.7.0 - 2026-08-05
 
 **A review of the Synara codebase found an analytics configuration that came from the original T3 Code codebase when Synara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**
