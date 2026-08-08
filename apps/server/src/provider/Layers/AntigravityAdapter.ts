@@ -442,6 +442,7 @@ export function buildAntigravityTurnPrompt(
 }
 
 const DEFAULT_EFFORT_BY_MODEL: Readonly<Record<string, string>> = {
+  "Gemini 3.6 Flash": "medium",
   "Gemini 3.5 Flash": "medium",
   "Gemini 3.1 Pro": "low",
   "Claude Sonnet 4.6": "thinking",
@@ -462,11 +463,18 @@ function effortLabel(value: string): string {
 export function parseAntigravityCliModelLabel(
   value: string,
 ): { model: string; effort?: string } | null {
-  const trimmed = value
-    .replace(/\x1b\[[0-9;]*m/g, "")
-    .trim()
-    .replace(/^(?:[*•-]\s+)+/u, "");
+  const stripped = value.replace(/\x1b\[[0-9;]*m/g, "").trim();
+  if (!stripped) return null;
+
+  // Newer `agy models` rows are `slug<TAB>Display Name (Effort)`. Older builds
+  // printed only the display label. Prefer the display column when present so
+  // Synara never treats `slug\tName` as a single model id at dispatch.
+  const tabIndex = stripped.indexOf("\t");
+  const labelColumn =
+    tabIndex >= 0 ? stripped.slice(tabIndex + 1).trim() : stripped.replace(/^(?:[*•-]\s+)+/u, "");
+  const trimmed = labelColumn.replace(/^(?:[*•-]\s+)+/u, "").trim();
   if (!trimmed) return null;
+
   const match = trimmed.match(/^(.*?)\s+\(([^()]+)\)$/u);
   if (!match?.[1] || !match[2]) return { model: trimmed };
   return {
@@ -527,11 +535,13 @@ export function resolveAntigravityCliModelLabel(
 ): string {
   const parsed = parseAntigravityCliModelLabel(model);
   if (!parsed) return model;
-  if (parsed.effort) return model.trim();
   const effort =
+    parsed.effort ??
     options?.reasoningEffort?.trim().toLowerCase() ??
     discoveredDefaultEffort?.trim().toLowerCase() ??
     DEFAULT_EFFORT_BY_MODEL[parsed.model];
+  // Always rebuild the CLI display label. Returning the raw input would preserve
+  // corrupted `slug\tName (Effort)` rows from older discovery parsing.
   return effort ? `${parsed.model} (${effortLabel(effort)})` : parsed.model;
 }
 
