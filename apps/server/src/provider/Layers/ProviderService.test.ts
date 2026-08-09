@@ -702,6 +702,36 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("fork source overrides explicit and persisted resume cursors", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-external-fork");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        resumeCursor: { threadId: "persisted-thread" },
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+
+      const forkSourceResumeCursor = { threadId: "external-thread" };
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        forkSourceResumeCursor,
+        resumeCursor: { threadId: "explicit-thread" },
+        runtimeMode: "full-access",
+      });
+
+      const startInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(startInput?.forkSourceResumeCursor, forkSourceResumeCursor);
+      assert.equal(startInput?.resumeCursor, undefined);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("runs the idempotent adapter cleanup barrier for an inactive binding", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
