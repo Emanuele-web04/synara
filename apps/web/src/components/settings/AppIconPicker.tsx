@@ -41,7 +41,12 @@ export function AppIconPicker({
             )}
             onClick={() => onValueChange(option.value)}
           >
-            <img src={option.src} alt="" draggable={false} className="size-10 object-contain" />
+            <img
+              src={option.src}
+              alt=""
+              draggable={false}
+              className="size-10 rounded-[22%] object-contain"
+            />
           </button>
         );
       })}
