@@ -44,6 +44,7 @@ import type {
 import type {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitWorktreeSetupProgressEvent,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -659,6 +660,9 @@ export interface NativeApi {
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
+    onWorktreeSetupProgress: (
+      callback: (event: GitWorktreeSetupProgressEvent) => void,
+    ) => () => void;
   };
   pullRequests: {
     list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;

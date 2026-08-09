@@ -699,12 +699,14 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
       path,
       copyChangesFrom,
       newBranch,
+      progressId,
     }: {
       cwd: string;
       ref: string;
       path?: string | null;
       copyChangesFrom?: string;
       newBranch?: string;
+      progressId?: string;
     }) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git worktree creation is unavailable.");
@@ -714,6 +716,7 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
         path: path ?? null,
         ...(copyChangesFrom ? { copyChangesFrom } : {}),
         ...(newBranch ? { newBranch } : {}),
+        ...(progressId ? { progressId } : {}),
       });
     },
     mutationKey: ["git", "mutation", "create-detached-worktree"] as const,
