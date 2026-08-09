@@ -53,7 +53,6 @@ import {
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
 import {
-  SettingsCard,
   SettingsRow,
   SettingsSection,
   SettingsSectionShell,
@@ -95,6 +94,7 @@ import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
   SETTINGS_TARGETS,
+  settingRowAnchorId,
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 
@@ -611,26 +611,21 @@ function SettingsRouteView() {
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
-      <SettingsSectionShell title="Theme">
-        <SettingsCard>
-          <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
-            resetAction={
-              theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-              ) : null
-            }
-          >
-            <div className="max-w-md pt-3">
-              <ThemeModePicker
-                value={theme}
-                onValueChange={setTheme}
-                ariaLabel="Theme preference"
-              />
-            </div>
-          </SettingsRow>
-        </SettingsCard>
+      <SettingsSectionShell
+        title="Theme"
+        action={
+          theme !== "system" ? (
+            <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+          ) : null
+        }
+      >
+        {/* The mode picker is the one settings control that sits directly on the page
+            instead of inside a card — the mockups are the whole UI, so boxing them in
+            a card reads as chrome around chrome. The anchor keeps search deep-links
+            (`?target=setting-theme`) working without the SettingsRow. */}
+        <div id={settingRowAnchorId("Theme")} className="scroll-mt-24 pb-1.5">
+          <ThemeModePicker value={theme} onValueChange={setTheme} ariaLabel="Theme preference" />
+        </div>
 
         <div className="space-y-3">
           {(resolvedTheme === "dark"

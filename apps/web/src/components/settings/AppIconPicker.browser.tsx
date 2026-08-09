@@ -30,10 +30,10 @@ it("uses inset transparent artwork and selects it", async () => {
   const buttonRect = iconButton.element().getBoundingClientRect();
   const artworkRect = artwork.getBoundingClientRect();
 
-  expect(buttonRect.width).toBe(64);
+  expect(buttonRect.width).toBe(50);
   expect(artworkRect.width).toBe(40);
-  expect(artworkRect.left).toBe(buttonRect.left + 12);
-  expect(artworkRect.top).toBe(buttonRect.top + 12);
+  expect(artworkRect.left).toBe(buttonRect.left + 5);
+  expect(artworkRect.top).toBe(buttonRect.top + 5);
   expect(readTopLeftAlpha(artwork)).toBe(0);
 
   await iconButton.click();
