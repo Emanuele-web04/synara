@@ -2547,8 +2547,7 @@ diffs-container {
 }
 
 /* Composer glass — the same material as the floating menus/pickers
-   (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`), applied to the composer's own
-   surface color instead of the popover token so the fill keeps its familiar tint.
+   (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
 
    The blur lives on a `::before` at `z-index: -1` rather than on the element itself,
    exactly like the popup primitive: `backdrop-filter` on the element would make it a
@@ -2556,11 +2555,23 @@ diffs-container {
    `overflow-visible`). Painted behind the element's own translucent fill, the layer
    frosts the transcript scrolling underneath (see composerOverlay.ts).
 
+   Fill comes from the SAME token the floating menus use (`--popover`, via
+   `--app-composer-picker-surface`), not from `--composer-surface`. In dark mode
+   `--composer-surface` resolves to `--color-background-control-opaque`, which sits
+   within a couple of RGB steps of the chat background — thinning a color to 72% of
+   the color already behind it is a no-op, so the composer read as a flat slab even
+   with the blur running. `--popover` is the elevated token the handoff menu and the
+   pickers are built from, so the composer now lifts off the transcript exactly the
+   way they do.
+
    `--composer-glass-opacity` keeps every composer-family surface on one knob. */
 :root {
   --composer-glass-opacity: 72%;
   --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
   --composer-glass-filter: blur(40px) saturate(150%);
+  /* Same base as `.composer-picker-menu-surface`, kept opaque here so the shared
+     `--composer-glass-opacity` knob is the only thing thinning it. */
+  --composer-glass-surface: var(--popover);
 }
 
 /* macOS Electron paints into a transparent vibrancy window, where Chromium skips
@@ -2589,13 +2600,12 @@ diffs-container {
   -webkit-backdrop-filter: var(--composer-glass-filter);
 }
 
-/* Stacked rail above the composer input: the composer's own surface color at
-   half the glass opacity, so the rail reads as a lighter continuation of the input
-   shell rather than a differently-colored block. */
+/* Stacked rail above the composer input: the elevated glass surface at its
+   dedicated opacity, so the rail reads as a lighter continuation of the input. */
 .chat-composer-stacked-top {
   background: color-mix(
     in srgb,
-    var(--composer-surface) var(--composer-glass-stacked-opacity),
+    var(--composer-glass-surface) var(--composer-glass-stacked-opacity),
     transparent
   );
 }
@@ -2603,7 +2613,7 @@ diffs-container {
 .chat-composer-surface {
   background: color-mix(
     in srgb,
-    var(--composer-surface) var(--composer-glass-opacity),
+    var(--composer-glass-surface) var(--composer-glass-opacity),
     transparent
   );
 }

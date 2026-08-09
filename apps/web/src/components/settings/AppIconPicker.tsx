@@ -33,7 +33,7 @@ export function AppIconPicker({
             aria-label={option.label}
             aria-pressed={selected}
             className={cn(
-              "relative size-16 rounded-[18px] border p-1.5 transition-colors",
+              "relative grid size-16 place-items-center rounded-[18px] border transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               selected
                 ? "border-foreground bg-accent"
@@ -41,12 +41,7 @@ export function AppIconPicker({
             )}
             onClick={() => onValueChange(option.value)}
           >
-            <img
-              src={option.src}
-              alt=""
-              draggable={false}
-              className="size-full rounded-[13px] object-cover"
-            />
+            <img src={option.src} alt="" draggable={false} className="size-11 object-cover" />
           </button>
         );
       })}

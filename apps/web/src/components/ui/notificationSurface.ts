@@ -22,16 +22,19 @@ export const COMPACT_NOTIFICATION_SURFACE_CLASS_NAME = `w-max max-w-[min(calc(10
 
 export const EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME = `w-full rounded-2xl border border-[color-mix(in_srgb,var(--color-text-accent)_14%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] ${NOTIFICATION_FOREGROUND_CLASS_NAME} shadow-lg/10 backdrop-blur-xl before:hidden [-webkit-app-region:no-drag] dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:shadow-lg/15`;
 
-export const NOTIFICATION_ICON_CLASS_NAME = "text-[var(--notification-fg)]/92";
+// The icon carries the tone color while the copy stays on the neutral
+// `--notification-fg`, so tones only need to set `--notification-icon-fg`.
+export const NOTIFICATION_ICON_CLASS_NAME =
+  "text-[var(--notification-icon-fg,var(--notification-fg))]/92";
 
 export type NotificationTone = "default" | "error";
 
-// Error notifications keep the same card geometry and swap the accent tint for the
-// destructive role color. The copy sits on a tint, so `--notification-fg` tracks
-// `--destructive` and not `--destructive-foreground`: the latter is on-fill ink that
-// the runtime theme resolves to the surface color (see the token notes in index.css).
+// Error notifications keep the same card geometry and swap the accent tint for a
+// light destructive wash. The copy deliberately keeps the theme foreground
+// (near-white in dark themes, near-black in light ones) instead of the destructive
+// role color, which reads muddy against the tint; the icon carries the red instead.
 const ERROR_NOTIFICATION_TONE_CLASS_NAME =
-  "border-[color-mix(in_srgb,var(--destructive)_26%,transparent)] bg-[color-mix(in_srgb,var(--destructive)_9%,var(--popover))] [--notification-fg:var(--destructive)] dark:border-[color-mix(in_srgb,var(--destructive)_22%,transparent)] dark:bg-[color-mix(in_srgb,var(--destructive)_14%,var(--popover))]";
+  "border-[color-mix(in_srgb,var(--destructive)_16%,transparent)] bg-[color-mix(in_srgb,var(--destructive)_5%,var(--popover))] [--notification-icon-fg:var(--destructive)] dark:border-[color-mix(in_srgb,var(--destructive)_13%,transparent)] dark:bg-[color-mix(in_srgb,var(--destructive)_8%,var(--popover))]";
 
 export function notificationSurfaceClassName(options: {
   compact: boolean;
