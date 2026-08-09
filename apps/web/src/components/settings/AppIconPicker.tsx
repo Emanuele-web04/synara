@@ -7,7 +7,7 @@ import { cn } from "~/lib/utils";
 
 const APP_ICON_OPTIONS = [
   { value: "default", label: "Default icon", src: "/app-icons/default.png" },
-  { value: "icon", label: "Icon", src: "/app-icons/icon-group-600.png" },
+  { value: "icon", label: "Icon", src: "/app-icons/icon-group-600-macos.png" },
 ] as const satisfies ReadonlyArray<{
   value: DesktopAppIcon;
   label: string;
@@ -41,12 +41,7 @@ export function AppIconPicker({
             )}
             onClick={() => onValueChange(option.value)}
           >
-            <img
-              src={option.src}
-              alt=""
-              draggable={false}
-              className="size-10 rounded-[22%] object-contain"
-            />
+            <img src={option.src} alt="" draggable={false} className="size-10 object-contain" />
           </button>
         );
       })}
