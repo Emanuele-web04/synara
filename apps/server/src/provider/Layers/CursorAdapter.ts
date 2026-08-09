@@ -40,7 +40,6 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as Acp from "@agentclientprotocol/sdk";
 
-import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
   type SynaraHarnessPolicyDeliveryState,
   takeSynaraHarnessPolicyTextPartForProviderSession,
@@ -72,6 +71,7 @@ import {
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
 import {
+  buildAcpGatewayMcpServers,
   acceptAcpPlanUpdate,
   makeAcpThreadLock,
   readAcpUsdCost,
@@ -741,16 +741,10 @@ export function makeCursorAdapter(
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
             startupTimeouts: CURSOR_ACP_STARTUP_TIMEOUTS,
-            ...(agentGatewayCredentials
-              ? {
-                  buildMcpServers: (initializeResult) =>
-                    buildAcpSynaraMcpServers({
-                      connection: gatewaySessionLease!.connection,
-                      initializeResult,
-                      stdioProxy: agentGatewayCredentials.stdioProxy,
-                    }),
-                }
-              : {}),
+            ...buildAcpGatewayMcpServers({
+              gatewaySessionLease,
+              agentGatewayCredentials,
+            }),
             ...acpNativeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),

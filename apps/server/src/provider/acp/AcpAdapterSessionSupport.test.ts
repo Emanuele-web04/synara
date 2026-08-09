@@ -1,7 +1,10 @@
 import { ThreadId, TurnId, type ProviderSession } from "@synara/contracts";
+
+import { SYNARA_AGENT_GATEWAY_TOKEN_ENV } from "../../agentGateway/mcpInjection.ts";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildAcpGatewayMcpServers,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
   recordAcpSessionCost,
@@ -211,5 +214,60 @@ describe("ACP adapter session support", () => {
         homeDir: "/home/test",
       }),
     ).toBe("/server");
+  });
+});
+
+describe("buildAcpGatewayMcpServers", () => {
+  const connection = {
+    url: "http://127.0.0.1:3773/mcp",
+    bearerToken: "sagw_abc.def",
+  };
+  const stdioProxy = {
+    command: "/usr/local/bin/node",
+    args: ["/state/agent-gateway-mcp-proxy.mjs"],
+  };
+
+  it("builds an HTTP gateway server when the agent advertises http support", () => {
+    const options = buildAcpGatewayMcpServers({
+      gatewaySessionLease: { connection },
+      agentGatewayCredentials: { stdioProxy },
+    });
+    expect(
+      options.buildMcpServers?.({ agentCapabilities: { mcpCapabilities: { http: true } } }),
+    ).toEqual([
+      {
+        type: "http",
+        name: "synara",
+        url: connection.url,
+        headers: [{ name: "Authorization", value: `Bearer ${connection.bearerToken}` }],
+      },
+    ]);
+  });
+
+  it("falls back to the stdio proxy when http is not advertised", () => {
+    const options = buildAcpGatewayMcpServers({
+      gatewaySessionLease: { connection },
+      agentGatewayCredentials: { stdioProxy },
+    });
+    expect(options.buildMcpServers?.({})).toEqual([
+      {
+        name: "synara",
+        command: stdioProxy.command,
+        args: stdioProxy.args,
+        env: [
+          { name: "SYNARA_AGENT_GATEWAY_URL", value: connection.url },
+          { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: connection.bearerToken },
+        ],
+      },
+    ]);
+  });
+
+  it("skips gateway injection when the gateway is not running", () => {
+    expect(
+      buildAcpGatewayMcpServers({
+        gatewaySessionLease: undefined,
+        agentGatewayCredentials: undefined,
+      }),
+    ).toEqual({});
   });
 });
