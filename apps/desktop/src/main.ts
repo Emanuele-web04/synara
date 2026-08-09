@@ -3650,6 +3650,9 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = theme;
   });
 
+  ipcMain.removeHandler(IPC.getAppIcon);
+  ipcMain.handle(IPC.getAppIcon, () => readDesktopAppIcon());
+
   ipcMain.removeHandler(IPC.setAppIcon);
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
     if (!isDesktopAppIcon(rawIcon)) return;
