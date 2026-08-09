@@ -45,6 +45,9 @@ import {
   IconMinimize,
   IconMinus,
   IconDeviceLaptop,
+  IconDeviceMobileRotated,
+  IconPlugOff,
+  IconPower,
   IconMessageCircle,
   IconMoon,
   IconPaperclip,
@@ -196,6 +199,22 @@ export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // local servers): the Central glyph, so it matches the other work-row icons.
 export const GlobeIcon: LucideIcon = centralIconWrapper("globe");
 export const WebSearchIcon: LucideIcon = GlobeIcon;
+// Handset glyph for the iOS Simulator dock pane.
+export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
+// Hardware-button glyphs for the simulator's control rail.
+export const DeviceHomeIcon: LucideIcon = centralIconWrapper("home");
+export const DeviceLockIcon: LucideIcon = centralIconWrapper("lock");
+export const DeviceVolumeUpIcon: LucideIcon = centralIconWrapper("volume-up");
+export const DeviceVolumeDownIcon: LucideIcon = centralIconWrapper("volume-down");
+export const DeviceShutterIcon: LucideIcon = centralIconWrapper("camera-1");
+// Simulator toolbar: start/stop a screen recording, turn the view, power the
+// device off, and let go of it. The two Tabler glyphs have no Central
+// equivalent that reads as unambiguously as a rotating handset and a power symbol.
+export const DeviceRecordIcon: LucideIcon = centralIconWrapper("record");
+export const DeviceRecordStopIcon: LucideIcon = centralIconWrapper("stop", "fill");
+export const DeviceRotateIcon = adaptIcon(IconDeviceMobileRotated);
+export const DevicePowerIcon = adaptIcon(IconPower);
+export const DeviceDetachIcon = adaptIcon(IconPlugOff);
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );

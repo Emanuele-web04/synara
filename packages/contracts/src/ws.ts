@@ -87,6 +87,30 @@ import {
 } from "./project";
 import { StudioListThreadOutputsInput } from "./studio";
 import { FilesystemBrowseInput } from "./filesystem";
+import {
+  DEVICE_WS_CHANNELS,
+  DEVICE_WS_METHODS,
+  DeviceAttachInput,
+  DeviceBootInput,
+  DeviceDescribeUiInput,
+  DeviceScrollToElementInput,
+  DeviceDetachInput,
+  DeviceEvent,
+  DeviceInstallAppInput,
+  DeviceKeyEventInput,
+  DeviceLaunchAppInput,
+  DeviceListInput,
+  DeviceOpenUrlInput,
+  DevicePressButtonInput,
+  DeviceScreenshotInput,
+  DeviceStartRecordingInput,
+  DeviceStopRecordingInput,
+  DeviceShutdownInput,
+  DeviceSwipeInput,
+  DeviceTapInput,
+  DeviceThreadInput,
+  DeviceTypeTextInput,
+} from "./device";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
@@ -339,6 +363,28 @@ const WebSocketRequestBody = Schema.Union([
 
   tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
 
+  // Device pane (macOS only; the server refuses these off darwin)
+  tagRequestBody(DEVICE_WS_METHODS.list, DeviceListInput),
+  tagRequestBody(DEVICE_WS_METHODS.boot, DeviceBootInput),
+  tagRequestBody(DEVICE_WS_METHODS.shutdown, DeviceShutdownInput),
+  tagRequestBody(DEVICE_WS_METHODS.attach, DeviceAttachInput),
+  tagRequestBody(DEVICE_WS_METHODS.detach, DeviceDetachInput),
+  tagRequestBody(DEVICE_WS_METHODS.getThreadState, DeviceThreadInput),
+  tagRequestBody(DEVICE_WS_METHODS.tap, DeviceTapInput),
+  tagRequestBody(DEVICE_WS_METHODS.swipe, DeviceSwipeInput),
+  tagRequestBody(DEVICE_WS_METHODS.typeText, DeviceTypeTextInput),
+  tagRequestBody(DEVICE_WS_METHODS.keyEvent, DeviceKeyEventInput),
+  tagRequestBody(DEVICE_WS_METHODS.pressButton, DevicePressButtonInput),
+  tagRequestBody(DEVICE_WS_METHODS.installApp, DeviceInstallAppInput),
+  tagRequestBody(DEVICE_WS_METHODS.launchApp, DeviceLaunchAppInput),
+  tagRequestBody(DEVICE_WS_METHODS.openUrl, DeviceOpenUrlInput),
+  tagRequestBody(DEVICE_WS_METHODS.screenshot, DeviceScreenshotInput),
+  tagRequestBody(DEVICE_WS_METHODS.startRecording, DeviceStartRecordingInput),
+  tagRequestBody(DEVICE_WS_METHODS.stopRecording, DeviceStopRecordingInput),
+  tagRequestBody(DEVICE_WS_METHODS.describeUi, DeviceDescribeUiInput),
+  tagRequestBody(DEVICE_WS_METHODS.scrollToElement, DeviceScrollToElementInput),
+  tagRequestBody(DEVICE_WS_METHODS.subscribeEvents, Schema.Struct({})),
+
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),
 
@@ -479,6 +525,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.projectProvisionProgress]: typeof GitHubProjectProvisionProgressEvent.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
   readonly [WS_CHANNELS.projectDevServerEvent]: typeof ProjectDevServerEvent.Type;
+  readonly [DEVICE_WS_CHANNELS.event]: typeof DeviceEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
   readonly [ORCHESTRATION_WS_CHANNELS.shellEvent]: OrchestrationShellStreamItem;
   readonly [ORCHESTRATION_WS_CHANNELS.threadEvent]: OrchestrationThreadStreamItem;
@@ -536,6 +583,7 @@ export const WsPushProjectDevServerEvent = makeWsPushSchema(
   WS_CHANNELS.projectDevServerEvent,
   ProjectDevServerEvent,
 );
+export const WsPushDeviceEvent = makeWsPushSchema(DEVICE_WS_CHANNELS.event, DeviceEvent);
 export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
@@ -561,6 +609,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.automationEvent,
   WS_CHANNELS.terminalEvent,
   WS_CHANNELS.projectDevServerEvent,
+  DEVICE_WS_CHANNELS.event,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   ORCHESTRATION_WS_CHANNELS.shellEvent,
   ORCHESTRATION_WS_CHANNELS.threadEvent,
@@ -579,6 +628,7 @@ export const WsPush = Schema.Union([
   WsPushProjectProvisionProgress,
   WsPushTerminalEvent,
   WsPushProjectDevServerEvent,
+  WsPushDeviceEvent,
   WsPushOrchestrationDomainEvent,
   WsPushOrchestrationShellEvent,
   WsPushOrchestrationThreadEvent,
