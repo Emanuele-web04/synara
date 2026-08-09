@@ -41,12 +41,7 @@ export function AppIconPicker({
             )}
             onClick={() => onValueChange(option.value)}
           >
-            <img
-              src={option.src}
-              alt=""
-              draggable={false}
-              className="size-10 object-cover"
-            />
+            <img src={option.src} alt="" draggable={false} className="size-10 object-cover" />
           </button>
         );
       })}

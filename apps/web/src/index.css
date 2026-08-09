@@ -2574,15 +2574,6 @@ diffs-container {
   --composer-glass-surface: var(--popover);
 }
 
-/* macOS Electron paints into a transparent vibrancy window, where Chromium skips
-   `backdrop-filter` entirely (electron/electron#32317): the frost never renders and
-   the thin fill lets transcript rows read through crisply. Lean on a near-opaque
-   fill there so the glass still reads as translucent material, not a see-through hole. */
-:root[data-window-transparent="true"] {
-  --composer-glass-opacity: 92%;
-  --composer-glass-stacked-opacity: 80%;
-}
-
 .chat-composer-surface,
 .chat-composer-stacked-top {
   position: relative;
