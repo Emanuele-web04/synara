@@ -6,8 +6,9 @@
 //
 // The composer is absolutely positioned at `bottom-full` of the in-flow block that
 // carries the trailing gutter (and the git BranchToolbar), so the transcript's scroll
-// viewport ends exactly at the composer's BOTTOM edge. A viewport mask dissolves
-// content as it passes behind the glass and cuts it fully above the composer's footer
+// viewport ends exactly at the composer's BOTTOM edge. Content stays fully painted
+// while it scrolls behind the glass (the frosted surface is what dims and blurs it);
+// a viewport mask only dissolves it in a short band just above the composer's footer
 // row, so nothing ever shows behind the send controls or the padding strip below.
 
 import { useCallback, useRef, useState } from "react";
@@ -47,8 +48,16 @@ export function composerOverlayBottomClearancePx(
 }
 
 /**
+ * Height of the dissolve band above the footer clearance. Content scrolling behind
+ * the glass stays fully painted (blurred and tinted by the surface) until it reaches
+ * this band, then fades out before the footer row.
+ */
+export const COMPOSER_OVERLAY_MASK_FADE_PX = 40;
+
+/**
  * Mask for the transcript scroll viewport while the composer floats over it:
- * opaque above the composer's top edge, dissolving to fully transparent
+ * opaque through the composer's editor region — the frosted surface, not the mask,
+ * is what obscures content there — then dissolving to fully transparent
  * `COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX` above the composer's bottom edge (which is
  * also the viewport's bottom edge). Derived from the same bottom inset the viewport
  * uses for padding so both always track the measured composer height together.
@@ -60,11 +69,12 @@ export function composerOverlayScrollMaskImage(
   if (bottomInsetPx <= 0) return null;
   const overlayHeightPx = Math.max(0, Math.round(bottomInsetPx) + COMPOSER_OVERLAY_TUCK_PX);
 
-  const effectiveClearancePx = Math.min(
+  const fadeEndPx = Math.min(
     overlayHeightPx,
     Math.max(COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX, Math.round(bottomClearancePx)),
   );
-  return `linear-gradient(to bottom, #000 calc(100% - ${overlayHeightPx}px), transparent calc(100% - ${effectiveClearancePx}px))`;
+  const fadeStartPx = Math.min(overlayHeightPx, fadeEndPx + COMPOSER_OVERLAY_MASK_FADE_PX);
+  return `linear-gradient(to bottom, #000 calc(100% - ${fadeStartPx}px), transparent calc(100% - ${fadeEndPx}px))`;
 }
 
 /** Gap between the composer's top edge and floating transcript affordances. */

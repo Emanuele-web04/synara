@@ -12,8 +12,10 @@ describe("composer overlay mask", () => {
 
   it("expands the transparent footer cut to the measured footer height", () => {
     expect(composerOverlayBottomClearancePx(200, 128)).toBe(72);
+    // Opaque until 40px above the footer cut (112px), not the overlay top (120px):
+    // the glass surface obscures the editor region, the mask only clears the footer.
     expect(composerOverlayScrollMaskImage(100, 72)).toBe(
-      "linear-gradient(to bottom, #000 calc(100% - 120px), transparent calc(100% - 72px))",
+      "linear-gradient(to bottom, #000 calc(100% - 112px), transparent calc(100% - 72px))",
     );
   });
 
