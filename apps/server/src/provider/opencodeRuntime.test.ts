@@ -935,10 +935,7 @@ openrouter/google/lyria-3-clip-preview
 `);
 
     const freeSlugs = models.filter((model) => model.isFree === true).map((model) => model.slug);
-    expect(freeSlugs).toEqual([
-      "kilo/kilo-auto/free",
-      "kilo/cohere/north-mini-code:free",
-    ]);
+    expect(freeSlugs).toEqual(["kilo/kilo-auto/free", "kilo/cohere/north-mini-code:free"]);
   });
 
   it("lets an explicit isFree:false win over the zero-cost heuristic", () => {

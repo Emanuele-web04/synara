@@ -31,7 +31,7 @@ import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./co
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   prompt: string;
@@ -39,7 +39,7 @@ export type ComposerProviderStateInput = {
 };
 
 export type ComposerProviderState = {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   promptEffort: string | null;
   modelOptionsForDispatch: ProviderModelOptions[ProviderKind] | undefined;
   composerFrameClassName?: string;
@@ -118,6 +118,13 @@ function getProviderStateFromCapabilities(
   input: ComposerProviderStateInput,
 ): ComposerProviderState {
   const { provider, model, runtimeModel, prompt, modelOptions } = input;
+  if (provider === "external") {
+    return {
+      provider: "external",
+      promptEffort: null,
+      modelOptionsForDispatch: undefined,
+    };
+  }
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
 
   let rawEffort: string | null = null;
@@ -321,7 +328,19 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
   },
 };
 
+const EXTERNAL_AGENT_COMPOSER_STATE: ComposerProviderState = {
+  // External agent profiles expose no Synara-side composer traits: effort,
+  // context windows, and mode flags are connector-owned until the connector
+  // foundation lands.
+  provider: "external",
+  promptEffort: null,
+  modelOptionsForDispatch: undefined,
+};
+
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
+  if (input.provider === "external") {
+    return EXTERNAL_AGENT_COMPOSER_STATE;
+  }
   return composerProviderRegistry[input.provider].getState(input);
 }
 

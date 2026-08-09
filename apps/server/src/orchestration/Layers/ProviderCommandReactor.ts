@@ -7,6 +7,7 @@ import {
   type CheckpointRef,
   CommandId,
   EventId,
+  type ExternalAgentModelSelection,
   type ModelSelection,
   MessageId,
   type OrchestrationEvent,
@@ -96,6 +97,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { AgentProfileService } from "../../externalAgents/AgentProfileService.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -571,7 +573,9 @@ const make = Effect.gen(function* () {
     }
     return completed.value;
   });
+
   const managedAttachments = yield* ManagedAttachmentRepository;
+  const agentProfiles = yield* AgentProfileService;
   const serverConfig = yield* ServerConfig;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
@@ -754,6 +758,41 @@ const make = Effect.gen(function* () {
 
     // Non-generating chat providers still get AI titles via the configured git-writing model.
     return yield* resolveConfiguredTextGenerationInput();
+  });
+
+  /**
+   * External agent profile session start: resolve the pinned revision, refuse
+   * new sessions for missing or removed profiles, and expand credential
+   * references. The generic ACP adapter that consumes the resolved launch spec
+   * is not part of this build (KAR-521), so a valid profile still stops here
+   * with an attributable error instead of being silently misrouted.
+   */
+  const resolveExternalAgentSessionStart = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly selection: ExternalAgentModelSelection;
+  }) {
+    const launch = yield* agentProfiles
+      .resolveSessionLaunch({
+        profileId: input.selection.profileId,
+        revisionId: input.selection.revisionId,
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: "external",
+              operation: "thread.turn.start",
+              issue: error.message,
+            }),
+        ),
+      );
+    return yield* Effect.fail(
+      new ProviderAdapterValidationError({
+        provider: "external",
+        operation: "thread.turn.start",
+        issue: `External agent profile '${launch.profile.name}' is configured, but external agent sessions are not available in this build.`,
+      }),
+    );
   });
 
   const appendProviderFailureActivity = (input: {
@@ -1004,7 +1043,9 @@ const make = Effect.gen(function* () {
     const provider = projectedThread
       ? Schema.is(ProviderKind)(projectedThread.session?.providerName)
         ? projectedThread.session?.providerName
-        : projectedThread.modelSelection.provider
+        : Schema.is(ProviderKind)(projectedThread.modelSelection.provider)
+          ? projectedThread.modelSelection.provider
+          : undefined
       : undefined;
     const rebuildsContext =
       provider !== undefined &&
@@ -1171,7 +1212,8 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
-    const threadProvider: ProviderKind = currentProvider ?? thread.modelSelection.provider;
+    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const threadProvider = currentProvider ?? thread.modelSelection.provider;
     if (
       requestedModelSelection !== undefined &&
       requestedModelSelection.provider !== threadProvider
@@ -1182,8 +1224,25 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
+    if (desiredModelSelection.provider === "external") {
+      return yield* resolveExternalAgentSessionStart({
+        threadId,
+        selection: desiredModelSelection,
+      });
+    }
+    if (threadProvider === "external") {
+      // Unreachable: external selections return in the branch above, and a
+      // requested built-in switch from an external thread fails the mismatch
+      // check above. Kept as a narrow safety net for future refactors.
+      return yield* Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: threadProvider,
+          operation: "thread.turn.start",
+          issue: `Thread '${threadId}' is bound to external agent profile '${thread.modelSelection.provider}'.`,
+        }),
+      );
+    }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
-    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settingsSnapshot = yield* serverSettings.getSnapshot;
     if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
       return yield* new ProviderAdapterValidationError({
@@ -3474,7 +3533,9 @@ const make = Effect.gen(function* () {
     const provider = thread
       ? Schema.is(ProviderKind)(thread.session?.providerName)
         ? thread.session?.providerName
-        : thread.modelSelection.provider
+        : Schema.is(ProviderKind)(thread.modelSelection.provider)
+          ? thread.modelSelection.provider
+          : undefined
       : undefined;
     const rebuildsContext =
       provider !== undefined &&

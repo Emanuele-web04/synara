@@ -12,6 +12,8 @@ import {
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
+  AgentProfileId,
+  AgentProfileRevisionId,
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -144,7 +146,19 @@ export const PiModelSelection = Schema.Struct({
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
 
+export const ExternalAgentModelSelection = Schema.Struct({
+  provider: Schema.Literal("external"),
+  profileId: AgentProfileId,
+  revisionId: AgentProfileRevisionId,
+  model: TrimmedNonEmptyString,
+  // Connector-specific model options. The shape is defined by the external
+  // agent connector, so it is intentionally untyped here.
+  options: Schema.optional(Schema.Unknown),
+});
+export type ExternalAgentModelSelection = typeof ExternalAgentModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
+  ExternalAgentModelSelection,
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
@@ -513,7 +527,7 @@ export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
 export const ThreadHandoff = Schema.Struct({
   sourceThreadId: ThreadId,
-  sourceProvider: ProviderKind,
+  sourceProvider: Schema.Union([ProviderKind, Schema.Literal("external")]),
   importedAt: IsoDateTime,
   bootstrapStatus: ThreadHandoffBootstrapStatus,
 });

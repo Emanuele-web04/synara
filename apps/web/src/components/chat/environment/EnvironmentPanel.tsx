@@ -21,6 +21,7 @@ import type {
   ThreadMarkerId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
@@ -97,7 +98,7 @@ export interface EnvironmentPanelProps {
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
   /** Active provider for the usage row (same chip the header used to show). */
-  activeProvider: ProviderKind;
+  activeProvider: DisplayProvider | null;
   /**
    * Whether the active thread is a Studio chat. Studio chats show the Output section:
    * the Outbox files THIS chat produced, so its output stays attached to the chat.

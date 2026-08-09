@@ -57,8 +57,7 @@ function createMockOpenCodeRuntime(options?: {
   readonly cliModelsError?: OpenCodeRuntimeError;
   /** Per-call CLI model results; overrides `cliModels`/`cliModelsError` when present. */
   readonly cliModelsByCall?: ReadonlyArray<
-    | ReadonlyArray<OpenCodeCliModelDescriptor>
-    | { readonly error: OpenCodeRuntimeError }
+    ReadonlyArray<OpenCodeCliModelDescriptor> | { readonly error: OpenCodeRuntimeError }
   >;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
   readonly events?: AsyncIterable<unknown>;
@@ -1048,9 +1047,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       source: "opencode-cli",
       cached: false,
     });
-    expect(result?.models.map((model) => model.slug)).toEqual([
-      "opencode/deepseek-v4-flash-free",
-    ]);
+    expect(result?.models.map((model) => model.slug)).toEqual(["opencode/deepseek-v4-flash-free"]);
     // First attempt used the requested (bad) cwd; the retry dropped it.
     expect(runtime.cliModelCalls).toHaveLength(2);
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/deleted-cwd" });
