@@ -2377,15 +2377,10 @@ const make = Effect.gen(function* () {
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
   ) {
+    // Keep the replay-safe claimed delivery limited to this idempotent durable
+    // write. The recovery drain can dispatch a later provider intent, so it
+    // runs only after this delivery has settled successfully.
     yield* enqueueQueuedTurnStart(event);
-    // Recovery drain: if the provider turn settled between the decider's
-    // (stale) running check and this enqueue, the terminal
-    // `turn.completed`/`turn.aborted` event has already been consumed and will
-    // never drain this queue — the message would be stuck forever. Re-check
-    // live provider state and promote immediately.
-    if (!(yield* hasLiveProviderTurn(event.payload.threadId))) {
-      yield* drainQueuedTurnsForThread(event.payload.threadId);
-    }
   });
 
   const readOrchestrationEventAtSequence = (eventSequence: number) =>
@@ -2544,28 +2539,28 @@ const make = Effect.gen(function* () {
     yield* drainQueuedTurnsForSession(event.threadId);
   });
 
+  const recoverQueuedTurnPromotionsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    // `resolveThread` filters `deleted_at IS NULL`, so a soft-deleted (or fully
+    // missing) thread returns undefined. Cancel instead of dispatching into an
+    // absent thread, including when an operator retries an older dead delivery
+    // after the corresponding thread deletion has already been consumed.
+    const thread = yield* resolveThread(threadId);
+    if (!thread || thread.deletedAt !== null) {
+      yield* queuedTurnPromotions.cancelThread({
+        threadId,
+        updatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    if (yield* hasLiveProviderTurn(threadId)) {
+      return;
+    }
+    yield* drainQueuedTurnsForThread(threadId);
+  });
+
   const recoverQueuedTurnPromotions = Effect.gen(function* () {
     yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (rawThreadId) =>
-      Effect.gen(function* () {
-        const threadId = ThreadId.makeUnsafe(rawThreadId);
-        // Resolve the projected thread first. `resolveThread` filters
-        // `deleted_at IS NULL`, so a soft-deleted (or fully missing) thread
-        // returns undefined; either way there is nothing to drain into, and the
-        // pending promotions must be cancelled rather than promoted (otherwise a
-        // deletion that raced startup would leave orphan turns to dispatch).
-        const thread = yield* resolveThread(threadId);
-        if (!thread || thread.deletedAt !== null) {
-          yield* queuedTurnPromotions.cancelThread({
-            threadId: rawThreadId,
-            updatedAt: new Date().toISOString(),
-          });
-          return;
-        }
-        if (yield* hasLiveProviderTurn(threadId)) {
-          return;
-        }
-        yield* drainQueuedTurnsForThread(threadId);
-      }),
+      recoverQueuedTurnPromotionsForThread(ThreadId.makeUnsafe(rawThreadId)),
     );
   });
 
@@ -3526,6 +3521,38 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const recoverQueuedTurnAfterDeliverySafely = (
+    event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
+  ) =>
+    Effect.gen(function* () {
+      const delivery = yield* deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: event.sequence,
+      });
+      if (Option.isNone(delivery) || delivery.value.state !== "succeeded") {
+        return;
+      }
+      // Recovery drain: if the provider turn settled between the decider's
+      // (stale) running check and the durable enqueue, its terminal runtime
+      // event has already been consumed and cannot drain this queue. Re-check
+      // the projected thread and live provider state after delivery settlement.
+      yield* recoverQueuedTurnPromotionsForThread(event.payload.threadId);
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        // The promotion row is already durable. Startup recovery or a later
+        // terminal provider event will retry the drain without replaying the
+        // settled enqueue delivery.
+        return Effect.logWarning("provider command reactor failed queued-turn recovery drain", {
+          eventSequence: event.sequence,
+          threadId: event.payload.threadId,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
   // One attach-before-replay source owns every provider intent. The claimed
   // canary classes settle before cursor advancement. Remaining classes execute
   // serially in the same source but do not acquire delivery claims yet.
@@ -3848,6 +3875,19 @@ const make = Effect.gen(function* () {
       yield* requireCursorAdvance(event);
     });
 
+    // Every entry point that settles a claimed delivery must cross this
+    // boundary. In particular, operator-authorized safe retries bypass the
+    // ordered event stream, but a successfully retried queued-turn enqueue
+    // still needs its post-settlement recovery drain.
+    const processClaimedProviderIntentWithRecovery = Effect.fnUntraced(function* (
+      event: ProviderIntentEvent,
+    ) {
+      yield* processClaimedProviderIntent(event);
+      if (event.type === "thread.turn-queued") {
+        yield* recoverQueuedTurnAfterDeliverySafely(event);
+      }
+    });
+
     const processOrderedEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
       if (event.sequence <= cursor) return;
       if (!isProviderIntentEvent(event)) {
@@ -3855,7 +3895,7 @@ const make = Effect.gen(function* () {
         return;
       }
       if (isClaimedProviderIntent(event)) {
-        yield* processClaimedProviderIntent(event);
+        yield* processClaimedProviderIntentWithRecovery(event);
         return;
       }
       yield* processUnclaimedProviderIntent(event);
@@ -3894,7 +3934,7 @@ const make = Effect.gen(function* () {
             return Effect.void;
           }
           return isClaimedProviderIntent(event)
-            ? processClaimedProviderIntent(event)
+            ? processClaimedProviderIntentWithRecovery(event)
             : processUnclaimedProviderIntent(event);
         },
       );
@@ -3913,7 +3953,7 @@ const make = Effect.gen(function* () {
           ),
         );
       }
-      yield* processClaimedProviderIntent(event);
+      yield* processClaimedProviderIntentWithRecovery(event);
       const delivery = yield* deliveryRepository.getDelivery({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: input.eventSequence,
