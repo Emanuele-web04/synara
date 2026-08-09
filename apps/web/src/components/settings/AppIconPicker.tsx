@@ -6,23 +6,12 @@ import type { DesktopAppIcon } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 
 const APP_ICON_OPTIONS = [
-  {
-    value: "default",
-    label: "Default icon",
-    src: "/app-icons/default.png",
-    artworkClassName: "size-10",
-  },
-  {
-    value: "icon",
-    label: "Icon",
-    src: "/app-icons/icon.png",
-    artworkClassName: "size-[34px] rounded-[8px]",
-  },
+  { value: "default", label: "Default icon", src: "/app-icons/default.png" },
+  { value: "icon", label: "Icon", src: "/app-icons/icon-inset.png" },
 ] as const satisfies ReadonlyArray<{
   value: DesktopAppIcon;
   label: string;
   src: string;
-  artworkClassName: string;
 }>;
 
 export function AppIconPicker({
@@ -52,14 +41,7 @@ export function AppIconPicker({
             )}
             onClick={() => onValueChange(option.value)}
           >
-            <span className="grid size-10 place-items-center">
-              <img
-                src={option.src}
-                alt=""
-                draggable={false}
-                className={cn("object-contain", option.artworkClassName)}
-              />
-            </span>
+            <img src={option.src} alt="" draggable={false} className="size-10 object-contain" />
           </button>
         );
       })}
