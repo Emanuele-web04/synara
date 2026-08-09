@@ -57,42 +57,60 @@ export const PROVIDER_DESCRIPTORS = [
     displayName: PROVIDER_DISPLAY_NAMES.antigravity,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "agy",
+      learnMoreHref: "https://github.com/Emanuele-web04/synara",
+    },
   },
   {
     kind: "grok",
     displayName: PROVIDER_DISPLAY_NAMES.grok,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "grok",
+      learnMoreHref: "https://docs.x.ai/",
+    },
   },
   {
     kind: "droid",
     displayName: PROVIDER_DISPLAY_NAMES.droid,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "droid",
+      learnMoreHref: "https://docs.factory.ai/",
+    },
   },
   {
     kind: "kilo",
     displayName: PROVIDER_DISPLAY_NAMES.kilo,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "kilo login",
+      learnMoreHref: "https://kilo.ai/docs",
+    },
   },
   {
     kind: "opencode",
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "opencode auth login",
+      learnMoreHref: "https://opencode.ai/docs/",
+    },
   },
   {
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,
     supportsNativeTurnSteering: true,
-    usage: null,
+    usage: {
+      signInCommand: "pi",
+      learnMoreHref: "https://github.com/badlogic/pi-mono",
+    },
   },
 ] as const satisfies readonly ProviderDescriptor[];
 
