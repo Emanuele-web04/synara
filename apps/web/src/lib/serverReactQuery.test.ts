@@ -12,7 +12,6 @@ import {
   refreshServerConfigAfterTransportOpen,
   serverAllProviderUsageQueryOptions,
   serverLocalServersQueryOptions,
-  serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
@@ -198,16 +197,5 @@ describe("serverAllProviderUsageQueryOptions", () => {
     const options = serverAllProviderUsageQueryOptions();
 
     expect(options.queryKey).toEqual(serverQueryKeys.allProviderUsage());
-  });
-});
-
-describe("serverProviderUsageSnapshotQueryOptions", () => {
-  it("can be disabled by privacy-safe active surfaces", () => {
-    const options = serverProviderUsageSnapshotQueryOptions({
-      provider: "cursor",
-      enabled: false,
-    });
-
-    expect(options.enabled).toBe(false);
   });
 });

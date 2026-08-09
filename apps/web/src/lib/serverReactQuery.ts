@@ -1,5 +1,4 @@
 import type {
-  ProviderKind,
   ServerConfig,
   ServerListProviderUsageInput,
   ServerProviderStatus,
@@ -20,8 +19,6 @@ export const serverQueryKeys = {
   settings: () => ["server", "settings"] as const,
   worktrees: () => ["server", "worktrees"] as const,
   localServers: () => ["server", "localServers"] as const,
-  providerUsage: (provider: ProviderKind | null | undefined) =>
-    ["server", "providerUsage", provider ?? null] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
@@ -263,25 +260,6 @@ export function serverStopLocalServerMutationOptions(input: { queryClient: Query
     },
     onSettled: () => {
       void input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
-    },
-  });
-}
-
-export function serverProviderUsageSnapshotQueryOptions(input: {
-  provider: ProviderKind | null | undefined;
-  enabled?: boolean;
-}) {
-  return queryOptions({
-    queryKey: serverQueryKeys.providerUsage(input.provider),
-    enabled: (input.enabled ?? true) && input.provider !== null && input.provider !== undefined,
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: false,
-    retry: false,
-    queryFn: async () => {
-      if (!input.provider) return null;
-      const api = ensureNativeApi();
-      return api.server.getProviderUsageSnapshot({ provider: input.provider });
     },
   });
 }
