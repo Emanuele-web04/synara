@@ -761,8 +761,8 @@ export function buildThemeCssVariables(
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
-          ? `color-mix(in srgb, ${sidebarSurface} 72%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 64%, transparent)`
+          ? `color-mix(in srgb, ${sidebarSurface} 56%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurface} 48%, transparent)`
         : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.

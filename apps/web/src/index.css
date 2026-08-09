@@ -424,7 +424,7 @@
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
   --app-sidebar-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.025);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 64%, transparent);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 48%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -535,7 +535,7 @@
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
     --app-sidebar-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.024);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 72%, transparent);
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
