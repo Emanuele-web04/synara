@@ -8,6 +8,8 @@ import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { claudeUsageFetcher } from "./providers/claude";
 import { codexUsageFetcher } from "./providers/codex";
 import { cursorUsageFetcher } from "./providers/cursor";
+import { antigravityUsageFetcher } from "./providers/antigravity";
+import { kiloUsageFetcher } from "./providers/kilo";
 import { unsupportedSnapshot } from "./parse";
 import type { ProviderUsageFetcher } from "./types";
 
@@ -29,10 +31,10 @@ export const PROVIDER_USAGE_FETCHERS: Record<ProviderKind, ProviderUsageFetcher>
   codex: codexUsageFetcher,
   claudeAgent: claudeUsageFetcher,
   cursor: cursorUsageFetcher,
-  antigravity: unsupportedUsageFetcher("antigravity"),
+  antigravity: antigravityUsageFetcher,
   grok: unsupportedUsageFetcher("grok"),
   droid: unsupportedUsageFetcher("droid"),
-  kilo: unsupportedUsageFetcher("kilo"),
+  kilo: kiloUsageFetcher,
   opencode: unsupportedUsageFetcher("opencode"),
   pi: unsupportedUsageFetcher("pi"),
 };
