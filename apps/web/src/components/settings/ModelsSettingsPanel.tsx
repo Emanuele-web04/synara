@@ -2,18 +2,20 @@
 // Purpose: Own model-setting discovery, selection, and custom-model editing workflows.
 // Layer: Settings panel
 
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import {
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
-  PROVIDER_DISPLAY_NAMES,
-  type ProviderKind,
-} from "@synara/contracts";
-import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
+  defaultGitTextGenerationSelectionFor,
+  getModelOptions,
+  normalizeModelSlug,
+  resolveGitTextGenerationSelection,
+} from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
 import {
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   type AppSettingsBinding,
+  GIT_TEXT_GENERATION_PICKER_PROVIDERS,
   MAX_CUSTOM_MODEL_LENGTH,
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
@@ -45,8 +47,6 @@ import { SettingsRow, SettingsSection, SettingsSelectPopup } from "./SettingsPan
 type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
-
-const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "kilo", "opencode"] as const;
 
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
@@ -105,24 +105,25 @@ export function ModelsSettingsPanel({
     textGenerationModel,
     textGenerationProvider,
   } = settings;
-  const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
-  const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-  const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
-    [currentGitTextGenerationModel, currentGitTextGenerationProvider],
-  );
+  const resolvedGitTextGenerationSelection =
+    resolveGitTextGenerationSelection({
+      provider: textGenerationProvider ?? null,
+      model: textGenerationModel ?? null,
+    }) ?? defaultGitTextGenerationSelectionFor("codex");
+  const currentGitTextGenerationProvider = resolvedGitTextGenerationSelection.provider;
+  const currentGitTextGenerationModel = resolvedGitTextGenerationSelection.model;
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
     activeProjectCwd: null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
-    selectedProvider: currentGitTextGenerationProvider,
-    discoveryEnabled: active,
-    cwd: providerModelDiscoveryCwd,
-    modelHintByProvider: gitWritingModelHintByProvider,
-    prefetchProviders: GIT_WRITING_DISCOVERY_PROVIDERS,
-  });
+  const { modelOptionsByProvider: gitTextGenerationCatalogOptionsByProvider } =
+    useProviderModelCatalog({
+      selectedProvider: currentGitTextGenerationProvider,
+      discoveryEnabled: active,
+      cwd: providerModelDiscoveryCwd,
+      prefetchProviders: GIT_TEXT_GENERATION_PICKER_PROVIDERS,
+    });
   const gitTextGenerationModelOptions = useMemo(
     () =>
       getGitTextGenerationModelOptions(
@@ -134,18 +135,18 @@ export function ModelsSettingsPanel({
           textGenerationProvider,
         },
         {
-          codex: gitWritingCatalogOptionsByProvider.codex,
-          kilo: gitWritingCatalogOptionsByProvider.kilo,
-          opencode: gitWritingCatalogOptionsByProvider.opencode,
+          codex: gitTextGenerationCatalogOptionsByProvider.codex,
+          kilo: gitTextGenerationCatalogOptionsByProvider.kilo,
+          opencode: gitTextGenerationCatalogOptionsByProvider.opencode,
         },
       ),
     [
       customCodexModels,
       customKiloModels,
       customOpenCodeModels,
-      gitWritingCatalogOptionsByProvider.codex,
-      gitWritingCatalogOptionsByProvider.kilo,
-      gitWritingCatalogOptionsByProvider.opencode,
+      gitTextGenerationCatalogOptionsByProvider.codex,
+      gitTextGenerationCatalogOptionsByProvider.kilo,
+      gitTextGenerationCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,
     ],

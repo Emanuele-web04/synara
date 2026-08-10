@@ -9,20 +9,23 @@ import { Option, Schema, SchemaTransformation } from "effect";
 import {
   type AssistantDeliveryMode,
   DesktopAppIcon,
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
   ProviderKind,
+  type GitTextGenerationDefaultProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
 } from "@synara/contracts";
 import {
+  defaultGitTextGenerationSelectionFor,
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
+  resolveGitTextGenerationSelection,
 } from "@synara/shared/model";
 import {
   APP_SNAP_SHORTCUT_KEYS,
@@ -300,10 +303,26 @@ export function isGitTextGenerationSettingsDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
+  // currentProvider is intentionally omitted here: both sides resolve against
+  // the same empty context, so an equal stored pair normalizes to an equal
+  // complete pair. A rejected resolution (null) cannot be compared, so treat
+  // it as dirty: the stored pair is unattributable and needs a deliberate fix.
+  const resolvedSettings = resolveGitTextGenerationSelection({
+    provider: settings.textGenerationProvider ?? null,
+    model: settings.textGenerationModel ?? null,
+  });
+  const resolvedDefaults = resolveGitTextGenerationSelection({
+    provider: defaults.textGenerationProvider ?? null,
+    model: defaults.textGenerationModel ?? null,
+  });
+
+  if (resolvedSettings === null || resolvedDefaults === null) {
+    return true;
+  }
+
   return (
-    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
-    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
-      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
+    resolvedSettings.provider !== resolvedDefaults.provider ||
+    resolvedSettings.model !== resolvedDefaults.model
   );
 }
 
@@ -591,17 +610,6 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
   };
 }
 
-function resolveTextGenerationProvider(input: {
-  readonly provider?: ProviderKind | null;
-  readonly model?: string | null;
-}): ProviderKind {
-  if (input.provider) {
-    return input.provider;
-  }
-  const model = input.model;
-  return model?.includes("/") ? "opencode" : "codex";
-}
-
 function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key: Key): boolean {
   return Object.prototype.hasOwnProperty.call(patch, key);
 }
@@ -619,7 +627,10 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
-function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): ServerSettingsPatch {
+export function appSettingsPatchToServerSettingsPatch(
+  patch: Partial<AppSettings>,
+  currentProvider?: ProviderKind | null,
+): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
@@ -633,16 +644,20 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
-    const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-    serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({
-        ...(patch.textGenerationProvider !== undefined
-          ? { provider: patch.textGenerationProvider }
-          : {}),
-        model,
-      }),
-      model,
-    };
+    // Resolve the provider and model as one complete pair so a partial patch
+    // (provider-only, model-only, or neither) can never produce a mismatched
+    // pair. When the resolver rejects the input (null), leave the selection
+    // out of the patch: the server keeps the current pair unchanged.
+    const resolved = resolveGitTextGenerationSelection({
+      ...(patch.textGenerationProvider !== undefined
+        ? { provider: patch.textGenerationProvider }
+        : {}),
+      ...(patch.textGenerationModel !== undefined ? { model: patch.textGenerationModel } : {}),
+      ...(currentProvider !== undefined && currentProvider !== null ? { currentProvider } : {}),
+    });
+    if (resolved !== null) {
+      serverPatch.textGenerationModelSelection = resolved;
+    }
   }
 
   if (
@@ -763,7 +778,9 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
   return Object.keys(patch).length === 0;
 }
 
-function buildInitialServerSettingsMigrationPatch(settings: AppSettings): ServerSettingsPatch {
+export function buildInitialServerSettingsMigrationPatch(
+  settings: AppSettings,
+): ServerSettingsPatch {
   const patch: Partial<Mutable<AppSettings>> = {};
   const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
@@ -822,7 +839,23 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     }
   }
 
-  return appSettingsPatchToServerSettingsPatch(patch);
+  // Before server-owned settings, the browser inferred slash-qualified models
+  // as OpenCode and bare models as Codex when no provider was saved. Preserve
+  // those legacy mappings only for this one-time migration. Normal patches
+  // stay strict so an unattributable model cannot create a mismatched pair.
+  const legacyModel = patch.textGenerationModel;
+  const migrationPatch: Partial<Mutable<AppSettings>> =
+    patch.textGenerationProvider === undefined &&
+    typeof legacyModel === "string" &&
+    !legacyModel.startsWith("kilo/") &&
+    !legacyModel.startsWith("opencode/")
+      ? {
+          ...patch,
+          textGenerationProvider: legacyModel.includes("/") ? "opencode" : "codex",
+        }
+      : patch;
+
+  return appSettingsPatchToServerSettingsPatch(migrationPatch);
 }
 
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
@@ -919,7 +952,32 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "kilo" | "opencode";
+// Registry-driven union (keyof the default-selection registry), so the
+// picker types cannot drift when the registry gains a provider.
+type GitTextGenerationDiscoveredProvider = GitTextGenerationDefaultProvider;
+
+/**
+ * The providers the Git text generation picker exposes, in display order. Derived from
+ * the registry keys so the picker list cannot drift from the registered
+ * defaults (registry insertion order == picker order).
+ */
+export const GIT_TEXT_GENERATION_PICKER_PROVIDERS: readonly GitTextGenerationDefaultProvider[] =
+  Object.keys(
+    DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
+  ) as GitTextGenerationDefaultProvider[];
+
+// Precomputed registered-default rows for the Git text generation picker (AC4): a
+// provider's OWN registered default is always a valid selectable option for
+// that provider, so it is always offered.
+// Hoisted because every input is a module constant.
+const GIT_TEXT_GENERATION_DEFAULT_OPTIONS = GIT_TEXT_GENERATION_PICKER_PROVIDERS.map((provider) => {
+  const slug = defaultGitTextGenerationSelectionFor(provider).model;
+  return {
+    provider,
+    slug,
+    name: formatProviderModelOptionName({ provider, slug }),
+  };
+});
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
@@ -971,10 +1029,28 @@ export function getGitTextGenerationModelOptions(
     deduped.push(option);
   }
 
+  // AC4 refinement: a provider's OWN registered default is always a valid
+  // selectable option for that provider. It is not a phantom, even when the
+  // runtime catalog is authoritative and does not advertise it. Defaults of
+  // OTHER providers are never injected.
+  for (const defaultOption of GIT_TEXT_GENERATION_DEFAULT_OPTIONS) {
+    const key = `${defaultOption.provider}:${defaultOption.slug}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push({
+      ...defaultOption,
+      isCustom: false,
+    });
+  }
+
   const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  // The provider always defaults to codex; no slug-shape inference happens
+  // here. Slug attribution is the shared resolver's job (kilo/ and opencode/
+  // prefixes); this row only labels a persisted selection under the provider
+  // it came from.
+  const selectedProvider = settings.textGenerationProvider ?? "codex";
   if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
     deduped.push({
       provider: selectedProvider,
@@ -1272,7 +1348,10 @@ export function useAppSettings() {
       void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
     }
 
-    const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
+    const serverPatch = appSettingsPatchToServerSettingsPatch(
+      patch,
+      settings.textGenerationProvider,
+    );
     if (isServerSettingsPatchEmpty(serverPatch)) {
       return;
     }
