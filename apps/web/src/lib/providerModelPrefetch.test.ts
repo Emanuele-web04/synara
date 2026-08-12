@@ -4,12 +4,13 @@
 //          and gates Droid to explicit intent.
 // Layer: Web lib tests
 
-import { DEFAULT_SERVER_SETTINGS, type ProviderKind } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   prefetchModelsForNewThread,
+  prefetchProviderModelsForNewThread,
   providerModelsPrefetchQueryOptions,
   resolveNewThreadModelPrefetchCwd,
   resolveNewThreadModelPrefetchProvider,
@@ -238,10 +239,9 @@ describe("prefetchModelsForNewThread", () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
-    const { prefetchProviderModelsForNewThread } = await import("./providerModelPrefetch");
     prefetchProviderModelsForNewThread(queryClient, {
       settings: makeSettings(),
-      providers: ["codex", "droid" as ProviderKind],
+      providers: ["codex", "droid"],
     });
 
     const modelKeys = prefetchQuery.mock.calls

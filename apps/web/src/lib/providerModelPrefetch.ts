@@ -64,8 +64,7 @@ export function resolveNewThreadModelPrefetchProvider(input: {
     input.draftActiveProvider ??
     input.stickyActiveProvider ??
     input.projectDefaultProvider ??
-    input.defaultProvider ??
-    "codex"
+    input.defaultProvider
   );
 }
 
