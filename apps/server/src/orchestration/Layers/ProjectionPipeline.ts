@@ -1011,6 +1011,125 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  const insertMessageTextSegment = (
+    event: Extract<OrchestrationEvent, { readonly type: "thread.message-sent" }>,
+    overrides?: { readonly text?: string; readonly startedAt?: string; readonly endedAt?: string },
+  ) =>
+    sql`
+      INSERT INTO message_text_segments (
+        thread_id,
+        message_id,
+        sequence,
+        started_at,
+        ended_at,
+        text
+      )
+      VALUES (
+        ${event.payload.threadId},
+        ${event.payload.messageId},
+        ${event.payload.segmentSequence ?? event.sequence},
+        ${overrides?.startedAt ?? event.payload.segmentStartedAt ?? event.payload.createdAt},
+        ${overrides?.endedAt ?? event.payload.updatedAt},
+        ${overrides?.text ?? event.payload.text}
+      )
+    `.pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionPipeline.insertMessageTextSegment:query")),
+    );
+
+  const deleteMessageTextSegmentRows = (event: {
+    readonly threadId: string;
+    readonly messageId?: string;
+    readonly sequence?: number;
+  }) =>
+    sql`
+      DELETE FROM message_text_segments
+      WHERE thread_id = ${event.threadId}
+        ${event.messageId !== undefined ? sql`AND message_id = ${event.messageId}` : sql``}
+        ${event.sequence !== undefined ? sql`AND sequence = ${event.sequence}` : sql``}
+    `.pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionPipeline.deleteMessageTextSegmentRows:query"),
+      ),
+    );
+
+  /**
+   * Appends a continuation delta to the message's current (latest-started)
+   * text segment. Returns false when no segment exists yet for the message,
+   * so the caller seeds one from the delta itself.
+   */
+  const appendCurrentMessageTextSegment = (
+    event: Extract<OrchestrationEvent, { readonly type: "thread.message-sent" }>,
+  ) =>
+    sql<{ readonly messageId: string }>`
+      UPDATE message_text_segments
+      SET
+        text = text || ${event.payload.text},
+        ended_at = ${event.payload.updatedAt}
+      WHERE thread_id = ${event.payload.threadId}
+        AND message_id = ${event.payload.messageId}
+        AND sequence = (
+          SELECT MAX(sequence)
+          FROM message_text_segments
+          WHERE thread_id = ${event.payload.threadId}
+            AND message_id = ${event.payload.messageId}
+        )
+      RETURNING message_id AS "messageId"
+    `.pipe(
+      Effect.map((rows) => rows.length > 0),
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionPipeline.appendCurrentMessageTextSegment:query"),
+      ),
+    );
+
+  /**
+   * Lists the message's text segments in start order (for completion-time
+   * boundary preservation checks).
+   */
+  const listMessageTextSegmentsForMessage = (payload: {
+    readonly threadId: string;
+    readonly messageId: string;
+  }) =>
+    sql<{ readonly text: string }>`
+      SELECT text
+      FROM message_text_segments
+      WHERE thread_id = ${payload.threadId}
+        AND message_id = ${payload.messageId}
+      ORDER BY sequence ASC
+    `.pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionPipeline.listMessageTextSegmentsForMessage:query"),
+      ),
+    );
+
+  /**
+   * Advances the message's latest-started segment's endedAt (completion nudges
+   * the interleaved tail segment to the final updatedAt without losing the
+   * mid-turn boundaries).
+   */
+  const touchLatestMessageTextSegmentEndedAt = (
+    payload: {
+      readonly threadId: string;
+      readonly messageId: string;
+    },
+    endedAt: string,
+  ) =>
+    sql`
+      UPDATE message_text_segments
+      SET ended_at = ${endedAt}
+      WHERE thread_id = ${payload.threadId}
+        AND message_id = ${payload.messageId}
+        AND sequence = (
+          SELECT MAX(sequence)
+          FROM message_text_segments
+          WHERE thread_id = ${payload.threadId}
+            AND message_id = ${payload.messageId}
+        )
+    `.pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionPipeline.touchLatestMessageTextSegmentEndedAt:query"),
+      ),
+    );
+
   const applyThreadMessagesProjection: ProjectorDefinition["apply"] = (
     event,
     attachmentSideEffects,
@@ -1021,12 +1140,64 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           // Hot path: append onto an existing streaming message without reading
           // the accumulated text back out of SQLite.
           if (event.payload.streaming && (yield* appendStreamingThreadMessageText(event))) {
+            if (event.payload.segmentStartedAt) {
+              // A row-making provider event intervened since the last delta:
+              // this delta begins a new interleaved text segment. Delete-then-
+              // insert keeps journal replay idempotent (the first pass may
+              // have already written this exact boundary).
+              yield* deleteMessageTextSegmentRows({
+                threadId: event.payload.threadId,
+                messageId: event.payload.messageId,
+                sequence: event.payload.segmentSequence ?? event.sequence,
+              });
+              yield* insertMessageTextSegment(event);
+            } else if (!(yield* appendCurrentMessageTextSegment(event))) {
+              // Legacy streaming message rows have no segments yet; seed one
+              // from the first delta that reaches them.
+              yield* deleteMessageTextSegmentRows({
+                threadId: event.payload.threadId,
+                messageId: event.payload.messageId,
+                sequence: event.payload.segmentSequence ?? event.sequence,
+              });
+              yield* insertMessageTextSegment(event, {
+                startedAt: event.payload.createdAt,
+              });
+            }
             return;
           }
           const existingMessage = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
           });
+          const resolvedText =
+            Option.isSome(existingMessage) && event.payload.streaming
+              ? `${existingMessage.value.text}${event.payload.text}`
+              : Option.isSome(existingMessage) && event.payload.text.length === 0
+                ? existingMessage.value.text
+                : event.payload.text;
+          if (!event.payload.streaming && event.payload.role === "assistant") {
+            // Completion / edit / rewrite / import. Keep the interleaved
+            // segment boundaries when multiple segments already cover the
+            // final text. Single-segment messages, first writes, edits and
+            // imports need no side-table rows.
+            const segmentRows = yield* listMessageTextSegmentsForMessage(event.payload);
+            const collatedSegmentText = segmentRows.map((segment) => segment.text).join("");
+            if (segmentRows.length > 1 && collatedSegmentText === resolvedText) {
+              yield* touchLatestMessageTextSegmentEndedAt(event.payload, event.payload.updatedAt);
+            } else {
+              yield* deleteMessageTextSegmentRows(event.payload);
+            }
+          } else if (event.payload.streaming && event.payload.role === "assistant") {
+            // Streaming hot-path miss (message row did not exist yet): seed the
+            // first segment from this delta. Delete-first keeps journal replay
+            // idempotent.
+            yield* deleteMessageTextSegmentRows({
+              threadId: event.payload.threadId,
+              messageId: event.payload.messageId,
+              sequence: event.payload.segmentSequence ?? event.sequence,
+            });
+            yield* insertMessageTextSegment(event);
+          }
           const nextAttachments =
             event.payload.attachments !== undefined
               ? event.payload.attachments
@@ -1041,12 +1212,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               incomingTurnId: event.payload.turnId,
             }),
             role: event.payload.role,
-            text:
-              Option.isSome(existingMessage) && event.payload.streaming
-                ? `${existingMessage.value.text}${event.payload.text}`
-                : Option.isSome(existingMessage) && event.payload.text.length === 0
-                  ? existingMessage.value.text
-                  : event.payload.text,
+            text: resolvedText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             ...(event.payload.skills !== undefined ? { skills: event.payload.skills } : {}),
             ...(event.payload.mentions !== undefined ? { mentions: event.payload.mentions } : {}),
@@ -1107,6 +1273,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
           });
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert);
+          // The rollback rewrites message history, so the repository deletion
+          // intentionally drops all derived segment boundaries for the thread.
           if (event.type === "thread.reverted" || event.payload.skipAttachmentPrune !== true) {
             attachmentSideEffects.prunedThreadRelativePaths.set(
               event.payload.threadId,
@@ -1193,7 +1361,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             payload: event.payload.activity.payload,
             // The orchestration log is durable and monotonic across provider
             // restarts, unlike provider-local counters that may reset to zero.
-            sequence: event.sequence,
+            sequence: event.payload.activity.sequence ?? event.sequence,
             createdAt: event.payload.activity.createdAt,
           });
           return;
