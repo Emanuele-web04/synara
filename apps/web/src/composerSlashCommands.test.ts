@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THREAD_GOAL_MAX_CHARS } from "@synara/contracts";
 
 import {
   buildReviewPrompt,
@@ -14,6 +15,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommandArgs,
   providerSupportsTextNativeReviewCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
@@ -26,6 +28,7 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("export")).toBe(true);
     expect(isBuiltInComposerSlashCommand("feedback")).toBe(true);
     expect(isBuiltInComposerSlashCommand("debug")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("goal")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
@@ -72,6 +75,10 @@ describe("composerSlashCommands", () => {
       command: "debug",
       args: "",
     });
+    expect(parseComposerSlashInvocation("/goal first line\nsecond line")).toEqual({
+      command: "goal",
+      args: "first line\nsecond line",
+    });
     expect(parseComposerSlashInvocation("review")).toBeNull();
   });
 
@@ -112,6 +119,18 @@ describe("composerSlashCommands", () => {
     expect(parseForkSlashCommandArgs("local continue here")).toEqual({
       target: null,
       invalid: true,
+    });
+  });
+
+  it("parses /goal show, clear, set, and length-limit actions", () => {
+    expect(parseGoalSlashCommandArgs("")).toEqual({ action: "show" });
+    expect(parseGoalSlashCommandArgs("  CLEAR  ")).toEqual({ action: "clear" });
+    expect(parseGoalSlashCommandArgs("Ship the release safely")).toEqual({
+      action: "set",
+      goal: "Ship the release safely",
+    });
+    expect(parseGoalSlashCommandArgs("x".repeat(THREAD_GOAL_MAX_CHARS + 1))).toEqual({
+      action: "too-long",
     });
   });
 
@@ -305,7 +324,15 @@ describe("composerSlashCommands", () => {
       canOfferExportCommand: true,
     });
 
-    expect(commands).toEqual(["side", "export", "debug", "default", "feedback", "automation"]);
+    expect(commands).toEqual([
+      "side",
+      "export",
+      "goal",
+      "debug",
+      "default",
+      "feedback",
+      "automation",
+    ]);
   });
 
   it("offers the app-level /export command on every provider", () => {
@@ -417,6 +444,7 @@ describe("composerSlashCommands", () => {
       "status",
       "subagents",
       "export",
+      "goal",
       "feedback",
       "automation",
     ]);

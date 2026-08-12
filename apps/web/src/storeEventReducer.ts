@@ -931,6 +931,7 @@ function applyOrchestrationEvent(
             (event.payload.threadMarkers === undefined ||
               deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
             (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
+            (event.payload.goal === undefined || event.payload.goal === (thread.goal ?? "")) &&
             nextUpdatedAt === thread.updatedAt
           ) {
             return thread;
@@ -983,6 +984,7 @@ function applyOrchestrationEvent(
                 }
               : {}),
             ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
+            ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
             updatedAt: nextUpdatedAt,
             ...(cwdChanged ? { session: null } : {}),
           };

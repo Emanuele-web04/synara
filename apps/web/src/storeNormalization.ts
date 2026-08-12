@@ -178,6 +178,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
     deepEqualJson(left.threadMarkers ?? null, right.threadMarkers ?? null) &&
     (left.notes ?? "") === (right.notes ?? "") &&
+    (left.goal ?? "") === (right.goal ?? "") &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
@@ -1514,6 +1515,7 @@ export function normalizeThreadFromReadModel(
       ? previous.threadMarkers
       : (incoming.threadMarkers as Thread["threadMarkers"]);
   const notes = incoming.notes;
+  const goal = incoming.goal;
   const turnDiffSummaries = normalizeTurnDiffSummaries(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
@@ -1614,6 +1616,7 @@ export function normalizeThreadFromReadModel(
     previous.pinnedMessages === pinnedMessages &&
     previous.threadMarkers === threadMarkers &&
     previous.notes === notes &&
+    previous.goal === goal &&
     previous.turnDiffSummaries === turnDiffSummaries &&
     previous.activities === activities &&
     previous.pendingInteractions === pendingInteractions
@@ -1662,6 +1665,7 @@ export function normalizeThreadFromReadModel(
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
     ...(threadMarkers !== undefined ? { threadMarkers } : {}),
     ...(notes !== undefined ? { notes } : {}),
+    ...(goal !== undefined ? { goal } : {}),
     ...(resolvedLatestUserMessageAt !== undefined
       ? { latestUserMessageAt: resolvedLatestUserMessageAt }
       : {}),
@@ -1708,6 +1712,7 @@ export function normalizeThreadShellSnapshot(
   const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
   const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
   const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
+  const goal = incoming.goal !== undefined ? incoming.goal : previous?.goal;
   const resolvedBranch = resolveThreadBranchRegressionGuard({
     currentBranch: previous?.branch ?? null,
     nextBranch: incoming.branch,
@@ -1758,11 +1763,12 @@ export function normalizeThreadShellSnapshot(
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
     handoff,
-    // The sidebar shell snapshot/event does not carry thread annotations, so keep the values
-    // resolved from the thread-detail path instead of clobbering them with `undefined`.
+    // The sidebar shell snapshot/event does not carry detail-only annotations, so keep those
+    // values instead of clobbering them with `undefined`. Goals are shell state and update here.
     ...(previous?.pinnedMessages !== undefined ? { pinnedMessages: previous.pinnedMessages } : {}),
     ...(previous?.threadMarkers !== undefined ? { threadMarkers: previous.threadMarkers } : {}),
     ...(previous?.notes !== undefined ? { notes: previous.notes } : {}),
+    ...(goal !== undefined ? { goal } : {}),
     ...(incoming.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: incoming.latestUserMessageAt ?? null }
       : {}),

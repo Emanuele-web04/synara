@@ -10113,6 +10113,7 @@ export default function ChatView({
     setIsSlashStatusDialogOpen,
     handleStandaloneSlashCommand,
     handleSlashCommandSelection,
+    clearThreadGoal,
   } = useComposerSlashCommands({
     activeProject,
     activeThread,
@@ -11263,6 +11264,11 @@ export default function ChatView({
               >
                 <ComposerInputBanners
                   roundedTopReset={false}
+                  goal={
+                    activeThread?.goal?.trim()
+                      ? { text: activeThread.goal.trim(), onClear: clearThreadGoal }
+                      : null
+                  }
                   planFollowUp={
                     !activePendingApproval &&
                     pendingUserInputs.length === 0 &&
