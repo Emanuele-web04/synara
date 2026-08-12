@@ -1,14 +1,15 @@
 // FILE: providerModelPrefetch.test.ts
-// Purpose: Verifies new-thread model prefetch resolves providers/cwds and hits
-//          the same React Query keys ChatView uses for listModels.
+// Purpose: Verifies new-thread model prefetch resolves providers/cwds, hits the
+//          same React Query keys ChatView uses, warms every visible provider,
+//          and gates Droid to explicit intent.
 // Layer: Web lib tests
 
-import type { ProviderKind } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProviderKind } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  prefetchProviderModelsForNewThread,
+  prefetchModelsForNewThread,
   providerModelsPrefetchQueryOptions,
   resolveNewThreadModelPrefetchCwd,
   resolveNewThreadModelPrefetchProvider,
@@ -25,6 +26,7 @@ function makeSettings(
 ): ProviderModelPrefetchSettings {
   return {
     defaultProvider: "codex",
+    claudeBinaryPath: "",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
     antigravityBinaryPath: "",
@@ -39,7 +41,17 @@ function makeSettings(
 }
 
 describe("resolveNewThreadModelPrefetchProvider", () => {
-  it("prefers draft, then sticky, then project default, then app default", () => {
+  it("prefers override, draft, sticky, project default, then app default", () => {
+    expect(
+      resolveNewThreadModelPrefetchProvider({
+        providerOverride: "grok",
+        draftActiveProvider: "cursor",
+        stickyActiveProvider: "pi",
+        projectDefaultProvider: "opencode",
+        defaultProvider: "codex",
+      }),
+    ).toBe("grok");
+
     expect(
       resolveNewThreadModelPrefetchProvider({
         draftActiveProvider: "cursor",
@@ -48,15 +60,6 @@ describe("resolveNewThreadModelPrefetchProvider", () => {
         defaultProvider: "codex",
       }),
     ).toBe("cursor");
-
-    expect(
-      resolveNewThreadModelPrefetchProvider({
-        draftActiveProvider: null,
-        stickyActiveProvider: "pi",
-        projectDefaultProvider: "opencode",
-        defaultProvider: "codex",
-      }),
-    ).toBe("pi");
 
     expect(
       resolveNewThreadModelPrefetchProvider({
@@ -105,6 +108,7 @@ describe("resolveNewThreadModelPrefetchCwd", () => {
 describe("providerModelsPrefetchQueryOptions", () => {
   it("matches ChatView cache keys for cwd-scoped and binary-scoped providers", () => {
     const settings = makeSettings({
+      claudeBinaryPath: "/bin/claude",
       cursorBinaryPath: "/bin/agent",
       cursorApiEndpoint: "https://api.example",
       antigravityBinaryPath: "/bin/antigravity",
@@ -113,97 +117,139 @@ describe("providerModelsPrefetchQueryOptions", () => {
       piAgentDir: "/tmp/pi-agent",
     });
 
-    const cursorOptions = providerModelsPrefetchQueryOptions({
-      provider: "cursor",
-      settings,
-    });
-    expect(cursorOptions.queryKey).toEqual(
+    expect(
+      providerModelsPrefetchQueryOptions({ provider: "claudeAgent", settings }).queryKey,
+    ).toEqual(providerDiscoveryQueryKeys.models("claudeAgent", "/bin/claude", null, null, null));
+
+    expect(providerModelsPrefetchQueryOptions({ provider: "cursor", settings }).queryKey).toEqual(
       providerDiscoveryQueryKeys.models("cursor", "/bin/agent", "https://api.example", null, null),
     );
 
-    const openCodeOptions = providerModelsPrefetchQueryOptions({
-      provider: "opencode",
-      settings,
-      cwd: "/tmp/project",
-    });
-    expect(openCodeOptions.queryKey).toEqual(
+    expect(
+      providerModelsPrefetchQueryOptions({ provider: "opencode", settings, cwd: "/tmp/project" })
+        .queryKey,
+    ).toEqual(
       providerDiscoveryQueryKeys.models("opencode", "/bin/opencode", null, null, "/tmp/project"),
     );
 
-    const piOptions = providerModelsPrefetchQueryOptions({
-      provider: "pi",
-      settings,
-      cwd: "/tmp/project",
-    });
-    expect(piOptions.queryKey).toEqual(
+    expect(
+      providerModelsPrefetchQueryOptions({ provider: "pi", settings, cwd: "/tmp/project" })
+        .queryKey,
+    ).toEqual(
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
     );
 
-    const antigravityOptions = providerModelsPrefetchQueryOptions({
-      provider: "antigravity",
-      settings,
-      cwd: "/tmp/project",
-    });
-    expect(antigravityOptions.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models(
-        "antigravity",
-        "/bin/antigravity",
-        null,
-        null,
-        "/tmp/project",
-      ),
-    );
-
-    const codexOptions = providerModelsPrefetchQueryOptions({
-      provider: "codex",
-      settings,
-    });
-    expect(codexOptions.queryKey).toEqual(
+    expect(providerModelsPrefetchQueryOptions({ provider: "codex", settings }).queryKey).toEqual(
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );
   });
 });
 
-describe("prefetchProviderModelsForNewThread", () => {
-  it("prefetches models and agents for the resolved provider", async () => {
+describe("prefetchModelsForNewThread", () => {
+  it("warms every provider except Droid, selected provider first", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
-    prefetchProviderModelsForNewThread(queryClient, {
-      provider: "kilo" satisfies ProviderKind,
-      settings: makeSettings({
-        kiloBinaryPath: "/bin/kilo",
-      }),
-      cwd: "/tmp/project",
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      projectCwd: "/tmp/project",
+      projectDefaultProvider: "opencode",
     });
 
-    expect(prefetchQuery).toHaveBeenCalledTimes(3);
-    expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("kilo", "/bin/kilo", null, null, "/tmp/project"),
+    const modelKeys = prefetchQuery.mock.calls
+      .map((call) => call[0].queryKey)
+      .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys[0]).toEqual(
+      providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project"),
     );
-    expect(prefetchQuery.mock.calls[1]?.[0].queryKey).toEqual(
-      providerDiscoveryQueryKeys.agents("kilo", "/bin/kilo", "/tmp/project"),
+    // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
+    expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
+    expect(modelKeys).toHaveLength(8);
+    expect(modelKeys).not.toContainEqual(
+      providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
-    expect(prefetchQuery.mock.calls[2]?.[0].queryKey).toEqual(
-      providerDiscoveryQueryKeys.composerCapabilities("kilo"),
+    expect(modelKeys).toContainEqual(
+      providerDiscoveryQueryKeys.models("claudeAgent", null, null, null, null),
     );
   });
 
-  it("prefetches only models for providers without agent discovery", async () => {
+  it("skips hidden and disabled providers", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
-    prefetchProviderModelsForNewThread(queryClient, {
-      provider: "cursor",
-      settings: makeSettings({ cursorBinaryPath: "/bin/agent" }),
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      serverSettings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
+        },
+      },
+      hiddenProviders: ["pi"],
+      projectCwd: "/tmp/project",
     });
 
-    expect(prefetchQuery).toHaveBeenCalledTimes(2);
-    expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("cursor", "/bin/agent", null, null, null),
+    const modelKeys = prefetchQuery.mock.calls
+      .map((call) => call[0].queryKey)
+      .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys).toHaveLength(6);
+    expect(modelKeys).not.toContainEqual(
+      providerDiscoveryQueryKeys.models("cursor", null, null, null, "/tmp/project"),
     );
-    expect(prefetchQuery.mock.calls[1]?.[0].queryKey).toEqual(
-      providerDiscoveryQueryKeys.composerCapabilities("cursor"),
+    expect(modelKeys).not.toContainEqual(
+      providerDiscoveryQueryKeys.models("pi", null, null, null, "/tmp/project"),
+    );
+  });
+
+  it("warms Droid only on explicit intent with Droid selected", async () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      providerOverride: "droid",
+      projectCwd: "/tmp/project",
+    });
+
+    const modelKeys = prefetchQuery.mock.calls
+      .map((call) => call[0].queryKey)
+      .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys).not.toContainEqual(
+      providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
+    );
+
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      providerOverride: "droid",
+      projectCwd: "/tmp/project",
+      includeDroid: true,
+    });
+
+    const modelKeys2 = prefetchQuery.mock.calls
+      .map((call) => call[0].queryKey)
+      .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys2).toContainEqual(
+      providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
+    );
+  });
+
+  it("warms the explicit providers subset without Droid", async () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+
+    const { prefetchProviderModelsForNewThread } = await import("./providerModelPrefetch");
+    prefetchProviderModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      providers: ["codex", "droid" as ProviderKind],
+    });
+
+    const modelKeys = prefetchQuery.mock.calls
+      .map((call) => call[0].queryKey)
+      .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
+    expect(modelKeys).toHaveLength(1);
+    expect(modelKeys[0]).toEqual(
+      providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );
   });
 });

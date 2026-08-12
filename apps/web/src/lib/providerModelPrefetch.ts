@@ -6,7 +6,7 @@
 // Layer: Web lib
 // Exports: resolve + prefetch helpers that mirror ChatView's listModels query keys.
 
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderKind, ServerSettings } from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
 import type { AppSettings } from "../appSettings";
@@ -20,6 +20,7 @@ import {
 export type ProviderModelPrefetchSettings = Pick<
   AppSettings,
   | "defaultProvider"
+  | "claudeBinaryPath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
   | "antigravityBinaryPath"
@@ -31,13 +32,35 @@ export type ProviderModelPrefetchSettings = Pick<
   | "piAgentDir"
 >;
 
+/**
+ * Providers whose model catalogs are runtime-discovered (not static) and thus
+ * need warming before the picker can show anything beyond the static fallback.
+ * Droid is excluded: its discovery spins a disposable ACP session per model,
+ * so it warms only on explicit new-thread intent.
+ */
+export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<ProviderKind, "droid">> = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "grok",
+  "kilo",
+  "opencode",
+  "pi",
+];
+
+/** Warm results stay fresh for 30 minutes instead of the interactive 60s. */
+export const NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS = 30 * 60_000;
+
 export function resolveNewThreadModelPrefetchProvider(input: {
+  providerOverride?: ProviderKind | null | undefined;
   draftActiveProvider?: ProviderKind | null | undefined;
   stickyActiveProvider?: ProviderKind | null | undefined;
   projectDefaultProvider?: ProviderKind | null | undefined;
   defaultProvider: ProviderKind;
 }): ProviderKind {
   return (
+    input.providerOverride ??
     input.draftActiveProvider ??
     input.stickyActiveProvider ??
     input.projectDefaultProvider ??
@@ -72,7 +95,10 @@ export function providerModelsPrefetchQueryOptions(input: {
 
   switch (provider) {
     case "claudeAgent":
-      return providerModelsQueryOptions({ provider: "claudeAgent" });
+      return providerModelsQueryOptions({
+        provider: "claudeAgent",
+        binaryPath: settings.claudeBinaryPath || null,
+      });
     case "codex":
       return providerModelsQueryOptions({ provider: "codex" });
     case "cursor":
@@ -153,31 +179,131 @@ function providerAgentsPrefetchQueryOptions(input: {
 export function prefetchProviderModelsForNewThread(
   queryClient: QueryClient,
   input: {
-    provider: ProviderKind;
+    settings: ProviderModelPrefetchSettings;
+    cwd?: string | null;
+    providers?: ReadonlyArray<ProviderKind>;
+  },
+): void {
+  const cwd = input.cwd ?? null;
+  const providers = (input.providers ?? NEW_THREAD_MODEL_PREFETCH_PROVIDERS).filter(
+    (provider) => provider !== "droid",
+  );
+
+  for (const provider of providers) {
+    const modelsOptions = providerModelsPrefetchQueryOptions({
+      provider,
+      settings: input.settings,
+      cwd,
+    });
+    void queryClient.prefetchQuery({
+      ...modelsOptions,
+      retry: 0,
+      staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+      gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+    });
+
+    // Agent/mode lists ride along for providers that surface them next to models.
+    const agentsOptions = providerAgentsPrefetchQueryOptions({
+      provider,
+      settings: input.settings,
+      cwd,
+    });
+    if (agentsOptions) {
+      void queryClient.prefetchQuery({
+        ...agentsOptions,
+        retry: 0,
+        staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+        gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+      });
+    }
+
+    // Composer capabilities gate composer affordances on ChatView mount; the query
+    // has staleTime Infinity, so this costs one IPC per provider per session.
+    void queryClient.prefetchQuery({
+      ...providerComposerCapabilitiesQueryOptions(provider),
+      gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+    });
+  }
+}
+
+/**
+ * Warm Droid's model catalog on explicit new-thread intent only. Droid
+ * discovery spins a disposable ACP session per model (expensive), so it must
+ * never run from idle project focus.
+ */
+export function prefetchDroidModelsForNewThread(
+  queryClient: QueryClient,
+  input: {
     settings: ProviderModelPrefetchSettings;
     cwd?: string | null;
   },
 ): void {
   const cwd = input.cwd ?? null;
-  void queryClient.prefetchQuery(
-    providerModelsPrefetchQueryOptions({
-      provider: input.provider,
+  void queryClient.prefetchQuery({
+    ...providerModelsPrefetchQueryOptions({
+      provider: "droid",
       settings: input.settings,
       cwd,
     }),
-  );
+    retry: 0,
+    staleTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+    gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+  });
+  void queryClient.prefetchQuery({
+    ...providerComposerCapabilitiesQueryOptions("droid"),
+    gcTime: NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
+  });
+}
 
-  // Agent/mode lists ride along for providers that surface them next to models.
-  const agentsOptions = providerAgentsPrefetchQueryOptions({
-    provider: input.provider,
+/**
+ * Warm every visible provider for the next new thread: the selected provider
+ * first, hidden/disabled providers skipped, Droid only on explicit intent.
+ */
+export function prefetchModelsForNewThread(
+  queryClient: QueryClient,
+  input: {
+    settings: ProviderModelPrefetchSettings;
+    serverSettings?: ServerSettings | null;
+    hiddenProviders?: ReadonlyArray<ProviderKind>;
+    providerOverride?: ProviderKind | null;
+    draftActiveProvider?: ProviderKind | null;
+    stickyActiveProvider?: ProviderKind | null;
+    projectDefaultProvider?: ProviderKind | null;
+    projectCwd?: string | null;
+    draftWorktreePath?: string | null;
+    serverCwd?: string | null;
+    includeDroid?: boolean;
+  },
+): void {
+  const selectedProvider = resolveNewThreadModelPrefetchProvider({
+    providerOverride: input.providerOverride,
+    draftActiveProvider: input.draftActiveProvider,
+    stickyActiveProvider: input.stickyActiveProvider,
+    projectDefaultProvider: input.projectDefaultProvider,
+    defaultProvider: input.settings.defaultProvider,
+  });
+  const cwd = resolveNewThreadModelPrefetchCwd({
+    draftWorktreePath: input.draftWorktreePath,
+    projectCwd: input.projectCwd,
+    serverCwd: input.serverCwd,
+  });
+  const hiddenProviderSet = new Set(input.hiddenProviders ?? []);
+  const isProviderWarmable = (provider: ProviderKind): boolean =>
+    !hiddenProviderSet.has(provider) &&
+    input.serverSettings?.providers[provider]?.enabled !== false;
+  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(isProviderWarmable);
+  const orderedProviders =
+    selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
+      ? providers
+      : [selectedProvider, ...providers.filter((provider) => provider !== selectedProvider)];
+
+  prefetchProviderModelsForNewThread(queryClient, {
     settings: input.settings,
     cwd,
+    providers: orderedProviders,
   });
-  if (agentsOptions) {
-    void queryClient.prefetchQuery(agentsOptions);
-  }
 
-  // Composer capabilities gate composer affordances on ChatView mount; the query
-  // has staleTime Infinity, so this costs one IPC per provider per session.
-  void queryClient.prefetchQuery(providerComposerCapabilitiesQueryOptions(input.provider));
+  if (input.includeDroid === true && selectedProvider === "droid" && isProviderWarmable("droid")) {
+    prefetchDroidModelsForNewThread(queryClient, { settings: input.settings, cwd });
+  }
 }
