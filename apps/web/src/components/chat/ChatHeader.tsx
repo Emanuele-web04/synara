@@ -170,7 +170,9 @@ function EditorChatHistoryMenu(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const displayThreads = useStore(selectDisplayThreads);
   const historyThreads = sortThreadsForSidebar(
     displayThreads.filter((thread) => thread.projectId === props.projectId),
@@ -255,7 +257,9 @@ function EditorRailTabs(props: {
         ];
   });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const displayThreads = useStore(selectDisplayThreads);
   const currentChatTab: EditorRailChatTab = {
     id: props.activeThreadId,
@@ -832,6 +836,15 @@ export function ChatHeader({
           />
         ) : null}
 
+        {environment && activeProjectName && showGitActions ? (
+          <GitActionsControl
+            gitCwd={gitCwd}
+            activeThreadId={activeThreadId}
+            hideQuickActionLabel={compact}
+            visibleWhen="pull-available"
+          />
+        ) : null}
+
         {inlineChatLayoutAction ? (
           <Tooltip>
             <TooltipTrigger
@@ -867,8 +880,9 @@ export function ChatHeader({
           </Tooltip>
         ) : null}
 
-        {/* Environment: one button consolidating Open-in-editor and git actions into the
-            Environment panel. The right-side panel control stays beside it, acting as the
+        {/* Environment: one button consolidating Open-in-editor and most git actions into
+            the Environment panel. Pull still appears in this action cluster when the
+            branch is behind. The right-side panel control stays beside it, acting as the
             multi-pane dock toggle on single chats and the legacy diff toggle in split hosts.
             Falls back to the legacy controls when no environment is resolved. */}
         {environment ? (

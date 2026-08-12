@@ -131,12 +131,26 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 0;
   });
 });
+
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners (observed >10s under a full parallel suite). beforeAll keeps that
+// cost off any single test's clock; the explicit timeout keeps it off the
+// default 10s hook clock too.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+}, 120_000);
 
 describe("MessagesTimeline", () => {
   // The first test pays the full dynamic-import cost of the MessagesTimeline
@@ -1559,6 +1573,50 @@ describe("MessagesTimeline", () => {
       '<span data-work-entry-display-text="true">Searched 2 files found</span>',
     );
     expect(markup).not.toContain("data-work-entry-action-word");
+  });
+
+  it("renders the complete task-list progress heading", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-task-progress");
+    const timelineEntries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: activeTurnId,
+          payload: {
+            tasks: [
+              { task: "Implement inline editing", status: "completed" },
+              { task: "Run verification", status: "inProgress" },
+              { task: "Ship", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      activeTurnId,
+    ).map((entry) => ({
+      id: entry.id,
+      kind: "work" as const,
+      createdAt: entry.createdAt,
+      entry,
+    }));
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
+        timelineEntries={timelineEntries}
+      />,
+    );
+
+    expect(markup).toContain(
+      '<span data-work-entry-display-text="true">1 out of 3 tasks completed Run verification</span>',
+    );
   });
 
   it("renders Claude agent task output through the shared markdown renderer", async () => {

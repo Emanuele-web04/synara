@@ -99,11 +99,13 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import {
+  hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import {
   composerMentionPathNeedsQuoting,
@@ -120,6 +122,7 @@ import {
   normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   resolveProviderSendAvailabilityWithRefresh,
+  resolveAvailableProviderPreference,
 } from "~/lib/providerAvailability";
 import {
   loadConfirmedCustomBinaryPaths,
@@ -312,6 +315,7 @@ import {
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import {
+  BugIcon,
   ChevronDownIcon,
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
@@ -466,10 +470,8 @@ import {
   formatCadence,
   automationsForThread,
   isFormSubmittable,
-  providerOptionsForAutomationEdit,
   projectModelSelection as automationProjectModelSelection,
   type AutomationFormState,
-  updateInputFromForm,
 } from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
@@ -2256,15 +2258,35 @@ export default function ChatView({
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
-  const selectedProvider: ProviderKind =
-    lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const localProviderStatuses = useProviderStatusesForLocalConfig();
+  const preferredDraftProvider =
+    selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
+  const selectedProvider = useMemo<ProviderKind>(
+    () =>
+      lockedProvider ??
+      resolveAvailableProviderPreference({
+        preferredProvider: preferredDraftProvider,
+        statuses: providerStatusesReconciled ? localProviderStatuses : EMPTY_PROVIDER_STATUSES,
+        providerOrder: settings.providerOrder,
+        hiddenProviders: settings.hiddenProviders,
+      }),
+    [
+      localProviderStatuses,
+      lockedProvider,
+      preferredDraftProvider,
+      providerStatusesReconciled,
+      settings.hiddenProviders,
+      settings.providerOrder,
+    ],
+  );
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
   } | null>(null);
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
@@ -3047,11 +3069,8 @@ export default function ChatView({
     automationProjects,
     automationThreads,
     automationData,
-    automationUpdateMutation,
     automationDraftForm,
     setAutomationDraftForm,
-    automationEditingDefinition,
-    setAutomationEditingDefinition,
     automationDraftWarnings,
     setAutomationDraftWarnings,
     setAutomationDraftWarningContext,
@@ -3073,10 +3092,8 @@ export default function ChatView({
     toggleAutomationWarning,
     updateAutomationDraftForm,
     resetAutomationDraftState,
-    openAutomationEditDialog,
   } = useChatAutomationSetup({
     threadId,
-    activeProjectId,
     hasLiveTurn,
     promptRef,
     setComposerDraftPrompt,
@@ -5045,7 +5062,7 @@ export default function ChatView({
             .catch((error) => {
               toastManager.add({
                 type: "error",
-                title: "Could not update plan mode",
+                title: "Could not update interaction mode",
                 description:
                   error instanceof Error ? error.message : "An unexpected error occurred.",
               });
@@ -5067,6 +5084,9 @@ export default function ChatView({
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
+  const resetInteractionMode = useCallback(() => {
+    handleInteractionModeChange("default");
+  }, [handleInteractionModeChange]);
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -5078,12 +5098,6 @@ export default function ChatView({
       return !open;
     });
   }, [activeTaskList?.turnId, sidebarProposedPlan?.turnId]);
-  const setPlanMode = useCallback(
-    (enabled: boolean) => {
-      handleInteractionModeChange(enabled ? "plan" : "default");
-    },
-    [handleInteractionModeChange],
-  );
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
       threadId: ThreadId;
@@ -7129,74 +7143,8 @@ export default function ChatView({
     ],
   );
 
-  const updateAutomationFromForm = useCallback(
-    async (input: {
-      readonly definition: AutomationDefinition;
-      readonly form: AutomationFormState;
-      readonly warnings: readonly AutomationDraftWarning[];
-      readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
-      readonly providerOptions?: ProviderStartOptions;
-    }): Promise<boolean> => {
-      if (automationDraftSubmittingRef.current) {
-        return false;
-      }
-      if (!isFormSubmittable(input.form)) {
-        return false;
-      }
-      if (hasBlockingAutomationDraftWarnings(input.warnings, input.acknowledgedWarningIds)) {
-        return false;
-      }
-      const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(
-        input.warnings,
-        input.acknowledgedWarningIds,
-      );
-      automationDraftSubmittingRef.current = true;
-      setIsAutomationDraftSubmitting(true);
-      return await (async () => {
-        const providerOptions =
-          input.providerOptions ??
-          providerOptionsForAutomationEdit(
-            input.definition,
-            input.form,
-            providerOptionsForDispatch,
-          );
-        const updated = await automationUpdateMutation.mutateAsync(
-          updateInputFromForm(input.definition, input.form, providerOptions, acknowledgedRisks),
-        );
-        resetAutomationDraftState();
-        toastManager.add({
-          type: "success",
-          title: "Automation updated",
-          description: `${updated.name} - ${formatCadence(updated.schedule)}`,
-        });
-        return true;
-      })()
-        .catch(() => false)
-        .finally(() => {
-          automationDraftSubmittingRef.current = false;
-          setIsAutomationDraftSubmitting(false);
-        });
-    },
-    [
-      automationDraftSubmittingRef,
-      automationUpdateMutation,
-      providerOptionsForDispatch,
-      resetAutomationDraftState,
-      setIsAutomationDraftSubmitting,
-    ],
-  );
-
   const submitAutomationDraft = useCallback(async () => {
     if (!automationDraftForm) {
-      return;
-    }
-    if (automationEditingDefinition) {
-      await updateAutomationFromForm({
-        definition: automationEditingDefinition,
-        form: automationDraftForm,
-        warnings: automationDraftWarnings,
-        acknowledgedWarningIds: acknowledgedAutomationWarnings,
-      });
       return;
     }
     if (
@@ -7217,12 +7165,10 @@ export default function ChatView({
     });
   }, [
     acknowledgedAutomationWarnings,
-    automationEditingDefinition,
     automationDraftForm,
     automationDraftWarnings,
     createAutomationFromForm,
     prepareAutomationFormForCreate,
-    updateAutomationFromForm,
   ]);
 
   const restoreQueuedTurnToComposer = useCallback(
@@ -7669,7 +7615,6 @@ export default function ChatView({
             promptRef.current = restoredPrompt;
             setComposerDraftPrompt(activeThread.id, restoredPrompt);
           }
-          setAutomationEditingDefinition(null);
           setAutomationDraftWarningContext(automationDraft.warningContext);
           setAutomationDraftForm(automationDraft.form);
           setAutomationDraftWarnings(automationDraft.warnings);
@@ -11109,7 +11054,7 @@ export default function ChatView({
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddAttachments={addComposerAttachments}
         onToggleFastMode={toggleFastMode}
-        onSetPlanMode={setPlanMode}
+        onInteractionModeChange={handleInteractionModeChange}
       />
       {!isVoiceRecording && !isVoiceTranscribing ? (
         <RuntimeUsageControls
@@ -11298,7 +11243,7 @@ export default function ChatView({
     onProjectInstructionsChange: setProjectInstructions,
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
-    onOpenAutomation: openAutomationEditDialog,
+    onOpenAutomation: (definition: AutomationDefinition) => onOpenAutomation(definition.id),
     onOpenGithubRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
@@ -11644,17 +11589,23 @@ export default function ChatView({
 
                       {!isVoiceRecording && !isVoiceTranscribing ? (
                         <>
-                          {interactionMode === "plan" ? (
+                          {interactionMode !== "default" ? (
                             <Button
                               variant="ghost"
                               className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
                               size="sm"
                               type="button"
-                              onClick={toggleInteractionMode}
-                              title="Plan mode — click to return to normal build mode"
+                              onClick={resetInteractionMode}
+                              title={`${interactionMode === "plan" ? "Plan" : "Debug"} mode — click to return to normal build mode`}
                             >
-                              <GoTasklist className="size-3.5" />
-                              <span className="sr-only sm:not-sr-only">Plan</span>
+                              {interactionMode === "plan" ? (
+                                <GoTasklist className="size-3.5" />
+                              ) : (
+                                <BugIcon className="size-3.5" />
+                              )}
+                              <span className="sr-only sm:not-sr-only">
+                                {interactionMode === "plan" ? "Plan" : "Debug"}
+                              </span>
                             </Button>
                           ) : null}
 
@@ -12027,7 +11978,6 @@ export default function ChatView({
       {automationDraftForm ? (
         <AutomationDialog
           open={automationDraftOpen}
-          editing={automationEditingDefinition !== null}
           form={automationDraftForm}
           projects={automationProjects}
           threads={automationThreads}
@@ -12037,7 +11987,7 @@ export default function ChatView({
           onOpenChange={setAutomationDraftDialogOpen}
           onFormChange={updateAutomationDraftForm}
           onSubmit={submitAutomationDraft}
-          busy={isAutomationDraftSubmitting || automationUpdateMutation.isPending}
+          busy={isAutomationDraftSubmitting}
         />
       ) : null}
 

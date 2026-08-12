@@ -6,6 +6,7 @@ import {
   type AutomationCreateInput,
   type AutomationDefinition,
   CheckpointRef,
+  DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -100,6 +101,7 @@ let attachmentResponseDelayMs = 0;
 let attachmentUploadSequence = 0;
 let attachmentUploadBarrier: Promise<void> | null = null;
 let attachmentUploadReachedBarrier = false;
+let attachmentCancelBarrier: Promise<void> | null = null;
 
 interface WsRequestEnvelope {
   id: string;
@@ -576,7 +578,13 @@ function createAutomationDefinitionFromCreateRequest(
     mode: input.mode ?? "standalone",
     targetThreadId: input.targetThreadId ?? null,
     maxIterations: input.maxIterations ?? null,
-    stopOnError: input.stopOnError ?? true,
+    stopAfterConsecutiveFailures:
+      input.stopAfterConsecutiveFailures === undefined
+        ? DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES
+        : input.stopAfterConsecutiveFailures,
+    consecutiveFailureCount: 0,
+    disabledReason: null,
+    disabledAt: null,
     completionPolicy: input.completionPolicy ?? { type: "none" },
     completionPolicyVersion: 1,
     completionPolicyUpdatedAt: NOW_ISO,
@@ -1460,9 +1468,10 @@ const worker = setupWorker(
       { status: 201 },
     );
   }),
-  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, () =>
-    HttpResponse.json({ cancelled: true }, { status: 200 }),
-  ),
+  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, async () => {
+    await attachmentCancelBarrier;
+    return HttpResponse.json({ cancelled: true }, { status: 200 });
+  }),
   http.get("*/attachments/:attachmentId", async () => {
     if (attachmentResponseDelayMs > 0) {
       await new Promise<void>((resolve) => {
@@ -2097,6 +2106,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
     attachmentUploadReachedBarrier = false;
+    attachmentCancelBarrier = null;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -3478,8 +3488,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
         0,
       );
-      // The approach itself must not bounce: every frame moves the message
-      // toward the anchor, never back down and up again.
+      // The approach itself must not bounce: every observed frame moves the
+      // message toward the anchor, never back down and up again. The easing
+      // curve is covered deterministically in transcriptScroll.test.ts;
+      // browser frame sampling cannot prove the intermediate path because a
+      // loaded runner may present no frames between the first move and arrival.
       const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
       let approachReversals = 0;
       let approachDirection = 0;
@@ -3493,16 +3506,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
         approachDirection = direction;
       }
-      // ...and it has to be a glide, not a teleport. A loaded browser runner
-      // can deliver animation frames far apart, so fixed frame counts and
-      // per-sample distance caps turn scheduler starvation into false failures.
-      // Requiring multiple observable positions between the endpoints still
-      // rejects a teleport while remaining independent of frame cadence.
-      const approachStartOffsetPx = approach[0]?.offset ?? topGapPx;
-      const intermediateApproachSamples = approach.filter(
-        (entry) => entry.offset < approachStartOffsetPx - 2 && entry.offset > topGapPx + 2,
-      );
-
       const trace = () =>
         visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
       expect(
@@ -3514,10 +3517,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         `anchor took too long to land: ${trace()}`,
       ).toBeLessThan(900);
       expect(approachReversals, `anchor bounced on its way up: ${trace()}`).toBeLessThanOrEqual(1);
-      expect(
-        intermediateApproachSamples.length,
-        `anchor jumped instead of gliding: ${trace()}`,
-      ).toBeGreaterThanOrEqual(2);
       expect(reversals, `anchor moved back and forth after landing: ${trace()}`).toBe(0);
       expect(maxDownwardJumpPx, `anchor slid back down after landing: ${trace()}`).toBeLessThan(2);
       expect(travelAfterArrivalPx, `anchor kept moving after landing: ${trace()}`).toBeLessThan(8);
@@ -6656,8 +6655,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
   it("keeps worktree setup resolvable while attachments upload", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let releaseAttachmentUpload = () => {};
+    let releaseAttachmentCancel = () => {};
     attachmentUploadBarrier = new Promise<void>((resolve) => {
       releaseAttachmentUpload = resolve;
+    });
+    attachmentCancelBarrier = new Promise<void>((resolve) => {
+      releaseAttachmentCancel = resolve;
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -6711,6 +6714,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       ).toBe(false);
 
       await cancelButton.click();
+      await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
+      releaseAttachmentCancel();
+      attachmentCancelBarrier = null;
       releaseAttachmentUpload();
       attachmentUploadBarrier = null;
 
@@ -6729,6 +6735,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      releaseAttachmentCancel();
+      attachmentCancelBarrier = null;
       releaseAttachmentUpload();
       attachmentUploadBarrier = null;
       await mounted.cleanup();
@@ -7086,6 +7094,201 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("preserves a new-chat draft when switching to another thread and back via New chat", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-home-draft-switch" as MessageId,
+            targetText: "home draft switch target",
+          }),
+          OTHER_THREAD_ID,
+        ),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+      },
+    });
+
+    try {
+      // Start a brand-new home chat (draft thread)
+      const newChatButton = page.getByLabelText("Open new chat home");
+      await expect.element(newChatButton).toBeInTheDocument();
+      await newChatButton.click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      // Type a draft in the new chat
+      const prompt = "draft typed in a brand-new home chat";
+      useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Switch to another thread to check on it
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Come back via "New chat" — must return to the SAME draft thread with the draft intact
+      const newChatButtonAgain = page.getByLabelText("Open new chat home");
+      await expect.element(newChatButtonAgain).toBeInTheDocument();
+      await newChatButtonAgain.click();
+      const returnedPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a draft thread UUID.",
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(returnedPath).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const composerEditorAfter = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditorAfter.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The original draft thread must still be registered with its content
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(prompt);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves a new-chat draft when returning via the project New thread button", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-project-draft-switch" as MessageId,
+          targetText: "project draft switch target",
+        }),
+        OTHER_THREAD_ID,
+      ),
+    });
+
+    try {
+      const newThreadButton = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const prompt = "draft typed in a brand-new project thread";
+      useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+
+      const newThreadButtonAgain = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButtonAgain).toBeInTheDocument();
+      await newThreadButtonAgain.click();
+      const returnedPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a draft thread UUID.",
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(returnedPath).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const composerEditorAfter = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditorAfter.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("applies the selected chat width to the transcript column", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ chatWidth: "wide" }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-chat-width-test" as MessageId,
+        targetText: "chat width test",
+      }),
+    });
+
+    try {
+      // The hook must surface the preset as a root CSS variable.
+      await vi.waitFor(
+        () => {
+          expect(document.documentElement.style.getPropertyValue("--app-chat-max-width")).toBe(
+            "72rem",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The transcript column frame must pick up the wider max width.
+      await vi.waitFor(
+        () => {
+          const row = document.querySelector(
+            "[data-timeline-row-kind='message'][data-message-role='assistant']",
+          ) as HTMLElement | null;
+          expect(row).not.toBeNull();
+          expect(row?.className ?? "").toContain("max-w-[var(--app-chat-max-width,46rem)]");
+          expect(getComputedStyle(row!).maxWidth).toBe("1152px"); // 72rem at 16px root
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a new thread from the global chat.new shortcut", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -7127,6 +7330,126 @@ describe("ChatView timeline estimator parity (full app)", () => {
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new draft thread UUID from the shortcut.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-home-draft-shortcut-switch" as MessageId,
+            targetText: "home draft shortcut switch target",
+          }),
+          OTHER_THREAD_ID,
+        ),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "chat.newChat",
+              shortcut: {
+                key: "n",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      await waitForLayout();
+      const dispatchNewChatShortcut = () => {
+        const useMetaForMod = isMacPlatform(navigator.platform);
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "n",
+            metaKey: useMetaForMod,
+            ctrlKey: !useMetaForMod,
+            altKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      };
+      const newThreadPath = await triggerThreadShortcutUntilPath(
+        mounted.router,
+        dispatchNewChatShortcut,
+        (path) => UUID_ROUTE_RE.test(path),
+        "chat.newChat should route to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      // Type a draft in the new home chat
+      const prompt = "draft typed via chat.newChat";
+      useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(
+            prompt,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Switch to another thread and come back via the same shortcut
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const returnedPath = await triggerThreadShortcutUntilPath(
+        mounted.router,
+        dispatchNewChatShortcut,
+        (path) => UUID_ROUTE_RE.test(path),
+        "chat.newChat should route back to a draft thread UUID.",
+      );
+      await vi.waitFor(
+        () => {
+          expect(returnedPath).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The draft must survive the round trip on the same thread
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(prompt);
+      const composerEditorAfter = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditorAfter.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -7356,13 +7679,51 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await page.getByLabelText("Composer extras").click();
-      await page.getByText("Plan mode").click();
+      await page.getByText("Mode").click();
+      await page.getByRole("menuitemradio", { name: "Plan" }).click();
 
       await vi.waitFor(() => {
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(
           "plan",
         );
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("activates Debug with /debug and returns to Default from the badge and /default", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-debug-mode-test" as MessageId,
+        targetText: "debug mode test",
+      }),
+    });
+
+    try {
+      const readInteractionMode = () =>
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode ?? "default";
+      const runSlashCommand = async (command: string) => {
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, command);
+        const composerEditor = await waitForComposerEditor();
+        await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(command));
+        const sendButton = await waitForSendButton();
+        expect(sendButton.disabled).toBe(false);
+        sendButton.click();
+      };
+
+      await runSlashCommand("/debug");
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("debug"));
+      const debugBadge = page.getByTitle("Debug mode — click to return to normal build mode");
+      await expect.element(debugBadge).toBeInTheDocument();
+      await debugBadge.click();
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("default"));
+
+      await runSlashCommand("/debug");
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("debug"));
+      await runSlashCommand("/default");
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("default"));
     } finally {
       await mounted.cleanup();
     }
