@@ -47,7 +47,7 @@ export function createMemoryStorage(): StateStorage {
  * deferral) and then again at flush.
  */
 interface PageHideEventTarget {
-  readonly addEventListener: (type: string, listener: () => void) => void;
+  readonly addEventListener?: ((type: string, listener: () => void) => void) | undefined;
 }
 
 interface PageVisibilityTarget extends PageHideEventTarget {
@@ -73,10 +73,10 @@ export function flushStorageBeforePageHide(
     document: typeof document !== "undefined" ? document : undefined,
   },
 ): void {
-  env.window?.addEventListener("beforeunload", flush);
-  env.window?.addEventListener("pagehide", flush);
+  env.window?.addEventListener?.("beforeunload", flush);
+  env.window?.addEventListener?.("pagehide", flush);
   const doc = env.document;
-  doc?.addEventListener("visibilitychange", () => {
+  doc?.addEventListener?.("visibilitychange", () => {
     if (doc.visibilityState === "hidden") {
       flush();
     }

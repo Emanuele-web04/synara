@@ -828,4 +828,16 @@ describe("flushStorageBeforePageHide", () => {
     harness.fireDocument("visibilitychange");
     expect(flush).not.toHaveBeenCalled();
   });
+
+  it("ignores partial DOM targets without event listeners", () => {
+    const flush = vi.fn();
+
+    expect(() =>
+      flushStorageBeforePageHide(flush, {
+        window: {},
+        document: { visibilityState: "visible" },
+      }),
+    ).not.toThrow();
+    expect(flush).not.toHaveBeenCalled();
+  });
 });
