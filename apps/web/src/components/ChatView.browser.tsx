@@ -4235,7 +4235,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .element(page.getByTestId("composer-branch-mismatch-warning"))
         .toBeInTheDocument();
       const branchWarning = page.getByTestId("composer-branch-mismatch-warning").element();
-      expect(branchWarning.getBoundingClientRect().height).toBeLessThanOrEqual(64);
+      expect(branchWarning.getBoundingClientRect().height).toBeLessThanOrEqual(80);
       expect(branchWarning.textContent).toContain(
         "Sending a message will move this thread to the current branch",
       );

@@ -493,6 +493,7 @@ import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPane
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
+import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
@@ -11422,6 +11423,11 @@ export default function ChatView({
                   showComposerSubagentStrip
                 }
               />
+              {settledThreadBranchMismatch ? (
+                <div className="pb-2">
+                  <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />
+                </div>
+              ) : null}
               {/* Pending approvals and AskUserQuestion prompts both render as a detached
                   card floating just above the composer (padding gives the measured gap),
                   instead of a banner fused into the composer surface. An approval takes
@@ -11490,7 +11496,6 @@ export default function ChatView({
                       ? { onCancel: cancelAutomationConversation }
                       : null
                   }
-                  branchMismatch={settledThreadBranchMismatch}
                 />
                 <div
                   className={cn(
