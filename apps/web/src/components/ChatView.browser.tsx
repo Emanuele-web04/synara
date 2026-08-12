@@ -1282,7 +1282,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   return {};
 }
 
-function installDeterministicSendNativeApi(): () => void {
+function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean }): () => void {
   const previousNativeApi = window.nativeApi;
   const wsNativeApi = readNativeApi();
   if (!wsNativeApi) {
@@ -1340,6 +1340,9 @@ function installDeterministicSendNativeApi(): () => void {
             _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
             command,
           });
+          if (options?.rejectTurnStart && command.type === "thread.turn.start") {
+            throw new Error("Turn start failed for test.");
+          }
           return { sequence: fixture.snapshot.snapshotSequence + 1 };
         },
       },
@@ -4300,6 +4303,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("restores a settled thread branch when turn start fails", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi({ rejectTurnStart: true });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withSettledThreadBranch(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-settled-branch-failed-send" as MessageId,
+          targetText: "settled branch failed send",
+        }),
+        "feature/finished",
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.gitBranchByCwd["/repo/project"] = "feature/current";
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("composer-branch-mismatch-warning"))
+        .toBeInTheDocument();
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "retry after failed turn start");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      wsRequests.length = 0;
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const branchUpdates = wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.meta.update" && "branch" in command)
+            .map((command) => command?.branch);
+          expect(branchUpdates).toEqual(["feature/current", "feature/finished"]);
+          expect(useStore.getState().threadShellById?.[THREAD_ID]?.branch).toBe("feature/finished");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expect
+        .element(page.getByTestId("composer-branch-mismatch-warning"))
+        .toBeInTheDocument();
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+        "retry after failed turn start",
+      );
+    } finally {
+      restoreNativeApi();
       await mounted.cleanup();
     }
   });

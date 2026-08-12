@@ -8243,6 +8243,7 @@ export default function ChatView({
     let createdWorktreeForSendPath: string | null = null;
     let switchedToLocalCheckout = false;
     let turnStartSucceeded = false;
+    let settledLocalBranchUpdatedForSend = false;
     await (async () => {
       // "Work locally" from the setup card: drop any prepared worktree and
       // point the send (and the thread's metadata) back at the project
@@ -8503,6 +8504,8 @@ export default function ChatView({
         });
       }
 
+      const stagedTurnAttachments = await turnAttachmentsPromise;
+
       if (
         isServerThread &&
         activeThread.settledAt != null &&
@@ -8521,6 +8524,7 @@ export default function ChatView({
           associatedWorktreeBranch: nextAssociatedWorktreeBranch,
           associatedWorktreeRef: nextAssociatedWorktreeRef,
         });
+        settledLocalBranchUpdatedForSend = true;
         setStoreThreadWorkspace(threadIdForSend, {
           envMode: "local",
           branch: nextThreadBranch,
@@ -8530,15 +8534,6 @@ export default function ChatView({
           associatedWorktreeRef: nextAssociatedWorktreeRef,
         });
       }
-      if (
-        shouldResumeSettledLocalThread &&
-        currentActiveGitBranchForSend !== null &&
-        nextThreadBranch === currentActiveGitBranchForSend
-      ) {
-        setSettledThreadBranchWarningDismissedThreadId(threadIdForSend);
-      }
-
-      const stagedTurnAttachments = await turnAttachmentsPromise;
       // Keep setup resolvable while attachment uploads are still preparing the
       // turn. Once they settle, consume the last possible choice before the
       // card advances to the non-resolvable "Starting session" step.
@@ -8588,6 +8583,13 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
+      if (
+        shouldResumeSettledLocalThread &&
+        currentActiveGitBranchForSend !== null &&
+        nextThreadBranch === currentActiveGitBranchForSend
+      ) {
+        setSettledThreadBranchWarningDismissedThreadId(threadIdForSend);
+      }
       armLocalDispatchAckFallback(threadIdForSend);
       // Steers on providers without native mid-turn steering interrupt the live
       // turn before re-dispatching; hold queued auto-dispatch through that gap
@@ -8632,6 +8634,32 @@ export default function ChatView({
         // The turn RPC never resolved, so no server turn exists for the
         // watchdog to recover — drop the marker armed when the dispatch began.
         clearPendingTurnDispatch(threadIdForSend);
+      }
+      if (settledLocalBranchUpdatedForSend && !turnStartSucceeded) {
+        await api.orchestration
+          .dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            envMode: "local",
+            branch: activeThread.branch,
+            worktreePath: null,
+            associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
+            associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
+            associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
+          })
+          .then(
+            () =>
+              setStoreThreadWorkspace(threadIdForSend, {
+                envMode: "local",
+                branch: activeThread.branch,
+                worktreePath: null,
+                associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
+                associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
+                associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
+              }),
+            () => undefined,
+          );
       }
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
