@@ -605,6 +605,18 @@ function createDraftOnlySnapshot(): OrchestrationReadModel {
   };
 }
 
+function withSettledThreadBranch(
+  snapshot: OrchestrationReadModel,
+  branch: string,
+): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID ? { ...thread, branch, settledAt: NOW_ISO } : thread,
+    ),
+  };
+}
+
 function withOpenProjectPickerFixtures(snapshot: OrchestrationReadModel): OrchestrationReadModel {
   return {
     ...snapshot,
@@ -1215,6 +1227,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
         deletions: 0,
       },
       hasUpstream: true,
+      upstreamBranch: null,
       aheadCount: 0,
       behindCount: 0,
       pr: null,
@@ -4116,6 +4129,164 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(page.getByText("What should we do in")).toBeInTheDocument();
       await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
       expect(document.body.textContent).toContain("main");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("resets branch selector state when switching threads", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-branch-selector-switch" as MessageId,
+          targetText: "branch selector switch",
+        }),
+        OTHER_THREAD_ID,
+      ),
+    });
+
+    try {
+      const branchTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[data-slot="combobox-trigger"]'),
+        "Unable to find branch selector trigger.",
+      );
+      await vi.waitFor(() => expect(branchTrigger.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      branchTrigger.click();
+
+      const branchSearch = await waitForElement(
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        "Unable to find branch selector search input.",
+      );
+      await page.getByPlaceholder("Search branches...").fill("stale-query");
+      expect(branchSearch.value).toBe("stale-query");
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/${OTHER_THREAD_ID}`,
+        "Thread route did not switch.",
+      );
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('input[placeholder="Search branches..."]'),
+            "Branch selector state remained open after switching threads.",
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const nextBranchTrigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[data-slot="combobox-trigger"]'),
+        "Unable to find branch selector after switching threads.",
+      );
+      nextBranchTrigger.click();
+      const resetSearch = await waitForElement(
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        "Unable to reopen branch selector after switching threads.",
+      );
+      expect(resetSearch.value).toBe("");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("warns before sending from a settled thread on another branch", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withSettledThreadBranch(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-settled-branch-warning" as MessageId,
+          targetText: "settled branch warning",
+        }),
+        "feature/finished",
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.gitBranchByCwd["/repo/project"] = "feature/current";
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("composer-branch-mismatch-warning"))
+        .toBeInTheDocument();
+      const branchWarning = page.getByTestId("composer-branch-mismatch-warning").element();
+      expect(branchWarning.getBoundingClientRect().height).toBeLessThanOrEqual(64);
+      expect(branchWarning.textContent).toContain(
+        "Sending a message will move this thread to the current branch",
+      );
+      const threadBranchLabel = branchWarning.querySelector<HTMLElement>(
+        '[title="Thread branch: feature/finished"]',
+      );
+      const currentBranchLabel = branchWarning.querySelector<HTMLElement>(
+        '[title="Current branch: feature/current"]',
+      );
+      expect(threadBranchLabel).not.toBeNull();
+      expect(currentBranchLabel).not.toBeNull();
+      expect(getComputedStyle(threadBranchLabel!).textOverflow).toBe("ellipsis");
+      expect(getComputedStyle(currentBranchLabel!).textOverflow).toBe("ellipsis");
+      expect(document.body.textContent).toContain("feature/finished");
+      expect(document.body.textContent).toContain("feature/current");
+
+      // Simulate an out-of-band checkout after the cached branch query resolved. The send
+      // path must refresh Git status instead of trusting the stale composer warning.
+      fixture.gitBranchByCwd["/repo/project"] = "feature/latest";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "resume settled thread");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => expect(composerEditor.textContent ?? "").toContain("resume settled thread"),
+        { timeout: 8_000, interval: 16 },
+      );
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await vi.waitFor(
+        () => {
+          const branchUpdate = wsRequests
+            .map(readDispatchedCommand)
+            .find(
+              (command) =>
+                command?.type === "thread.meta.update" &&
+                command.threadId === THREAD_ID &&
+                command.branch === "feature/latest",
+            );
+          expect(branchUpdate).toBeTruthy();
+          const branchUpdateIndex = wsRequests.findIndex((request) => {
+            const command = readDispatchedCommand(request);
+            return (
+              command?.type === "thread.meta.update" &&
+              command.threadId === THREAD_ID &&
+              command.branch === "feature/latest"
+            );
+          });
+          const turnStartIndex = wsRequests.findIndex(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.start",
+          );
+          expect(turnStartIndex).toBeGreaterThan(branchUpdateIndex);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            document.querySelector('[data-testid="composer-branch-mismatch-warning"]'),
+          ).toBeNull(),
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

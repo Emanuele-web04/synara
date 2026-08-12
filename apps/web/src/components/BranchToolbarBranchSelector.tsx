@@ -83,6 +83,7 @@ interface BranchToolbarBranchSelectorProps {
   effectiveEnvMode: EnvMode;
   envLocked: boolean;
   hasServerThread: boolean;
+  isThreadSettled: boolean;
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -377,6 +378,7 @@ export function BranchToolbarBranchSelector({
   effectiveEnvMode,
   envLocked,
   hasServerThread,
+  isThreadSettled,
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -456,6 +458,7 @@ export function BranchToolbarBranchSelector({
         activeThreadBranch,
         currentGitBranch,
         hasServerThread,
+        isThreadSettled,
         isBranchActionPending,
       })
     ) {
@@ -469,6 +472,7 @@ export function BranchToolbarBranchSelector({
     currentGitBranch,
     effectiveEnvMode,
     hasServerThread,
+    isThreadSettled,
     isBranchActionPending,
     onSetThreadWorkspace,
   ]);
