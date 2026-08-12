@@ -3,9 +3,11 @@ import type { WorkLogEntry } from "../../session-logic";
 import {
   deriveAgentActivityTimelineState,
   formatAgentActivityEntryPreview,
+  formatAgentActivityEntryTitle,
   isAgentActivityWorkEntry,
   isCodexActivityStatusWorkEntry,
   isReasoningUpdateWorkEntry,
+  isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
 
 function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">): WorkLogEntry {
@@ -196,5 +198,40 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(state.timelineWorkEntries[0]).toMatchObject({
       detail: "Full changelog report\nwith many file references and implementation notes.",
     });
+  });
+});
+
+describe("unmapped provider events", () => {
+  it("labels an unmapped event with its native type and safe detail", () => {
+    const entry = workEntry({
+      id: "unmapped-1",
+      label: "item/agentMessage/completed",
+      toolTitle: "item/agentMessage/completed",
+      activityKind: "provider.event.unmapped",
+      nativeEventType: "item/agentMessage/completed",
+      detail: "Finished the refactor",
+      tone: "info",
+    });
+
+    expect(isUnmappedProviderEventWorkEntry(entry)).toBe(true);
+    // Raw native type/label is the title instead of the generic "Activity".
+    expect(formatAgentActivityEntryTitle(entry)).toBe("Item/agentMessage/completed");
+    expect(formatAgentActivityEntryPreview(entry)).toBe("Finished the refactor");
+    // The unmapped fallback never hijacks explicit, working mappings.
+    expect(isCodexActivityStatusWorkEntry(entry)).toBe(false);
+    expect(isAgentActivityWorkEntry(entry)).toBe(false);
+  });
+
+  it("still derives a native-type title when the normalized heading is empty", () => {
+    const entry = workEntry({
+      id: "unmapped-2",
+      label: "done",
+      activityKind: "provider.event.unmapped",
+      nativeEventType: "done",
+      tone: "info",
+    });
+    // normalizeCompactToolLabel strips the trailing "done", which previously
+    // fell through to the generic "Activity" label.
+    expect(formatAgentActivityEntryTitle(entry)).toBe("Done");
   });
 });
