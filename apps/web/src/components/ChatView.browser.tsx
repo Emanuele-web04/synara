@@ -6,6 +6,7 @@ import {
   type AutomationCreateInput,
   type AutomationDefinition,
   CheckpointRef,
+  DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -99,6 +100,7 @@ const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' heig
 let attachmentResponseDelayMs = 0;
 let attachmentUploadSequence = 0;
 let attachmentUploadBarrier: Promise<void> | null = null;
+let attachmentCancelBarrier: Promise<void> | null = null;
 
 interface WsRequestEnvelope {
   id: string;
@@ -575,7 +577,13 @@ function createAutomationDefinitionFromCreateRequest(
     mode: input.mode ?? "standalone",
     targetThreadId: input.targetThreadId ?? null,
     maxIterations: input.maxIterations ?? null,
-    stopOnError: input.stopOnError ?? true,
+    stopAfterConsecutiveFailures:
+      input.stopAfterConsecutiveFailures === undefined
+        ? DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES
+        : input.stopAfterConsecutiveFailures,
+    consecutiveFailureCount: 0,
+    disabledReason: null,
+    disabledAt: null,
     completionPolicy: input.completionPolicy ?? { type: "none" },
     completionPolicyVersion: 1,
     completionPolicyUpdatedAt: NOW_ISO,
@@ -1433,9 +1441,10 @@ const worker = setupWorker(
       { status: 201 },
     );
   }),
-  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, () =>
-    HttpResponse.json({ cancelled: true }, { status: 200 }),
-  ),
+  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, async () => {
+    await attachmentCancelBarrier;
+    return HttpResponse.json({ cancelled: true }, { status: 200 });
+  }),
   http.get("*/attachments/:attachmentId", async () => {
     if (attachmentResponseDelayMs > 0) {
       await new Promise<void>((resolve) => {
@@ -2069,6 +2078,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
+    attachmentCancelBarrier = null;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -3450,8 +3460,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
         0,
       );
-      // The approach itself must not bounce: every frame moves the message
-      // toward the anchor, never back down and up again.
+      // The approach itself must not bounce: every observed frame moves the
+      // message toward the anchor, never back down and up again. The easing
+      // curve is covered deterministically in transcriptScroll.test.ts;
+      // browser frame sampling cannot prove the intermediate path because a
+      // loaded runner may present no frames between the first move and arrival.
       const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
       let approachReversals = 0;
       let approachDirection = 0;
@@ -3465,16 +3478,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
         approachDirection = direction;
       }
-      // ...and it has to be a glide, not a teleport. A loaded browser runner
-      // can deliver animation frames far apart, so fixed frame counts and
-      // per-sample distance caps turn scheduler starvation into false failures.
-      // Requiring multiple observable positions between the endpoints still
-      // rejects a teleport while remaining independent of frame cadence.
-      const approachStartOffsetPx = approach[0]?.offset ?? topGapPx;
-      const intermediateApproachSamples = approach.filter(
-        (entry) => entry.offset < approachStartOffsetPx - 2 && entry.offset > topGapPx + 2,
-      );
-
       const trace = () =>
         visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
       expect(
@@ -3486,10 +3489,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         `anchor took too long to land: ${trace()}`,
       ).toBeLessThan(900);
       expect(approachReversals, `anchor bounced on its way up: ${trace()}`).toBeLessThanOrEqual(1);
-      expect(
-        intermediateApproachSamples.length,
-        `anchor jumped instead of gliding: ${trace()}`,
-      ).toBeGreaterThanOrEqual(2);
       expect(reversals, `anchor moved back and forth after landing: ${trace()}`).toBe(0);
       expect(maxDownwardJumpPx, `anchor slid back down after landing: ${trace()}`).toBeLessThan(2);
       expect(travelAfterArrivalPx, `anchor kept moving after landing: ${trace()}`).toBeLessThan(8);
@@ -6418,8 +6417,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
   it("keeps worktree setup resolvable while attachments upload", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let releaseAttachmentUpload = () => {};
+    let releaseAttachmentCancel = () => {};
     attachmentUploadBarrier = new Promise<void>((resolve) => {
       releaseAttachmentUpload = resolve;
+    });
+    attachmentCancelBarrier = new Promise<void>((resolve) => {
+      releaseAttachmentCancel = resolve;
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -6473,6 +6476,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await cancelButton.click();
       await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
+      releaseAttachmentCancel();
+      attachmentCancelBarrier = null;
       releaseAttachmentUpload();
       attachmentUploadBarrier = null;
 
@@ -6488,6 +6493,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      releaseAttachmentCancel();
+      attachmentCancelBarrier = null;
       releaseAttachmentUpload();
       attachmentUploadBarrier = null;
       await mounted.cleanup();
