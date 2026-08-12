@@ -39,10 +39,7 @@ export function ComposerBranchMismatchBanner({
           >
             {threadBranch}
           </code>
-          <ArrowRightIcon
-            aria-hidden="true"
-            className="size-3 shrink-0 text-muted-foreground/50"
-          />
+          <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/50" />
           <code
             className="min-w-0 truncate font-medium text-foreground/85"
             title={`Current branch: ${currentBranch}`}
