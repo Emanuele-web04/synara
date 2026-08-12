@@ -718,6 +718,7 @@ export function projectEvent(
                 ? { threadMarkers: payload.threadMarkers }
                 : {}),
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
               updatedAt: payload.updatedAt,
             }),
           };

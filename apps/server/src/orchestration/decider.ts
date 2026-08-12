@@ -1268,6 +1268,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
+          ...(command.goal !== undefined ? { goal: command.goal } : {}),
           updatedAt: occurredAt,
         },
       };
