@@ -1960,7 +1960,7 @@ export default function ChatView({
             return;
           }
         }
-        await handleNewChat({ fresh: true });
+        await handleNewChat();
       };
 
       try {

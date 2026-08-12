@@ -112,6 +112,15 @@ export const EMPTY_AUTOMATION_LIST: AutomationListResult = {
   runs: [],
   memories: [],
 };
+const AUTOMATION_DEFINITION_UPDATE_SCOPE = {
+  id: "automation-definition-updates",
+} as const;
+
+export function automationDefinitionUpdateMutationOptions(
+  mutationFn: (input: AutomationUpdateInput) => Promise<AutomationDefinition>,
+) {
+  return { scope: AUTOMATION_DEFINITION_UPDATE_SCOPE, mutationFn };
+}
 
 export {
   acknowledgedRiskIdsForFormWarnings,
@@ -692,7 +701,9 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     onError: (error) => toastManager.add({ type: "error", title: error.message }),
   });
   const updateMutation = useMutation({
-    mutationFn: (input: AutomationUpdateInput) => ensureNativeApi().automation.update(input),
+    ...automationDefinitionUpdateMutationOptions((input) =>
+      ensureNativeApi().automation.update(input),
+    ),
     // Optimistically merge the patch so inline edits on the detail page feel instant; the
     // server's authoritative definition (with recomputed nextRunAt) arrives via the stream.
     onMutate: (input) => {
