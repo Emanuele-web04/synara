@@ -675,7 +675,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             ? { threadId: target.id, goal: null, achieved: true }
             : blocked
               ? { threadId: target.id, goal: target.goal, blocked: true, paused: true }
-            : { threadId: target.id, goal: goal || null },
+              : { threadId: target.id, goal: goal || null },
         );
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };

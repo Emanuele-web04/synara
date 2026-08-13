@@ -17,9 +17,7 @@ export async function dispatchThreadGoal(
     commandId: newCommandId(),
     threadId,
     goal,
-    ...(options.startBehavior !== undefined
-      ? { goalStartBehavior: options.startBehavior }
-      : {}),
+    ...(options.startBehavior !== undefined ? { goalStartBehavior: options.startBehavior } : {}),
   });
 }
 

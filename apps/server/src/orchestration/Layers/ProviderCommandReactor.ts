@@ -3656,8 +3656,7 @@ const make = Effect.gen(function* () {
             event.payload.goalStartedAt !== undefined ||
             event.payload.goalPausedAt !== undefined;
           const startsOrResumesGoal =
-            event.payload.goalPausedAt == null &&
-            event.payload.goalStartedAt != null;
+            event.payload.goalPausedAt == null && event.payload.goalStartedAt != null;
           if (
             goalTimingChanged &&
             event.payload.goalStartBehavior !== "defer" &&
