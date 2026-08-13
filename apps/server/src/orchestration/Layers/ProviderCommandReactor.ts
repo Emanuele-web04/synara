@@ -2671,9 +2671,8 @@ const make = Effect.gen(function* () {
     if (
       pendingInteractionCounts.pendingApprovalCount > 0 ||
       pendingInteractionCounts.pendingUserInputCount > 0 ||
-      (thread.session !== null &&
-        thread.session.status !== "ready" &&
-        thread.session.status !== "stopped") ||
+      thread.session?.status === "starting" ||
+      thread.session?.status === "running" ||
       (yield* hasLiveProviderTurn(threadId))
     ) {
       yield* scheduleBlockedGoalContinuationRetry(threadId);
