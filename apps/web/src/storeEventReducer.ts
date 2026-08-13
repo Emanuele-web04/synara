@@ -936,6 +936,8 @@ function applyOrchestrationEvent(
               (event.payload.goalStartedAt ?? null) === (thread.goalStartedAt ?? null)) &&
             (event.payload.goalPausedAt === undefined ||
               (event.payload.goalPausedAt ?? null) === (thread.goalPausedAt ?? null)) &&
+            (event.payload.goalAchievements === undefined ||
+              deepEqualJson(event.payload.goalAchievements, thread.goalAchievements ?? null)) &&
             nextUpdatedAt === thread.updatedAt
           ) {
             return thread;
@@ -994,6 +996,13 @@ function applyOrchestrationEvent(
               : {}),
             ...(event.payload.goalPausedAt !== undefined
               ? { goalPausedAt: event.payload.goalPausedAt }
+              : {}),
+            ...(event.payload.goalAchievements !== undefined
+              ? {
+                  goalAchievements: event.payload.goalAchievements as NonNullable<
+                    Thread["goalAchievements"]
+                  >,
+                }
               : {}),
             updatedAt: nextUpdatedAt,
             ...(cwdChanged ? { session: null } : {}),

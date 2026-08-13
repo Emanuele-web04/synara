@@ -18,6 +18,7 @@ import {
   ThreadPinnedMessages,
   ThreadMarkers,
   ThreadHandoff,
+  ThreadGoalAchievements,
 } from "@synara/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
@@ -35,6 +36,9 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
+    goalAchievements: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(ThreadGoalAchievements)),
+    ).pipe(Schema.withDecodingDefault(() => null)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
@@ -83,6 +87,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal,
           goal_started_at,
           goal_paused_at,
+          goal_achievements_json,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
@@ -129,6 +134,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.goal},
           ${row.goalStartedAt ?? null},
           ${row.goalPausedAt ?? null},
+          ${row.goalAchievements == null ? null : JSON.stringify(row.goalAchievements)},
           ${row.latestUserMessageAt},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
@@ -175,6 +181,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal = excluded.goal,
           goal_started_at = excluded.goal_started_at,
           goal_paused_at = excluded.goal_paused_at,
+          goal_achievements_json = excluded.goal_achievements_json,
           latest_user_message_at = excluded.latest_user_message_at,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
@@ -228,6 +235,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal,
           goal_started_at AS "goalStartedAt",
           goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -283,6 +291,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal,
           goal_started_at AS "goalStartedAt",
           goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",

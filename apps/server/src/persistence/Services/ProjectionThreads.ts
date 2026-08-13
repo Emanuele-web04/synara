@@ -13,6 +13,7 @@ import {
   OrchestrationThreadPullRequest,
   ThreadNotes,
   ThreadGoal,
+  ThreadGoalAchievements,
   ThreadPinnedMessages,
   ThreadMarkers,
   ThreadHandoff,
@@ -77,6 +78,9 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalAchievements: Schema.optional(Schema.NullOr(ThreadGoalAchievements)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),

@@ -587,6 +587,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             goal: null,
             goalStartedAt: null,
             goalPausedAt: null,
+            goalAchievements: null,
             latestUserMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
@@ -700,6 +701,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : {}),
               ...(event.payload.goalPausedAt !== undefined
                 ? { goalPausedAt: event.payload.goalPausedAt }
+                : {}),
+              ...(event.payload.goalAchievements !== undefined
+                ? { goalAchievements: event.payload.goalAchievements }
                 : {}),
               updatedAt: event.payload.updatedAt,
             };

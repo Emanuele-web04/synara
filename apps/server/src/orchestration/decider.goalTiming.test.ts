@@ -89,6 +89,7 @@ async function decideGoalUpdate(
     commandId: string;
     goal?: string;
     goalPaused?: boolean;
+    goalAchieved?: boolean;
   },
 ) {
   const result = await Effect.runPromise(
@@ -99,6 +100,7 @@ async function decideGoalUpdate(
         threadId: THREAD_ID,
         ...(input.goal !== undefined ? { goal: input.goal } : {}),
         ...(input.goalPaused !== undefined ? { goalPaused: input.goalPaused } : {}),
+        ...(input.goalAchieved !== undefined ? { goalAchieved: input.goalAchieved } : {}),
       },
       readModel,
     }),
@@ -254,5 +256,146 @@ describe("decider thread goal timing", () => {
     });
     expect(resumeEvent.payload.goalPausedAt).toBeNull();
     expect(resumeEvent.payload.goalStartedAt).toBe(resumeEvent.occurredAt);
+  });
+
+  it("records an achievement with the running elapsed time and clears the goal", async () => {
+    const now = new Date().toISOString();
+    let readModel = await createThreadReadModel(now);
+    const setEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-set",
+      goal: "Ship the feature",
+    });
+    readModel = await applyEvent(readModel, setEvent, 3);
+
+    const achieveEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-achieve",
+      goalAchieved: true,
+    });
+    expect(achieveEvent.payload.goal).toBe("");
+    expect(achieveEvent.payload.goalStartedAt).toBeNull();
+    expect(achieveEvent.payload.goalPausedAt).toBeNull();
+    const achievements = achieveEvent.payload.goalAchievements;
+    expect(achievements).toHaveLength(1);
+    expect(achievements?.[0]).toEqual({
+      goal: "Ship the feature",
+      achievedAt: achieveEvent.occurredAt,
+      elapsedMs: Date.parse(achieveEvent.occurredAt) - Date.parse(setEvent.occurredAt),
+      turnId: null,
+    });
+
+    readModel = await applyEvent(readModel, achieveEvent, 4);
+    expect(readModel.threads[0]?.goal).toBe("");
+    expect(readModel.threads[0]?.goalAchievements).toHaveLength(1);
+  });
+
+  it("freezes the achievement's elapsed time at the pause stamp for paused goals", async () => {
+    const now = new Date().toISOString();
+    let readModel = await createThreadReadModel(now);
+    const setEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-set",
+      goal: "Objective",
+    });
+    readModel = await applyEvent(readModel, setEvent, 3);
+    const pauseEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-pause",
+      goalPaused: true,
+    });
+    readModel = await applyEvent(readModel, pauseEvent, 4);
+
+    const achieveEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-achieve",
+      goalAchieved: true,
+    });
+    expect(achieveEvent.payload.goalAchievements?.[0]?.elapsedMs).toBe(
+      Date.parse(pauseEvent.occurredAt) - Date.parse(setEvent.occurredAt),
+    );
+  });
+
+  it("records a null elapsed time for legacy goals without a start stamp", async () => {
+    const now = new Date().toISOString();
+    let readModel = await createThreadReadModel(now);
+    readModel = await applyEvent(
+      readModel,
+      {
+        eventId: EventId.makeUnsafe("evt-legacy-goal"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        type: "thread.meta-updated",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-legacy-goal"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-legacy-goal"),
+        metadata: {},
+        payload: {
+          threadId: THREAD_ID,
+          goal: "Legacy objective",
+          updatedAt: now,
+        },
+        sequence: 3,
+      } as OrchestrationEvent,
+      3,
+    );
+
+    const achieveEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-legacy-achieve",
+      goalAchieved: true,
+    });
+    expect(achieveEvent.payload.goalAchievements?.[0]?.elapsedMs).toBeNull();
+    expect(achieveEvent.payload.goalAchievements?.[0]?.goal).toBe("Legacy objective");
+  });
+
+  it("ignores achieved intents when the thread has no active goal", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createThreadReadModel(now);
+
+    const event = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-achieve-empty",
+      goalAchieved: true,
+    });
+    expect("goal" in event.payload).toBe(false);
+    expect("goalAchievements" in event.payload).toBe(false);
+  });
+
+  it("caps the achievement history at the newest 20 entries", async () => {
+    const now = new Date().toISOString();
+    let readModel = await createThreadReadModel(now);
+    const priorAchievements = Array.from({ length: 20 }, (_, index) => ({
+      goal: `Objective ${index}`,
+      achievedAt: now,
+      elapsedMs: null,
+      turnId: null,
+    }));
+    readModel = await applyEvent(
+      readModel,
+      {
+        eventId: EventId.makeUnsafe("evt-goal-history"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        type: "thread.meta-updated",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-goal-history"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-goal-history"),
+        metadata: {},
+        payload: {
+          threadId: THREAD_ID,
+          goal: "Objective 20",
+          goalStartedAt: now,
+          goalAchievements: priorAchievements,
+          updatedAt: now,
+        },
+        sequence: 3,
+      } as OrchestrationEvent,
+      3,
+    );
+
+    const achieveEvent = await decideGoalUpdate(readModel, {
+      commandId: "cmd-goal-achieve-cap",
+      goalAchieved: true,
+    });
+    const achievements = achieveEvent.payload.goalAchievements;
+    expect(achievements).toHaveLength(20);
+    expect(achievements?.[0]?.goal).toBe("Objective 1");
+    expect(achievements?.[19]?.goal).toBe("Objective 20");
   });
 });

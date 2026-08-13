@@ -658,6 +658,24 @@ export const ThreadGoalTimingFields = {
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 };
+/**
+ * A completed goal, recorded when the decider processes a `goalAchieved` intent.
+ * `elapsedMs` is the pause-adjusted pursuit duration (null for legacy goals with
+ * no recorded start) and `turnId` anchors the transcript "Goal achieved" badge to
+ * the turn that was live when the goal completed.
+ */
+export const ThreadGoalAchievement = Schema.Struct({
+  goal: ThreadGoal,
+  achievedAt: IsoDateTime,
+  elapsedMs: Schema.NullOr(Schema.Number),
+  turnId: Schema.NullOr(TurnId),
+});
+export type ThreadGoalAchievement = typeof ThreadGoalAchievement.Type;
+export const THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT = 20;
+export const ThreadGoalAchievements = Schema.Array(ThreadGoalAchievement).check(
+  Schema.isMaxLength(THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT),
+);
+export type ThreadGoalAchievements = typeof ThreadGoalAchievements.Type;
 export const PinnedMessageLabel = TrimmedNonEmptyString.check(
   Schema.isMaxLength(PINNED_MESSAGE_LABEL_MAX_CHARS),
 );
@@ -817,6 +835,7 @@ export const OrchestrationThread = Schema.Struct({
   notes: Schema.optional(ThreadNotes),
   goal: Schema.optional(ThreadGoal),
   ...ThreadGoalTimingFields,
+  goalAchievements: Schema.optional(ThreadGoalAchievements),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
   activities: Schema.Array(OrchestrationThreadActivity),
@@ -1217,6 +1236,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   goal: Schema.optional(ThreadGoal),
   // Desired paused state; the decider stamps the authoritative goal timestamps.
   goalPaused: Schema.optional(Schema.Boolean),
+  // Marks the active goal accomplished: the decider records a ThreadGoalAchievement
+  // (with pause-adjusted elapsed time) and clears the goal in the same event.
+  goalAchieved: Schema.optional(Schema.Boolean),
 });
 
 const ThreadPinnedMessageAddCommand = Schema.Struct({
@@ -1864,6 +1886,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   goal: Schema.optional(ThreadGoal),
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  goalAchievements: Schema.optional(ThreadGoalAchievements),
   updatedAt: IsoDateTime,
 });
 

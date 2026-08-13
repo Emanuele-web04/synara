@@ -723,6 +723,9 @@ export function projectEvent(
                 ? { goalStartedAt: payload.goalStartedAt }
                 : {}),
               ...(payload.goalPausedAt !== undefined ? { goalPausedAt: payload.goalPausedAt } : {}),
+              ...(payload.goalAchievements !== undefined
+                ? { goalAchievements: payload.goalAchievements }
+                : {}),
               updatedAt: payload.updatedAt,
             }),
           };

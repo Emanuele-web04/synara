@@ -13,6 +13,7 @@ import type {
   OrchestrationProposedPlanId,
   PinnedMessage,
   ThreadMarker,
+  ThreadGoalAchievement,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
@@ -251,6 +252,7 @@ export interface Thread extends ThreadWorkspaceState {
   goal?: string;
   goalStartedAt?: string | null;
   goalPausedAt?: string | null;
+  goalAchievements?: ThreadGoalAchievement[];
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
@@ -297,6 +299,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   goal?: string;
   goalStartedAt?: string | null;
   goalPausedAt?: string | null;
+  goalAchievements?: ThreadGoalAchievement[];
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;

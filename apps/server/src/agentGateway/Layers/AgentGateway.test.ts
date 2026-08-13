@@ -1503,6 +1503,8 @@ describe("AgentGateway", () => {
         (setThreadGoal?.inputSchema.properties?.goal as { type?: string[] } | undefined)?.type,
         ["string", "null"],
       );
+      assert.property(setThreadGoal?.inputSchema.properties, "achieved");
+      assert.include(setThreadGoal?.description ?? "", "achieved: true");
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
       assert.include(createAutomation?.description ?? "", "self-contained brief");
@@ -4823,6 +4825,51 @@ describe("AgentGateway", () => {
 
       assert.isTrue(isToolError(response.result));
       assert.include(toolErrorText(response.result), `at most ${THREAD_GOAL_MAX_CHARS} characters`);
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("marks an active goal achieved instead of plain-clearing it", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads.filter((thread) => thread.id !== "thread-child"),
+      makeThreadShell("thread-child", { goal: "Ship the gateway feature" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_goal",
+        args: { threadId: "thread-child", achieved: true },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(toolResultJson(response.result), {
+        threadId: "thread-child",
+        goal: null,
+        achieved: true,
+      });
+      const dispatched = harness.dispatched[0] as unknown as Record<string, unknown>;
+      assert.deepInclude(dispatched, {
+        type: "thread.meta.update",
+        threadId: "thread-child",
+        goalAchieved: true,
+      });
+      assert.notProperty(dispatched, "goal");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects achieved intents when the thread has no active goal", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_goal",
+        args: { achieved: true },
+      });
+
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "no active goal");
       assert.equal(harness.dispatched.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
