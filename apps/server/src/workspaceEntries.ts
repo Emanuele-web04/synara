@@ -863,7 +863,12 @@ async function searchFileContent(
   relativePath: string,
   normalizedQuery: string,
 ): Promise<ContentSearchMatch[] | null> {
-  const absolutePath = path.join(cwd, relativePath);
+  const absolutePath = await resolveRealPathWithinRoot(cwd, path.join(cwd, relativePath)).catch(
+    () => null,
+  );
+  if (!absolutePath) {
+    return null;
+  }
   let fileHandle: Awaited<ReturnType<typeof fs.open>>;
   try {
     fileHandle = await fs.open(absolutePath, "r");

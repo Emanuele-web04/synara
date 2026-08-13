@@ -506,6 +506,22 @@ describe("searchWorkspaceContent", () => {
     ]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "does not follow tracked symlinks outside the workspace",
+    async () => {
+      const cwd = makeTempDir("synara-content-search-symlink-");
+      const outside = makeTempDir("synara-content-search-outside-");
+      writeFile(outside, "secret.txt", "outside needle\n");
+      runGit(cwd, ["init"]);
+      fs.symlinkSync(path.join(outside, "secret.txt"), path.join(cwd, "linked-secret.txt"));
+      runGit(cwd, ["add", "linked-secret.txt"]);
+
+      const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+      expect(result.matches).toEqual([]);
+    },
+  );
+
   it("caps per-file matches so one hot file cannot crowd out others", async () => {
     const cwd = makeTempDir("synara-content-search-per-file-cap-");
     const hotLines = Array.from({ length: 10 }, () => "hot needle line\n").join("");

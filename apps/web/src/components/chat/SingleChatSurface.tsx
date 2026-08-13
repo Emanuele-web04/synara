@@ -349,6 +349,10 @@ export function SingleChatSurface(props: {
   // snippet (content) search. Registered with capture so it wins over page-level
   // defaults (print, browser find) while the chat surface is mounted.
   useEffect(() => {
+    // Editor view returns before rendering the palette, so leave its shortcuts
+    // available to the editor instead of swallowing them invisibly.
+    if (editorViewActive) return;
+
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.repeat || event.altKey) return;
       const isPrimaryModifier = event.ctrlKey || event.metaKey;
@@ -364,7 +368,7 @@ export function SingleChatSurface(props: {
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, []);
+  }, [editorViewActive]);
 
   const handleOpenEditorView = () => {
     void navigate({
