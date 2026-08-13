@@ -1345,6 +1345,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
+          ...(command.goalStartBehavior !== undefined
+            ? { goalStartBehavior: command.goalStartBehavior }
+            : {}),
           ...resolveThreadGoalPatch(command, thread, occurredAt),
           updatedAt: occurredAt,
         },
@@ -1832,12 +1835,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const interruptEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1851,6 +1854,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      if ((thread.goal ?? "").trim().length === 0 || thread.goalPausedAt != null) {
+        return interruptEvent;
+      }
+
+      const pausedAt = nowIso();
+      const pauseEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: pausedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          goalPausedAt: pausedAt,
+          updatedAt: pausedAt,
+        },
+      };
+      return [
+        pauseEvent,
+        {
+          ...interruptEvent,
+          causationEventId: pauseEvent.eventId,
+        },
+      ];
     }
 
     case "thread.task.stop": {
@@ -2161,6 +2190,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.session-stop-requested",
         payload: {
           threadId: command.threadId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.goal.continue": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-continuation-requested",
+        payload: {
+          threadId: command.threadId,
+          goalStartedAt: command.goalStartedAt,
+          trigger: command.trigger,
+          ...(command.sourceTurnId !== undefined ? { sourceTurnId: command.sourceTurnId } : {}),
           createdAt: command.createdAt,
         },
       };

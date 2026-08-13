@@ -122,9 +122,12 @@ describe("composerSlashCommands", () => {
     });
   });
 
-  it("parses /goal show, clear, set, and length-limit actions", () => {
+  it("parses /goal controls, set, and length-limit actions", () => {
     expect(parseGoalSlashCommandArgs("")).toEqual({ action: "show" });
     expect(parseGoalSlashCommandArgs("  CLEAR  ")).toEqual({ action: "clear" });
+    expect(parseGoalSlashCommandArgs("pause")).toEqual({ action: "pause" });
+    expect(parseGoalSlashCommandArgs("RESUME")).toEqual({ action: "resume" });
+    expect(parseGoalSlashCommandArgs(" edit ")).toEqual({ action: "edit" });
     expect(parseGoalSlashCommandArgs("Ship the release safely")).toEqual({
       action: "set",
       goal: "Ship the release safely",

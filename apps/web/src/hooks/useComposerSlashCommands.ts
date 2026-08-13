@@ -296,12 +296,13 @@ export function useComposerSlashCommands(input: {
   }, [persistThreadGoal]);
 
   const setThreadGoalPaused = useCallback(
-    async (paused: boolean) => {
+    async (paused: boolean): Promise<boolean> => {
       if (!isServerThread || !activeThread) {
-        return;
+        return false;
       }
       try {
         await dispatchThreadGoalPaused(activeThread.id, paused);
+        return true;
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -309,6 +310,7 @@ export function useComposerSlashCommands(input: {
           description:
             error instanceof Error ? error.message : "An error occurred while updating the goal.",
         });
+        return false;
       }
     },
     [activeThread, isServerThread],
@@ -338,11 +340,27 @@ export function useComposerSlashCommands(input: {
         await clearThreadGoal();
         return;
       }
+      if (action.action === "pause" || action.action === "resume") {
+        const paused = action.action === "pause";
+        if (await setThreadGoalPaused(paused)) {
+          toastManager.add({
+            type: "success",
+            title: `Thread goal ${paused ? "paused" : "resumed"}`,
+          });
+        }
+        return;
+      }
+      if (action.action === "edit") {
+        const currentGoal = activeThread?.goal?.trim() ?? "";
+        editorActions.setComposerPromptValue(`/goal ${currentGoal}`);
+        editorActions.scheduleComposerFocus();
+        return;
+      }
       if (await persistThreadGoal(action.goal)) {
         toastManager.add({ type: "success", title: "Thread goal updated" });
       }
     },
-    [activeThread?.goal, clearThreadGoal, persistThreadGoal],
+    [activeThread?.goal, clearThreadGoal, editorActions, persistThreadGoal, setThreadGoalPaused],
   );
 
   const createForkThreadFromSlashCommand = useCallback(

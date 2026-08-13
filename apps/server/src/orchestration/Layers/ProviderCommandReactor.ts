@@ -80,6 +80,7 @@ import {
 } from "../../provider/debugMode.ts";
 import {
   activeThreadGoal,
+  buildGoalContinuationInput,
   providerGoalPromptOverheadChars,
   withProviderGoalPrompt,
 } from "../../provider/goalMode.ts";
@@ -1400,6 +1401,7 @@ const make = Effect.gen(function* () {
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
+    readonly turnKind?: "user" | "goal-continuation";
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -1530,9 +1532,11 @@ const make = Effect.gen(function* () {
       ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
       : input.messageText;
     const bootstrapBudgetMessageText = `${boundaryMessageText}${mentionContextSuffix}`;
+    const transcriptBoundaryMessageId =
+      input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
-      !hasNativeAssistantMessagesBefore(thread, input.messageId);
+      !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId);
     const handoffBootstrapAvailableChars = availableProviderContextChars({
       tag: "handoff_context",
       messageText: bootstrapBudgetMessageText,
@@ -1568,7 +1572,7 @@ const make = Effect.gen(function* () {
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
-      !hasNativeAssistantMessagesBefore(thread, input.messageId) &&
+      !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId) &&
       !shouldBootstrapHandoff &&
       !hasPendingPriorTranscriptBootstrap;
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
@@ -1603,7 +1607,7 @@ const make = Effect.gen(function* () {
       !shouldBootstrapSidechatContext;
     const hasPriorTranscriptBootstrapContent =
       shouldBootstrapPriorTranscriptContext &&
-      listPriorTranscriptMessages(thread, input.messageId).length > 0;
+      listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
     const priorTranscriptBootstrapAvailableChars = availableProviderContextChars({
       tag: "thread_context",
       messageText: bootstrapBudgetMessageText,
@@ -1628,7 +1632,7 @@ const make = Effect.gen(function* () {
       shouldBootstrapPriorTranscriptContext && priorTranscriptBootstrapAvailableChars > 0
         ? buildPriorTranscriptBootstrapText(
             thread,
-            input.messageId,
+            transcriptBoundaryMessageId,
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
@@ -2591,6 +2595,141 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const hasPendingQueuedTurnForSession = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    if (pendingQueuedDispatchBySessionThread.has(sessionThreadId)) {
+      return true;
+    }
+    for (const queuedThreadId of yield* queuedTurnPromotions.listPendingThreadIds) {
+      const queuedThread = ThreadId.makeUnsafe(queuedThreadId);
+      const providerThread = yield* resolveProviderSessionThread(queuedThread);
+      if ((providerThread?.id ?? queuedThread) === sessionThreadId) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  const pauseActiveThreadGoal = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly expectedGoalStartedAt: string | null;
+    readonly createdAt: string;
+  }) {
+    const thread = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (candidate) => candidate.id === input.threadId,
+    );
+    if (
+      !thread ||
+      !activeThreadGoal(thread)?.trim() ||
+      thread.goalPausedAt != null ||
+      (thread.goalStartedAt ?? null) !== input.expectedGoalStartedAt
+    ) {
+      return;
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: serverCommandId("goal-auto-pause"),
+      threadId: input.threadId,
+      goalPaused: true,
+      createdAt: input.createdAt,
+    });
+  });
+
+  const processGoalContinuationRequested = (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+  ) =>
+    withProviderSessionLease(
+      event.payload.threadId,
+      Effect.gen(function* () {
+        const thread = yield* resolveThread(event.payload.threadId);
+        if (
+          !thread ||
+          thread.deletedAt != null ||
+          thread.archivedAt != null ||
+          thread.parentThreadId != null ||
+          thread.interactionMode === "plan" ||
+          !activeThreadGoal(thread)?.trim() ||
+          thread.goalPausedAt != null ||
+          (thread.goalStartedAt ?? null) !== event.payload.goalStartedAt
+        ) {
+          return;
+        }
+
+        const pendingInteractionCounts = yield* pendingInteractions.getPendingCountsByThreadId({
+          threadId: thread.id,
+        });
+        if (
+          pendingInteractionCounts.pendingApprovalCount > 0 ||
+          pendingInteractionCounts.pendingUserInputCount > 0 ||
+          (yield* hasLiveProviderTurn(thread.id))
+        ) {
+          return;
+        }
+
+        // User-authored queued work always wins. Its terminal event will ask for
+        // the next goal iteration if the goal is still active afterwards.
+        yield* drainQueuedTurnsForSession(thread.id);
+        if (yield* hasPendingQueuedTurnForSession(thread.id)) {
+          return;
+        }
+
+        const createdAt = event.payload.createdAt;
+        const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
+        const turnStartSession = deriveTurnStartSession({
+          threadId: thread.id,
+          currentSession: thread.session,
+          providerName,
+          requestedRuntimeMode: thread.runtimeMode,
+          requestedAt: createdAt,
+        });
+        if (turnStartSession !== null) {
+          yield* setThreadSession({
+            threadId: thread.id,
+            session: turnStartSession,
+            createdAt,
+          });
+        }
+
+        yield* dispatchTurnForThread({
+          threadId: thread.id,
+          messageId: MessageId.makeUnsafe(`goal-continuation:${event.eventId}`),
+          messageText: buildGoalContinuationInput(),
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          dispatchMode: "queue",
+          turnKind: "goal-continuation",
+          createdAt,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.gen(function* () {
+                  const detail = Cause.pretty(cause);
+                  yield* appendProviderFailureActivity({
+                    threadId: thread.id,
+                    kind: "provider.turn.start.failed",
+                    summary: "Goal continuation failed",
+                    detail,
+                    turnId: null,
+                    createdAt,
+                  });
+                  yield* setThreadSessionError({
+                    threadId: thread.id,
+                    runtimeMode: thread.runtimeMode,
+                    detail,
+                    createdAt,
+                  });
+                  yield* pauseActiveThreadGoal({
+                    threadId: thread.id,
+                    expectedGoalStartedAt: event.payload.goalStartedAt,
+                    createdAt,
+                  });
+                }),
+          ),
+        );
+      }),
+    );
+
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
     observePendingContextBootstrapTerminalEvent(event);
     const sessionThreadId =
@@ -3439,6 +3578,40 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const surfaceTimedOutGoalContinuation = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+    detail: string,
+  ) {
+    const createdAt = new Date().toISOString();
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (thread?.session?.status === "starting" && thread.session.activeTurnId === null) {
+      yield* setThreadSessionError({
+        threadId: event.payload.threadId,
+        runtimeMode: thread.runtimeMode,
+        detail,
+        expectedSession: {
+          status: thread.session.status,
+          updatedAt: thread.session.updatedAt,
+        },
+        createdAt,
+      });
+    }
+    yield* appendProviderFailureActivity({
+      threadId: event.payload.threadId,
+      kind: "provider.turn.start.failed",
+      summary: "Goal continuation timed out",
+      detail,
+      turnId: null,
+      createdAt,
+      settlementStatus: "uncertain",
+    });
+    yield* pauseActiveThreadGoal({
+      threadId: event.payload.threadId,
+      expectedGoalStartedAt: event.payload.goalStartedAt,
+      createdAt,
+    });
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -3478,6 +3651,30 @@ const make = Effect.gen(function* () {
           return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
+          const goalTimingChanged =
+            event.payload.goal !== undefined ||
+            event.payload.goalStartedAt !== undefined ||
+            event.payload.goalPausedAt !== undefined;
+          const startsOrResumesGoal =
+            event.payload.goalPausedAt == null &&
+            event.payload.goalStartedAt != null;
+          if (
+            goalTimingChanged &&
+            event.payload.goalStartBehavior !== "defer" &&
+            (startsOrResumesGoal ||
+              (thread !== undefined &&
+                Boolean(activeThreadGoal(thread)?.trim()) &&
+                thread.goalPausedAt == null))
+          ) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.goal.continue",
+              commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
+              threadId: event.payload.threadId,
+              goalStartedAt: event.payload.goalStartedAt ?? thread?.goalStartedAt ?? null,
+              trigger: "goal-updated",
+              createdAt: event.payload.updatedAt,
+            });
+          }
           if (event.payload.modelSelection === undefined) {
             return;
           }
@@ -3526,11 +3723,36 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        case "thread.interaction-mode-set": {
+          if (event.payload.interactionMode === "plan") {
+            return;
+          }
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (
+            thread &&
+            thread.parentThreadId == null &&
+            activeThreadGoal(thread)?.trim() &&
+            thread.goalPausedAt == null
+          ) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.goal.continue",
+              commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
+              threadId: thread.id,
+              goalStartedAt: thread.goalStartedAt ?? null,
+              trigger: "interaction-mode-updated",
+              createdAt: event.payload.updatedAt,
+            });
+          }
+          return;
+        }
         case "thread.turn-queued":
           yield* processTurnQueued(event);
           return;
         case "thread.turn-start-requested":
           yield* processTurnStartRequested(event);
+          return;
+        case "thread.goal-continuation-requested":
+          yield* processGoalContinuationRequested(event);
           return;
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);
@@ -3878,6 +4100,16 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
+          } else if (event.type === "thread.goal-continuation-requested") {
+            yield* surfaceTimedOutGoalContinuation(event, workerResult.detail).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("failed to surface timed-out goal continuation", {
+                  eventSequence: event.sequence,
+                  threadId: event.payload.threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            );
           }
           yield* settleTerminalFailure({
             event,
@@ -4214,10 +4446,37 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const recoverActiveThreadGoals = Effect.gen(function* () {
+    const snapshot = yield* orchestrationEngine.getReadModel();
+    yield* Effect.forEach(
+      snapshot.threads.filter(
+        (thread) =>
+          thread.deletedAt == null &&
+          thread.archivedAt == null &&
+          thread.parentThreadId == null &&
+          Boolean(activeThreadGoal(thread)?.trim()) &&
+          thread.goalPausedAt == null,
+      ),
+      (thread) =>
+        orchestrationEngine.dispatch({
+          type: "thread.goal.continue",
+          commandId: serverCommandId("goal-startup-recovery"),
+          threadId: thread.id,
+          goalStartedAt: thread.goalStartedAt ?? null,
+          trigger: "startup-recovery",
+          createdAt: new Date().toISOString(),
+        }),
+      { discard: true },
+    );
+  });
+
   const start = seedThreadModelSelections.pipe(
     Effect.andThen(
       Effect.all([
-        startProviderIntentSource.pipe(Effect.andThen(recoverQueuedTurnPromotions)),
+        startProviderIntentSource.pipe(
+          Effect.andThen(recoverQueuedTurnPromotions),
+          Effect.andThen(recoverActiveThreadGoals),
+        ),
         Stream.runForEach(providerService.streamEvents, (event) => {
           if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
             return Effect.void;

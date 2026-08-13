@@ -2343,6 +2343,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-max-input-goal-set"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         goal: "Preserve the full objective",
+        goalStartBehavior: "defer",
       }),
     );
     await Effect.runPromise(
@@ -2366,6 +2367,200 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect((await readHarnessThread(harness))?.session?.lastError).toContain(
       "too long to include the persistent thread goal",
+    );
+  });
+
+  it("starts an idle active goal with an internal continuation turn", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-autostart"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Finish the complete implementation",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const providerInput = harness.sendTurn.mock.calls[0]?.[0].input;
+    expect(providerInput).toContain("<synara_goal>");
+    expect(providerInput).toContain("Finish the complete implementation");
+    expect(providerInput).toContain("Continue working toward the active thread goal");
+    expect((await readHarnessThread(harness))?.messages).toEqual([]);
+  });
+
+  it("defers a staged draft goal until the first real user turn", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-deferred-draft"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Carry this through the first turn",
+        goalStartBehavior: "defer",
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("recovers an active idle goal when the reactor restarts", async () => {
+    const harness = await createHarness({ startReactor: false });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-before-reactor-restart"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Resume after Synara restarts",
+        goalStartBehavior: "defer",
+      }),
+    );
+    await harness.startReactor();
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+      "Continue working toward the active thread goal",
+    );
+  });
+
+  it("ignores a stale continuation request after the goal is cleared", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.continue",
+        commandId: CommandId.makeUnsafe("cmd-stale-goal-continuation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goalStartedAt: null,
+        trigger: "turn-completed",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("waits for plan mode to end before continuing an active goal", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: CommandId.makeUnsafe("cmd-plan-before-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionMode: "plan",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-in-plan-mode"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Implement the approved plan",
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: CommandId.makeUnsafe("cmd-default-after-plan-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionMode: "default",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+      "Continue working toward the active thread goal",
+    );
+  });
+
+  it("resumes a paused idle goal immediately", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-paused-seed"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Resume the full objective",
+        goalStartBehavior: "defer",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-paused"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goalPaused: true,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-resumed"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goalPaused: false,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+      "Continue working toward the active thread goal",
+    );
+  });
+
+  it("promotes queued user work before an automatic goal continuation", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-queue-priority"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Finish after handling user input",
+        goalStartBehavior: "defer",
+      }),
+    );
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-before-goal-continuation"),
+      messageId: asMessageId("msg-user-before-goal-continuation"),
+      text: "User follow-up wins",
+    });
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
+    expect(goalStartedAt).toBeTruthy();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.continue",
+        commandId: CommandId.makeUnsafe("cmd-goal-continue-after-user-queue"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goalStartedAt: goalStartedAt!,
+        trigger: "turn-completed",
+        sourceTurnId: asTurnId("turn-before-goal-continuation"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      input: expect.stringContaining("User follow-up wins"),
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).not.toContain(
+      "Continue working toward the active thread goal",
     );
   });
 
@@ -3692,6 +3887,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-thread-goal-before-turn"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         goal: "Deliver <all> providers safely",
+        goalStartBehavior: "defer",
       }),
     );
 
