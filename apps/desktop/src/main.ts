@@ -86,6 +86,7 @@ import {
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
 } from "./desktopAppIcon";
+import { refreshWindowsTaskbarIcon } from "./windowsTaskbarIcon";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -1951,6 +1952,12 @@ function applyDesktopAppIcon(icon: DesktopAppIcon): void {
     return;
   }
   mainWindow?.setIcon(image);
+  // setIcon updates the window chrome and Alt-Tab artwork, but the Windows
+  // shell caches the taskbar button icon registered for the app identity, so
+  // re-register the live taskbar button to make the new icon take effect.
+  if (process.platform === "win32") {
+    refreshWindowsTaskbarIcon(mainWindow);
+  }
 }
 
 function applyInitialMacDockIcon(): void {
