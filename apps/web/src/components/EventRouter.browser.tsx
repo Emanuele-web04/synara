@@ -379,10 +379,9 @@ async function mountApp(options?: {
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
       },
-      // The first Chromium/MSW mount can spend more than a minute compiling
-      // the full desktop route graph on a cold cache. Match the browser suite's
-      // test timeout so route compilation cannot expire this inner wait first.
-      { timeout: 90_000, interval: 16 },
+      // The first Chromium/MSW mount can spend more than 40 seconds compiling
+      // the full desktop route graph on a cold Windows dev cache.
+      { timeout: 60_000, interval: 16 },
     );
   } catch (cause) {
     await screen.unmount();

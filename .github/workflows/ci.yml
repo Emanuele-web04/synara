@@ -138,12 +138,9 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        # The Windows regression suite does not run TypeScript builds. Skip the
-        # optional Effect language-service prepare hook, which is not safe on
-        # the Windows runner and can leave the PTY smoke test without output.
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: bun install --frozen-lockfile
 
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs

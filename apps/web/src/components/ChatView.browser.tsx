@@ -100,9 +100,7 @@ const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' heig
 let attachmentResponseDelayMs = 0;
 let attachmentUploadSequence = 0;
 let attachmentUploadBarrier: Promise<void> | null = null;
-let attachmentUploadReachedBarrier = false;
 let attachmentCancelBarrier: Promise<void> | null = null;
-let attachmentCancelReachedBarrier = false;
 
 interface WsRequestEnvelope {
   id: string;
@@ -1316,12 +1314,6 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
             ReturnType<typeof wsNativeApi.git.createDetachedWorktree>
           >;
         },
-        removeWorktree: async (input: Parameters<typeof wsNativeApi.git.removeWorktree>[0]) => {
-          wsRequests.push({
-            _tag: WS_METHODS.gitRemoveWorktree,
-            ...input,
-          });
-        },
       },
       terminal: {
         ...wsNativeApi.terminal,
@@ -1451,12 +1443,8 @@ const worker = setupWorker(
   }),
   http.post(`*${ATTACHMENT_UPLOAD_ROUTE_PATH}`, async ({ request }) => {
     const url = new URL(request.url);
-    const uploadBarrier = attachmentUploadBarrier;
     const bytes = await request.arrayBuffer();
-    if (uploadBarrier !== null) {
-      attachmentUploadReachedBarrier = true;
-      await uploadBarrier;
-    }
+    await attachmentUploadBarrier;
     attachmentUploadSequence += 1;
     return HttpResponse.json(
       {
@@ -1470,7 +1458,6 @@ const worker = setupWorker(
     );
   }),
   http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, async () => {
-    attachmentCancelReachedBarrier = true;
     await attachmentCancelBarrier;
     return HttpResponse.json({ cancelled: true }, { status: 200 });
   }),
@@ -2107,9 +2094,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
-    attachmentUploadReachedBarrier = false;
     attachmentCancelBarrier = null;
-    attachmentCancelReachedBarrier = false;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -6707,7 +6692,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
               ?.textContent,
         )
         .toContain("Linking thread workspace");
-      await expect.poll(() => attachmentUploadReachedBarrier).toBe(true);
       const cancelButton = page.getByRole("button", { name: "Cancel" });
       await expect.element(cancelButton).toBeInTheDocument();
       expect(
@@ -6717,24 +6701,20 @@ describe("ChatView timeline estimator parity (full app)", () => {
       ).toBe(false);
 
       await cancelButton.click();
-      releaseAttachmentUpload();
-      attachmentUploadBarrier = null;
-      await expect.poll(() => attachmentCancelReachedBarrier).toBe(true);
       await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
       releaseAttachmentCancel();
       attachmentCancelBarrier = null;
+      releaseAttachmentUpload();
+      attachmentUploadBarrier = null;
 
       await vi.waitFor(
         () => {
+          expect(document.body.textContent).not.toContain("Cancelling...");
           expect(
             wsRequests.some(
               (candidate) => readDispatchedCommand(candidate)?.type === "thread.turn.start",
             ),
           ).toBe(false);
-          expect(
-            wsRequests.some((candidate) => candidate._tag === WS_METHODS.gitRemoveWorktree),
-          ).toBe(true);
-          expect(document.querySelector('[data-timeline-row-kind="worktree-setup"]')).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );

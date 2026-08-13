@@ -47,7 +47,7 @@ export function createMemoryStorage(): StateStorage {
  * deferral) and then again at flush.
  */
 interface PageHideEventTarget {
-  readonly addEventListener?: ((type: string, listener: () => void) => void) | undefined;
+  readonly addEventListener: (type: string, listener: () => void) => void;
 }
 
 interface PageVisibilityTarget extends PageHideEventTarget {
