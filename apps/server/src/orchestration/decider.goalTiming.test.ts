@@ -140,8 +140,8 @@ describe("decider thread goal timing", () => {
       commandId: "cmd-goal-edit",
       goal: "Ship the feature and tests",
     });
-    expect("goalStartedAt" in editEvent.payload).toBe(false);
-    expect("goalPausedAt" in editEvent.payload).toBe(false);
+    expect(editEvent.payload.goalStartedAt).toBe(setEvent.occurredAt);
+    expect(editEvent.payload.goalPausedAt).toBeNull();
 
     readModel = await applyEvent(readModel, editEvent, 4);
     expect(readModel.threads[0]?.goal).toBe("Ship the feature and tests");

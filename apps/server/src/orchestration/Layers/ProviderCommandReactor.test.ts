@@ -2486,6 +2486,42 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
+  it("does not continue an active goal when toggling between Default and Debug", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-before-debug-toggle"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Keep this goal idle",
+        goalStartBehavior: "defer",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: CommandId.makeUnsafe("cmd-debug-with-active-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionMode: "debug",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: CommandId.makeUnsafe("cmd-default-after-debug-with-active-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("resumes a paused idle goal immediately", async () => {
     const harness = await createHarness();
 
@@ -2506,6 +2542,20 @@ describe("ProviderCommandReactor", () => {
         goalPaused: true,
       }),
     );
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-edited-while-paused"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Resume the edited objective",
+      }),
+    );
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -4540,6 +4590,80 @@ describe("ProviderCommandReactor", () => {
     expect(retrySendInput.input).toContain("<latest_user_message>");
     expect(retrySendInput.input).toContain("nice but bring it on the left.");
     expect(retrySendInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
+  });
+
+  it("keeps transcript context when replaying a stale Claude goal continuation", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+    });
+    const now = new Date().toISOString();
+    const staleResumeFailure = () =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "turn/setModel",
+          detail:
+            "Claude Code returned an error result: No conversation found with session ID: b469168a-2625-4447-927f-d86d94bb7237",
+        }),
+      );
+    harness.sendTurn
+      .mockImplementationOnce(staleResumeFailure)
+      .mockImplementationOnce(staleResumeFailure);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-goal-continuation-history"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("user-message-before-goal-continuation"),
+            role: "user",
+            text: "Implement the persistence layer first.",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("assistant-message-before-goal-continuation"),
+            role: "assistant",
+            text: "The persistence layer is complete.",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-stale-continuation-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Finish the remaining goal work",
+        goalStartBehavior: "defer",
+      }),
+    );
+    const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
+    expect(goalStartedAt).toBeTruthy();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.continue",
+        commandId: CommandId.makeUnsafe("cmd-stale-goal-continuation-retry"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goalStartedAt: goalStartedAt!,
+        trigger: "turn-completed",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+    const retrySendInput = harness.sendTurn.mock.calls[2]?.[0] as { readonly input?: string };
+    expect(retrySendInput.input).toContain("<thread_context>");
+    expect(retrySendInput.input).toContain("Implement the persistence layer first.");
+    expect(retrySendInput.input).toContain("The persistence layer is complete.");
+    expect(retrySendInput.input).toContain("Finish the remaining goal work");
+    expect(retrySendInput.input).toContain("Continue working toward the active thread goal");
   });
 
   it("retries a stale Claude resume natively before paying the transcript bootstrap", async () => {

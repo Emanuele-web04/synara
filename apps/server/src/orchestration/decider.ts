@@ -375,7 +375,11 @@ function resolveThreadGoalPatch(
       return { goal: command.goal, goalStartedAt: null, goalPausedAt: null };
     }
     if (activeGoal.length > 0) {
-      return { goal: command.goal };
+      return {
+        goal: command.goal,
+        goalStartedAt: currentThread.goalStartedAt ?? null,
+        goalPausedAt: currentThread.goalPausedAt ?? null,
+      };
     }
     return { goal: command.goal, goalStartedAt: occurredAt, goalPausedAt: null };
   }
@@ -1628,7 +1632,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.interaction-mode.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
@@ -1644,6 +1648,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.interaction-mode-set",
         payload: {
           threadId: command.threadId,
+          previousInteractionMode: thread.interactionMode,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
         },

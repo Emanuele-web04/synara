@@ -1841,7 +1841,7 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars > 0
               ? buildPriorTranscriptBootstrapText(
                   thread,
-                  input.messageId,
+                  transcriptBoundaryMessageId,
                   priorTranscriptBootstrapAvailableChars,
                 )
               : null;
@@ -3647,25 +3647,14 @@ const make = Effect.gen(function* () {
           return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
-          const goalTimingChanged =
-            event.payload.goal !== undefined ||
-            event.payload.goalStartedAt !== undefined ||
-            event.payload.goalPausedAt !== undefined;
           const startsOrResumesGoal =
             event.payload.goalPausedAt == null && event.payload.goalStartedAt != null;
-          if (
-            goalTimingChanged &&
-            event.payload.goalStartBehavior !== "defer" &&
-            (startsOrResumesGoal ||
-              (thread !== undefined &&
-                Boolean(activeThreadGoal(thread)?.trim()) &&
-                thread.goalPausedAt == null))
-          ) {
+          if (event.payload.goalStartBehavior !== "defer" && startsOrResumesGoal) {
             yield* orchestrationEngine.dispatch({
               type: "thread.goal.continue",
               commandId: CommandId.makeUnsafe(`server:goal-continue:${event.eventId}`),
               threadId: event.payload.threadId,
-              goalStartedAt: event.payload.goalStartedAt ?? thread?.goalStartedAt ?? null,
+              goalStartedAt: event.payload.goalStartedAt,
               trigger: "goal-updated",
               createdAt: event.payload.updatedAt,
             });
@@ -3719,7 +3708,10 @@ const make = Effect.gen(function* () {
           return;
         }
         case "thread.interaction-mode-set": {
-          if (event.payload.interactionMode === "plan") {
+          if (
+            event.payload.previousInteractionMode !== "plan" ||
+            event.payload.interactionMode === "plan"
+          ) {
             return;
           }
           const thread = yield* resolveThread(event.payload.threadId);
