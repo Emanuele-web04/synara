@@ -12,6 +12,8 @@ import {
   NonNegativeInt,
   OrchestrationThreadPullRequest,
   ThreadNotes,
+  ThreadGoal,
+  ThreadGoalAchievements,
   ThreadPinnedMessages,
   ThreadMarkers,
   ThreadHandoff,
@@ -71,6 +73,16 @@ export const ProjectionThread = Schema.Struct({
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
   threadMarkers: Schema.NullOr(ThreadMarkers),
   notes: Schema.NullOr(ThreadNotes),
+  goal: Schema.NullOr(ThreadGoal),
+  goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalAchievements: Schema.optional(Schema.NullOr(ThreadGoalAchievements)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,

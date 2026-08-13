@@ -433,11 +433,10 @@ describe("store projection", () => {
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
   });
 
-  it("preserves pinnedMessages and notes through the normalized read-model projection", () => {
-    // Regression: the normalized ThreadShell projection used to omit pinnedMessages/notes, so a
-    // read-model sync would reconstruct the thread without them — pins clicked in the sidebar
-    // never surfaced in the Environment panel. `threadsOf(next)[0]` reads back through
-    // getThreadsFromState (the shell projection), so this asserts the fields survive the round trip.
+  it("preserves thread annotations through the normalized read-model projection", () => {
+    // Regression: normalized shells used to omit detail annotations. `threadsOf(next)[0]` reads
+    // back through getThreadsFromState, so this asserts detail annotations and shell-owned goals
+    // all survive the round trip.
     const messageId = MessageId.makeUnsafe("assistant-pin-1");
     const pinnedMessages = [
       { messageId, label: null, done: false, pinnedAt: "2026-02-27T00:01:00.000Z" },
@@ -448,12 +447,14 @@ describe("store projection", () => {
         makeReadModelThread({
           pinnedMessages,
           notes: "remember to rerun typecheck",
+          goal: "Finish the release safely",
         }),
       ),
     );
 
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("remember to rerun typecheck");
+    expect(threadsOf(next)[0]?.goal).toBe("Finish the release safely");
   });
 
   it("preserves threadMarkers through the normalized read-model projection", () => {
@@ -482,9 +483,9 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.threadMarkers).toEqual([marker]);
   });
 
-  it("does not let a sidebar shell upsert clobber pinnedMessages/notes from the detail path", () => {
-    // The sidebar shell snapshot/event does not carry pinnedMessages or notes. A shell upsert must
-    // preserve the values resolved from the thread-detail path rather than clearing them.
+  it("applies shell goals without clobbering detail annotations", () => {
+    // Shell snapshots carry goals but not pinned messages or notes. A shell upsert must update the
+    // former while preserving detail-only values.
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = MessageId.makeUnsafe("assistant-pin-3");
     const pinnedMessages = [
@@ -496,6 +497,9 @@ describe("store projection", () => {
         makeReadModelThread({
           pinnedMessages,
           notes: "keep me",
+          goal: "Keep the old goal",
+          goalStartedAt: "2026-02-27T00:01:00.000Z",
+          goalPausedAt: "2026-02-27T00:02:00.000Z",
         }),
       ),
     );
@@ -532,12 +536,18 @@ describe("store projection", () => {
         updatedAt: "2026-02-27T00:05:00.000Z",
         archivedAt: null,
         handoff: null,
+        goal: "Use the shell goal",
+        goalStartedAt: "2026-02-27T00:03:00.000Z",
+        goalPausedAt: null,
         session: null,
       },
     });
 
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("keep me");
+    expect(threadsOf(next)[0]?.goal).toBe("Use the shell goal");
+    expect(threadsOf(next)[0]?.goalStartedAt).toBe("2026-02-27T00:03:00.000Z");
+    expect(threadsOf(next)[0]?.goalPausedAt).toBeNull();
   });
 
   it("preserves cross-task creation provenance from the read model", () => {

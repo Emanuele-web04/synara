@@ -14,6 +14,7 @@ import {
   OrchestrationThreadPullRequest,
   ThreadPinnedMessages,
   ThreadMarkers,
+  ThreadGoalAchievements,
   ProjectScript,
   ProjectId,
   ProjectKind,
@@ -108,6 +109,9 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
+    goalAchievements: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(ThreadGoalAchievements)),
+    ).pipe(Schema.withDecodingDefault(() => null)),
     modelSelection: ModelSelectionJsonUnknown,
   }),
 );
@@ -115,6 +119,7 @@ const {
   pinnedMessages: _projectionThreadPinnedMessagesField,
   threadMarkers: _projectionThreadMarkersField,
   notes: _projectionThreadNotesField,
+  goalAchievements: _projectionThreadGoalAchievementsField,
   ...ProjectionThreadShellFields
 } = ProjectionThread.fields;
 const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFields).mapFields(
@@ -685,6 +690,9 @@ function toProjectedThreadShellFromStoredSummary(input: {
     archivedAt: threadRow.archivedAt ?? null,
     settledAt: threadRow.settledAt ?? null,
     handoff: threadRow.handoff,
+    goal: threadRow.goal ?? "",
+    goalStartedAt: threadRow.goalStartedAt ?? null,
+    goalPausedAt: threadRow.goalPausedAt ?? null,
     session: input.session,
   };
 }
@@ -748,6 +756,12 @@ function toProjectedThread(input: {
     ...(threadRow.pinnedMessages !== null ? { pinnedMessages: threadRow.pinnedMessages } : {}),
     ...(threadRow.threadMarkers !== null ? { threadMarkers: threadRow.threadMarkers } : {}),
     ...(threadRow.notes !== null ? { notes: threadRow.notes } : {}),
+    ...(threadRow.goal !== null ? { goal: threadRow.goal } : {}),
+    ...(threadRow.goalStartedAt !== null ? { goalStartedAt: threadRow.goalStartedAt } : {}),
+    ...(threadRow.goalPausedAt !== null ? { goalPausedAt: threadRow.goalPausedAt } : {}),
+    ...(threadRow.goalAchievements !== null
+      ? { goalAchievements: threadRow.goalAchievements }
+      : {}),
     session: input.session,
   };
 }
@@ -877,6 +891,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          goal,
+          goal_started_at AS "goalStartedAt",
+          goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
           source_thread_id AS "sourceThreadId",
@@ -940,6 +958,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          goal,
+          goal_started_at AS "goalStartedAt",
+          goal_paused_at AS "goalPausedAt",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -1502,6 +1523,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          goal,
+          goal_started_at AS "goalStartedAt",
+          goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
           source_thread_id AS "sourceThreadId",
@@ -1556,6 +1581,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          goal,
+          goal_started_at AS "goalStartedAt",
+          goal_paused_at AS "goalPausedAt",
+          goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
           source_thread_id AS "sourceThreadId",
