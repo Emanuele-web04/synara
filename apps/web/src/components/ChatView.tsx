@@ -8391,7 +8391,9 @@ export default function ChatView({
         const draftGoalForSend = activeThread.goal?.trim() ?? "";
         if (draftGoalForSend.length > 0) {
           try {
-            await dispatchThreadGoal(threadIdForSend, draftGoalForSend);
+            await dispatchThreadGoal(threadIdForSend, draftGoalForSend, {
+              startBehavior: "defer",
+            });
           } catch {
             // Non-critical: the goal can be set again with /goal on the live thread.
           }
@@ -11410,7 +11412,9 @@ export default function ChatView({
                   goalPausedAt={activeThread.goalPausedAt}
                   canPause={isServerThread}
                   onEdit={editThreadGoalInComposer}
-                  onSetPaused={setThreadGoalPaused}
+                  onSetPaused={async (paused) => {
+                    await setThreadGoalPaused(paused);
+                  }}
                   onClear={clearThreadGoal}
                   attachedToPrevious={
                     showComposerLiveChangesHeader ||

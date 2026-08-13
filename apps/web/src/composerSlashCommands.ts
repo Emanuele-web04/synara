@@ -33,6 +33,9 @@ export type ForkSlashCommandTarget = "local" | "worktree";
 export type GoalSlashCommandAction =
   | { readonly action: "show" }
   | { readonly action: "clear" }
+  | { readonly action: "pause" }
+  | { readonly action: "resume" }
+  | { readonly action: "edit" }
   | { readonly action: "set"; readonly goal: string }
   | { readonly action: "too-long" };
 
@@ -230,7 +233,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   goal: {
     command: "goal",
     label: "/goal",
-    description: "View, set, replace, or clear this thread's persistent goal",
+    description: "Set, edit, pause, resume, or clear this thread's persistent goal",
     source: "app",
   },
   feedback: {
@@ -389,8 +392,12 @@ export function parseGoalSlashCommandArgs(args: string): GoalSlashCommandAction 
   if (!goal) {
     return { action: "show" };
   }
-  if (goal.toLowerCase() === "clear") {
+  const control = goal.toLowerCase();
+  if (control === "clear") {
     return { action: "clear" };
+  }
+  if (control === "pause" || control === "resume" || control === "edit") {
+    return { action: control };
   }
   if (goal.length > THREAD_GOAL_MAX_CHARS) {
     return { action: "too-long" };
