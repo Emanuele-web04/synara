@@ -3364,5 +3364,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
+    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
+      markup.indexOf("Edited 1 file"),
+    );
   });
 });

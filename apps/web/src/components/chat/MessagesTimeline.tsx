@@ -2106,64 +2106,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
-                {(showPinToggle ||
-                  assistantCopyState.visible ||
-                  assistantMeta.length > 0 ||
-                  goalAchievement !== null) && (
-                  <div
-                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
-                    style={chatMessageFooterStyle}
-                  >
-                    {showPinToggle ? (
-                      // Pin sits at the left edge of the footer, before the copy action. It stays
-                      // visible when pinned so it reads as a persistent "this is pinned" marker; an
-                      // unpinned message only reveals it on hover, like the other footer actions.
-                      // Same Central pin glyph in both states — persistence signals the pinned state.
-                      <MessageActionButton
-                        label={pinActionLabel("message", messagePinned)}
-                        tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
-                        aria-pressed={messagePinned}
-                        className={
-                          messagePinned
-                            ? "text-muted-foreground/80"
-                            : MESSAGE_HOVER_REVEAL_CLASS_NAME
-                        }
-                        onClick={() => onTogglePinMessage?.(row.message.id)}
-                      >
-                        <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                      </MessageActionButton>
-                    ) : null}
-                    {assistantCopyState.visible ? (
-                      <MessageCopyButton
-                        text={assistantCopyState.text ?? ""}
-                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                      />
-                    ) : null}
-                    {assistantMeta.length > 0 ? (
-                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {assistantMeta}
-                      </p>
-                    ) : null}
-                    {goalAchievement !== null ? (
-                      // Persistent (not hover-revealed) marker: the achieved goal is a
-                      // durable fact about this turn, unlike the transient actions.
-                      <>
-                        <div aria-hidden className="h-3 w-px shrink-0 bg-border" />
-                        <p
-                          className="flex min-w-0 items-center gap-1.5 tabular-nums"
-                          title={goalAchievement.goal}
-                        >
-                          <CircleCheckIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                          <span className="truncate">
-                            {goalAchievement.elapsedMs !== null
-                              ? `Goal achieved in ${formatClockDuration(goalAchievement.elapsedMs)}`
-                              : "Goal achieved"}
-                          </span>
-                        </p>
-                      </>
-                    ) : null}
-                  </div>
-                )}
                 {!row.assistantTurnInProgress && row.showAssistantCopyButton
                   ? synaraThreadCreationRecaps.map((creation) => (
                       <div key={creation.operationId} className="mt-2 mb-4">
@@ -2259,7 +2201,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     );
                   };
                   return (
-                    <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
+                    <div className="mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-user-message-background)_40%,transparent)] px-3 py-1.5",
@@ -2363,6 +2305,64 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
+                {(showPinToggle ||
+                  assistantCopyState.visible ||
+                  assistantMeta.length > 0 ||
+                  goalAchievement !== null) && (
+                  <div
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
+                    style={chatMessageFooterStyle}
+                  >
+                    {showPinToggle ? (
+                      // Pin sits at the left edge of the footer, before the copy action. It stays
+                      // visible when pinned so it reads as a persistent "this is pinned" marker; an
+                      // unpinned message only reveals it on hover, like the other footer actions.
+                      // Same Central pin glyph in both states — persistence signals the pinned state.
+                      <MessageActionButton
+                        label={pinActionLabel("message", messagePinned)}
+                        tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
+                        aria-pressed={messagePinned}
+                        className={
+                          messagePinned
+                            ? "text-muted-foreground/80"
+                            : MESSAGE_HOVER_REVEAL_CLASS_NAME
+                        }
+                        onClick={() => onTogglePinMessage?.(row.message.id)}
+                      >
+                        <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
+                    ) : null}
+                    {assistantCopyState.visible ? (
+                      <MessageCopyButton
+                        text={assistantCopyState.text ?? ""}
+                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                      />
+                    ) : null}
+                    {assistantMeta.length > 0 ? (
+                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                        {assistantMeta}
+                      </p>
+                    ) : null}
+                    {goalAchievement !== null ? (
+                      // Persistent (not hover-revealed) marker: the achieved goal is a
+                      // durable fact about this turn, unlike the transient actions.
+                      <>
+                        <div aria-hidden className="h-3 w-px shrink-0 bg-border" />
+                        <p
+                          className="flex min-w-0 items-center gap-1.5 tabular-nums"
+                          title={goalAchievement.goal}
+                        >
+                          <CircleCheckIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          <span className="truncate">
+                            {goalAchievement.elapsedMs !== null
+                              ? `Goal achieved in ${formatClockDuration(goalAchievement.elapsedMs)}`
+                              : "Goal achieved"}
+                          </span>
+                        </p>
+                      </>
+                    ) : null}
+                  </div>
+                )}
               </div>
             </>
           );
