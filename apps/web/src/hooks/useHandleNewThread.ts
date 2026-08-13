@@ -5,7 +5,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { startTransition } from "react";
 import { useAppSettings } from "../appSettings";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import {
+  hasReconciledServerProviderStatuses,
+  serverConfigQueryOptions,
+} from "../lib/serverReactQuery";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
@@ -48,6 +52,8 @@ export function useHandleNewThread() {
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverCwd = serverConfigQuery.data?.cwd ?? null;
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const navigate = useNavigate();
   const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
@@ -82,7 +88,14 @@ export function useHandleNewThread() {
         projectDefaultProvider: project?.defaultModelSelection?.provider ?? null,
         projectCwd: project?.cwd ?? null,
         draftWorktreePath: draftThread?.worktreePath ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        hasExplicitWorktreePath: options?.worktreePath !== undefined,
+        fresh: options?.fresh === true,
+        envMode: options?.envMode ?? null,
         serverCwd,
+        providerStatuses,
+        statusesReconciled: providerStatusesReconciled,
+        providerOrder: settings.providerOrder,
         includeDroid: true,
       });
     }
