@@ -2308,7 +2308,6 @@ const make = Effect.gen(function* () {
                   commandId: providerCommandId(event, "goal-auto-pause", thread.id),
                   threadId: thread.id,
                   goalPaused: true,
-                  createdAt: now,
                 });
               }
             }

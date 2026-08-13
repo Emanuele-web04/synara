@@ -2613,7 +2613,6 @@ const make = Effect.gen(function* () {
   const pauseActiveThreadGoal = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly expectedGoalStartedAt: string | null;
-    readonly createdAt: string;
   }) {
     const thread = (yield* orchestrationEngine.getReadModel()).threads.find(
       (candidate) => candidate.id === input.threadId,
@@ -2631,7 +2630,6 @@ const make = Effect.gen(function* () {
       commandId: serverCommandId("goal-auto-pause"),
       threadId: input.threadId,
       goalPaused: true,
-      createdAt: input.createdAt,
     });
   });
 
@@ -2722,7 +2720,6 @@ const make = Effect.gen(function* () {
                   yield* pauseActiveThreadGoal({
                     threadId: thread.id,
                     expectedGoalStartedAt: event.payload.goalStartedAt,
-                    createdAt,
                   });
                 }),
           ),
@@ -3608,7 +3605,6 @@ const make = Effect.gen(function* () {
     yield* pauseActiveThreadGoal({
       threadId: event.payload.threadId,
       expectedGoalStartedAt: event.payload.goalStartedAt,
-      createdAt,
     });
   });
 
