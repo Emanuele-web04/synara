@@ -717,6 +717,7 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    ...(draftThread.goal ? { goal: draftThread.goal } : {}),
   };
 }
 

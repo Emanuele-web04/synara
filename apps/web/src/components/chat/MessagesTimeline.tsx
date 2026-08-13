@@ -51,6 +51,7 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  GoalIcon,
   LoaderIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -72,6 +73,7 @@ import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { InlineMentionChip } from "./InlineMentionChip";
 import { InlineSkillChip } from "./InlineSkillChip";
+import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -2352,7 +2354,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           className="flex min-w-0 items-center gap-1.5 tabular-nums"
                           title={goalAchievement.goal}
                         >
-                          <CircleCheckIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          <GoalIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                           <span className="truncate">
                             {goalAchievement.elapsedMs !== null
                               ? `Goal achieved in ${formatClockDuration(goalAchievement.elapsedMs)}`
@@ -3003,6 +3005,9 @@ function renderUserMessageInlineText(
     }
     if (segment.type === "link") {
       return [<InlineLinkChip key={`${key}:link`} url={segment.url} interactive />];
+    }
+    if (segment.type === "slash-command") {
+      return [<InlineSlashCommandChip key={`${key}:command`} command={segment.command} />];
     }
     return [];
   });
