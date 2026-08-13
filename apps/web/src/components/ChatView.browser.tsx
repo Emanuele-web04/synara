@@ -102,6 +102,7 @@ let attachmentUploadSequence = 0;
 let attachmentUploadBarrier: Promise<void> | null = null;
 let attachmentUploadReachedBarrier = false;
 let attachmentCancelBarrier: Promise<void> | null = null;
+let attachmentCancelReachedBarrier = false;
 
 interface WsRequestEnvelope {
   id: string;
@@ -1469,6 +1470,7 @@ const worker = setupWorker(
     );
   }),
   http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, async () => {
+    attachmentCancelReachedBarrier = true;
     await attachmentCancelBarrier;
     return HttpResponse.json({ cancelled: true }, { status: 200 });
   }),
@@ -2107,6 +2109,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentUploadReachedBarrier = false;
     attachmentCancelBarrier = null;
+    attachmentCancelReachedBarrier = false;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -6714,11 +6717,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       ).toBe(false);
 
       await cancelButton.click();
+      releaseAttachmentUpload();
+      attachmentUploadBarrier = null;
+      await expect.poll(() => attachmentCancelReachedBarrier).toBe(true);
       await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
       releaseAttachmentCancel();
       attachmentCancelBarrier = null;
-      releaseAttachmentUpload();
-      attachmentUploadBarrier = null;
 
       await vi.waitFor(
         () => {
