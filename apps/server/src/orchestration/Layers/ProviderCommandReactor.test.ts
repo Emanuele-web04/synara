@@ -2706,10 +2706,7 @@ describe("ProviderCommandReactor", () => {
   it("interrupts a continuation that races a user stop", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
-    let releaseSend!: (result: {
-      readonly threadId: ThreadId;
-      readonly turnId: TurnId;
-    }) => void;
+    let releaseSend!: (result: { readonly threadId: ThreadId; readonly turnId: TurnId }) => void;
     const sendGate = new Promise<{ readonly threadId: ThreadId; readonly turnId: TurnId }>(
       (resolve) => {
         releaseSend = resolve;
