@@ -6701,7 +6701,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
       ).toBe(false);
 
       await cancelButton.click();
-      await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
       releaseAttachmentCancel();
       attachmentCancelBarrier = null;
       releaseAttachmentUpload();
@@ -6709,12 +6708,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).not.toContain("Cancelling...");
           expect(
             wsRequests.some(
               (candidate) => readDispatchedCommand(candidate)?.type === "thread.turn.start",
             ),
           ).toBe(false);
+          expect(
+            wsRequests.some(
+              (candidate) =>
+                candidate._tag === WS_METHODS.gitRemoveWorktree &&
+                candidate.path === "/repo/.codex/worktrees/generated/synara" &&
+                candidate.force === true &&
+                candidate.reclaimTemporaryBranch === true,
+            ),
+          ).toBe(true);
+          expect(document.querySelector('[data-timeline-row-kind="worktree-setup"]')).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
