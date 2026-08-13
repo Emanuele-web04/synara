@@ -11412,7 +11412,9 @@ export default function ChatView({
                   goalPausedAt={activeThread.goalPausedAt}
                   canPause={isServerThread}
                   onEdit={editThreadGoalInComposer}
-                  onSetPaused={setThreadGoalPaused}
+                  onSetPaused={async (paused) => {
+                    await setThreadGoalPaused(paused);
+                  }}
                   onClear={clearThreadGoal}
                   attachedToPrevious={
                     showComposerLiveChangesHeader ||
