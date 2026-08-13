@@ -101,7 +101,13 @@ import {
 } from "../appSettings";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
-import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
+import {
+  isMacNavigatorPlatform,
+  newCommandId,
+  newProjectId,
+  newThreadId,
+  randomUUID,
+} from "../lib/utils";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
@@ -1533,14 +1539,14 @@ export default function Sidebar() {
   const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.search") ??
-    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+    (isMacNavigatorPlatform() ? "⌘K" : "Ctrl+K");
   const activityShortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.activity");
   const importThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
-    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
+    (isMacNavigatorPlatform() ? "⌘I" : "Ctrl+I");
   const addProjectShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
-    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
+    (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
@@ -3989,7 +3995,7 @@ export default function Sidebar() {
 
   const handleThreadClick = useCallback(
     (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
-      const isMac = isMacPlatform(navigator.platform);
+      const isMac = isMacNavigatorPlatform();
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
 
@@ -5697,7 +5703,7 @@ export default function Sidebar() {
   // Only macOS draws the traffic lights in the renderer's top-left, so only there
   // does the open-sidebar header need to reserve the gutter (mirrors the mac guard
   // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
-  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = isMacNavigatorPlatform();
 
   // Open-sidebar (in-sidebar) and non-electron wordmark clusters share the one
   // SidebarLeadingControls primitive with the closed-state host headers, so the

@@ -45,7 +45,7 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
 import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
-import { isMacPlatform } from "../lib/utils";
+import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
@@ -1671,7 +1671,7 @@ async function waitForServerConfigToApply(): Promise<void> {
 }
 
 function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): void {
-  const useMetaForMod = isMacPlatform(navigator.platform);
+  const useMetaForMod = isMacNavigatorPlatform();
   target.dispatchEvent(
     new KeyboardEvent("keydown", {
       key,
@@ -1712,7 +1712,7 @@ function dispatchConfiguredShortcut(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
 ): void {
-  const useMetaForMod = isMacPlatform(navigator.platform);
+  const useMetaForMod = isMacNavigatorPlatform();
   target.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: input.key,
@@ -1758,7 +1758,7 @@ function dispatchTerminalThreadShortcut(): void {
 }
 
 function dispatchThreadShortcut(key: string): void {
-  const useMetaForMod = isMacPlatform(navigator.platform);
+  const useMetaForMod = isMacNavigatorPlatform();
   window.dispatchEvent(
     new KeyboardEvent("keydown", {
       key,
@@ -7142,7 +7142,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       composerEditor.focus();
       await waitForLayout();
       const dispatchNewChatShortcut = () => {
-        const useMetaForMod = isMacPlatform(navigator.platform);
+        const useMetaForMod = isMacNavigatorPlatform();
         window.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: "n",

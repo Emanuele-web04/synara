@@ -38,6 +38,7 @@ import {
   SurfaceChipIcon,
   SurfaceTabChip,
 } from "./chatHeaderControls";
+import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
@@ -628,14 +629,11 @@ export function ChatHeader({
             }
           >
             {!togglesRightDock && showDiffTotals ? (
-              <span className="inline-flex items-center gap-1">
-                <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
-                  +{diffAdditions}
-                </span>
-                <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
-                  -{diffDeletions}
-                </span>
-              </span>
+              <DiffStat
+                className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal"
+                insertions={diffAdditions}
+                deletions={diffDeletions}
+              />
             ) : null}
             <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
           </Toggle>
