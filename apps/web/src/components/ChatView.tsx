@@ -437,6 +437,7 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./Compose
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import { dispatchThreadNotes } from "~/pinnedMessages";
+import { dispatchThreadGoal } from "~/threadGoal";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -8386,6 +8387,16 @@ export default function ChatView({
             // into the notepad manually from the Environment panel.
           }
         }
+        // Same for a goal staged on the draft via /goal: persist it now so the
+        // decider stamps goalStartedAt when the thread actually starts working.
+        const draftGoalForSend = activeThread.goal?.trim() ?? "";
+        if (draftGoalForSend.length > 0) {
+          try {
+            await dispatchThreadGoal(threadIdForSend, draftGoalForSend);
+          } catch {
+            // Non-critical: the goal can be set again with /goal on the live thread.
+          }
+        }
         if (targetProjectKindForSend === "chat") {
           await api.orchestration.dispatchCommand({
             type: "project.meta.update",
@@ -11397,6 +11408,7 @@ export default function ChatView({
                   goal={activeThreadGoalText}
                   goalStartedAt={activeThread.goalStartedAt}
                   goalPausedAt={activeThread.goalPausedAt}
+                  canPause={isServerThread}
                   onEdit={editThreadGoalInComposer}
                   onSetPaused={setThreadGoalPaused}
                   onClear={clearThreadGoal}

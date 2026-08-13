@@ -38,6 +38,7 @@ import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { dispatchThreadGoal, dispatchThreadGoalPaused } from "../threadGoal";
 import {
   createOrJoinSidechat,
@@ -252,11 +253,21 @@ export function useComposerSlashCommands(input: {
 
   const persistThreadGoal = useCallback(
     async (goal: string): Promise<boolean> => {
+      if (!isServerThread && activeThread) {
+        // Draft threads have no server row yet: stage the goal locally so the
+        // header shows it immediately, then the first send persists it right
+        // after `thread.create` promotes the draft.
+        const draftStore = useComposerDraftStore.getState();
+        if (draftStore.getDraftThread(activeThread.id)) {
+          draftStore.setDraftThreadContext(activeThread.id, { goal });
+          return true;
+        }
+      }
       if (!isServerThread || !activeThread) {
         toastManager.add({
           type: "warning",
           title: "Thread goal is unavailable",
-          description: "Open an existing server-backed thread before setting a goal.",
+          description: "Open a thread before setting a goal.",
         });
         return false;
       }

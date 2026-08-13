@@ -154,6 +154,48 @@ describe("composerDraftStore persisted-state hydration", () => {
     expect(hydrated.draftsByThreadId[threadId]?.interactionMode).toBe("debug");
     expect(hydrated.draftThreadsByThreadId[threadId]?.interactionMode).toBe("debug");
   });
+
+  it("preserves a staged goal in draft-thread state during hydration and drops blank ones", () => {
+    const projectId = ProjectId.makeUnsafe("project-goal");
+    const threadId = ThreadId.makeUnsafe("thread-goal");
+    const blankGoalThreadId = ThreadId.makeUnsafe("thread-goal-blank");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [threadId]: {
+          projectId,
+          createdAt: "2026-08-13T00:00:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+          goal: "clean the directory and build a snake game",
+        },
+        [blankGoalThreadId]: {
+          projectId,
+          createdAt: "2026-08-13T00:00:00.000Z",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+          goal: "   ",
+        },
+      },
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    expect(hydrated.draftThreadsByThreadId[threadId]?.goal).toBe(
+      "clean the directory and build a snake game",
+    );
+    expect(hydrated.draftThreadsByThreadId[blankGoalThreadId]?.goal).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore restored source proposed plan", () => {
