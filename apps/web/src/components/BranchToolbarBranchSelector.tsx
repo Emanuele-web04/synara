@@ -38,6 +38,7 @@ import {
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
 import { Button } from "./ui/button";
+import { DiffStat } from "./ui/diff-stat";
 import {
   Dialog,
   DialogDescription,
@@ -831,12 +832,11 @@ export function BranchToolbarBranchSelector({
                   Uncommitted: {currentBranchChangeSummary.fileCount.toLocaleString()}{" "}
                   {pluralize(currentBranchChangeSummary.fileCount, "file")}
                 </span>
-                <span className="font-mono tabular-nums text-success">
-                  +{currentBranchChangeSummary.insertions.toLocaleString()}
-                </span>
-                <span className="font-mono tabular-nums text-destructive">
-                  -{currentBranchChangeSummary.deletions.toLocaleString()}
-                </span>
+                <DiffStat
+                  className="font-mono"
+                  insertions={currentBranchChangeSummary.insertions}
+                  deletions={currentBranchChangeSummary.deletions}
+                />
               </div>
             ) : null}
           </div>

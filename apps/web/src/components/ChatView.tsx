@@ -332,7 +332,7 @@ import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import { randomTerminalId } from "./terminal/terminalIds";
-import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -3651,12 +3651,11 @@ export default function ChatView({
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
   const isMentionTrigger = composerTriggerKind === "mention";
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
   const gitStatusQuery = useQuery(gitStatusQueryOptions(gitBranchSourceCwd));
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverConfigQuery.data?.homeDir ?? null,
-    isMacPlatform(platform),
+    isMacNavigatorPlatform(),
   );
   const isLocalFolderBrowserOpen =
     composerCommandPicker === null &&
@@ -6344,7 +6343,7 @@ export default function ChatView({
       // Mirror terminal interrupt semantics without stealing regular copy shortcuts.
       if (
         hasLiveTurn &&
-        isMacPlatform(navigator.platform) &&
+        isMacNavigatorPlatform() &&
         event.ctrlKey &&
         !event.metaKey &&
         !event.altKey &&
