@@ -51,6 +51,7 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   ClockIcon,
+  GitForkIcon,
   GoalIcon,
   LoaderIcon,
   type LucideIcon,
@@ -426,6 +427,8 @@ interface MessagesTimelineProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
+  /** Fork the thread from the assistant footer, carrying the transcript up to that turn. */
+  onForkFromMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
   /** Recorded goal achievements; each renders a footer badge on its turn's terminal assistant message. */
@@ -523,6 +526,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
+  onForkFromMessage,
   threadMarkers: threadMarkersProp,
   goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
@@ -1745,6 +1749,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             messageCanPin &&
             Boolean(onTogglePinMessage) &&
             (assistantCopyState.visible || messagePinned);
+          // Fork rides the same "settled, persisted answer" signal as copy: an
+          // ephemeral or still-streaming bubble has no turn to fork from.
+          const showForkAction =
+            messageCanPin && Boolean(onForkFromMessage) && assistantCopyState.visible;
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -2308,46 +2316,48 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   );
                 })()}
                 {(showPinToggle ||
+                  showForkAction ||
                   assistantCopyState.visible ||
                   assistantMeta.length > 0 ||
                   goalAchievement !== null) && (
+                  // Turn-end actions read Copy → Fork → Pin → time and stay visible at
+                  // rest: they belong to a settled turn, so hiding them behind hover made
+                  // the whole row feel undiscoverable.
                   <div
-                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground"
                     style={chatMessageFooterStyle}
                   >
+                    {assistantCopyState.visible ? (
+                      <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                    ) : null}
+                    {showForkAction ? (
+                      <MessageActionButton
+                        label="Fork thread from this turn"
+                        tooltip="Fork from here"
+                        onClick={() => onForkFromMessage?.(row.message.id)}
+                      >
+                        <GitForkIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
+                    ) : null}
                     {showPinToggle ? (
-                      // Pin sits at the left edge of the footer, before the copy action. It stays
-                      // visible when pinned so it reads as a persistent "this is pinned" marker; an
-                      // unpinned message only reveals it on hover, like the other footer actions.
-                      // Same Central pin glyph in both states — persistence signals the pinned state.
+                      // Same Central pin glyph in both states — the darker tint is what
+                      // signals "this message is pinned".
                       <MessageActionButton
                         label={pinActionLabel("message", messagePinned)}
                         tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
                         aria-pressed={messagePinned}
-                        className={
-                          messagePinned
-                            ? "text-muted-foreground/80"
-                            : MESSAGE_HOVER_REVEAL_CLASS_NAME
-                        }
+                        className={messagePinned ? "text-foreground" : undefined}
                         onClick={() => onTogglePinMessage?.(row.message.id)}
                       >
                         <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                       </MessageActionButton>
                     ) : null}
-                    {assistantCopyState.visible ? (
-                      <MessageCopyButton
-                        text={assistantCopyState.text ?? ""}
-                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                      />
-                    ) : null}
                     {assistantMeta.length > 0 ? (
-                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {assistantMeta}
-                      </p>
+                      <p className="tabular-nums">{assistantMeta}</p>
                     ) : null}
                     {goalAchievement !== null ? (
-                      // Persistent (not hover-revealed) marker: the achieved goal is a
-                      // durable fact about this turn, unlike the transient actions.
+                      // Divided off from the actions: the achieved goal is a durable fact
+                      // about the turn, not something you can act on.
                       <>
                         <div aria-hidden className="h-3 w-px shrink-0 bg-border" />
                         <p

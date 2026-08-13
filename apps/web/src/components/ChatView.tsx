@@ -10122,6 +10122,7 @@ export default function ChatView({
   );
 
   const {
+    handleForkFromMessage,
     handleForkTargetSelection,
     handleReviewTargetSelection,
     isSlashStatusDialogOpen,
@@ -12016,6 +12017,7 @@ export default function ChatView({
                     pinnedMessageIds={pinnedMessageIds}
                     canPinMessage={canPinMessage}
                     onTogglePinMessage={handleTogglePinMessageGuarded}
+                    onForkFromMessage={handleForkFromMessage}
                     threadMarkers={threadMarkers}
                     goalAchievements={goalAchievements}
                     enteringUserMessageIds={enteringUserMessageIds}

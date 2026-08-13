@@ -1,5 +1,6 @@
 import {
   THREAD_GOAL_MAX_CHARS,
+  type MessageId,
   type ModelSelection,
   type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
@@ -345,7 +346,11 @@ export function useComposerSlashCommands(input: {
   );
 
   const createForkThreadFromSlashCommand = useCallback(
-    async (inputOptions?: { target?: ForkSlashCommandTarget }) => {
+    async (inputOptions?: {
+      target?: ForkSlashCommandTarget;
+      /** Fork from a specific turn: imports the transcript up to (and including) this message. */
+      throughMessageId?: MessageId | null;
+    }) => {
       const api = readNativeApi();
       if (!api || !activeProject || !activeThread || !isServerThread) {
         toastManager.add({
@@ -356,7 +361,9 @@ export function useComposerSlashCommands(input: {
         return true;
       }
 
-      const importedMessages = buildThreadHandoffImportedMessages(activeThread);
+      const importedMessages = buildThreadHandoffImportedMessages(activeThread, {
+        throughMessageId: inputOptions?.throughMessageId ?? null,
+      });
 
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -609,10 +616,13 @@ export function useComposerSlashCommands(input: {
     [editorActions, selectedProvider, runCodexReviewStart],
   );
 
-  const handleForkTargetSelection = useCallback(
-    async (target: ForkSlashCommandTarget) => {
+  const runForkThread = useCallback(
+    async (inputOptions: {
+      target: ForkSlashCommandTarget;
+      throughMessageId?: MessageId | null;
+    }) => {
       try {
-        await createForkThreadFromSlashCommand({ target });
+        await createForkThreadFromSlashCommand(inputOptions);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -625,6 +635,22 @@ export function useComposerSlashCommands(input: {
       }
     },
     [createForkThreadFromSlashCommand],
+  );
+
+  const handleForkTargetSelection = useCallback(
+    async (target: ForkSlashCommandTarget) => {
+      await runForkThread({ target });
+    },
+    [runForkThread],
+  );
+
+  // Footer fork action: stays in the current environment (a worktree-backed thread
+  // reuses its worktree) and carries the transcript up to the clicked turn.
+  const handleForkFromMessage = useCallback(
+    (messageId: MessageId) => {
+      void runForkThread({ target: "local", throughMessageId: messageId });
+    },
+    [runForkThread],
   );
 
   const checkClaudeFastSlashCommandAvailability = useCallback(async (): Promise<boolean> => {
@@ -1105,6 +1131,7 @@ export function useComposerSlashCommands(input: {
   );
 
   return {
+    handleForkFromMessage,
     handleForkTargetSelection,
     handleReviewTargetSelection,
     isSlashStatusDialogOpen,
