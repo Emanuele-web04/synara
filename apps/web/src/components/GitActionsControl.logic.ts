@@ -452,15 +452,16 @@ export function resolveGitMenuActionDisabledReason(input: {
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isAhead = gitStatus.aheadCount > 0;
   const isBehind = gitStatus.behindCount > 0;
+  const action = item.dialogAction ?? item.id;
 
-  if (item.id === "commit") {
+  if (action === "commit") {
     if (!hasChanges) {
       return "Worktree is clean. Make changes before committing.";
     }
     return "Commit is currently unavailable.";
   }
 
-  if (item.id === "push") {
+  if (action === "push") {
     if (!hasBranch) {
       return "Detached HEAD: checkout a branch before pushing.";
     }
@@ -479,7 +480,7 @@ export function resolveGitMenuActionDisabledReason(input: {
     return "Push is currently unavailable.";
   }
 
-  if (item.id === "commit_push") {
+  if (action === "commit_push") {
     if (!hasBranch) {
       return "Detached HEAD: checkout a branch before committing and pushing.";
     }

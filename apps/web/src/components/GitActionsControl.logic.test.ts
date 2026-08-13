@@ -1481,6 +1481,22 @@ describe("resolveCommitDialogActions", () => {
     );
   });
 
+  it("uses the commit & push reason for the default-branch push menu item", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        isDefaultBranch: true,
+        gitStatus: status({ branch: "main", hasWorkingTreeChanges: true, behindCount: 1 }),
+      },
+      hasFileSelection: true,
+    });
+    assert.equal(actions.commit_push?.disabled, true);
+    assert.equal(
+      actions.commit_push?.disabledReason,
+      "Branch is behind upstream. Pull/rebase before committing and pushing.",
+    );
+  });
+
   it("labels the PR row as View PR when one is already open", () => {
     const actions = byId({
       context: {
