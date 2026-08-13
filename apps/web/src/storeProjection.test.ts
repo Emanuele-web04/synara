@@ -498,6 +498,8 @@ describe("store projection", () => {
           pinnedMessages,
           notes: "keep me",
           goal: "Keep the old goal",
+          goalStartedAt: "2026-02-27T00:01:00.000Z",
+          goalPausedAt: "2026-02-27T00:02:00.000Z",
         }),
       ),
     );
@@ -535,6 +537,8 @@ describe("store projection", () => {
         archivedAt: null,
         handoff: null,
         goal: "Use the shell goal",
+        goalStartedAt: "2026-02-27T00:03:00.000Z",
+        goalPausedAt: null,
         session: null,
       },
     });
@@ -542,6 +546,8 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("keep me");
     expect(threadsOf(next)[0]?.goal).toBe("Use the shell goal");
+    expect(threadsOf(next)[0]?.goalStartedAt).toBe("2026-02-27T00:03:00.000Z");
+    expect(threadsOf(next)[0]?.goalPausedAt).toBeNull();
   });
 
   it("preserves cross-task creation provenance from the read model", () => {

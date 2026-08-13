@@ -690,9 +690,9 @@ function toProjectedThreadShellFromStoredSummary(input: {
     archivedAt: threadRow.archivedAt ?? null,
     settledAt: threadRow.settledAt ?? null,
     handoff: threadRow.handoff,
-    ...(threadRow.goal !== null ? { goal: threadRow.goal } : {}),
-    ...(threadRow.goalStartedAt !== null ? { goalStartedAt: threadRow.goalStartedAt } : {}),
-    ...(threadRow.goalPausedAt !== null ? { goalPausedAt: threadRow.goalPausedAt } : {}),
+    goal: threadRow.goal ?? "",
+    goalStartedAt: threadRow.goalStartedAt ?? null,
+    goalPausedAt: threadRow.goalPausedAt ?? null,
     session: input.session,
   };
 }

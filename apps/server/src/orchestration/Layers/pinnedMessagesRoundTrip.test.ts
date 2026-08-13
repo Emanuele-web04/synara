@@ -105,6 +105,12 @@ describe("thread annotations round-trip", () => {
       expect(shellSnapshot.threads.find((thread) => thread.id === threadId)?.goal).toBe(
         detail?.goal,
       );
+      expect(shellSnapshot.threads.find((thread) => thread.id === threadId)?.goalStartedAt).toBe(
+        detail?.goalStartedAt,
+      );
+      expect(
+        shellSnapshot.threads.find((thread) => thread.id === threadId)?.goalPausedAt,
+      ).toBeNull();
 
       await system.dispose();
       system = await createSystem(dbPath);
