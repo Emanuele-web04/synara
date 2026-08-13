@@ -109,6 +109,10 @@ function toThreadShell(thread: Thread): ThreadShell {
     ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
     ...(thread.threadMarkers !== undefined ? { threadMarkers: thread.threadMarkers } : {}),
     ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
+    ...(thread.goal !== undefined ? { goal: thread.goal } : {}),
+    ...(thread.goalStartedAt !== undefined ? { goalStartedAt: thread.goalStartedAt } : {}),
+    ...(thread.goalPausedAt !== undefined ? { goalPausedAt: thread.goalPausedAt } : {}),
+    ...(thread.goalAchievements !== undefined ? { goalAchievements: thread.goalAchievements } : {}),
     ...(thread.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: thread.latestUserMessageAt }
       : {}),

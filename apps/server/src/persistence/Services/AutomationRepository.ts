@@ -185,6 +185,7 @@ export type MarkAutomationRunFailedInput = typeof MarkAutomationRunFailedInput.T
 export interface MarkAutomationRunFailedResult {
   readonly run: AutomationRun;
   readonly transitioned: boolean;
+  readonly failureAccounting: Option.Option<RecordAutomationDefinitionRunFailureResult>;
 }
 
 export const MarkAutomationRunSkippedInput = Schema.Struct({
@@ -199,8 +200,15 @@ export const MarkAutomationRunSucceededInput = Schema.Struct({
   turnId: Schema.NullOr(TurnId),
   result: Schema.NullOr(AutomationRunResult),
   finishedAt: Schema.String,
+  accountedAt: Schema.String,
 });
 export type MarkAutomationRunSucceededInput = typeof MarkAutomationRunSucceededInput.Type;
+
+export interface MarkAutomationRunSucceededResult {
+  readonly run: AutomationRun;
+  readonly transitioned: boolean;
+  readonly failureCountReset: boolean;
+}
 
 export const MarkAutomationRunResultInput = Schema.Struct({
   id: AutomationRunId,
@@ -365,6 +373,7 @@ export interface AutomationRepositoryShape {
     scheduleAdvance?: {
       readonly nextRunAt: string | null;
       readonly disable: boolean;
+      readonly expectedDefinitionUpdatedAt: string;
     },
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
   readonly getRunById: (
@@ -403,7 +412,7 @@ export interface AutomationRepositoryShape {
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly markRunSucceeded: (
     input: MarkAutomationRunSucceededInput,
-  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  ) => Effect.Effect<MarkAutomationRunSucceededResult, AutomationRepositoryError>;
   readonly markRunResult: (
     input: MarkAutomationRunResultInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;

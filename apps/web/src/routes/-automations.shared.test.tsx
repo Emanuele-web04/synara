@@ -15,12 +15,14 @@ import {
   type AutomationRun,
   type ProviderStartOptions,
 } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   applyScheduleToForm,
   allVisibleTriageRuns,
   applyAutomationEvent,
+  automationDefinitionUpdateMutationOptions,
   automationAttentionCount,
   automationAttentionLabel,
   automationFastIntervalLimitMessage,
@@ -49,6 +51,37 @@ import {
   updateWeeklyScheduleTime,
   unresolvedTriageRuns,
 } from "./-automations.shared";
+
+describe("automation definition update ordering", () => {
+  it("serializes successful edits in submission order", async () => {
+    const queryClient = new QueryClient();
+    const calls: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const buildMutation = (name: string, gate?: Promise<void>) =>
+      queryClient.getMutationCache().build(queryClient, {
+        ...automationDefinitionUpdateMutationOptions(async () => {
+          calls.push(`${name}:start`);
+          await gate;
+          calls.push(`${name}:finish`);
+          return {} as AutomationDefinition;
+        }),
+      });
+    const first = buildMutation("first", firstGate);
+    const second = buildMutation("second");
+
+    const input = { id: automationId("automation-ordered-edits") };
+    const firstRequest = first.execute(input);
+    const secondRequest = second.execute(input);
+    await vi.waitFor(() => expect(calls).toEqual(["first:start"]));
+    releaseFirst();
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(calls).toEqual(["first:start", "first:finish", "second:start", "second:finish"]);
+  });
+});
 
 const runId = (value: string) => AutomationRunId.makeUnsafe(value);
 const automationId = (value: string) => AutomationId.makeUnsafe(value);

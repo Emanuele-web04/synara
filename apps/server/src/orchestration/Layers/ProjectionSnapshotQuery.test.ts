@@ -1738,6 +1738,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
           lastKnownPr: null,
+          goal: "",
+          goalStartedAt: null,
+          goalPausedAt: null,
           latestTurn: {
             turnId: asTurnId("turn-shell"),
             state: "completed",

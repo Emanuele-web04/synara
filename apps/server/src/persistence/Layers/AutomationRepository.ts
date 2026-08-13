@@ -162,6 +162,12 @@ const MAX_RUN_LIST_ROWS = 500;
 
 class AutomationRunClaimRejected extends Error {}
 
+const ClaimAutomationIterationInput = Schema.Struct({
+  id: AutomationDefinition.fields.id,
+  now: Schema.String,
+  expectedDefinitionUpdatedAt: Schema.NullOr(Schema.String),
+});
+
 function toDefinition(row: AutomationDefinitionDbRow) {
   return decodeDefinition({
     ...row,
@@ -1017,8 +1023,9 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
-  const markRunSucceededRow = SqlSchema.void({
+  const markRunSucceededRow = SqlSchema.findAll({
     Request: MarkAutomationRunSucceededInput,
+    Result: Schema.Struct({ id: AutomationRun.fields.id }),
     execute: ({ id, turnId, result, finishedAt }) =>
       sql`
         UPDATE automation_runs
@@ -1032,6 +1039,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             claimed_by = NULL
         WHERE run_id = ${id}
           AND status NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+        RETURNING run_id AS "id"
       `,
   });
 
@@ -1455,15 +1463,19 @@ const makeAutomationRepository = Effect.gen(function* () {
   });
 
   const incrementIterationIfRunnableRow = SqlSchema.findAll({
-    Request: IncrementAutomationIterationInput,
+    Request: ClaimAutomationIterationInput,
     Result: Schema.Struct({ id: AutomationDefinition.fields.id }),
-    execute: ({ id, now }) =>
+    execute: ({ id, now, expectedDefinitionUpdatedAt }) =>
       sql`
         UPDATE automation_definitions
         SET iteration_count = iteration_count + 1, updated_at = ${now}
         WHERE automation_id = ${id}
           AND archived_at IS NULL
           AND (max_iterations IS NULL OR iteration_count < max_iterations)
+          AND (
+            ${expectedDefinitionUpdatedAt} IS NULL
+            OR (enabled = 1 AND updated_at = ${expectedDefinitionUpdatedAt})
+          )
         RETURNING automation_id AS "id"
       `,
   });
@@ -1745,6 +1757,7 @@ const makeAutomationRepository = Effect.gen(function* () {
               const updated = yield* incrementIterationIfRunnableRow({
                 id: input.automationId,
                 now: input.now,
+                expectedDefinitionUpdatedAt: scheduleAdvance?.expectedDefinitionUpdatedAt ?? null,
               });
               if (updated.length === 0) {
                 return yield* Effect.fail(new AutomationRunClaimRejected());
@@ -1863,14 +1876,36 @@ const makeAutomationRepository = Effect.gen(function* () {
     );
 
   const markRunFailed: AutomationRepositoryShape["markRunFailed"] = (input) =>
-    markRunFailedRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunFailed:update")),
-      Effect.flatMap((rows) =>
-        requireRunById(input.id, "AutomationRepository.markRunFailed").pipe(
-          Effect.map((run) => ({ run, transitioned: rows.length > 0 })),
-        ),
-      ),
-    );
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* markRunFailedRow(input);
+          const run = yield* requireRunById(input.id, "AutomationRepository.markRunFailed");
+          if (rows.length === 0) {
+            return {
+              run,
+              transitioned: false,
+              failureAccounting: Option.none(),
+            };
+          }
+          const accountingRow = yield* recordDefinitionRunFailureRow({
+            id: run.automationId,
+            now: input.finishedAt,
+          });
+          return {
+            run,
+            transitioned: true,
+            failureAccounting: Option.map(
+              accountingRow,
+              (row): RecordAutomationDefinitionRunFailureResult => ({
+                consecutiveFailureCount: row.consecutiveFailureCount,
+                autoDisabled: row.autoDisabled === 1,
+              }),
+            ),
+          };
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunFailed:update")));
 
   const markRunSkipped: AutomationRepositoryShape["markRunSkipped"] = (input) =>
     markRunSkippedRow(input).pipe(
@@ -1879,10 +1914,23 @@ const makeAutomationRepository = Effect.gen(function* () {
     );
 
   const markRunSucceeded: AutomationRepositoryShape["markRunSucceeded"] = (input) =>
-    markRunSucceededRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunSucceeded:update")),
-      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunSucceeded")),
-    );
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* markRunSucceededRow(input);
+          const run = yield* requireRunById(input.id, "AutomationRepository.markRunSucceeded");
+          let failureCountReset = false;
+          if (rows.length > 0) {
+            const resetRows = yield* resetDefinitionFailureCountRow({
+              id: run.automationId,
+              now: input.accountedAt,
+            });
+            failureCountReset = resetRows.length > 0;
+          }
+          return { run, transitioned: rows.length > 0, failureCountReset };
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunSucceeded:update")));
 
   const markRunResult: AutomationRepositoryShape["markRunResult"] = (input) =>
     markRunResultRow(input).pipe(

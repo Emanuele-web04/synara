@@ -250,6 +250,8 @@ export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
 export const PauseIcon: LucideIcon = centralIconWrapper("pause", "fill");
 export const PlayIcon: LucideIcon = centralIconWrapper("play", "fill");
+// Persistent thread goal ("Pursuing goal" strip, /goal surfaces).
+export const GoalIcon: LucideIcon = centralIconWrapper("target-arrow");
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);
 export const RefreshCwIcon = adaptIcon(IconRefresh);

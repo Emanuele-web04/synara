@@ -2102,6 +2102,7 @@ layer("AutomationService", (it) => {
                   archivedAt: null,
                 },
                 finishedAt: "2026-06-16T10:00:00.000Z",
+                accountedAt: "2026-06-16T10:00:00.000Z",
               })
               .pipe(Effect.asVoid, Effect.orDie)
           : Effect.void;
@@ -2812,6 +2813,7 @@ layer("AutomationService", (it) => {
           archivedAt: null,
         },
         finishedAt: definitionUpdatedAt!,
+        accountedAt: definitionUpdatedAt!,
       });
 
       yield* service.reconcileActiveRuns();

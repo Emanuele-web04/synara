@@ -99,6 +99,51 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("rejects a scheduled claim after its selected definition is paused", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const definition = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-paused-before-claim"),
+        input: {
+          ...createInputForProject("project-paused-before-claim"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.disableDefinition({
+        id: definition.id,
+        now: "2026-06-16T10:00:01.000Z",
+        reason: "user",
+      });
+
+      const claimed = yield* repository.createRunAndIncrementDefinition(
+        {
+          id: AutomationRunId.makeUnsafe("run-paused-before-claim"),
+          automationId: definition.id,
+          projectId: definition.projectId,
+          threadId: null,
+          trigger: { type: "scheduled" },
+          scheduledFor: "2026-06-16T10:00:00.000Z",
+          permissionSnapshot,
+          now: "2026-06-16T10:00:02.000Z",
+        },
+        {
+          nextRunAt: "2026-06-16T10:05:00.000Z",
+          disable: false,
+          expectedDefinitionUpdatedAt: definition.updatedAt,
+        },
+      );
+
+      assert.isTrue(Option.isNone(claimed));
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({ id: definition.id }),
+      );
+      assert.strictEqual(reloaded.iterationCount, 0);
+      assert.isFalse(reloaded.enabled);
+    }),
+  );
+
   it.effect("decodes a pre-007 persisted definition row with additive defaults", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
@@ -633,6 +678,10 @@ layer("AutomationRepository", (it) => {
         input: createInputForProject("project-marks"),
         now: "2026-06-16T10:00:00.000Z",
       });
+      yield* repository.recordDefinitionRunFailure({
+        id: AutomationId.makeUnsafe("automation-marks"),
+        now: "2026-06-16T10:00:01.000Z",
+      });
 
       const seedRun = (suffix: string) =>
         repository.createRun({
@@ -647,15 +696,35 @@ layer("AutomationRepository", (it) => {
         });
 
       yield* seedRun("succeeded");
-      const succeeded = yield* repository.markRunSucceeded({
+      const succeededResult = yield* repository.markRunSucceeded({
         id: AutomationRunId.makeUnsafe("run-marks-succeeded"),
         turnId: TurnId.makeUnsafe("turn-succeeded"),
         result: null,
-        finishedAt: "2026-06-16T10:10:00.000Z",
+        finishedAt: "2026-06-16T10:05:00.000Z",
+        accountedAt: "2026-06-16T10:10:00.000Z",
       });
+      const succeeded = succeededResult.run;
       assert.strictEqual(succeeded.status, "succeeded");
       assert.strictEqual(succeeded.turnId, TurnId.makeUnsafe("turn-succeeded"));
-      assert.strictEqual(succeeded.finishedAt, "2026-06-16T10:10:00.000Z");
+      assert.strictEqual(succeeded.finishedAt, "2026-06-16T10:05:00.000Z");
+      assert.isTrue(succeededResult.transitioned);
+      assert.isTrue(succeededResult.failureCountReset);
+      const definitionAfterSuccess = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-marks"),
+        }),
+      );
+      assert.strictEqual(definitionAfterSuccess.consecutiveFailureCount, 0);
+      assert.strictEqual(definitionAfterSuccess.updatedAt, "2026-06-16T10:10:00.000Z");
+      const repeatedSuccess = yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-marks-succeeded"),
+        turnId: TurnId.makeUnsafe("turn-succeeded-again"),
+        result: null,
+        finishedAt: "2026-06-16T10:06:00.000Z",
+        accountedAt: "2026-06-16T10:11:00.000Z",
+      });
+      assert.isFalse(repeatedSuccess.transitioned);
+      assert.isFalse(repeatedSuccess.failureCountReset);
 
       yield* seedRun("interrupted");
       const interrupted = yield* repository.markRunInterrupted({
@@ -708,6 +777,12 @@ layer("AutomationRepository", (it) => {
       });
       assert.isFalse(repeatedFailure.transitioned);
       assert.strictEqual(repeatedFailure.run.error, "boom");
+      const definitionAfterFailure = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-marks"),
+        }),
+      );
+      assert.strictEqual(definitionAfterFailure.consecutiveFailureCount, 1);
     }),
   );
 
@@ -758,6 +833,7 @@ layer("AutomationRepository", (it) => {
         turnId: null,
         result: null,
         finishedAt: "2026-06-16T10:02:00.000Z",
+        accountedAt: "2026-06-16T10:02:00.000Z",
       });
       const newer = yield* repository.createRun({
         id: AutomationRunId.makeUnsafe("run-by-thread-new"),
@@ -828,6 +904,7 @@ layer("AutomationRepository", (it) => {
         turnId: null,
         result: null,
         finishedAt: "2026-06-16T10:00:06.000Z",
+        accountedAt: "2026-06-16T10:00:06.000Z",
       });
 
       const count = yield* repository.countActiveRunsForDefinition({
@@ -1325,6 +1402,7 @@ layer("AutomationRepository", (it) => {
           archivedAt: null,
         },
         finishedAt: "2026-06-16T10:01:00.000Z",
+        accountedAt: "2026-06-16T10:01:00.000Z",
       });
       const inFlightBeforePolicyRun = yield* repository.createRun({
         id: AutomationRunId.makeUnsafe("run-stop-backfill-in-flight-before-policy"),
@@ -1371,6 +1449,7 @@ layer("AutomationRepository", (it) => {
           archivedAt: null,
         },
         finishedAt: "2026-06-16T10:02:30.000Z",
+        accountedAt: "2026-06-16T10:02:30.000Z",
       });
 
       const currentRun = yield* repository.createRun({
@@ -1393,6 +1472,7 @@ layer("AutomationRepository", (it) => {
           archivedAt: null,
         },
         finishedAt: "2026-06-16T10:03:30.000Z",
+        accountedAt: "2026-06-16T10:03:30.000Z",
       });
 
       const pending = yield* repository.listRunsNeedingCompletionEvaluation({ limit: 10 });
@@ -1513,6 +1593,7 @@ layer("AutomationRepository", (it) => {
         turnId: TurnId.makeUnsafe("turn-completion-merge"),
         result: null,
         finishedAt: "2026-06-16T10:10:00.000Z",
+        accountedAt: "2026-06-16T10:10:00.000Z",
       });
 
       // A user archives the run (which also marks it read).
@@ -1577,6 +1658,7 @@ layer("AutomationRepository", (it) => {
         turnId: TurnId.makeUnsafe("turn-read-merge"),
         result: null,
         finishedAt: "2026-06-16T10:10:00.000Z",
+        accountedAt: "2026-06-16T10:10:00.000Z",
       });
 
       // User marks the run read WITHOUT archiving it.
@@ -1721,6 +1803,7 @@ layer("AutomationRepository", (it) => {
           archivedAt: null,
         },
         finishedAt: "2020-01-01T10:01:00.000Z",
+        accountedAt: "2020-01-01T10:01:00.000Z",
       });
 
       const pendingEarliest = yield* repository.getEarliestNextRunAt({
@@ -1815,6 +1898,7 @@ layer("AutomationRepository", (it) => {
               archivedAt: null,
             },
             finishedAt: "2019-06-16T10:00:30.000Z",
+            accountedAt: "2019-06-16T10:00:30.000Z",
           });
         });
 
@@ -1916,6 +2000,7 @@ layer("AutomationRepository", (it) => {
         turnId: null,
         result: null,
         finishedAt: "2026-06-16T10:01:00.000Z",
+        accountedAt: "2026-06-16T10:01:00.000Z",
       });
 
       // Cancelling an already-succeeded run is a no-op, not a clobber of its outcome.
