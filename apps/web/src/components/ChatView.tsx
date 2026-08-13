@@ -85,6 +85,7 @@ import {
   gitCreateDetachedWorktreeMutationOptions,
   gitGithubRepositoryQueryOptions,
   gitBranchesQueryOptions,
+  gitStatusQueryOptions,
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
@@ -203,6 +204,7 @@ import {
   resolveGitRepoUiState,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
+  resolveSettledThreadBranchMismatch,
   resolveThreadDetailHydration,
   shouldHandlePromptHistoryNavigationKey,
   shouldEnableComposerPastedTextCollapse,
@@ -496,6 +498,7 @@ import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPane
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
+import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
@@ -1839,6 +1842,35 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  // Local threads reconcile their stored branch to the shared checkout as soon as the
+  // branch query resolves. Keep the branch seen when a thread becomes active so a settled
+  // thread can explain that change before the user's first resumed message.
+  const [activeThreadBranchAtActivation, setActiveThreadBranchAtActivation] = useState<{
+    threadId: ThreadId;
+    branch: string | null;
+    isSettled: boolean;
+  } | null>(null);
+  const [
+    settledThreadBranchWarningDismissedThreadId,
+    setSettledThreadBranchWarningDismissedThreadId,
+  ] = useState<ThreadId | null>(null);
+  useEffect(() => {
+    if (!activeThread || activeThreadBranchAtActivation?.threadId === activeThread.id) {
+      return;
+    }
+    setActiveThreadBranchAtActivation({
+      threadId: activeThread.id,
+      branch: activeThread.branch,
+      isSettled: activeThread.settledAt != null,
+    });
+    setSettledThreadBranchWarningDismissedThreadId(null);
+  }, [activeThread, activeThreadBranchAtActivation?.threadId]);
+  const settledThreadBranchAtActivation =
+    activeThreadBranchAtActivation !== null &&
+    activeThreadBranchAtActivation.threadId === activeThread?.id &&
+    activeThreadBranchAtActivation.isSettled
+      ? activeThreadBranchAtActivation.branch
+      : activeThread?.branch;
   useEffect(() => {
     if (
       !pendingFileUndo ||
@@ -3621,6 +3653,7 @@ export default function ChatView({
   const isMentionTrigger = composerTriggerKind === "mention";
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
+  const gitStatusQuery = useQuery(gitStatusQueryOptions(gitBranchSourceCwd));
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverConfigQuery.data?.homeDir ?? null,
     isMacPlatform(platform),
@@ -3710,6 +3743,29 @@ export default function ChatView({
       }),
     [activeProject?.cwd, activeThread?.branch, branchesQuery.data?.branches],
   );
+  const currentActiveGitBranch = useMemo(() => {
+    if (gitStatusQuery.data !== undefined) {
+      return gitStatusQuery.data.branch;
+    }
+
+    return (
+      branchesQuery.data?.branches.find(
+        (branch) =>
+          branch.current === true &&
+          (branch.worktreePath === null ||
+            branch.worktreePath === undefined ||
+            branch.worktreePath === activeProject?.cwd),
+      )?.name ?? null
+    );
+  }, [activeProject?.cwd, branchesQuery.data?.branches, gitStatusQuery.data]);
+  const settledThreadBranchMismatch = resolveSettledThreadBranchMismatch({
+    isSettled:
+      activeThread?.settledAt != null &&
+      settledThreadBranchWarningDismissedThreadId !== activeThread.id,
+    isLocalWorkspace: !isStudioContainer && resolvedThreadWorktreePath === null,
+    threadBranch: settledThreadBranchAtActivation,
+    currentBranch: currentActiveGitBranch,
+  });
   // Keep plugin suggestions referentially stable so prompt-sync effects do not loop on rerender.
   const providerPlugins = useMemo(
     () =>
@@ -7827,6 +7883,12 @@ export default function ChatView({
     let nextAssociatedWorktreeRef = isStudioContainer
       ? null
       : (activeThread.associatedWorktreeRef ?? null);
+    const shouldResumeSettledLocalThread =
+      isServerThread &&
+      activeThread.settledAt != null &&
+      nextThreadEnvMode === "local" &&
+      nextThreadWorktreePath === null;
+    let currentActiveGitBranchForSend = currentActiveGitBranch;
 
     if (isFirstMessage && isContainerLandingProject && firstSendTarget.kind !== "current") {
       if (firstSendTarget.kind === "create-project") {
@@ -7915,6 +7977,34 @@ export default function ChatView({
       !nextThreadBranch
     ) {
       nextThreadBranch = activeRootBranch ?? null;
+    }
+
+    // A settled local thread keeps its historical branch until the user resumes it, so the
+    // composer can explain the branch change. Refresh Git status before sending because the
+    // cached branch query may still be loading or may lag behind an out-of-band checkout.
+    if (shouldResumeSettledLocalThread) {
+      if (!gitBranchSourceCwd) {
+        setStoreThreadError(threadIdForSend, "Unable to determine the current branch.");
+        return false;
+      }
+
+      try {
+        const gitStatus = await queryClient.fetchQuery({
+          ...gitStatusQueryOptions(gitBranchSourceCwd),
+          staleTime: 0,
+        });
+        currentActiveGitBranchForSend = gitStatus.branch;
+      } catch {
+        setStoreThreadError(
+          threadIdForSend,
+          "Unable to determine the current branch. Try again before sending.",
+        );
+        return false;
+      }
+
+      if (currentActiveGitBranchForSend !== null) {
+        nextThreadBranch = currentActiveGitBranchForSend;
+      }
     }
 
     const baseBranchForWorktree =
@@ -8104,6 +8194,7 @@ export default function ChatView({
     let createdWorktreeForSendPath: string | null = null;
     let switchedToLocalCheckout = false;
     let turnStartSucceeded = false;
+    let settledLocalBranchUpdatedForSend = false;
     await (async () => {
       // "Work locally" from the setup card: drop any prepared worktree and
       // point the send (and the thread's metadata) back at the project
@@ -8375,6 +8466,35 @@ export default function ChatView({
       }
 
       const stagedTurnAttachments = await turnAttachmentsPromise;
+
+      if (
+        isServerThread &&
+        activeThread.settledAt != null &&
+        nextThreadEnvMode === "local" &&
+        nextThreadWorktreePath === null &&
+        nextThreadBranch !== activeThread.branch
+      ) {
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          envMode: "local",
+          branch: nextThreadBranch,
+          worktreePath: null,
+          associatedWorktreePath: nextAssociatedWorktreePath,
+          associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+          associatedWorktreeRef: nextAssociatedWorktreeRef,
+        });
+        settledLocalBranchUpdatedForSend = true;
+        setStoreThreadWorkspace(threadIdForSend, {
+          envMode: "local",
+          branch: nextThreadBranch,
+          worktreePath: null,
+          associatedWorktreePath: nextAssociatedWorktreePath,
+          associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+          associatedWorktreeRef: nextAssociatedWorktreeRef,
+        });
+      }
       // Keep setup resolvable while attachment uploads are still preparing the
       // turn. Once they settle, consume the last possible choice before the
       // card advances to the non-resolvable "Starting session" step.
@@ -8424,6 +8544,13 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
+      if (
+        shouldResumeSettledLocalThread &&
+        currentActiveGitBranchForSend !== null &&
+        nextThreadBranch === currentActiveGitBranchForSend
+      ) {
+        setSettledThreadBranchWarningDismissedThreadId(threadIdForSend);
+      }
       armLocalDispatchAckFallback(threadIdForSend);
       // Steers on providers without native mid-turn steering interrupt the live
       // turn before re-dispatching; hold queued auto-dispatch through that gap
@@ -8468,6 +8595,32 @@ export default function ChatView({
         // The turn RPC never resolved, so no server turn exists for the
         // watchdog to recover — drop the marker armed when the dispatch began.
         clearPendingTurnDispatch(threadIdForSend);
+      }
+      if (settledLocalBranchUpdatedForSend && !turnStartSucceeded) {
+        await api.orchestration
+          .dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            envMode: "local",
+            branch: activeThread.branch,
+            worktreePath: null,
+            associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
+            associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
+            associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
+          })
+          .then(
+            () =>
+              setStoreThreadWorkspace(threadIdForSend, {
+                envMode: "local",
+                branch: activeThread.branch,
+                worktreePath: null,
+                associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
+                associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
+                associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
+              }),
+            () => undefined,
+          );
       }
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
@@ -10950,6 +11103,7 @@ export default function ChatView({
     threadId: activeThread.id,
     onEnvModeChange,
     envLocked,
+    threadDetailReady: threadDetailHydration === "ready",
     onHandoffToWorktree,
     onHandoffToLocal,
     handoffBusy,
@@ -11267,6 +11421,11 @@ export default function ChatView({
                     queuedComposerTurns.length > 0
                   }
                 />
+              ) : null}
+              {settledThreadBranchMismatch ? (
+                <div className="pb-2">
+                  <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />
+                </div>
               ) : null}
               {/* Pending approvals and AskUserQuestion prompts both render as a detached
                   card floating just above the composer (padding gives the measured gap),
