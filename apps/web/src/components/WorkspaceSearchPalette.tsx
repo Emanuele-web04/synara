@@ -1,14 +1,13 @@
 // FILE: WorkspaceSearchPalette.tsx
-// Purpose: Command-style palette for searching the current project's files by
-//          name and by content (grep-style snippet search), styled after the
-//          ChatGPT/Codex search overlay (neutral gray surface, soft shadow,
-//          segmented mode switch, subtle match emphasis).
+// Purpose: Minimal command-style palette for searching the current project's
+//          files by name and by content (grep-style snippet search): a plain
+//          borderless input, a single group label, and rows that split the
+//          match into basename (left) and parent directory (right).
 // Layer: Web UI components
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { FileIcon, SearchIcon } from "~/lib/icons";
 import {
   projectSearchContentQueryOptions,
   projectSearchEntriesQueryOptions,
@@ -18,15 +17,13 @@ import {
   CommandDialog,
   CommandDialogPopup,
   CommandEmpty,
-  CommandFooter,
   CommandGroup,
   CommandGroupLabel,
   CommandInput,
   CommandItem,
   CommandList,
-  CommandPanel,
 } from "./ui/command";
-import { isMacPlatform } from "~/lib/utils";
+import { FileEntryIcon } from "./chat/FileEntryIcon";
 
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
 
@@ -36,17 +33,27 @@ const SEARCH_LIMIT = 50;
 const SEARCH_STALE_TIME_MS = 10_000;
 
 const POPUP_CLASS =
-  "max-w-2xl -translate-y-[9vh] rounded-2xl border-zinc-200/80 bg-[#fafafa] text-zinc-800 shadow-[0_0_0_1px_rgba(0,0,0,0.03),0_16px_48px_rgba(0,0,0,0.16)] before:bg-transparent dark:border-zinc-700/70 dark:bg-[#212121] dark:text-zinc-200 dark:shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_16px_48px_rgba(0,0,0,0.55)]";
+  "max-w-2xl -translate-y-[9vh] rounded-3xl border-transparent bg-white text-zinc-800 shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_24px_64px_rgba(0,0,0,0.2)] before:hidden dark:border-zinc-700/60 dark:bg-[#212121] dark:text-zinc-200 dark:shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_24px_64px_rgba(0,0,0,0.55)]";
 
-const PANEL_CLASS = "border-zinc-200/80 bg-transparent shadow-none dark:border-zinc-700/70";
+const GROUP_LABEL_CLASS = "pb-1.5 pl-3 text-sm font-normal text-zinc-400 dark:text-zinc-500";
+
+const ITEM_CLASS =
+  "cursor-pointer rounded-xl px-3 py-2 text-zinc-800 data-highlighted:bg-zinc-500/8 data-highlighted:text-zinc-900 dark:text-zinc-200 dark:data-highlighted:bg-zinc-400/10 dark:data-highlighted:text-zinc-100";
+
+const MUTED_TEXT_CLASS = "text-zinc-400 dark:text-zinc-500";
 
 interface WorkspaceSearchPaletteProps {
   open: boolean;
   mode: WorkspaceSearchPaletteMode;
-  onModeChange: (mode: WorkspaceSearchPaletteMode) => void;
   onOpenChange: (open: boolean) => void;
   cwd: string | null;
   onOpenFile: (relativePath: string) => void;
+}
+
+function splitPath(path: string): { base: string; dir: string } {
+  const separatorIndex = path.lastIndexOf("/");
+  if (separatorIndex === -1) return { base: path, dir: "" };
+  return { base: path.slice(separatorIndex + 1), dir: path.slice(0, separatorIndex) };
 }
 
 function highlightRange(
@@ -54,48 +61,51 @@ function highlightRange(
   query: string,
 ): { prefix: string; match: string; suffix: string } | null {
   if (!query) return null;
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
-  const index = lowerText.indexOf(lowerQuery);
+  const index = text.toLowerCase().indexOf(query.toLowerCase());
   if (index === -1) return null;
   return {
     prefix: text.slice(0, index),
-    match: text.slice(index, index + lowerQuery.length),
-    suffix: text.slice(index + lowerQuery.length),
+    match: text.slice(index, index + query.length),
+    suffix: text.slice(index + query.length),
   };
 }
 
-// ChatGPT-style match emphasis: no colored mark, just a subtle weight bump.
-function HighlightedText(props: { text: string; query: string; muted?: boolean }) {
+// Minimal match emphasis: the matched substring reads in the foreground color
+// while the rest of the text stays muted. When the query doesn't occur in the
+// text (e.g. it matched the directory instead), the whole text stays readable.
+function FileNameText(props: { text: string; query: string }) {
   const range = highlightRange(props.text, props.query);
   if (!range) {
-    return <>{props.text}</>;
+    return <span className="text-zinc-700 dark:text-zinc-300">{props.text}</span>;
   }
-  const matchClass = props.muted
-    ? "font-medium text-zinc-700 dark:text-zinc-200"
-    : "font-semibold text-zinc-950 dark:text-white";
+  return (
+    <span className={MUTED_TEXT_CLASS}>
+      {range.prefix}
+      <span className="font-medium text-zinc-900 dark:text-zinc-50">{range.match}</span>
+      {range.suffix}
+    </span>
+  );
+}
+
+function SnippetLineText(props: { text: string; query: string }) {
+  const range = highlightRange(props.text, props.query);
+  if (!range) return <>{props.text}</>;
   return (
     <>
       {range.prefix}
-      <span className={matchClass}>{range.match}</span>
+      <span className="font-medium text-zinc-700 dark:text-zinc-200">{range.match}</span>
       {range.suffix}
     </>
   );
 }
 
-function modeButtonClass(active: boolean): string {
-  return active
-    ? "rounded-md bg-white px-2.5 py-1 text-xs font-medium text-zinc-900 shadow-sm dark:bg-zinc-600/90 dark:text-zinc-50"
-    : "rounded-md px-2.5 py-1 text-xs font-medium text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100";
-}
-
-function EmptyState(props: { message: string }) {
+// Left-aligned empty/prompt state matching the results layout: the group label
+// stays put and the message renders where the first row would be.
+function EmptyState(props: { label: string; message: string }) {
   return (
-    <CommandEmpty className="py-12">
-      <div className="flex flex-col items-center justify-center gap-2.5 text-center text-sm text-zinc-500 dark:text-zinc-400">
-        <SearchIcon className="size-4 opacity-60" />
-        <div>{props.message}</div>
-      </div>
+    <CommandEmpty className="px-0 py-0 text-start">
+      <div className={GROUP_LABEL_CLASS}>{props.label}</div>
+      <div className="px-3 py-2 text-[15px] text-zinc-700 dark:text-zinc-300">{props.message}</div>
     </CommandEmpty>
   );
 }
@@ -120,8 +130,6 @@ export function WorkspaceSearchPalette(props: WorkspaceSearchPaletteProps) {
     return () => window.clearTimeout(timeoutId);
   }, [query]);
 
-  const isMac = isMacPlatform(navigator.platform);
-  const modLabel = isMac ? "⌘" : "Ctrl";
   const trimmedQuery = query.trim();
   const hasUsableQuery =
     props.mode === "files"
@@ -165,147 +173,116 @@ export function WorkspaceSearchPalette(props: WorkspaceSearchPaletteProps) {
     props.onOpenFile(relativePath);
   };
 
-  const placeholder =
-    props.mode === "files" ? "Search files by name" : "Search code and file contents";
-
-  const promptState =
+  const groupLabel = props.mode === "files" ? "Files" : "Matches";
+  const placeholder = props.mode === "files" ? "Search files" : "Search code";
+  const promptMessage =
     props.mode === "files"
-      ? "Type a file name to search the project."
-      : `Type at least ${SNIPPET_MIN_QUERY_LENGTH} characters to search file contents.`;
+      ? "Type to search for files"
+      : `Type at least ${SNIPPET_MIN_QUERY_LENGTH} characters to search code`;
+  const noResultsMessage = props.mode === "files" ? "No matching files" : "No matches";
 
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
       <CommandDialogPopup className={POPUP_CLASS}>
         <Command mode="none">
-          <CommandPanel className={PANEL_CLASS}>
-            <div className="flex flex-col gap-2 border-b border-zinc-200/70 px-3 pt-2 pb-2.5 dark:border-zinc-700/60">
-              <CommandInput
-                placeholder={placeholder}
-                value={query}
-                onChange={(event) => setQuery(event.currentTarget.value)}
-                startAddon={<SearchIcon className="size-4 text-zinc-400 dark:text-zinc-500" />}
-                className="px-3 py-2 text-[15px] placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
-              />
-              <div className="flex items-center gap-2 px-2">
-                <div
-                  className="inline-flex items-center gap-0.5 rounded-lg bg-zinc-200/70 p-0.5 dark:bg-zinc-800"
-                  role="tablist"
-                  aria-label="Search mode"
-                >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={props.mode === "files"}
-                    className={modeButtonClass(props.mode === "files")}
-                    onClick={() => props.onModeChange("files")}
-                  >
-                    Files
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={props.mode === "snippets"}
-                    className={modeButtonClass(props.mode === "snippets")}
-                    onClick={() => props.onModeChange("snippets")}
-                  >
-                    Snippets
-                  </button>
-                </div>
-                {props.cwd ? (
-                  <span className="min-w-0 flex-1 truncate text-end text-[11px] text-zinc-400 dark:text-zinc-500">
-                    {props.cwd}
-                  </span>
-                ) : null}
-              </div>
-            </div>
+          <div className="px-2.5 pt-2.5">
+            <CommandInput
+              placeholder={placeholder}
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              startAddon={null}
+              className="px-2.5 py-2 text-[16px] placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+            />
+          </div>
 
-            <CommandList className="max-h-[min(22rem,55vh)] not-empty:px-1.5 not-empty:pt-1.5 not-empty:pb-1.5">
-              {!hasUsableQuery ? (
-                <EmptyState message={promptState} />
-              ) : props.mode === "files" ? (
-                fileEntries.length > 0 ? (
-                  <CommandGroup>
-                    <CommandGroupLabel className="pt-0 pb-1.5 pl-3 text-zinc-400 dark:text-zinc-500">
-                      Files
-                    </CommandGroupLabel>
-                    {fileEntries.map((entry) => (
+          <CommandList className="max-h-[min(24rem,60vh)] px-2 pt-1 pb-2.5">
+            {!hasUsableQuery ? (
+              <EmptyState label={groupLabel} message={promptMessage} />
+            ) : props.mode === "files" ? (
+              fileEntries.length > 0 ? (
+                <CommandGroup>
+                  <CommandGroupLabel className={GROUP_LABEL_CLASS}>{groupLabel}</CommandGroupLabel>
+                  {fileEntries.map((entry) => {
+                    const { base, dir } = splitPath(entry.path);
+                    return (
                       <CommandItem
                         key={entry.path}
                         value={`file:${entry.path}`}
-                        className="cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-zinc-800 data-highlighted:bg-zinc-200/60 data-highlighted:text-zinc-900 dark:text-zinc-200 dark:data-highlighted:bg-zinc-700/40 dark:data-highlighted:text-zinc-100"
+                        className={`items-center gap-2.5 ${ITEM_CLASS}`}
                         onMouseDown={(event) => {
                           event.preventDefault();
                         }}
                         onClick={() => handleOpenFile(entry.path)}
                       >
-                        <FileIcon className="size-4 shrink-0 text-zinc-400 dark:text-zinc-500" />
-                        <span className="min-w-0 flex-1 truncate text-sm">
-                          <HighlightedText text={entry.path} query={debouncedQuery} />
+                        <FileEntryIcon
+                          pathValue={entry.path}
+                          kind="file"
+                          colorMode="inherit"
+                          className="text-zinc-500 dark:text-zinc-400"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-[15px]">
+                          <FileNameText text={base} query={debouncedQuery} />
                         </span>
+                        {dir ? (
+                          <span
+                            className={`max-w-[45%] shrink-0 truncate text-sm ${MUTED_TEXT_CLASS}`}
+                          >
+                            {dir}
+                          </span>
+                        ) : null}
                       </CommandItem>
-                    ))}
-                  </CommandGroup>
-                ) : !isFetching ? (
-                  <EmptyState message="No matching files." />
-                ) : null
-              ) : snippetMatches.length > 0 ? (
-                <CommandGroup>
-                  <CommandGroupLabel className="pt-0 pb-1.5 pl-3 text-zinc-400 dark:text-zinc-500">
-                    Matches
-                  </CommandGroupLabel>
-                  {snippetMatches.map((match) => (
+                    );
+                  })}
+                </CommandGroup>
+              ) : !isFetching ? (
+                <EmptyState label={groupLabel} message={noResultsMessage} />
+              ) : null
+            ) : snippetMatches.length > 0 ? (
+              <CommandGroup>
+                <CommandGroupLabel className={GROUP_LABEL_CLASS}>{groupLabel}</CommandGroupLabel>
+                {snippetMatches.map((match) => {
+                  const { base, dir } = splitPath(match.path);
+                  return (
                     <CommandItem
                       key={`${match.path}:${match.lineNumber}`}
                       value={`snippet:${match.path}:${match.lineNumber}`}
-                      className="cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-zinc-800 data-highlighted:bg-zinc-200/60 data-highlighted:text-zinc-900 dark:text-zinc-200 dark:data-highlighted:bg-zinc-700/40 dark:data-highlighted:text-zinc-100"
+                      className={`items-start ${ITEM_CLASS}`}
                       onMouseDown={(event) => {
                         event.preventDefault();
                       }}
                       onClick={() => handleOpenFile(match.path)}
                     >
-                      <FileIcon className="mt-0.5 size-4 shrink-0 text-zinc-400 dark:text-zinc-500" />
-                      <div className="min-w-0 flex-1">
+                      <FileEntryIcon
+                        pathValue={match.path}
+                        kind="file"
+                        colorMode="inherit"
+                        className="mt-0.5 text-zinc-500 dark:text-zinc-400"
+                      />
+                      <div className="ml-2.5 min-w-0 flex-1">
                         <div className="flex items-baseline gap-2">
-                          <span className="min-w-0 flex-1 truncate text-sm">
-                            <HighlightedText text={match.path} query={debouncedQuery} />
+                          <span className="min-w-0 flex-1 truncate text-[15px]">
+                            <FileNameText text={base} query={debouncedQuery} />
                           </span>
-                          <span className="shrink-0 text-[10px] text-zinc-400 dark:text-zinc-500">
-                            :{match.lineNumber}
+                          <span
+                            className={`max-w-[45%] shrink-0 truncate text-sm ${MUTED_TEXT_CLASS}`}
+                          >
+                            {dir ? `${dir}:${match.lineNumber}` : `:${match.lineNumber}`}
                           </span>
                         </div>
-                        <div className="mt-0.5 truncate font-mono text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">
-                          <HighlightedText text={match.lineText} query={debouncedQuery} muted />
+                        <div
+                          className={`mt-0.5 truncate font-mono text-[11px] leading-5 ${MUTED_TEXT_CLASS}`}
+                        >
+                          <SnippetLineText text={match.lineText} query={debouncedQuery} />
                         </div>
                       </div>
                     </CommandItem>
-                  ))}
-                </CommandGroup>
-              ) : !isFetching ? (
-                <EmptyState message="No snippet matches." />
-              ) : null}
-            </CommandList>
-            <CommandFooter className="border-zinc-200/70 px-4 py-2.5 text-[11px] text-zinc-400 dark:border-zinc-700/60 dark:text-zinc-500">
-              <span>
-                {props.mode === "files"
-                  ? "Search files in the current project."
-                  : "Search keywords inside project files."}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <kbd className="rounded border border-zinc-200 bg-zinc-100 px-1 py-0.5 font-sans text-[10px] text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                  {modLabel}+P
-                </kbd>
-                <span>files</span>
-                <kbd className="rounded border border-zinc-200 bg-zinc-100 px-1 py-0.5 font-sans text-[10px] text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                  {modLabel}+Shift+F
-                </kbd>
-                <span>snippets</span>
-                <kbd className="rounded border border-zinc-200 bg-zinc-100 px-1 py-0.5 font-sans text-[10px] text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                  Enter
-                </kbd>
-                <span>open</span>
-              </span>
-            </CommandFooter>
-          </CommandPanel>
+                  );
+                })}
+              </CommandGroup>
+            ) : !isFetching ? (
+              <EmptyState label={groupLabel} message={noResultsMessage} />
+            ) : null}
+          </CommandList>
         </Command>
       </CommandDialogPopup>
     </CommandDialog>

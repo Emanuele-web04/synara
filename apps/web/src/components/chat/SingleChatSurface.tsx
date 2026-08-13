@@ -1137,7 +1137,6 @@ export function SingleChatSurface(props: {
         <WorkspaceSearchPalette
           open={searchPaletteOpen}
           mode={searchPaletteMode}
-          onModeChange={setSearchPaletteMode}
           onOpenChange={setSearchPaletteOpen}
           cwd={workspaceRoot}
           onOpenFile={handleOpenWorkspaceSearchFile}
