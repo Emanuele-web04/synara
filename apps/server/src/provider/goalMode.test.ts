@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { providerGoalPromptOverheadChars, withProviderGoalPrompt } from "./goalMode.ts";
+import {
+  activeThreadGoal,
+  providerGoalPromptOverheadChars,
+  withProviderGoalPrompt,
+} from "./goalMode.ts";
 
 describe("provider thread goal prompt", () => {
   it("leaves turns without an active goal unchanged", () => {
@@ -42,5 +46,13 @@ describe("provider thread goal prompt", () => {
       text.length + providerGoalPromptOverheadChars(goal),
     );
     expect(providerGoalPromptOverheadChars(undefined)).toBe(0);
+  });
+
+  it("suppresses the goal while the thread's pursuit is paused", () => {
+    const goal = "Ship the feature";
+    expect(activeThreadGoal({ goal })).toBe(goal);
+    expect(activeThreadGoal({ goal, goalPausedAt: null })).toBe(goal);
+    expect(activeThreadGoal({ goal, goalPausedAt: "2026-08-13T10:00:00.000Z" })).toBeUndefined();
+    expect(activeThreadGoal({ goalPausedAt: null })).toBeUndefined();
   });
 });

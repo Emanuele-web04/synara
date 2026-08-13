@@ -38,7 +38,7 @@ import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
-import { dispatchThreadGoal } from "../threadGoal";
+import { dispatchThreadGoal, dispatchThreadGoalPaused } from "../threadGoal";
 import {
   createOrJoinSidechat,
   createSidechatThread,
@@ -282,6 +282,25 @@ export function useComposerSlashCommands(input: {
       toastManager.add({ type: "success", title: "Thread goal cleared" });
     }
   }, [persistThreadGoal]);
+
+  const setThreadGoalPaused = useCallback(
+    async (paused: boolean) => {
+      if (!isServerThread || !activeThread) {
+        return;
+      }
+      try {
+        await dispatchThreadGoalPaused(activeThread.id, paused);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: paused ? "Could not pause the thread goal" : "Could not resume the thread goal",
+          description:
+            error instanceof Error ? error.message : "An error occurred while updating the goal.",
+        });
+      }
+    },
+    [activeThread, isServerThread],
+  );
 
   const runGoalSlashCommand = useCallback(
     async (args: string) => {
@@ -1082,5 +1101,6 @@ export function useComposerSlashCommands(input: {
     handleStandaloneSlashCommand,
     handleSlashCommandSelection,
     clearThreadGoal,
+    setThreadGoalPaused,
   };
 }

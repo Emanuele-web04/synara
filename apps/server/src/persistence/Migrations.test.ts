@@ -296,10 +296,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [92, "BackfillAutomationRunThreadSource"],
         [93, "BackfillMaxIterationsDisabledReason"],
         [94, "ProjectionThreadsGoal"],
+        [95, "ProjectionThreadsGoalTiming"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-40), [
+      assert.deepStrictEqual(tracker.slice(-41), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -340,6 +341,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 92, name: "BackfillAutomationRunThreadSource" },
         { migration_id: 93, name: "BackfillMaxIterationsDisabledReason" },
         { migration_id: 94, name: "ProjectionThreadsGoal" },
+        { migration_id: 95, name: "ProjectionThreadsGoalTiming" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -426,6 +428,7 @@ agentGatewayRetentionLegacyLayer(
           [92, "BackfillAutomationRunThreadSource"],
           [93, "BackfillMaxIterationsDisabledReason"],
           [94, "ProjectionThreadsGoal"],
+          [95, "ProjectionThreadsGoalTiming"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -515,11 +518,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [92, "BackfillAutomationRunThreadSource"],
         [93, "BackfillMaxIterationsDisabledReason"],
         [94, "ProjectionThreadsGoal"],
+        [95, "ProjectionThreadsGoalTiming"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-24).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-25).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -545,6 +549,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [92, "BackfillAutomationRunThreadSource"],
           [93, "BackfillMaxIterationsDisabledReason"],
           [94, "ProjectionThreadsGoal"],
+          [95, "ProjectionThreadsGoalTiming"],
         ],
       );
 
@@ -629,11 +634,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [92, "BackfillAutomationRunThreadSource"],
         [93, "BackfillMaxIterationsDisabledReason"],
         [94, "ProjectionThreadsGoal"],
+        [95, "ProjectionThreadsGoalTiming"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-20).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-21).map((row) => [row.migration_id, row.name]),
         [
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
@@ -655,6 +661,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [92, "BackfillAutomationRunThreadSource"],
           [93, "BackfillMaxIterationsDisabledReason"],
           [94, "ProjectionThreadsGoal"],
+          [95, "ProjectionThreadsGoalTiming"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

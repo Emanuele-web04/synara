@@ -719,6 +719,10 @@ export function projectEvent(
                 : {}),
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
               ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
+              ...(payload.goalStartedAt !== undefined
+                ? { goalStartedAt: payload.goalStartedAt }
+                : {}),
+              ...(payload.goalPausedAt !== undefined ? { goalPausedAt: payload.goalPausedAt } : {}),
               updatedAt: payload.updatedAt,
             }),
           };

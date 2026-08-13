@@ -11,6 +11,17 @@ function escapeXmlText(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
+/**
+ * The goal to inject for a thread, honoring pause: a paused goal stays
+ * persisted but is withheld from provider prompts until resumed.
+ */
+export function activeThreadGoal(thread: {
+  readonly goal?: string | undefined;
+  readonly goalPausedAt?: string | null | undefined;
+}): string | undefined {
+  return thread.goalPausedAt == null ? thread.goal : undefined;
+}
+
 function buildProviderGoalPrompt(goal: string | undefined): string | null {
   const objective = goal?.trim();
   if (!objective) {

@@ -15,3 +15,16 @@ export async function dispatchThreadGoal(threadId: ThreadId, goal: string): Prom
     goal,
   });
 }
+
+export async function dispatchThreadGoalPaused(threadId: ThreadId, paused: boolean): Promise<void> {
+  const api = readNativeApi();
+  if (!api) {
+    throw new Error("Synara API is unavailable.");
+  }
+  await api.orchestration.dispatchCommand({
+    type: "thread.meta.update",
+    commandId: newCommandId(),
+    threadId,
+    goalPaused: paused,
+  });
+}

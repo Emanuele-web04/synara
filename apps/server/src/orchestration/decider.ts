@@ -322,6 +322,48 @@ function resolveCreatedThreadWorkspaceMetadata(
   };
 }
 
+/**
+ * Stamps authoritative goal timestamps for `thread.meta.update`. A goal change
+ * takes precedence over `goalPaused` in the same command: a newly set goal
+ * starts the pursuit clock, an edit of an existing goal keeps the running clock
+ * and pause state, and clearing resets everything. Pause freezes the clock at
+ * `goalPausedAt`; resume rebases `goalStartedAt` so the paused span is excluded
+ * from the elapsed time.
+ */
+function resolveThreadGoalPatch(
+  command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
+  currentThread: OrchestrationThread,
+  occurredAt: string,
+): { goal?: string; goalStartedAt?: string | null; goalPausedAt?: string | null } {
+  if (command.goal !== undefined) {
+    if (command.goal.trim().length === 0) {
+      return { goal: command.goal, goalStartedAt: null, goalPausedAt: null };
+    }
+    if ((currentThread.goal ?? "").trim().length > 0) {
+      return { goal: command.goal };
+    }
+    return { goal: command.goal, goalStartedAt: occurredAt, goalPausedAt: null };
+  }
+  if (command.goalPaused === undefined || (currentThread.goal ?? "").trim().length === 0) {
+    return {};
+  }
+  const pausedAt = currentThread.goalPausedAt ?? null;
+  if (command.goalPaused) {
+    return pausedAt === null ? { goalPausedAt: occurredAt } : {};
+  }
+  if (pausedAt === null) {
+    return {};
+  }
+  const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+  const pausedMs = Date.parse(pausedAt);
+  const occurredMs = Date.parse(occurredAt);
+  const rebasedStartedAt =
+    Number.isFinite(startedMs) && Number.isFinite(pausedMs) && Number.isFinite(occurredMs)
+      ? new Date(occurredMs - Math.max(0, pausedMs - startedMs)).toISOString()
+      : occurredAt;
+  return { goalStartedAt: rebasedStartedAt, goalPausedAt: null };
+}
+
 function resolveThreadWorkspaceMetadataPatch(
   projectKind: ProjectKind | undefined,
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
@@ -1268,7 +1310,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
-          ...(command.goal !== undefined ? { goal: command.goal } : {}),
+          ...resolveThreadGoalPatch(command, thread, occurredAt),
           updatedAt: occurredAt,
         },
       };

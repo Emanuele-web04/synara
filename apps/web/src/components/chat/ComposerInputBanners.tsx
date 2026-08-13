@@ -1,8 +1,9 @@
 // FILE: ComposerInputBanners.tsx
-// Purpose: Picks the goal and contextual banners that render inside the composer surface.
+// Purpose: Picks the contextual banner that renders inside the composer surface.
 // Pending approvals and AskUserQuestion prompts render as detached cards above the composer
-// (see ComposerPendingApprovalPanel / ComposerPendingUserInputPanel), not here. Centralizes
-// precedence and shared banner chrome so callers pass data, not layout.
+// (see ComposerPendingApprovalPanel / ComposerPendingUserInputPanel), and the thread goal
+// renders as a stacked panel above the composer (see ComposerGoalHeader), not here.
+// Centralizes precedence and shared banner chrome so callers pass data, not layout.
 // Layer: Chat composer UI
 // Exports: ComposerInputBanners
 
@@ -10,7 +11,6 @@ import { type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerAutomationSetupBanner } from "./ComposerAutomationSetupBanner";
-import { ComposerGoalBanner } from "./ComposerGoalBanner";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME } from "./composerPickerStyles";
 
@@ -23,14 +23,12 @@ interface ComposerInputBannersProps {
   // Setup-mode control while gathering an automation's task/schedule (the exchange
   // itself renders as bubbles in the transcript).
   automationSetup: { onCancel: () => void } | null;
-  goal: { text: string; onClear: () => void | Promise<void> } | null;
 }
 
 export function ComposerInputBanners({
   roundedTopReset,
   planFollowUp,
   automationSetup,
-  goal,
 }: ComposerInputBannersProps) {
   let content: ReactNode = null;
   if (planFollowUp) {
@@ -39,7 +37,7 @@ export function ComposerInputBanners({
     content = <ComposerAutomationSetupBanner onCancel={automationSetup.onCancel} />;
   }
 
-  if (!content && !goal) {
+  if (!content) {
     return null;
   }
 
@@ -51,7 +49,6 @@ export function ComposerInputBanners({
         roundedTopReset && "!rounded-t-none",
       )}
     >
-      {goal ? <ComposerGoalBanner goal={goal.text} onClear={goal.onClear} /> : null}
       {content}
     </div>
   );

@@ -79,6 +79,7 @@ import {
   withProviderDebugModePrompt,
 } from "../../provider/debugMode.ts";
 import {
+  activeThreadGoal,
   providerGoalPromptOverheadChars,
   withProviderGoalPrompt,
 } from "../../provider/goalMode.ts";
@@ -1406,7 +1407,7 @@ const make = Effect.gen(function* () {
       return;
     }
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
-    const goalPromptOverheadChars = providerGoalPromptOverheadChars(thread.goal);
+    const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
       mentions: input.mentions,
@@ -1466,7 +1467,7 @@ const make = Effect.gen(function* () {
         : messageText;
       const composedSteerInput = withProviderThreadStatePrompts({
         interactionMode: input.interactionMode,
-        goal: thread.goal,
+        goal: activeThreadGoal(thread),
         text: normalizeSkillMentionTextForProvider({
           provider: steerProvider,
           messageText: steerMessageWithSkills,
@@ -1551,7 +1552,7 @@ const make = Effect.gen(function* () {
       providerPromptOverheadChars > 0 &&
       withProviderThreadStatePrompts({
         interactionMode: input.interactionMode,
-        goal: thread.goal,
+        goal: activeThreadGoal(thread),
         text: bootstrapBudgetMessageText,
       }).length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
     ) {
@@ -1655,7 +1656,7 @@ const make = Effect.gen(function* () {
         : boundaryMessageText;
     const providerInputWithMentionContext = withProviderThreadStatePrompts({
       interactionMode: input.interactionMode,
-      goal: thread.goal,
+      goal: activeThreadGoal(thread),
       text: `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`,
     });
     // Portable skills fallback: providers that cannot load the referenced skill
@@ -1690,7 +1691,7 @@ const make = Effect.gen(function* () {
       return toNonEmptyProviderInput(
         withProviderThreadStatePrompts({
           interactionMode: input.interactionMode,
-          goal: thread.goal,
+          goal: activeThreadGoal(thread),
           text: normalizeSkillMentionTextForProvider({
             provider: selectedProvider as ProviderKind,
             messageText: withSkills,

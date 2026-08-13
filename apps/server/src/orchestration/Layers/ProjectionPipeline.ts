@@ -585,6 +585,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadMarkers: null,
             notes: null,
             goal: null,
+            goalStartedAt: null,
+            goalPausedAt: null,
             latestUserMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
@@ -693,6 +695,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : {}),
               ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
               ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
+              ...(event.payload.goalStartedAt !== undefined
+                ? { goalStartedAt: event.payload.goalStartedAt }
+                : {}),
+              ...(event.payload.goalPausedAt !== undefined
+                ? { goalPausedAt: event.payload.goalPausedAt }
+                : {}),
               updatedAt: event.payload.updatedAt,
             };
           });

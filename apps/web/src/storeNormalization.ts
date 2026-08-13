@@ -179,6 +179,8 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     deepEqualJson(left.threadMarkers ?? null, right.threadMarkers ?? null) &&
     (left.notes ?? "") === (right.notes ?? "") &&
     (left.goal ?? "") === (right.goal ?? "") &&
+    (left.goalStartedAt ?? null) === (right.goalStartedAt ?? null) &&
+    (left.goalPausedAt ?? null) === (right.goalPausedAt ?? null) &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
@@ -1516,6 +1518,8 @@ export function normalizeThreadFromReadModel(
       : (incoming.threadMarkers as Thread["threadMarkers"]);
   const notes = incoming.notes;
   const goal = incoming.goal;
+  const goalStartedAt = incoming.goalStartedAt;
+  const goalPausedAt = incoming.goalPausedAt;
   const turnDiffSummaries = normalizeTurnDiffSummaries(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
@@ -1617,6 +1621,8 @@ export function normalizeThreadFromReadModel(
     previous.threadMarkers === threadMarkers &&
     previous.notes === notes &&
     previous.goal === goal &&
+    (previous.goalStartedAt ?? null) === (goalStartedAt ?? null) &&
+    (previous.goalPausedAt ?? null) === (goalPausedAt ?? null) &&
     previous.turnDiffSummaries === turnDiffSummaries &&
     previous.activities === activities &&
     previous.pendingInteractions === pendingInteractions
@@ -1666,6 +1672,8 @@ export function normalizeThreadFromReadModel(
     ...(threadMarkers !== undefined ? { threadMarkers } : {}),
     ...(notes !== undefined ? { notes } : {}),
     ...(goal !== undefined ? { goal } : {}),
+    ...(goalStartedAt !== undefined ? { goalStartedAt } : {}),
+    ...(goalPausedAt !== undefined ? { goalPausedAt } : {}),
     ...(resolvedLatestUserMessageAt !== undefined
       ? { latestUserMessageAt: resolvedLatestUserMessageAt }
       : {}),
@@ -1713,6 +1721,10 @@ export function normalizeThreadShellSnapshot(
   const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
   const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
   const goal = incoming.goal !== undefined ? incoming.goal : previous?.goal;
+  const goalStartedAt =
+    incoming.goalStartedAt !== undefined ? incoming.goalStartedAt : previous?.goalStartedAt;
+  const goalPausedAt =
+    incoming.goalPausedAt !== undefined ? incoming.goalPausedAt : previous?.goalPausedAt;
   const resolvedBranch = resolveThreadBranchRegressionGuard({
     currentBranch: previous?.branch ?? null,
     nextBranch: incoming.branch,
@@ -1769,6 +1781,8 @@ export function normalizeThreadShellSnapshot(
     ...(previous?.threadMarkers !== undefined ? { threadMarkers: previous.threadMarkers } : {}),
     ...(previous?.notes !== undefined ? { notes: previous.notes } : {}),
     ...(goal !== undefined ? { goal } : {}),
+    ...(goalStartedAt !== undefined ? { goalStartedAt } : {}),
+    ...(goalPausedAt !== undefined ? { goalPausedAt } : {}),
     ...(incoming.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: incoming.latestUserMessageAt ?? null }
       : {}),

@@ -249,6 +249,8 @@ export interface Thread extends ThreadWorkspaceState {
   threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
@@ -293,6 +295,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;

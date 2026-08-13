@@ -73,6 +73,12 @@ export const ProjectionThread = Schema.Struct({
   threadMarkers: Schema.NullOr(ThreadMarkers),
   notes: Schema.NullOr(ThreadNotes),
   goal: Schema.NullOr(ThreadGoal),
+  goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
