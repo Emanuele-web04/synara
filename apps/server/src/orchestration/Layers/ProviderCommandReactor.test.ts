@@ -2522,6 +2522,31 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
+  it("does not continue an active goal for a wording-only edit", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-before-wording-edit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Finish the implementation",
+        goalStartBehavior: "defer",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-wording-edit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Finish the implementation and tests",
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("resumes a paused idle goal immediately", async () => {
     const harness = await createHarness();
 

@@ -375,11 +375,7 @@ function resolveThreadGoalPatch(
       return { goal: command.goal, goalStartedAt: null, goalPausedAt: null };
     }
     if (activeGoal.length > 0) {
-      return {
-        goal: command.goal,
-        goalStartedAt: currentThread.goalStartedAt ?? null,
-        goalPausedAt: currentThread.goalPausedAt ?? null,
-      };
+      return { goal: command.goal };
     }
     return { goal: command.goal, goalStartedAt: occurredAt, goalPausedAt: null };
   }
