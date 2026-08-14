@@ -9,6 +9,11 @@ reducer → store → selectors → derivations → `ChatTranscriptPane`; produc
 5 streaming samples, 3 quiet samples, 60 s each. Raw JSONL:
 baseline `/tmp/synara-baseline/*.jsonl`, optimized `/tmp/synara-optimized/*.jsonl`.
 
+**Measurement boundary:** these recorded samples predate the profiler-boundary correction
+in this PR, so `React commit time` covers the transcript subtree but not the parent selector
+and work-log/timeline derivations. The two columns remain like-for-like. Future harness runs
+include those derivations and must not be compared numerically with these historical values.
+
 ## Headline (medians, 60 s visible streaming)
 
 | metric                          | baseline                         | optimized                        | change                                          |

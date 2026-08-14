@@ -1696,6 +1696,12 @@ function EventRouter() {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
+          if (!projectionConfirmed) {
+            // A failed/stale reconcile is not evidence of a quiet healthy
+            // stream. Retry it at the base cadence instead of inheriting a
+            // no-op streak from earlier successful snapshots.
+            resolveThreadCatchupBackoff(threadId).reconcileNoopStreak = 0;
+          }
           if (projectionConfirmed) {
             threadProjectionTerminalFencePending.delete(threadId);
           }

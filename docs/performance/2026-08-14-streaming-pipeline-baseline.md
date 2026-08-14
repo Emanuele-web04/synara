@@ -28,7 +28,11 @@ of this cost).
 process CPU%; it mounts only the transcript pane (no sidebar, `SplitChatSurface`,
 `ProviderUsageMenuControl`), so per-flush costs in those components — targeted by the
 selector fixes — are _under_-represented here; GPU/compositor cost (animations) is out of
-scope by request.
+scope by request. These recorded samples predate the profiler-boundary correction in this
+PR, so `React commit time` covers the transcript subtree but not the parent selector and
+work-log/timeline derivations. The baseline and optimized samples remain like-for-like;
+future harness output includes those derivations and must not be compared numerically with
+the historical values below.
 
 ## Results (medians)
 

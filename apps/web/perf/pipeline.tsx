@@ -36,6 +36,7 @@ import { makeActivity, makeDomainEvent, makeState, makeThread } from "../src/sto
 import type { ChatMessage } from "../src/types";
 import { deriveTimelineEntries, deriveWorkLogEntries } from "../src/workLog";
 import {
+  createFrameCollector,
   durationStats,
   frameReport,
   installCostToggleStyles,
@@ -174,31 +175,6 @@ if (typeof PerformanceObserver !== "undefined") {
   } catch {
     // Long task timing is unsupported in this browser; counters stay at zero.
   }
-}
-
-/** Collects rAF-to-rAF frame durations while a scenario runs. */
-function createFrameCollector() {
-  const durations: number[] = [];
-  let running = false;
-  let previous = 0;
-  const tick = (now: number) => {
-    if (!running) return;
-    if (previous > 0) durations.push(now - previous);
-    previous = now;
-    requestAnimationFrame(tick);
-  };
-  return {
-    start() {
-      durations.length = 0;
-      previous = 0;
-      running = true;
-      requestAnimationFrame(tick);
-    },
-    stop(): readonly number[] {
-      running = false;
-      return durations;
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -506,64 +482,64 @@ function PipelineHarness() {
     [messages, proposedPlans, workEntries],
   );
 
-  const handleRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
-    metrics.reactCommits += 1;
-    metrics.reactCommitMs += actualDuration;
-  };
-
   return (
     <main className="flex h-screen min-h-0 w-screen bg-background text-foreground">
-      <Profiler id="synara-pipeline-perf" onRender={handleRender}>
-        <ChatTranscriptPane
-          activeThreadId={THREAD_ID}
-          activeTurnId={working ? STREAM_TURN_ID : null}
-          activeTurnInProgress={working}
-          activeTurnStartedAt={working ? isoAt(seedMessageCount * 2) : null}
-          chatFontSizePx={15}
-          emptyStateProjectName={undefined}
-          hasMessages
-          isRevertingCheckpoint={false}
-          isWorking={working}
-          followLiveOutput={working}
-          listRef={listRef}
-          markdownCwd={undefined}
-          onExpandTimelineImage={NOOP}
-          onMessagesClickCapture={NOOP}
-          onMessagesMouseUp={NOOP}
-          onMessagesPointerCancel={NOOP}
-          onMessagesPointerDown={NOOP}
-          onMessagesPointerUp={NOOP}
-          onMessagesTouchEnd={NOOP}
-          onMessagesTouchMove={NOOP}
-          onMessagesTouchStart={NOOP}
-          onMessagesWheel={NOOP}
-          onMessagesScroll={NOOP}
-          onIsAtEndChange={NOOP}
-          onOpenTurnDiff={NOOP}
-          onOpenThread={NOOP}
-          onRevertUserMessage={NOOP}
-          onScrollToBottom={NOOP}
-          onToggleWorkGroup={NOOP}
-          resolvedTheme="dark"
-          revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
-          scrollButtonVisible={false}
-          terminalWorkspaceTerminalTabActive={false}
-          timelineEntries={timelineEntries}
-          timestampFormat="locale"
-          turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
-          workspaceRoot={undefined}
-          worktreeSetup={null}
-        />
-      </Profiler>
+      <ChatTranscriptPane
+        activeThreadId={THREAD_ID}
+        activeTurnId={working ? STREAM_TURN_ID : null}
+        activeTurnInProgress={working}
+        activeTurnStartedAt={working ? isoAt(seedMessageCount * 2) : null}
+        chatFontSizePx={15}
+        emptyStateProjectName={undefined}
+        hasMessages
+        isRevertingCheckpoint={false}
+        isWorking={working}
+        followLiveOutput={working}
+        listRef={listRef}
+        markdownCwd={undefined}
+        onExpandTimelineImage={NOOP}
+        onMessagesClickCapture={NOOP}
+        onMessagesMouseUp={NOOP}
+        onMessagesPointerCancel={NOOP}
+        onMessagesPointerDown={NOOP}
+        onMessagesPointerUp={NOOP}
+        onMessagesTouchEnd={NOOP}
+        onMessagesTouchMove={NOOP}
+        onMessagesTouchStart={NOOP}
+        onMessagesWheel={NOOP}
+        onMessagesScroll={NOOP}
+        onIsAtEndChange={NOOP}
+        onOpenTurnDiff={NOOP}
+        onOpenThread={NOOP}
+        onRevertUserMessage={NOOP}
+        onScrollToBottom={NOOP}
+        onToggleWorkGroup={NOOP}
+        resolvedTheme="dark"
+        revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
+        scrollButtonVisible={false}
+        terminalWorkspaceTerminalTabActive={false}
+        timelineEntries={timelineEntries}
+        timestampFormat="locale"
+        turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
+        workspaceRoot={undefined}
+        worktreeSetup={null}
+      />
     </main>
   );
 }
+
+const handleRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
+  metrics.reactCommits += 1;
+  metrics.reactCommitMs += actualDuration;
+};
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Missing #root element.");
 
 createRoot(rootElement).render(
   <StrictMode>
-    <PipelineHarness />
+    <Profiler id="synara-pipeline-perf" onRender={handleRender}>
+      <PipelineHarness />
+    </Profiler>
   </StrictMode>,
 );
