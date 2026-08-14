@@ -1636,6 +1636,7 @@ function EventRouter() {
       }
       threadProjectionReconcileInFlight.set(threadId, subscriptionGeneration);
       let projectionConfirmed = false;
+      let projectionAttemptFailed = false;
       try {
         const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
         if (
@@ -1691,15 +1692,18 @@ function EventRouter() {
           pendingStudioOutputInvalidationThreadIds.add(threadId);
           domainEventFlushThrottler.maybeExecute();
         }
+      } catch (error) {
+        projectionAttemptFailed = true;
+        throw error;
       } finally {
         if (threadProjectionReconcileInFlight.get(threadId) === subscriptionGeneration) {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
-          if (!projectionConfirmed) {
-            // A failed/stale reconcile is not evidence of a quiet healthy
-            // stream. Retry it at the base cadence instead of inheriting a
-            // no-op streak from earlier successful snapshots.
+          if (projectionAttemptFailed) {
+            // A failed reconcile is not evidence of a quiet healthy stream.
+            // Retry it at the base cadence, while preserving backoff when the
+            // snapshot was merely superseded by newer live events.
             resolveThreadCatchupBackoff(threadId).reconcileNoopStreak = 0;
           }
           if (projectionConfirmed) {
