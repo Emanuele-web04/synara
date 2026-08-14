@@ -2346,9 +2346,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   goalAchievement !== null) && (
                   // Turn-end actions read Copy → Fork → Pin → time and stay visible at
                   // rest: they belong to a settled turn, so hiding them behind hover made
-                  // the whole row feel undiscoverable.
+                  // the whole row feel undiscoverable. The leading button pulls left by
+                  // its own icon inset — (2em button − 1.125em glyph) / 2 — so the first
+                  // glyph, not the invisible hit area, aligns with the message text.
                   <div
-                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground"
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]"
                     style={chatMessageFooterStyle}
                   >
                     {assistantCopyState.visible ? (
