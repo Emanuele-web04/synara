@@ -3,14 +3,38 @@
 // one-file change: implement a ProviderUsageFetcher and register it here.
 
 import type { ProviderKind } from "@synara/contracts";
+import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 
 import { claudeUsageFetcher } from "./providers/claude";
 import { codexUsageFetcher } from "./providers/codex";
 import { cursorUsageFetcher } from "./providers/cursor";
+import { antigravityUsageFetcher } from "./providers/antigravity";
+import { kiloUsageFetcher } from "./providers/kilo";
+import { unsupportedSnapshot } from "./parse";
 import type { ProviderUsageFetcher } from "./types";
 
-export const PROVIDER_USAGE_FETCHERS: Partial<Record<ProviderKind, ProviderUsageFetcher>> = {
+function unsupportedUsageFetcher(provider: ProviderKind): ProviderUsageFetcher {
+  return {
+    provider,
+    fetch: async (ctx) =>
+      unsupportedSnapshot(
+        provider,
+        ctx.nowMs,
+        "synara-runtime",
+        `No safe live limit source is configured for ${providerUsageDisplayName(provider)} yet. ` +
+          "Synara activity and runtime-reported limits are shown separately.",
+      ),
+  };
+}
+
+export const PROVIDER_USAGE_FETCHERS: Record<ProviderKind, ProviderUsageFetcher> = {
   codex: codexUsageFetcher,
   claudeAgent: claudeUsageFetcher,
   cursor: cursorUsageFetcher,
+  antigravity: antigravityUsageFetcher,
+  grok: unsupportedUsageFetcher("grok"),
+  droid: unsupportedUsageFetcher("droid"),
+  kilo: kiloUsageFetcher,
+  opencode: unsupportedUsageFetcher("opencode"),
+  pi: unsupportedUsageFetcher("pi"),
 };

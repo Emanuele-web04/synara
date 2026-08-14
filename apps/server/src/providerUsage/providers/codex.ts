@@ -77,12 +77,22 @@ type CodexAuth = CodexOAuthState | { kind: "api-key" };
 
 function authFilePaths(ctx: ProviderUsageContext): string[] {
   const paths: string[] = [];
+  // The server-validated configured Codex home is authoritative when it has an
+  // auth.json: the local snapshot and the live fetch must read the same account.
+  if (ctx.codexHomePath?.trim()) {
+    paths.push(nodePath.join(ctx.codexHomePath.trim(), "auth.json"));
+  }
   if (ctx.env.CODEX_HOME) {
     paths.push(nodePath.join(ctx.env.CODEX_HOME, "auth.json"));
   }
   paths.push(nodePath.join(ctx.homeDir, ".config", "codex", "auth.json"));
   paths.push(nodePath.join(ctx.homeDir, ".codex", "auth.json"));
   return paths;
+}
+
+/** Test-only: verify the configured Codex home is preferred over the defaults. */
+export function __authFilePathsForTests(ctx: ProviderUsageContext): string[] {
+  return authFilePaths(ctx);
 }
 
 function readCodexAuthRecord(

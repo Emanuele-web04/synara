@@ -4,7 +4,6 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { type ReactNode } from "react";
 
-import { useAppSettings } from "~/appSettings";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import {
   deriveProviderUsageDisplayRows,
@@ -33,13 +32,11 @@ export interface ProviderUsageMenuModel {
 }
 
 export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
-  const { settings } = useAppSettings();
   const selectAllThreads = createAllThreadsSelector();
   const threads = useStore(selectAllThreads);
   const usageSummary = useProviderUsageSummary({
     provider,
     threads,
-    codexHomePath: settings.codexHomePath || null,
     fetchOpenUsageData: false,
   });
   const usageRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
