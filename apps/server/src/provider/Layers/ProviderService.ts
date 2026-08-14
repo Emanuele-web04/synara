@@ -1263,16 +1263,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     ? runtimeActiveTurnId(binding.runtimePayload)
                     : undefined;
                   if (binding === undefined || boundActiveTurnId !== String(event.turnId)) {
-                    return Effect.logWarning(
-                      "provider.session.stale_generation_event_ignored",
-                      {
-                        threadId: event.threadId,
-                        provider: event.provider,
-                        eventType: event.type,
-                        eventLifecycleGeneration: event.lifecycleGeneration,
-                        currentLifecycleGeneration: currentGeneration,
-                      },
-                    );
+                    return Effect.logWarning("provider.session.stale_generation_event_ignored", {
+                      threadId: event.threadId,
+                      provider: event.provider,
+                      eventType: event.type,
+                      eventLifecycleGeneration: event.lifecycleGeneration,
+                      currentLifecycleGeneration: currentGeneration,
+                    });
                   }
                   return Effect.logInfo(
                     "provider.session.stale_generation_terminal_event_accepted",
@@ -1587,8 +1584,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           binding.lifecycleGeneration === lifecycle.currentGeneration(input.threadId);
         if (
           hasActiveSession &&
-          (!input.allowRecovery ||
-            (bindingMatchesCurrentGeneration && !requiresCredentialRotation))
+          (!input.allowRecovery || (bindingMatchesCurrentGeneration && !requiresCredentialRotation))
         ) {
           return {
             adapter,
