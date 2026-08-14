@@ -1133,18 +1133,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [onTrailHighlightsChange],
   );
+  // Scroll events can fire several times per frame (smooth scrolls, streaming
+  // re-sticks); the trail-highlight derivation is coalesced to one per frame.
+  // At-end ownership stays synchronous: ChatView's auto-follow layout effect
+  // reads it via a ref in the same frame, and a deferred update would let a
+  // scheduled scrollToEnd override a user gesture that just scrolled away.
+  const listScrollFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (listScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(listScrollFrameRef.current);
+        listScrollFrameRef.current = null;
+      }
+    };
+  }, []);
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
-      if (state) {
-        tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
-        if (!state.isAtEnd) {
-          clearTailExpansionScrollTimers();
-        }
-        onIsAtEndChange?.(state.isAtEnd);
-        emitTrailHighlightsForViewport(state.start, state.end);
+      if (!state) {
+        return;
       }
+      tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
+      if (!state.isAtEnd) {
+        clearTailExpansionScrollTimers();
+      }
+      onIsAtEndChange?.(state.isAtEnd);
+      if (listScrollFrameRef.current !== null) {
+        return;
+      }
+      listScrollFrameRef.current = window.requestAnimationFrame(() => {
+        listScrollFrameRef.current = null;
+        const frameState = readLegendListState(resolvedListRef);
+        if (frameState) {
+          emitTrailHighlightsForViewport(frameState.start, frameState.end);
+        }
+      });
     },
     [
       clearTailExpansionScrollTimers,
