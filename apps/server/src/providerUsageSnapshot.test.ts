@@ -68,9 +68,7 @@ describe("readCodexSessionSummary", () => {
   it("parses a CRLF token record split across read chunks", async () => {
     const tokenLine = tokenCountLine("2026-08-14T10:00:00.000Z", 250, "café 🧠");
     const trailingLength = 64 * 1024 - Math.floor(Buffer.byteLength(tokenLine) / 2) - 2;
-    const file = await makeSessionFile(
-      `ignored\r\n${tokenLine}\r\n${"x".repeat(trailingLength)}`,
-    );
+    const file = await makeSessionFile(`ignored\r\n${tokenLine}\r\n${"x".repeat(trailingLength)}`);
 
     await expect(readCodexSessionSummary(file)).resolves.toMatchObject({
       timestampMs: Date.parse("2026-08-14T10:00:00.000Z"),

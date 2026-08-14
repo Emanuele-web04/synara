@@ -128,7 +128,7 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
-import { formatShortTimestamp } from "../../timestampFormat";
+import { formatDayAwareTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
   textContainsInlineTerminalContextLabels,
@@ -1663,7 +1663,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatMessageFooterStyle}
                     >
                       <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                        {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                        {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
                       </p>
                       <div className="flex items-center gap-2">
                         {displayedUserMessage.copyText && (
@@ -1806,7 +1806,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               : null;
           const assistantMeta = [
             isTerminalAssistantMessage
-              ? formatShortTimestamp(row.message.createdAt, timestampFormat)
+              ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
               : null,
           ]
             .filter((value): value is string => Boolean(value))
