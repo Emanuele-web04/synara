@@ -23,7 +23,11 @@ export function nonEmptyTrimmed(value: string | undefined): string | undefined {
 export function isCommandMissingCause(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const lower = error.message.toLowerCase();
-  return lower.includes("enoent") || lower.includes("notfound");
+  return (
+    lower.includes("enoent") ||
+    lower.includes("notfound") ||
+    lower.includes("command not found")
+  );
 }
 
 export function detailFromResult(
