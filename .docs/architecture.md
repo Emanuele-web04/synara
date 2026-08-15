@@ -52,9 +52,10 @@ Important boundaries include:
 - `wsTransport.ts` — connection state, negotiation, reconnect, and request transport;
 - `wsNativeApi.ts` / `nativeApi.ts` — typed client API exposed to the rest of the UI;
 - `routes/__root.tsx` — application-level event/subscription routing and shell/thread projection ownership;
-- Zustand/React Query stores — local presentation/cache state derived from server-authoritative data.
+- Zustand/React Query stores that cache or project server-authoritative state;
+- client-owned persisted UI state such as unsent composer drafts, sticky local model choices, and right-dock layout, which is not reconstructible from server snapshots.
 
-The client does not own provider session truth or durable orchestration state. When the socket reconnects, snapshots and resumable streams rebuild client state from the server.
+The client does not own provider session truth or durable orchestration state. When the socket reconnects, snapshots and resumable streams rebuild server-derived client projections, while browser-persisted drafts/layout remain a separate client-owned state class.
 
 ### Server and RPC surface
 
@@ -117,7 +118,7 @@ Key files:
 
 `ProviderService` is the session-aware routing layer. It resolves the thread/provider relationship and delegates native work through `ProviderAdapterRegistry`.
 
-Each concrete adapter implements the shared contract in `provider/Services/ProviderAdapter.ts` and translates one provider's native protocol into canonical runtime events. Current first-class providers are documented in [provider-architecture.md](./provider-architecture.md).
+Each concrete adapter implements the shared contract in `provider/Services/ProviderAdapter.ts` and translates one provider's native protocol into canonical runtime events. `ProviderAdapterRegistryLive` is the source of truth for the currently registered first-class provider set; [provider-architecture.md](./provider-architecture.md) documents the provider boundary and integration patterns but should not be treated as a stronger inventory authority than the registry itself.
 
 Provider-specific session ids, process lifecycle, wire formats, model discovery, approvals, tools, and resume details should stay inside the provider layer whenever possible. Orchestration should depend on capabilities and canonical events rather than provider names.
 
@@ -154,7 +155,7 @@ Streams support snapshot/replay recovery and client-side sequence fences. A late
 
 When adding a feature, keep these ownership rules explicit:
 
-1. durable domain truth belongs to server orchestration/persistence, not React state;
+1. durable domain truth belongs to server orchestration/persistence, not React state; client-owned drafts/layout remain explicitly local;
 2. provider-native behavior belongs behind `ProviderAdapter` unless it is genuinely cross-provider orchestration;
 3. state-changing side effects should have one authoritative server path and idempotent/replay-safe semantics;
 4. client subscriptions may cache/project state but must respect server sequence/version fences;
