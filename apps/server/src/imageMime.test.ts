@@ -43,13 +43,19 @@ describe("imageMime", () => {
 
   it("preserves the final extension from multi-dot attachment filenames", () => {
     expect(
-      inferAttachmentExtension({ mimeType: "application/octet-stream", fileName: "archive.tar.gz" }),
+      inferAttachmentExtension({
+        mimeType: "application/octet-stream",
+        fileName: "archive.tar.gz",
+      }),
     ).toBe(".gz");
   });
 
   it("does not treat a dotfile name as an attachment extension", () => {
     expect(
-      inferAttachmentExtension({ mimeType: "application/octet-stream", fileName: ".env" }),
+      inferAttachmentExtension({
+        mimeType: "application/octet-stream",
+        fileName: ".env",
+      }),
     ).toBe(".bin");
   });
 });
