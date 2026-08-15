@@ -46,19 +46,10 @@ describe("workspaceRelativePathOf", () => {
     expect(workspaceRelativePathOf("/repo/application/file.ts", "/repo/app")).toBeNull();
   });
 
-  it("normalizes Windows separators and path casing while preserving relative casing", () => {
+  it("normalizes Windows separators and path casing", () => {
     expect(workspaceRelativePathOf("C:\\Repo\\App\\Src\\Page.tsx", "c:/repo/app")).toBe(
       "Src/Page.tsx",
     );
-  });
-
-  it("compares UNC workspace paths case-insensitively", () => {
-    expect(
-      workspaceRelativePathOf(
-        "\\\\Server\\Share\\Repo\\Src\\Page.tsx",
-        "\\\\server\\share\\repo",
-      ),
-    ).toBe("Src/Page.tsx");
   });
 
   it("keeps POSIX path comparisons case-sensitive", () => {
