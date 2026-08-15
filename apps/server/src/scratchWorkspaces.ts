@@ -27,6 +27,6 @@ function scratchWorkspaceSegment(threadId: ThreadId): string {
 export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
   const workspaceRoot = path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
   const workspaceDir = path.join(workspaceRoot, scratchWorkspaceSegment(threadId));
-  mkdirSync(workspaceDir, { recursive: true });
+  mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
   return workspaceDir;
 }
