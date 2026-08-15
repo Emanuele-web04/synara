@@ -86,6 +86,21 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
+  it.each(["claude", "cursor", "droid", "antigravity", "grok"] as const)(
+    "does not leak OpenAI credentials into restricted %s children",
+    (provider) => {
+      const env = buildProviderChildEnvironment({
+        provider,
+        baseEnv: {
+          PATH: "/usr/bin",
+          OPENAI_API_KEY: "unrelated-openai-secret",
+        },
+      });
+
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+    },
+  );
+
   it.each(["codex", "kilo", "opencode", "pi"] as const)(
     "preserves upstream credential discovery for multi-provider %s",
     (provider) => {
@@ -94,11 +109,13 @@ describe("buildProviderChildEnvironment", () => {
         baseEnv: {
           ANTHROPIC_API_KEY: "anthropic-secret",
           GEMINI_API_KEY: "gemini-secret",
+          OPENAI_API_KEY: "openai-secret",
         },
       });
 
       expect(env.ANTHROPIC_API_KEY).toBe("anthropic-secret");
       expect(env.GEMINI_API_KEY).toBe("gemini-secret");
+      expect(env.OPENAI_API_KEY).toBe("openai-secret");
     },
   );
 
