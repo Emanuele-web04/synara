@@ -7,7 +7,7 @@
 // Exports: ensureIsolatedScratchWorkspace
 
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -28,5 +28,8 @@ export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
   const workspaceRoot = path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
   const workspaceDir = path.join(workspaceRoot, scratchWorkspaceSegment(threadId));
   mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    chmodSync(workspaceDir, 0o700);
+  }
   return workspaceDir;
 }
