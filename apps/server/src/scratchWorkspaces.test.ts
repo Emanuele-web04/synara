@@ -3,7 +3,7 @@
 //          temp root even when thread ids contain path-like characters.
 // Layer: Server filesystem utility tests
 
-import { rmSync, statSync } from "node:fs";
+import { chmodSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -48,4 +48,21 @@ describe("ensureIsolatedScratchWorkspace", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "tightens permissions when reusing an existing scratch workspace",
+    () => {
+      const threadId = ThreadId.makeUnsafe("reused-private-thread");
+      const workspace = ensureIsolatedScratchWorkspace(threadId);
+      try {
+        chmodSync(workspace, 0o755);
+        expect(statSync(workspace).mode & 0o777).toBe(0o755);
+
+        expect(ensureIsolatedScratchWorkspace(threadId)).toBe(workspace);
+        expect(statSync(workspace).mode & 0o777).toBe(0o700);
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 });
