@@ -8,11 +8,11 @@ const MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS = 2_000;
 const REDACTED_VALUE = "[REDACTED]";
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
 const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
-const URL_CREDENTIAL_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/giu;
+const URL_CREDENTIAL_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^/\s@]+@/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
-  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
+  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
-  /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
+  /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
 const SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*"|[^{}"])*\}/gu;
 const INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|[^{}"])*$/gu;
 const JSON_NAME_FIELD_PATTERN = /"name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"/iu;
@@ -55,9 +55,10 @@ const SENSITIVE_ENV_NAME_SUFFIXES = [
 ] as const;
 
 function redactText(value: string): string {
-  return value
+  const preRedacted = value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
-    .replace(URL_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}@`)
+    .replace(URL_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}@`);
+  return redactSerializedJsonObjects(preRedacted)
     .replace(SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
     .replace(INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
     .replace(
@@ -67,6 +68,93 @@ function redactText(value: string): string {
     )
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
+}
+
+function redactSerializedJsonObjects(value: string): string {
+  let redacted = "";
+  let cursor = 0;
+  let objectStart = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (depth === 0) {
+      if (character === "{") {
+        objectStart = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        const serializedObject = value.slice(objectStart, index + 1);
+        redacted += value.slice(cursor, objectStart) + redactParsedJsonObject(serializedObject);
+        cursor = index + 1;
+        objectStart = -1;
+      }
+    }
+  }
+
+  return redacted + value.slice(cursor);
+}
+
+function redactParsedJsonObject(serializedObject: string): string {
+  try {
+    const parsed: unknown = JSON.parse(serializedObject);
+    const result = redactParsedEnvironmentValue(parsed);
+    return result.changed ? JSON.stringify(result.value) : serializedObject;
+  } catch {
+    return serializedObject;
+  }
+}
+
+function redactParsedEnvironmentValue(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const entries = value.map((entry) => {
+      const result = redactParsedEnvironmentValue(entry);
+      changed ||= result.changed;
+      return result.value;
+    });
+    return { value: entries, changed };
+  }
+  if (value === null || typeof value !== "object") {
+    return { value, changed: false };
+  }
+
+  const record = value as Record<string, unknown>;
+  const namedValueIsSensitive =
+    typeof record.name === "string" && isSensitiveEnvironmentName(record.name);
+  let changed = false;
+  const entries = Object.entries(record).map(([key, entry]) => {
+    if (isSensitiveEnvironmentName(key) || (namedValueIsSensitive && key === "value")) {
+      changed ||= entry !== REDACTED_VALUE;
+      return [key, REDACTED_VALUE] as const;
+    }
+    const result = redactParsedEnvironmentValue(entry);
+    changed ||= result.changed;
+    return [key, result.value] as const;
+  });
+  return { value: Object.fromEntries(entries), changed };
 }
 
 function sanitizeText(value: string, maxChars: number): string {
@@ -132,7 +220,7 @@ function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
   const redacted: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     redacted[key] =
-      isSensitiveKey(key) || (namedValueIsSensitive && key === "value")
+      isSensitiveEnvironmentName(key) || (namedValueIsSensitive && key === "value")
         ? REDACTED_VALUE
         : redactValue(entry, seen);
   }

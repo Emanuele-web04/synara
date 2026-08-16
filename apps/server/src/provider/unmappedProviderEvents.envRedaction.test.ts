@@ -119,13 +119,32 @@ describe("unmapped provider environment credential redaction", () => {
   });
 
   it("redacts credentials embedded in connection URLs", () => {
-    const serialized = JSON.stringify(
+    const database = JSON.stringify(
       sanitizeUnmappedProviderData("DATABASE_URL=postgres://user:secret@host/db"),
     );
+    const redis = JSON.stringify(
+      sanitizeUnmappedProviderData("REDIS_URL=redis://:redis-secret@host/0"),
+    );
 
-    expect(serialized).not.toContain("user");
-    expect(serialized).not.toContain("secret");
-    expect(serialized).toContain("postgres://[REDACTED]@host/db");
+    expect(database).not.toContain("user");
+    expect(database).not.toContain("secret");
+    expect(database).toContain("postgres://[REDACTED]@host/db");
+    expect(redis).not.toContain("redis-secret");
+    expect(redis).toContain("redis://[REDACTED]@host/0");
+  });
+
+  it("consumes escaped separators in unquoted shell values", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        "SERVICE_APIKEY=abc\\ remaining-secret OTHER_TOKEN=def\\,remaining-token THIRD_SECRET=ghi\\;remaining-secret",
+      ),
+    );
+
+    expect(serialized).not.toContain("remaining-secret");
+    expect(serialized).not.toContain("remaining-token");
+    expect(serialized).toContain("SERVICE_APIKEY=[REDACTED]");
+    expect(serialized).toContain("OTHER_TOKEN=[REDACTED]");
+    expect(serialized).toContain("THIRD_SECRET=[REDACTED]");
   });
 
   it("redacts decoded and raw name/value environment entries", () => {
@@ -138,7 +157,7 @@ describe("unmapped provider environment credential redaction", () => {
     );
     const raw = JSON.stringify(
       sanitizeUnmappedProviderData(
-        'env: [{"name":"OPENAI_API_KEY","value":"raw-secret"},{"value":"reverse-secret","name":"GITHUB_TOKEN"},{"name":"STRIPE_SECRET_KEY","source":"process","value":"metadata-secret"},{"name":"SAFE_ENV","value":"kept"}]',
+        'env: [{"name":"OPENAI_API_KEY","value":"raw-secret"},{"value":"reverse-secret","name":"GITHUB_TOKEN"},{"name":"STRIPE_SECRET_KEY","source":"process","value":"metadata-secret"},{"name":"OPENAI_API_KEY","metadata":{"source":"process"},"value":"nested-secret"},{"name":"SAFE_ENV","value":"kept"}]',
       ),
     );
 
@@ -147,19 +166,28 @@ describe("unmapped provider environment credential redaction", () => {
     expect(raw).not.toContain("raw-secret");
     expect(raw).not.toContain("reverse-secret");
     expect(raw).not.toContain("metadata-secret");
+    expect(raw).not.toContain("nested-secret");
     expect(decoded).toContain('"value":"[REDACTED]"');
-    expect(raw).toContain('\\"value\\":[REDACTED]');
+    expect(raw).toContain('\\"value\\":\\"[REDACTED]\\"');
     expect(decoded).toContain("kept");
     expect(raw).toContain("kept");
   });
 
-  it("redacts access IDs in decoded environment maps", () => {
+  it("redacts compact credential names in decoded environment maps", () => {
     const serialized = JSON.stringify(
-      sanitizeUnmappedProviderData({ AWS_ACCESS_KEY_ID: "decoded-map-access-id" }),
+      sanitizeUnmappedProviderData({
+        AWS_ACCESS_KEY_ID: "decoded-map-access-id",
+        SERVICE_APIKEY: "decoded-compact-key",
+        PGPASSWORD: "decoded-compact-password",
+      }),
     );
 
     expect(serialized).not.toContain("decoded-map-access-id");
+    expect(serialized).not.toContain("decoded-compact-key");
+    expect(serialized).not.toContain("decoded-compact-password");
     expect(serialized).toContain('"AWS_ACCESS_KEY_ID":"[REDACTED]"');
+    expect(serialized).toContain('"SERVICE_APIKEY":"[REDACTED]"');
+    expect(serialized).toContain('"PGPASSWORD":"[REDACTED]"');
   });
 
   it("fails closed on truncated raw name/value entries", () => {
