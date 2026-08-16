@@ -159,7 +159,7 @@ const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
-  if (settings.providers[selection.provider].enabled) {
+  if (selection.provider !== "external" && settings.providers[selection.provider].enabled) {
     return settings;
   }
 

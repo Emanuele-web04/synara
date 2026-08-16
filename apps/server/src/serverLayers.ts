@@ -42,6 +42,8 @@ import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ExternalMcpRepositoryLive } from "./externalMcp/Layers/ExternalMcpRepository";
+import { AgentProfileRepositoryLive } from "./externalAgents/AgentProfileRepository";
+import { AgentProfileServiceLive } from "./externalAgents/AgentProfileService";
 import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService";
 import { ExternalMcpGatewayLive } from "./externalMcp/Layers/ExternalMcpGateway";
 import { capabilityEvidenceLayer } from "./capabilityEvidence/Layers/CapabilityEvidenceService";
@@ -175,6 +177,9 @@ export function makeServerRuntimeServicesLayer(
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
+  const externalAgentProfilesLayer = AgentProfileServiceLive.pipe(
+    Layer.provideMerge(AgentProfileRepositoryLive),
+  );
   const externalMcpServiceLayer = ExternalMcpServiceLive.pipe(
     Layer.provideMerge(ExternalMcpRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
@@ -225,6 +230,8 @@ export function makeServerRuntimeServicesLayer(
     AgentGatewayOperationRepositoryLive,
     ExternalMcpRepositoryLive,
     externalMcpServiceLayer,
+    AgentProfileRepositoryLive,
+    externalAgentProfilesLayer,
     externalMcpGatewayLayer,
     capabilityEvidenceServiceLayer,
     providerHealthLayer,

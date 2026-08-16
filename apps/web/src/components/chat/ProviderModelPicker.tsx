@@ -11,6 +11,7 @@ import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { appHistory } from "../../appNavigation";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
+import { isBuiltInModelProvider } from "~/lib/providerIdentity";
 import {
   Menu,
   MenuItem,
@@ -108,7 +109,7 @@ function filterProviderOptionsByVisibility<T extends { value: ProviderKind }>(
 }
 
 function providerIconClassName(
-  provider: ProviderKind | ProviderPickerKind,
+  provider: ProviderKind | ProviderPickerKind | "external",
   fallbackClassName: string,
 ): string {
   return provider === "claudeAgent" || provider === "antigravity" || provider === "pi"
@@ -170,14 +171,15 @@ function buildModelSearchText(option: ProviderModelOption): string {
 }
 
 type ProviderModelMenuItemsProps = {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   model: ModelSlug;
-  lockedProvider: ProviderKind | null;
+  lockedProvider: ProviderKind | "external" | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  externalProfiles?: ReadonlyArray<ExternalAgentProfilePickerEntry>;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
   // Invoked after a model selection commits so callers can close ancestor
@@ -218,8 +220,10 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const hiddenProviders = props.hiddenProviders;
   const providerOrder = props.providerOrder;
   const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders ?? []);
-  const protectedProviderSet = new Set<ProviderKind>([props.provider]);
-  if (props.lockedProvider !== null) {
+  const protectedProviderSet = new Set<ProviderKind>(
+    isBuiltInModelProvider(props.provider) ? [props.provider] : [],
+  );
+  if (props.lockedProvider !== null && isBuiltInModelProvider(props.lockedProvider)) {
     protectedProviderSet.add(props.lockedProvider);
   }
   const visibleAvailableProviderOptions = filterProviderOptionsByVisibility(
@@ -265,7 +269,15 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
   };
 
-  const renderModelRadioGroup = (provider: ProviderKind) => {
+  const renderModelRadioGroup = (provider: ProviderKind | "external") => {
+    if (provider === "external") {
+      // External agent profiles have no built-in model list in this build.
+      return (
+        <div className="px-2 py-2 text-muted-foreground text-sm">
+          External agent models are not listed here
+        </div>
+      );
+    }
     if (props.loadingModelProviders?.[provider]) {
       return (
         <div className="space-y-2 px-2 py-2" aria-label="Loading models">
@@ -418,18 +430,34 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
         <span>Add Providers</span>
       </MenuItem>
+      {props.externalProfiles && props.externalProfiles.length > 0 && <MenuSeparator />}
+      {props.externalProfiles?.map((profile) => (
+        <MenuItem key={profile.profileId} disabled>
+          <span
+            aria-hidden="true"
+            className="size-3 shrink-0 rounded-full bg-current text-muted-foreground/85 opacity-80"
+          />
+          <span>{profile.name}</span>
+          <span className="ms-auto text-[11px] text-muted-foreground/80">
+            {profile.removed ? "Removed" : "External agent"}
+          </span>
+        </MenuItem>
+      ))}
     </>
   );
 };
 
 // Resolves the human-readable label for the currently selected model.
 export function resolveProviderModelLabel(input: {
-  provider: ProviderKind;
-  lockedProvider: ProviderKind | null;
+  provider: ProviderKind | "external";
+  lockedProvider: ProviderKind | "external" | null;
   model: ModelSlug;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
 }): string {
   const activeProvider = input.lockedProvider ?? input.provider;
+  if (activeProvider === "external") {
+    return "External agent";
+  }
   return resolveSelectedModelLabel({
     provider: activeProvider,
     model: input.model,
@@ -444,10 +472,20 @@ export function getProviderIconClassName(
   return providerIconClassName(provider, fallbackClassName);
 }
 
+export interface ExternalAgentProfilePickerEntry {
+  readonly profileId: string;
+  readonly name: string;
+  readonly removed: boolean;
+}
+
 type ProviderModelPickerProps = {
-  provider: ProviderKind;
+  provider: ProviderKind | "external";
   model: ModelSlug;
-  lockedProvider: ProviderKind | null;
+  lockedProvider: ProviderKind | "external" | null;
+  /** External agent profiles listed after the built-in providers. */
+  externalProfiles?: ReadonlyArray<ExternalAgentProfilePickerEntry>;
+  /** Profile id of the active external selection, for the trigger label. */
+  activeExternalProfileId?: string | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
@@ -471,13 +509,22 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
   const selectionCommitTimerRef = useRef<number | null>(null);
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const activeProvider = props.lockedProvider ?? props.provider;
-  const selectedModelLabel = resolveProviderModelLabel({
-    provider: props.provider,
-    lockedProvider: props.lockedProvider,
-    model: props.model,
-    modelOptionsByProvider: props.modelOptionsByProvider,
-  });
-  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
+  const isExternalActive = activeProvider === "external";
+  const activeExternalProfileName = isExternalActive
+    ? (props.externalProfiles?.find((entry) => entry.profileId === props.activeExternalProfileId)
+        ?.name ?? "External agent")
+    : null;
+  const selectedModelLabel = isExternalActive
+    ? (activeExternalProfileName ?? "External agent")
+    : resolveProviderModelLabel({
+        provider: props.provider,
+        lockedProvider: props.lockedProvider,
+        model: props.model,
+        modelOptionsByProvider: props.modelOptionsByProvider,
+      });
+  const ProviderIcon = isExternalActive
+    ? null
+    : PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
@@ -516,19 +563,46 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
       hideLabel={props.hideLabel ?? false}
       className="text-[var(--color-text-foreground)]"
       icon={
-        <ProviderIcon
-          aria-hidden="true"
-          className={cn(
-            // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-            "size-3.5 shrink-0 opacity-100",
-            providerIconClassName(activeProvider, "text-muted-foreground/70"),
-            props.activeProviderIconClassName,
-          )}
-        />
+        ProviderIcon ? (
+          <ProviderIcon
+            aria-hidden="true"
+            className={cn(
+              // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
+              "size-3.5 shrink-0 opacity-100",
+              providerIconClassName(activeProvider, "text-muted-foreground/70"),
+              props.activeProviderIconClassName,
+            )}
+          />
+        ) : (
+          <span
+            aria-hidden="true"
+            className="size-3.5 shrink-0 rounded-full bg-current opacity-70"
+          />
+        )
       }
       label={selectedModelLabel}
     />
   );
+
+  if (isExternalActive) {
+    // External agent selections cannot be re-targeted through the built-in
+    // provider/model menu in this build.
+    return (
+      <PickerTriggerButton
+        disabled
+        compact={props.compact ?? false}
+        hideLabel={props.hideLabel ?? false}
+        className="text-[var(--color-text-foreground)]"
+        icon={
+          <span
+            aria-hidden="true"
+            className="size-3.5 shrink-0 rounded-full bg-current opacity-70"
+          />
+        }
+        label={selectedModelLabel}
+      />
+    );
+  }
 
   return (
     <Menu
@@ -575,6 +649,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+          {...(props.externalProfiles ? { externalProfiles: props.externalProfiles } : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
           onProviderModelChange={props.onProviderModelChange}
           onAfterSelection={handleAfterSelection}

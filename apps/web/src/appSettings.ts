@@ -600,7 +600,10 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
-    textGenerationProvider: settings.textGenerationModelSelection.provider,
+    textGenerationProvider:
+      settings.textGenerationModelSelection.provider === "external"
+        ? "codex"
+        : settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }

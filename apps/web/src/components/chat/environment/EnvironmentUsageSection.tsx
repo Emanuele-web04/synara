@@ -1,6 +1,7 @@
 // FILE: EnvironmentUsageSection.tsx
 // Purpose: "Usage" section of the Environment panel — same menu as the header chip.
 
+import type { DisplayProvider } from "~/lib/providerIdentity";
 import type { ProviderKind } from "@synara/contracts";
 
 import {
@@ -18,7 +19,10 @@ import {
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
 
-export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
+export function EnvironmentUsageSection({ provider }: { provider: DisplayProvider | null }) {
+  if (provider === null) {
+    return null;
+  }
   const model = useProviderUsageMenuModel(provider);
 
   if (!model) {

@@ -1,7 +1,9 @@
 // FILE: ProviderUsageMenuControl.tsx
 // Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
+import type { DisplayProvider } from "~/lib/providerIdentity";
+import { providerDisplayName } from "~/lib/providerIdentity";
 import { type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
@@ -36,7 +38,9 @@ export interface ProviderUsageMenuModel {
 // defeat the memo and rebuild every thread on each streaming flush.
 const selectAccountRateLimitThreads = createAccountRateLimitThreadsSelector();
 
-export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
+export function useProviderUsageMenuModel(
+  provider: DisplayProvider,
+): ProviderUsageMenuModel | null {
   const { settings } = useAppSettings();
   const threads = useStore(selectAccountRateLimitThreads);
   const usageSummary = useProviderUsageSummary({
@@ -53,7 +57,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
   }
 
   return {
-    menuTitle: `${PROVIDER_DISPLAY_NAMES[provider]} usage`,
+    menuTitle: `${providerDisplayName(provider)} usage`,
     primaryRow,
     rateLimits: usageSummary.rateLimits,
     usageLines: usageSummary.usageLines,
@@ -68,7 +72,7 @@ export function ProviderUsageMenuPopup({
   align: alignProp,
   children,
 }: {
-  provider: ProviderKind;
+  provider: DisplayProvider;
   model: ProviderUsageMenuModel;
   align?: "start" | "end";
   children: ReactNode;
@@ -93,7 +97,7 @@ export function ProviderUsageMenuPopup({
   );
 }
 
-export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind }) {
+export function ProviderUsageMenuControl({ provider }: { provider: DisplayProvider }) {
   const model = useProviderUsageMenuModel(provider);
 
   if (!model) {

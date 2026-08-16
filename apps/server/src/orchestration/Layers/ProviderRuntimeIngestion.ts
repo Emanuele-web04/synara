@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   MessageId,
+  ModelSelection,
   type OrchestrationCheckpointFile,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
@@ -18,7 +19,18 @@ import {
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@synara/contracts";
-import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
+import {
+  Cache,
+  Cause,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -1928,14 +1940,16 @@ const make = Effect.gen(function* () {
           // flags (e.g. supportsAutoMode) survive; a diverging subagent model gets
           // a bare selection because the parent's flags don't describe it.
           const resolvedModelSelection =
-            identity?.model && identity.modelIsRequestedHint !== true
-              ? identity.model === parentThread.modelSelection.model
-                ? parentThread.modelSelection
-                : {
-                    provider: parentThread.modelSelection.provider,
-                    model: identity.model,
-                  }
-              : undefined;
+            parentThread.modelSelection.provider === "external"
+              ? parentThread.modelSelection
+              : identity?.model && identity.modelIsRequestedHint !== true
+                ? identity.model === parentThread.modelSelection.model
+                  ? parentThread.modelSelection
+                  : Schema.decodeUnknownSync(ModelSelection)({
+                      provider: parentThread.modelSelection.provider,
+                      model: identity.model,
+                    })
+                : undefined;
 
           if (Option.isNone(existingThread)) {
             // The read above hides soft-deleted threads, but `thread.create` is

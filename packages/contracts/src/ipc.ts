@@ -22,6 +22,17 @@ import type {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import type {
+  ExternalAgentProfileCreateInput,
+  ExternalAgentProfileCreateResult,
+  ExternalAgentProfileGetInput,
+  ExternalAgentProfileGetResult,
+  ExternalAgentProfileListResult,
+  ExternalAgentProfileTombstoneInput,
+  ExternalAgentProfileTombstoneResult,
+  ExternalAgentProfileUpdateInput,
+  ExternalAgentProfileUpdateResult,
+} from "./externalAgent";
+import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -745,6 +756,19 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listExternalAgentProfiles: () => Promise<ExternalAgentProfileListResult>;
+    getExternalAgentProfile: (
+      input: ExternalAgentProfileGetInput,
+    ) => Promise<ExternalAgentProfileGetResult>;
+    createExternalAgentProfile: (
+      input: ExternalAgentProfileCreateInput,
+    ) => Promise<ExternalAgentProfileCreateResult>;
+    updateExternalAgentProfile: (
+      input: ExternalAgentProfileUpdateInput,
+    ) => Promise<ExternalAgentProfileUpdateResult>;
+    tombstoneExternalAgentProfile: (
+      input: ExternalAgentProfileTombstoneInput,
+    ) => Promise<ExternalAgentProfileTombstoneResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;

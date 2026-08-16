@@ -298,11 +298,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [94, "ProjectionThreadsGoal"],
         [95, "ProjectionThreadsGoalTiming"],
         [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ExternalAgentProfiles"],
         [98, "CapabilityEvidence"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-43), [
+      assert.deepStrictEqual(tracker.slice(-44), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -345,6 +346,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 94, name: "ProjectionThreadsGoal" },
         { migration_id: 95, name: "ProjectionThreadsGoalTiming" },
         { migration_id: 96, name: "ProjectionThreadsGoalAchievements" },
+        { migration_id: 97, name: "ExternalAgentProfiles" },
         { migration_id: 98, name: "CapabilityEvidence" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
@@ -434,6 +436,7 @@ agentGatewayRetentionLegacyLayer(
           [94, "ProjectionThreadsGoal"],
           [95, "ProjectionThreadsGoalTiming"],
           [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ExternalAgentProfiles"],
           [98, "CapabilityEvidence"],
         ]);
 
@@ -526,12 +529,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [94, "ProjectionThreadsGoal"],
         [95, "ProjectionThreadsGoalTiming"],
         [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ExternalAgentProfiles"],
         [98, "CapabilityEvidence"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-27).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-28).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -559,6 +563,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [94, "ProjectionThreadsGoal"],
           [95, "ProjectionThreadsGoalTiming"],
           [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ExternalAgentProfiles"],
           [98, "CapabilityEvidence"],
         ],
       );
@@ -646,12 +651,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [94, "ProjectionThreadsGoal"],
         [95, "ProjectionThreadsGoalTiming"],
         [96, "ProjectionThreadsGoalAchievements"],
+        [97, "ExternalAgentProfiles"],
         [98, "CapabilityEvidence"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-23).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-24).map((row) => [row.migration_id, row.name]),
         [
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
@@ -675,6 +681,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [94, "ProjectionThreadsGoal"],
           [95, "ProjectionThreadsGoalTiming"],
           [96, "ProjectionThreadsGoalAchievements"],
+          [97, "ExternalAgentProfiles"],
           [98, "CapabilityEvidence"],
         ],
       );

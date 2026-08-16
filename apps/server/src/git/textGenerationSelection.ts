@@ -6,7 +6,9 @@ export interface TextGenerationProviderInput {
   readonly codexHomePath?: string;
 }
 
-export function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
+export function hasDedicatedTextGenerationProvider(
+  provider: ModelSelection["provider"] | undefined,
+): boolean {
   return (
     provider === "codex" || provider === "cursor" || provider === "kilo" || provider === "opencode"
   );

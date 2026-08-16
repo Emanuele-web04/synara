@@ -71,6 +71,17 @@ import {
   DeviceTypeTextInput,
   ThreadDeviceState,
 } from "./device";
+import {
+  ExternalAgentProfileCreateInput,
+  ExternalAgentProfileCreateResult,
+  ExternalAgentProfileGetInput,
+  ExternalAgentProfileGetResult,
+  ExternalAgentProfileListResult,
+  ExternalAgentProfileTombstoneInput,
+  ExternalAgentProfileTombstoneResult,
+  ExternalAgentProfileUpdateInput,
+  ExternalAgentProfileUpdateResult,
+} from "./externalAgent";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitHubProjectProvisionInput,
@@ -986,6 +997,51 @@ export const WsCapabilityEvidenceInvalidateRpc = Rpc.make(WS_METHODS.capabilityE
   error: WsRpcError,
 });
 
+export const WsServerListExternalAgentProfilesRpc = Rpc.make(
+  WS_METHODS.serverListExternalAgentProfiles,
+  {
+    payload: Schema.Struct({}),
+    success: ExternalAgentProfileListResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerGetExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverGetExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileGetInput,
+    success: ExternalAgentProfileGetResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerCreateExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverCreateExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileCreateInput,
+    success: ExternalAgentProfileCreateResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerUpdateExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverUpdateExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileUpdateInput,
+    success: ExternalAgentProfileUpdateResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerTombstoneExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverTombstoneExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileTombstoneInput,
+    success: ExternalAgentProfileTombstoneResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1313,6 +1369,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsCapabilityEvidenceRecordRpc,
   WsCapabilityEvidenceQueryRpc,
   WsCapabilityEvidenceInvalidateRpc,
+  WsServerListExternalAgentProfilesRpc,
+  WsServerGetExternalAgentProfileRpc,
+  WsServerCreateExternalAgentProfileRpc,
+  WsServerUpdateExternalAgentProfileRpc,
+  WsServerTombstoneExternalAgentProfileRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
