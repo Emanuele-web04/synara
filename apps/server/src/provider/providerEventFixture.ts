@@ -5,8 +5,33 @@ const DEFAULT_MAX_FIXTURE_EVENTS = 2_000;
 const REDACTED_VALUE = "<redacted>";
 const NORMALIZED_ISO_TIMESTAMP = "2000-01-01T00:00:00.000Z";
 
-const SENSITIVE_KEY_PATTERN =
-  /(?:authorization|bearer|cookie|credential|secret|token|api.?key|prompt|content|text|body|input|output|attachment|file|path|cwd|environment|env|header|url)/i;
+const SENSITIVE_VALUE_KEYS = new Set([
+  "authorization",
+  "bearer",
+  "body",
+  "content",
+  "cookie",
+  "credential",
+  "cwd",
+  "environment",
+  "env",
+  "file",
+  "filePath",
+  "header",
+  "headers",
+  "input",
+  "message",
+  "output",
+  "path",
+  "prompt",
+  "secret",
+  "text",
+  "token",
+  "url",
+  "apiKey",
+  "api_key",
+  "attachment",
+]);
 const IDENTIFIER_KEY_PATTERN = /(?:^|_)(?:id|uuid)$/i;
 const CAMEL_IDENTIFIER_KEY_PATTERN = /(?:Id|ID|Uuid|UUID)$/;
 const TIMESTAMP_KEY_PATTERN =
@@ -28,6 +53,61 @@ const SAFE_STRING_KEYS = new Set([
   "kind",
   "phase",
   "streamKind",
+  "subtype",
+]);
+
+const SAFE_UNTRUSTED_STRING_VALUES = new Set([
+  "accepted",
+  "allow",
+  "always",
+  "approved",
+  "assistant",
+  "assistant_text",
+  "antigravity",
+  "cancelled",
+  "canceled",
+  "claudeAgent",
+  "client",
+  "codex",
+  "complete",
+  "completed",
+  "cursor",
+  "denied",
+  "deny",
+  "desktop",
+  "droid",
+  "error",
+  "failed",
+  "grok",
+  "idle",
+  "in_progress",
+  "inProgress",
+  "input_text",
+  "kilo",
+  "once",
+  "output_text",
+  "opencode",
+  "pending",
+  "pi",
+  "provider",
+  "ready",
+  "reasoning",
+  "reasoning_text",
+  "rejected",
+  "result",
+  "running",
+  "started",
+  "stderr",
+  "stdout",
+  "stopped",
+  "success",
+  "server",
+  "system",
+  "terminal",
+  "text",
+  "tool",
+  "user",
+  "web",
 ]);
 
 const SAFE_SCALAR_KEYS = new Set([
@@ -42,6 +122,13 @@ const SAFE_SCALAR_KEYS = new Set([
   "completed",
   "synthetic",
   "ignored",
+  "is_error",
+  "inputTokens",
+  "outputTokens",
+  "cachedInputTokens",
+  "reasoningOutputTokens",
+  "totalTokens",
+  "contextWindow",
 ]);
 
 const SAFE_CONTAINER_KEYS = new Set([
@@ -64,10 +151,11 @@ const SAFE_CONTAINER_KEYS = new Set([
   "usage",
   "cache",
   "tokens",
+  "tokenUsage",
   "time",
 ]);
 
-const UNTRUSTED_STRING_CONTAINER_KEYS = new Set(["data", "metadata", "raw"]);
+const UNTRUSTED_STRING_CONTAINER_KEYS = new Set(SAFE_CONTAINER_KEYS);
 
 export interface ProviderEventFixtureRecord {
   readonly version: typeof PROVIDER_EVENT_FIXTURE_VERSION;
@@ -126,7 +214,7 @@ function isClassifiedFixtureKey(key: string): boolean {
     SAFE_CONTAINER_KEYS.has(key) ||
     SAFE_STRING_KEYS.has(key) ||
     SAFE_SCALAR_KEYS.has(key) ||
-    SENSITIVE_KEY_PATTERN.test(key) ||
+    SENSITIVE_VALUE_KEYS.has(key) ||
     IDENTIFIER_KEY_PATTERN.test(key) ||
     CAMEL_IDENTIFIER_KEY_PATTERN.test(key) ||
     TIMESTAMP_KEY_PATTERN.test(key)
@@ -139,25 +227,40 @@ function sanitizeValue(
   state: SanitizerState,
   context: SanitizerContext,
 ): unknown {
-  if (key && SENSITIVE_KEY_PATTERN.test(key)) {
+  if (key && SENSITIVE_VALUE_KEYS.has(key) && (value === null || typeof value !== "object")) {
     return REDACTED_VALUE;
   }
   if (key && (IDENTIFIER_KEY_PATTERN.test(key) || CAMEL_IDENTIFIER_KEY_PATTERN.test(key))) {
+    if (value === null) {
+      return null;
+    }
     return redactIdentifier(value, state);
   }
-  if (key && TIMESTAMP_KEY_PATTERN.test(key)) {
+  if (
+    key &&
+    TIMESTAMP_KEY_PATTERN.test(key) &&
+    (typeof value === "string" || typeof value === "number")
+  ) {
     return normalizeTimestamp(value);
   }
 
-  if (value === null || typeof value === "boolean" || typeof value === "number") {
+  if (value === null || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new ProviderEventFixtureError("Fixture numbers must be finite.");
+    }
     return value;
   }
   if (typeof value === "string") {
     if (
       key &&
       SAFE_STRING_KEYS.has(key) &&
-      !context.untrustedStrings &&
-      SAFE_DISCRIMINATOR_VALUE_PATTERN.test(value)
+      ((!context.untrustedStrings &&
+        (key === "type" || key === "method") &&
+        SAFE_DISCRIMINATOR_VALUE_PATTERN.test(value)) ||
+        SAFE_UNTRUSTED_STRING_VALUES.has(value))
     ) {
       return value;
     }
@@ -188,15 +291,23 @@ function sanitizeValue(
 
 export function sanitizeProviderEventFixtureEvents(events: readonly unknown[]): unknown[] {
   const state: SanitizerState = { ids: new Map(), nextId: 1 };
-  return events.map((event) =>
-    sanitizeValue(event, null, state, {
+  return events.map((event) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      throw new ProviderEventFixtureError("Fixture events must be objects.");
+    }
+    return sanitizeValue(event, null, state, {
       untrustedStrings: false,
-    }),
-  );
+    });
+  });
 }
 
 export function serializeProviderEventFixture(events: readonly unknown[]): string {
-  return sanitizeProviderEventFixtureEvents(events)
+  if (events.length > DEFAULT_MAX_FIXTURE_EVENTS) {
+    throw new ProviderEventFixtureError(
+      `Fixture exceeds ${String(DEFAULT_MAX_FIXTURE_EVENTS)} events.`,
+    );
+  }
+  const serialized = sanitizeProviderEventFixtureEvents(events)
     .map((event, index) =>
       JSON.stringify({
         version: PROVIDER_EVENT_FIXTURE_VERSION,
@@ -205,6 +316,12 @@ export function serializeProviderEventFixture(events: readonly unknown[]): strin
       } satisfies ProviderEventFixtureRecord),
     )
     .join("\n");
+  if (Buffer.byteLength(serialized, "utf8") > DEFAULT_MAX_FIXTURE_BYTES) {
+    throw new ProviderEventFixtureError(
+      `Fixture exceeds ${String(DEFAULT_MAX_FIXTURE_BYTES)} bytes.`,
+    );
+  }
+  return serialized;
 }
 
 function parseFixtureRecord(line: string, expectedIndex: number): ProviderEventFixtureRecord {

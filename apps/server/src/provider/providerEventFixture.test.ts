@@ -56,8 +56,8 @@ describe("provider event fixtures", () => {
       },
     ]) as Array<Record<string, any>>;
 
-    expect(sanitized.properties.sessionID).toBe("<id-1>");
-    expect(sanitized.properties.partID).toBe("<id-2>");
+    expect(sanitized!.properties.sessionID).toBe("<id-1>");
+    expect(sanitized!.properties.partID).toBe("<id-2>");
   });
 
   it("preserves timestamp types while normalizing values", () => {
@@ -69,8 +69,8 @@ describe("provider event fixtures", () => {
       },
     ]) as Array<Record<string, any>>;
 
-    expect(sanitized.createdAt).toBe("2000-01-01T00:00:00.000Z");
-    expect(sanitized.properties.timestamp).toBe(0);
+    expect(sanitized!.createdAt).toBe("2000-01-01T00:00:00.000Z");
+    expect(sanitized!.properties.timestamp).toBe(0);
   });
 
   it("preserves safe native event methods", () => {
@@ -81,8 +81,8 @@ describe("provider event fixtures", () => {
       },
     ]) as Array<Record<string, any>>;
 
-    expect(sanitized.method).toBe("thread/started");
-    expect(sanitized.params.sessionID).toBe("<id-1>");
+    expect(sanitized!.method).toBe("thread/started");
+    expect(sanitized!.params.sessionID).toBe("<id-1>");
   });
 
   it("fails closed for an unclassified string field", () => {
@@ -122,6 +122,106 @@ describe("provider event fixtures", () => {
         },
       ]),
     ).toThrow(/unclassified string field/u);
+  });
+
+  it("does not trust discriminator-looking strings inside provider payloads", () => {
+    expect(() =>
+      serializeProviderEventFixture([{ type: "custom.event", status: "private-project-codename" }]),
+    ).toThrow(/unclassified string field/u);
+    for (const container of ["properties", "payload", "params"] as const) {
+      expect(() =>
+        serializeProviderEventFixture([
+          {
+            type: "custom.event",
+            [container]: { status: "private-project-codename" },
+          },
+        ]),
+      ).toThrow(/unclassified string field/u);
+    }
+  });
+
+  it("rejects sensitive data embedded in property names", () => {
+    expect(() =>
+      serializeProviderEventFixture([
+        {
+          type: "custom.event",
+          metadata: { "authorization-Bearer-private-secret": true },
+        },
+      ]),
+    ).toThrow(/unclassified object key/u);
+  });
+
+  it("supports classified Claude and OpenCode payload shapes", () => {
+    const [claude, openCode] = sanitizeProviderEventFixtureEvents([
+      {
+        type: "stream_event",
+        payload: {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          parent_tool_use_id: null,
+        },
+      },
+      {
+        type: "message.updated",
+        properties: {
+          info: {
+            time: { startedAt: 123, endedAt: 456 },
+          },
+        },
+      },
+    ]) as Array<Record<string, any>>;
+
+    expect(claude!.payload).toMatchObject({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      parent_tool_use_id: null,
+    });
+    expect(openCode!.properties.info.time).toEqual({ startedAt: 0, endedAt: 0 });
+  });
+
+  it("preserves numeric usage fields while redacting credential tokens", () => {
+    const [sanitized] = sanitizeProviderEventFixtureEvents([
+      {
+        type: "thread/tokenUsage/updated",
+        payload: {
+          tokenUsage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            totalTokens: 15,
+          },
+          token: "credential",
+        },
+      },
+    ]) as Array<Record<string, any>>;
+
+    expect(sanitized!.payload.tokenUsage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
+    expect(sanitized!.payload.token).toBe("<redacted>");
+  });
+
+  it("redacts string-valued message fields", () => {
+    const [sanitized] = sanitizeProviderEventFixtureEvents([
+      { type: "process/stderr", message: "private stderr text" },
+    ]) as Array<Record<string, any>>;
+
+    expect(sanitized!.message).toBe("<redacted>");
+  });
+
+  it("rejects non-object events and non-finite numbers before serialization", () => {
+    for (const event of [null, 1, []]) {
+      expect(() => serializeProviderEventFixture([event])).toThrow(/events must be objects/u);
+    }
+    expect(() =>
+      serializeProviderEventFixture([{ type: "custom.event", attempt: Number.NaN }]),
+    ).toThrow(/numbers must be finite/u);
+    expect(() =>
+      serializeProviderEventFixture([{ type: "custom.event", usage: [Infinity] }]),
+    ).toThrow(/numbers must be finite/u);
   });
 
   it("rejects prototype-shaped keys instead of mutating the sanitizer result prototype", () => {
@@ -187,6 +287,17 @@ describe("provider event fixtures", () => {
 
     expect(() => parseProviderEventFixture(one, { maxBytes: 1 })).toThrow(/exceeds 1 bytes/u);
     expect(() => parseProviderEventFixture(two, { maxEvents: 1 })).toThrow(/exceeds 1 events/u);
+    expect(() => serializeProviderEventFixture(Array.from({ length: 2_001 }, () => ({})))).toThrow(
+      /exceeds 2000 events/u,
+    );
+    expect(() =>
+      serializeProviderEventFixture([
+        {
+          type: "custom.event",
+          usage: Array.from({ length: 300_000 }, () => 1),
+        },
+      ]),
+    ).toThrow(/exceeds 524288 bytes/u);
   });
 
   it("replays records sequentially in fixture order", async () => {
