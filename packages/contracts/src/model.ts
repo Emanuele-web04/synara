@@ -646,21 +646,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   antigravity: [],
   grok: [
     {
-      slug: "grok-build-0.1",
-      name: "Grok Build 0.1",
-      capabilities: GROK_BUILD_CAPABILITIES,
-    },
-    {
-      slug: "grok-build",
-      name: "Grok 4.3",
-      capabilities: GROK_BUILD_CAPABILITIES,
-    },
-    {
-      slug: "grok-4.5",
-      name: "Grok 4.5",
-      capabilities: GROK_4_5_CAPABILITIES,
-    },
-    {
       slug: "grok-4.6",
       name: "Grok 4.6",
       capabilities: GROK_4_6_CAPABILITIES,
@@ -1076,7 +1061,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
   antigravity: "Gemini 3.5 Flash",
-  grok: "grok-build",
+  grok: "grok-4.6",
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
@@ -1242,6 +1227,12 @@ export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
     Object.fromEntries(models.map((m) => [m.slug, m.capabilities])),
   ]),
 ) as unknown as Record<ProviderKind, Record<string, ModelCapabilities>>;
+
+Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
+  "grok-build-0.1": GROK_BUILD_CAPABILITIES,
+  "grok-build": GROK_BUILD_CAPABILITIES,
+  "grok-4.5": GROK_4_5_CAPABILITIES,
+});
 
 // ── Provider display names ────────────────────────────────────────────
 

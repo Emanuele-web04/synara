@@ -561,6 +561,21 @@ export function parseXaiLanguageModelDescriptors(
   return models;
 }
 
+export function selectGrokDiscoveredModelGroups(input: {
+  readonly cliModels: ReadonlyArray<{ slug: string; name: string }>;
+  readonly apiModels: ReadonlyArray<{ slug: string; name: string }>;
+}): ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>> {
+  // `grok models` is the picker source of truth. The xAI language-model API still
+  // advertises retired grok-build slugs that the current CLI no longer serves.
+  if (input.cliModels.length > 0) {
+    return [input.cliModels];
+  }
+  if (input.apiModels.length > 0) {
+    return [input.apiModels];
+  }
+  return [];
+}
+
 export function mergeGrokModelDescriptors(
   groups: ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>>,
 ): ProviderModelDescriptor[] {
@@ -2472,7 +2487,9 @@ export function makeGrokAdapter(
               ),
             )
           : [];
-        const models = mergeGrokModelDescriptors([cliModels, apiModels]);
+        const models = mergeGrokModelDescriptors(
+          selectGrokDiscoveredModelGroups({ cliModels, apiModels }),
+        );
         if (models.length === 0) {
           if (cliError) {
             return yield* mapGrokModelDiscoveryError(cliError);
@@ -2488,7 +2505,7 @@ export function makeGrokAdapter(
         }
         return {
           models,
-          source: apiModels.length > 0 ? "grok-cli+xai-api" : "grok-cli",
+          source: cliModels.length > 0 ? "grok-cli" : "grok-cli+xai-api",
           cached: false,
         } satisfies ProviderListModelsResult;
       }).pipe(

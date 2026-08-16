@@ -27,6 +27,7 @@ import {
   isRenderableGrokAssistantDelta,
   mergeGrokModelDescriptors,
   parseXaiLanguageModelDescriptors,
+  selectGrokDiscoveredModelGroups,
   resolveGrokPlanHookResponse,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
@@ -338,6 +339,22 @@ describe("GrokAdapter runtime event scoping", () => {
       "low",
       "medium",
       "high",
+    ]);
+  });
+
+  it("keeps the live Grok CLI catalog instead of retired xAI API slugs", () => {
+    const models = mergeGrokModelDescriptors(
+      selectGrokDiscoveredModelGroups({
+        cliModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
+        apiModels: [
+          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+          { slug: "grok-4.5", name: "Grok 4.5" },
+        ],
+      }),
+    );
+
+    expect(models.map(({ slug, name }) => ({ slug, name }))).toEqual([
+      { slug: "grok-4.6", name: "Grok 4.6" },
     ]);
   });
 
