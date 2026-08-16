@@ -109,12 +109,15 @@ interface TestContext {
   readonly providerService: ProviderServiceShape;
   readonly directory: ProviderSessionDirectoryShape;
   readonly stoppedThreads: string[];
+  /** Thread ids whose stopSession mock should fail. */
+  readonly failStopThreads: Set<string>;
   readonly sessions: { value: ReadonlyArray<ProviderSession> };
   readonly bindings: { value: ReadonlyArray<ProviderRuntimeBinding> };
 }
 
 const makeTestContext = (): TestContext => {
   const stoppedThreads: string[] = [];
+  const failStopThreads = new Set<string>();
   const sessions: { value: ReadonlyArray<ProviderSession> } = { value: [] };
   const bindings: { value: ReadonlyArray<ProviderRuntimeBinding> } = { value: [] };
   const providerService: ProviderServiceShape = {
@@ -129,9 +132,11 @@ const makeTestContext = (): TestContext => {
     respondToRequest: () => Effect.never as never,
     respondToUserInput: () => Effect.never as never,
     stopSession: (input: { threadId: string }) =>
-      Effect.sync(() => {
-        stoppedThreads.push(input.threadId);
-      }) as never,
+      failStopThreads.has(input.threadId)
+        ? (Effect.fail(new Error(`stopSession failed for ${input.threadId}`)) as never)
+        : (Effect.sync(() => {
+            stoppedThreads.push(input.threadId);
+          }) as never),
     listSessions: () => Effect.succeed(sessions.value),
     getCapabilities: () => Effect.never as never,
     rollbackConversation: () => Effect.never as never,
@@ -149,7 +154,7 @@ const makeTestContext = (): TestContext => {
     listBindings: () => Effect.succeed(bindings.value),
   };
 
-  return { providerService, directory, stoppedThreads, sessions, bindings };
+  return { providerService, directory, stoppedThreads, failStopThreads, sessions, bindings };
 };
 
 const makeTestLayer = (ctx: TestContext) => {
@@ -241,6 +246,12 @@ layer("ProfileLifecycleService", (it) => {
       );
       yield* service.tombstoneProfile(created.profile.profileId);
 
+      // Tombstoning records the retire lifecycle event so archived profile
+      // history carries the "why" alongside the retired status.
+      const detail = yield* service.getProfile(created.profile.profileId);
+      assert.strictEqual(detail.profile.status, "retired");
+      assert.strictEqual(detail.profile.lifecycleEvent?.kind, "retire");
+
       const quarantineError = yield* Effect.flip(
         lifecycle.quarantineProfile(created.profile.profileId),
       );
@@ -297,6 +308,46 @@ layer("ProfileLifecycleService", (it) => {
       const result = yield* lifecycle.quarantineProfile(created.profile.profileId);
       assert.strictEqual(result.stoppedSessions, 1);
       assert.deepEqual(testContext.stoppedThreads, [threadId]);
+    });
+  });
+
+  it.effect("counts only sessions that actually stopped on quarantine", () => {
+    const okThreadId = ThreadId.makeUnsafe("thread-stop-ok");
+    const failThreadId = ThreadId.makeUnsafe("thread-stop-fail");
+    return Effect.gen(function* () {
+      const lifecycle = yield* ProfileLifecycleService;
+      const service = yield* AgentProfileService;
+      const created = yield* service.createProfile(
+        createProfileInput({
+          name: "Stop counting",
+          displayName: "Stop counting",
+          command: "stopcount",
+          provenanceSource: "legacy-settings-acp",
+        }),
+      );
+      testContext.failStopThreads.add(failThreadId);
+      const session = {
+        threadId: okThreadId,
+        provider: "claudeAgent" as const,
+        status: "running" as const,
+        runtimeMode: "full-access" as const,
+        resumeCursor: { profileId: created.profile.profileId } as unknown,
+        createdAt: now(),
+        updatedAt: now(),
+      } as const;
+      const sessionFail = {
+        ...session,
+        threadId: failThreadId,
+      } as const;
+      testContext.sessions.value = [session, sessionFail];
+      const stoppedBefore = [...testContext.stoppedThreads];
+
+      const result = yield* lifecycle.quarantineProfile(created.profile.profileId);
+      // Only the successful stop is counted and recorded; the failed stop is
+      // logged (and in this mock path the Error is surfaced) without inflating
+      // the success count or the recorded thread list.
+      assert.strictEqual(result.stoppedSessions, 1);
+      assert.deepEqual(testContext.stoppedThreads, [...stoppedBefore, okThreadId]);
     });
   });
 

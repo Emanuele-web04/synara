@@ -62,6 +62,11 @@ export interface AgentProfileRepositoryShape {
    * repository-level primitive; the lifecycle service owns the state-machine
    * rules on top of it.
    */
+  /**
+   * Applies a lifecycle transition to a profile's status metadata. This is the
+   * repository-level primitive; the lifecycle service owns the state-machine
+   * rules on top of it.
+   */
   readonly setLifecycleState: (input: {
     readonly profileId: string;
     readonly status: AgentProfileStatus;
@@ -85,6 +90,15 @@ export class AgentProfileRepository extends ServiceMap.Service<
 
 const repositoryError = (operation: string) => (cause: unknown) =>
   new Error(`External agent profile repository failed during ${operation}.`, { cause });
+
+const lifecycleEvent = (
+  kind: AgentProfileLifecycleEvent["kind"],
+  reason: string,
+): AgentProfileLifecycleEvent => ({
+  kind,
+  reason,
+  observedAt: new Date().toISOString(),
+});
 
 function parseRevisionPayload(value: string): AgentProfileRevision {
   return Schema.decodeUnknownSync(AgentProfileRevisionSchema)(JSON.parse(value) as unknown);
@@ -280,8 +294,11 @@ export const makeAgentProfileRepository = Effect.gen(function* () {
   ) =>
     sql`
       UPDATE external_agent_profiles
-      SET status = 'retired', updated_at = ${updatedAt}
+      SET status = 'retired',
+          lifecycle_event_json = ${JSON.stringify(lifecycleEvent("retire", "Profile retired by operator"))},
+          updated_at = ${updatedAt}
       WHERE profile_id = ${profileId}
+        AND status <> 'retired'
     `.pipe(
       Effect.andThen(getProfile(profileId)),
       Effect.mapError(repositoryError("tombstoneProfile")),

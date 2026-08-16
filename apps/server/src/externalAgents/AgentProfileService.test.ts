@@ -105,7 +105,7 @@ layer("AgentProfileService", (it) => {
     }),
   );
 
-  it.effect("refuses new sessions for tombstoned profiles but keeps history readable", () =>
+  it.effect("refuses new sessions for retired profiles but keeps history readable", () =>
     Effect.gen(function* () {
       const service = yield* AgentProfileService;
       const created = yield* service.createProfile({
@@ -127,9 +127,11 @@ layer("AgentProfileService", (it) => {
       assert.instanceOf(launchResult, ExternalAgentProfileError);
       assert.strictEqual(launchResult.code, "profile-removed");
 
-      // Historical thread reads still resolve the pinned revision.
+      // Historical thread reads still resolve the pinned revision and record
+      // the retire lifecycle event alongside the retired status.
       const detail = yield* service.getProfile(created.profile.profileId);
       assert.strictEqual(detail.profile.status, "retired");
+      assert.strictEqual(detail.profile.lifecycleEvent?.kind, "retire");
       assert.strictEqual(detail.currentRevision.revisionId, created.revision.revisionId);
     }),
   );

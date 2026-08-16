@@ -145,6 +145,11 @@ export type AgentProfileRevision = typeof AgentProfileRevision.Type;
  * - `retired`: permanent terminal state (was tombstoned or re-certified as
  *   hopeless). No new sessions, no un-quarantine.
  */
+// NOTE: `tombstoned` was removed vs. the KAR-522 base contract. This is an
+// intentional breaking literal change for old clients: the status is an
+// internal RPC layer value and the only consumer in front of it is the
+// archive-only web client, so the removal is safe. Server-side legacy rows are
+// normalized to `retired` by migration 099.
 export const AgentProfileStatus = Schema.Literals(["active", "quarantined", "retired"]);
 export type AgentProfileStatus = typeof AgentProfileStatus.Type;
 

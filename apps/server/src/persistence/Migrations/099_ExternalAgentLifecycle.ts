@@ -3,7 +3,9 @@
 // Adds the lifecycle/trust columns to `external_agent_profiles` and the
 // attribution columns (external agent revision + spawning profile) to
 // `projection_turns` so turn logs can be traced back to the exact external
-// agent revision that produced them.
+// agent revision that produced them. Also normalizes KAR-522's legacy
+// `tombstoned` status rows to `retired` so the tight status contract keeps
+// decoding after migration.
 
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -46,6 +48,17 @@ export default Effect.gen(function* () {
       ADD COLUMN spawning_profile_id TEXT
     `;
   }
+
+  // Normalize legacy `tombstoned` rows (written by the KAR-522 base) to
+  // `retired`. The AgentProfileStatus contract only decodes active /
+  // quarantined / retired, so a tombstoned row left behind would throw on
+  // every profile read after this schema lands. Bounded to tombstoned rows
+  // and idempotent: re-running touches nothing.
+  yield* sql`
+    UPDATE external_agent_profiles
+    SET status = 'retired'
+    WHERE status = 'tombstoned'
+  `;
 
   // Backfill attribution for already-persisted external-agent turns from the
   // thread's model selection. The model selection JSON (projection_threads,

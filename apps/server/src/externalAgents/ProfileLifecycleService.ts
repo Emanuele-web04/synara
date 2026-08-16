@@ -8,7 +8,9 @@
 //     stop live provider sessions for the profile
 //   - recertifyProfile: evidence-freshness check + conformance re-runs +
 //     downgrade/quarantine decision
-//   - assertSessionAllowed: the gate resolveSessionLaunch calls before release
+//   - assertSessionAllowed: delegates to the shared pure launch gate in
+//     agentProfileTrust.ts, which resolveSessionLaunch also calls — one source
+//     of truth for "may this session start" (status + trust rules).
 // Layer: Server external agents
 // Exports: ProfileLifecycleService, makeProfileLifecycleService,
 //          recertifyDecisionFromStates
@@ -32,7 +34,11 @@ import {
 } from "../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { AgentProfileRepository } from "./AgentProfileRepository.ts";
-import { profileEvidenceNamespace } from "./agentProfileTrust.ts";
+import {
+  assertSessionAllowed as assertSessionAllowedGate,
+  profileEvidenceNamespace,
+  ProfileSessionRefused,
+} from "./agentProfileTrust.ts";
 import { isAgentProfileRevisionTrusted } from "./agentProfileTrust.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,9 +248,31 @@ const makeProfileLifecycleService = Effect.gen(function* () {
       );
       const threadIds = new Set([...boundByCursor, ...boundByModelSelection]);
       let stopped = 0;
+      const stopFailures: Array<{ readonly threadId: string; readonly cause: unknown }> = [];
       for (const threadId of threadIds) {
-        yield* providerService.stopSession({ threadId }).pipe(Effect.catch(() => Effect.void));
-        stopped += 1;
+        yield* providerService.stopSession({ threadId }).pipe(
+          Effect.match({
+            onFailure: (cause) => {
+              stopFailures.push({ threadId, cause });
+            },
+            onSuccess: () => {
+              stopped += 1;
+            },
+          }),
+        );
+      }
+      // Surface only actual stop failures; a session that fails to stop is a
+      // safety miss (its runtime may still run after quarantine). Log the
+      // failure while keeping the count to successes only.
+      if (stopFailures.length > 0) {
+        yield* Effect.logError("Failed to stop sessions bound to an external agent profile").pipe(
+          Effect.annotateLogs({
+            profileId,
+            failures: stopFailures.map(
+              (failure) => `${failure.threadId}: ${String(failure.cause)}`,
+            ),
+          }),
+        );
       }
       return stopped;
     });
@@ -435,9 +463,29 @@ const makeProfileLifecycleService = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(internalError("recertifyProfile:persist")));
 
-      // If we quarantined, kill live sessions for the profile now.
+      // If we quarantined, kill live sessions for the profile now. A stop
+      // failure here leaves a session running against a quarantined profile —
+      // a safety miss that must not be silently swallowed. Log it and surface
+      // the same `quarantine-stop-failed` outcome quarantineProfile reports,
+      // so the caller sees the kill failed even though the state was already
+      // persisted to quarantined.
       if (decision.shouldQuarantine) {
-        yield* stopSessionsForProfile(profileId).pipe(Effect.catch(() => Effect.void));
+        yield* stopSessionsForProfile(profileId).pipe(
+          Effect.tapError((cause) =>
+            Effect.logError(
+              "Re-certification quarantined a profile but failed to stop its live sessions",
+            ).pipe(Effect.annotateLogs({ profileId, cause: String(cause) })),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new ProfileLifecycleError({
+                code: "quarantine-stop-failed",
+                message: `Re-certification quarantined profile "${profile.name}" but failed to stop its live sessions.`,
+                status: 500,
+                cause,
+              }),
+          ),
+        );
       }
 
       // Re-run trust evaluation so the persisted trust reflects the pinned
@@ -447,31 +495,18 @@ const makeProfileLifecycleService = Effect.gen(function* () {
     });
 
   const assertSessionAllowed: ProfileLifecycleServiceShape["assertSessionAllowed"] = (input) =>
-    Effect.gen(function* () {
-      const status = input.profile.status;
-      if (status === "quarantined" || status === "retired") {
-        return yield* Effect.fail(
-          new Error(
-            `External agent profile "${input.profile.name}" is ${status}; new sessions are blocked.`,
-          ),
-        );
-      }
-      // Provenance-based credential release: never hand credentials to an
-      // untrusted profile that needs them.
-      const hasCredentialRefs =
-        (input.revision.credentialRefs?.length ?? 0) > 0 ||
-        (input.revision.launch.kind === "command" &&
-          (input.revision.launch.envRefs?.length ?? 0) > 0);
-      if (hasCredentialRefs) {
-        if (!isAgentProfileRevisionTrusted(input.revision)) {
-          return yield* Effect.fail(
-            new Error(
-              `External agent profile "${input.profile.name}" is not trusted for credential release.`,
-            ),
-          );
-        }
-      }
-      return yield* Effect.void;
+    // Delegates to the shared pure gate (agentProfileTrust.ts) — the same
+    // gate resolveSessionLaunch calls, so the status + trust rules live in
+    // exactly one place. `Effect.try` keeps the thrown ProfileSessionRefused on
+    // the error channel instead of letting it escape a generator try/catch.
+    Effect.try({
+      try: () => assertSessionAllowedGate(input),
+      catch: (cause) =>
+        cause instanceof ProfileSessionRefused
+          ? new Error(cause.message)
+          : cause instanceof Error
+            ? cause
+            : new Error(String(cause)),
     });
 
   return {

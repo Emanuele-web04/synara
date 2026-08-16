@@ -21,7 +21,7 @@ import {
   legacyAcpRevisionId,
 } from "./agentProfileIdentity";
 import { AgentProfileRepository, type AgentProfileRepositoryShape } from "./AgentProfileRepository";
-import { isAgentProfileRevisionTrusted } from "./agentProfileTrust";
+import { assertSessionAllowed, ProfileSessionRefused } from "./agentProfileTrust";
 
 export class ExternalAgentProfileError extends Data.TaggedError("ExternalAgentProfileError")<{
   readonly code: string;
@@ -97,20 +97,6 @@ const profileRemovedError = (profileName: string) =>
   new ExternalAgentProfileError({
     code: "profile-removed",
     message: `External agent profile "${profileName}" has been removed; new sessions are disabled.`,
-    status: 409,
-  });
-
-const profileQuarantinedError = (profileName: string) =>
-  new ExternalAgentProfileError({
-    code: "profile-quarantined",
-    message: `External agent profile "${profileName}" is quarantined; new sessions are blocked until it is re-certified.`,
-    status: 409,
-  });
-
-const profileUntrustedError = (profileName: string) =>
-  new ExternalAgentProfileError({
-    code: "profile-untrusted",
-    message: `External agent profile "${profileName}" is not trusted for credential release; attach a trusted workflow or verified vendor claim first.`,
     status: 409,
   });
 
@@ -237,25 +223,37 @@ export const makeAgentProfileService = Effect.gen(function* () {
         return yield* profileNotFoundError(input.profileId);
       }
       const current = profile.value;
-      if (current.status === "retired") {
-        return yield* profileRemovedError(current.name);
-      }
-      if (current.status === "quarantined") {
-        return yield* profileQuarantinedError(current.name);
-      }
       const revision = yield* repository.getRevision(input.revisionId);
       if (Option.isNone(revision)) {
         return yield* revisionNotFoundError(current.name, input.revisionId);
       }
-      // Provenance-based credential release: credentials are only handed to
-      // trusted streams. Untrusted profiles that need credentials are refused
-      // before the secret store is touched.
-      const launchRefs =
-        revision.value.launch.kind === "command" ? (revision.value.launch.envRefs ?? []) : [];
-      const needsCredentials =
-        (revision.value.credentialRefs?.length ?? 0) > 0 || launchRefs.length > 0;
-      if (needsCredentials && !isAgentProfileRevisionTrusted(revision.value)) {
-        return yield* profileUntrustedError(current.name);
+      // Shared launch gate (KAR-529 AC5): refuses quarantined/retired profiles
+      // and untrusted credential release — the same trust/status rules the
+      // lifecycle service's assertSessionAllowed enforces. `Effect.try` keeps
+      // the thrown ProfileSessionRefused on the error channel.
+      const refusal = yield* Effect.try({
+        try: () => assertSessionAllowed({ profile: current, revision: revision.value }),
+        catch: (cause) =>
+          cause instanceof ProfileSessionRefused
+            ? cause
+            : cause instanceof Error
+              ? cause
+              : new Error(String(cause)),
+      }).pipe(
+        Effect.match({
+          onFailure: (cause) =>
+            cause instanceof ProfileSessionRefused ? Option.some(cause) : Option.none(),
+          onSuccess: () => Option.none<ProfileSessionRefused>(),
+        }),
+      );
+      if (Option.isSome(refusal)) {
+        return yield* Effect.fail(
+          new ExternalAgentProfileError({
+            code: refusal.value.code,
+            message: refusal.value.message,
+            status: 409,
+          }),
+        );
       }
       const env = yield* resolveCredentialEnv(current, revision.value);
       return { profile: current, revision: revision.value, env };
