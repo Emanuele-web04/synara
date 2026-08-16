@@ -51,60 +51,6 @@ describe("ensureIsolatedScratchWorkspace", () => {
     }
   });
 
-  it("reuses a validated private workspace in place after the temporary root changes", () => {
-    const threadId = ThreadId.makeUnsafe("prior-private-thread");
-    const currentRoot = path.join(testScratchParent, "current", SCRATCH_WORKSPACES_DIRNAME);
-    const ownerContainerName = path.basename(path.dirname(resolveScratchWorkspacesRoot()));
-    const priorRoot = path.join(
-      testScratchParent,
-      "old-tmp",
-      ownerContainerName,
-      SCRATCH_WORKSPACES_DIRNAME,
-    );
-    const priorWorkspace = ensureIsolatedScratchWorkspace(threadId, priorRoot);
-    writeFileSync(path.join(priorWorkspace, "resume.txt"), "preserved");
-
-    const resumedWorkspace = resolveScratchWorkspaceCwd(threadId, priorWorkspace, {
-      workspaceRoot: currentRoot,
-      legacyWorkspaceRoot: path.join(testScratchParent, "unused-legacy"),
-    });
-
-    expect(resumedWorkspace).toBe(priorWorkspace);
-    expect(readFileSync(path.join(resumedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "uses a fresh private workspace when an earlier temporary cwd is a symlink",
-    () => {
-      const threadId = ThreadId.makeUnsafe("unsafe-prior-private-thread");
-      const currentRoot = path.join(testScratchParent, "fresh-current", SCRATCH_WORKSPACES_DIRNAME);
-      const ownerContainerName = path.basename(path.dirname(resolveScratchWorkspacesRoot()));
-      const priorRoot = path.join(
-        testScratchParent,
-        "unsafe-old-tmp",
-        ownerContainerName,
-        SCRATCH_WORKSPACES_DIRNAME,
-      );
-      const priorWorkspace = ensureIsolatedScratchWorkspace(threadId, priorRoot);
-      const redirected = mkdtempSync(path.join(tmpdir(), "synara-prior-redirect-"));
-      try {
-        rmSync(priorWorkspace, { recursive: true, force: true });
-        symlinkSync(redirected, priorWorkspace, "dir");
-
-        const resumedWorkspace = resolveScratchWorkspaceCwd(threadId, priorWorkspace, {
-          workspaceRoot: currentRoot,
-          legacyWorkspaceRoot: path.join(testScratchParent, "unused-legacy"),
-        });
-
-        expect(resumedWorkspace).not.toBe(priorWorkspace);
-        expect(resumedWorkspace.startsWith(`${currentRoot}${path.sep}`)).toBe(true);
-      } finally {
-        rmSync(priorWorkspace, { force: true });
-        rmSync(redirected, { recursive: true, force: true });
-      }
-    },
-  );
-
   it("creates a readable per-thread directory under the scratch root", () => {
     const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("thread-1"));
     try {
@@ -135,10 +81,44 @@ describe("ensureIsolatedScratchWorkspace", () => {
     expect(resumedWorkspace).toBe(legacyWorkspace);
     expect(readFileSync(path.join(resumedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
     if (process.platform !== "win32") {
-      expect(statSync(legacyRoot).mode & 0o1777).toBe(0o777);
+      expect(statSync(legacyRoot).mode & 0o1777).toBe(0o1777);
       expect(statSync(resumedWorkspace).mode & 0o777).toBe(0o700);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "does not reuse a workspace through an untrusted legacy-root symlink",
+    () => {
+      const threadId = ThreadId.makeUnsafe("symlinked-legacy-root");
+      const privateRoot = path.join(
+        testScratchParent,
+        "private-fallback",
+        SCRATCH_WORKSPACES_DIRNAME,
+      );
+      const legacyRoot = path.join(testScratchParent, "legacy-link");
+      const redirectedRoot = mkdtempSync(path.join(tmpdir(), "synara-legacy-redirect-"));
+      const workspaceSegment = path.basename(
+        ensureIsolatedScratchWorkspace(threadId, privateRoot, redirectedRoot),
+      );
+      rmSync(privateRoot, { recursive: true, force: true });
+      mkdirSync(path.join(redirectedRoot, workspaceSegment), { recursive: true });
+      symlinkSync(redirectedRoot, legacyRoot, "dir");
+      try {
+        const workspace = resolveScratchWorkspaceCwd(
+          threadId,
+          path.join(legacyRoot, workspaceSegment),
+          {
+            workspaceRoot: privateRoot,
+            legacyWorkspaceRoot: legacyRoot,
+          },
+        );
+        expect(workspace).toBe(path.join(privateRoot, workspaceSegment));
+      } finally {
+        rmSync(legacyRoot, { force: true });
+        rmSync(redirectedRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("leaves non-scratch persisted workspaces unchanged", () => {
     const projectCwd = path.join(testScratchParent, "project");

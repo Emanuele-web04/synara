@@ -127,10 +127,41 @@ function repairOwnedScratchWorkspace(workspacePath: string): string | undefined 
   }
 }
 
+function secureOwnedLegacyRoot(legacyWorkspaceRoot: string): boolean {
+  const descriptor = openOwnedDirectoryDescriptor(legacyWorkspaceRoot);
+  if (descriptor === undefined) return false;
+  if (descriptor === -1) return true;
+  try {
+    const openedStat = fstatSync(descriptor);
+    const writableByOtherUsers = (openedStat.mode & 0o022) !== 0;
+    const hasStickyBit = (openedStat.mode & 0o1000) !== 0;
+    if (writableByOtherUsers && !hasStickyBit) {
+      // Keep legacy multi-user access, but prevent other users from replacing
+      // an owned workspace entry between validation and provider startup.
+      fchmodSync(descriptor, (openedStat.mode & 0o7777) | 0o1000);
+    }
+    const currentStat = lstatSync(legacyWorkspaceRoot);
+    return (
+      currentStat.isDirectory() &&
+      !currentStat.isSymbolicLink() &&
+      currentStat.dev === openedStat.dev &&
+      currentStat.ino === openedStat.ino
+    );
+  } catch (cause) {
+    if (["ELOOP", "ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) {
+      return false;
+    }
+    throw cause;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 function repairLegacyScratchWorkspace(
   legacyWorkspaceRoot: string,
   workspaceSegment: string,
 ): string | undefined {
+  if (!secureOwnedLegacyRoot(legacyWorkspaceRoot)) return undefined;
   const legacyWorkspaceDir = path.join(legacyWorkspaceRoot, workspaceSegment);
   return repairOwnedScratchWorkspace(legacyWorkspaceDir);
 }
@@ -185,21 +216,10 @@ export function resolveScratchWorkspaceCwd(
   const legacyWorkspace = path.join(legacyWorkspaceRoot, workspaceSegment);
   if (path.resolve(persistedCwd) === path.resolve(legacyWorkspace)) {
     return (
-      repairOwnedScratchWorkspace(persistedCwd) ??
+      repairLegacyScratchWorkspace(legacyWorkspaceRoot, workspaceSegment) ??
       ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment)
     );
   }
 
-  const persistedWorkspaceRoot = path.dirname(persistedCwd);
-  const persistedOwnerContainer = path.dirname(persistedWorkspaceRoot);
-  const matchesPriorPrivateLayout =
-    path.basename(persistedCwd) === workspaceSegment &&
-    path.basename(persistedWorkspaceRoot) === SCRATCH_WORKSPACES_DIRNAME &&
-    path.basename(persistedOwnerContainer) === `.synara-${scratchOwnerSegment()}`;
-  if (!matchesPriorPrivateLayout) return persistedCwd;
-
-  return (
-    repairOwnedScratchWorkspace(persistedCwd) ??
-    ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment)
-  );
+  return persistedCwd;
 }
