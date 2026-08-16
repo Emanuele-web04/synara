@@ -124,6 +124,15 @@ describe("provider event fixtures", () => {
     ).toThrow(/unclassified string field/u);
   });
 
+  it("only preserves explicitly classified root protocol discriminators", () => {
+    for (const event of [
+      { type: "/home/alice/private-project" },
+      { method: "thread/private-project-codename" },
+    ]) {
+      expect(() => serializeProviderEventFixture([event])).toThrow(/unclassified string field/u);
+    }
+  });
+
   it("does not trust discriminator-looking strings inside provider payloads", () => {
     expect(() =>
       serializeProviderEventFixture([{ type: "custom.event", status: "private-project-codename" }]),

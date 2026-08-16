@@ -36,9 +36,24 @@ const IDENTIFIER_KEY_PATTERN = /(?:^|_)(?:id|uuid)$/i;
 const CAMEL_IDENTIFIER_KEY_PATTERN = /(?:Id|ID|Uuid|UUID)$/;
 const TIMESTAMP_KEY_PATTERN =
   /(?:timestamp|createdAt|updatedAt|observedAt|startedAt|endedAt|time)$/i;
-const SAFE_DISCRIMINATOR_VALUE_PATTERN = /^[A-Za-z0-9_.:/@-]{1,128}$/u;
 const OPENCODE_TOKEN_COUNTER_KEYS = new Set(["input", "output", "reasoning"]);
 const OPENCODE_CACHE_COUNTER_KEYS = new Set(["read", "write"]);
+
+// Root protocol discriminators are part of the fixture replay contract. Keep this
+// allowlist explicit so a user-controlled path or label cannot cross the safe-to-commit
+// boundary merely because it resembles an event name.
+const SAFE_ROOT_TYPE_VALUES = new Set([
+  "custom.event",
+  "message.part.delta",
+  "message.part.updated",
+  "message.updated",
+  "process/stderr",
+  "session.state.changed",
+  "stream_event",
+  "thread/tokenUsage/updated",
+  "turn.completed",
+]);
+const SAFE_ROOT_METHOD_VALUES = new Set(["thread/started"]);
 
 const SAFE_STRING_KEYS = new Set([
   "type",
@@ -271,8 +286,8 @@ function sanitizeValue(
       key &&
       SAFE_STRING_KEYS.has(key) &&
       ((!context.untrustedStrings &&
-        (key === "type" || key === "method") &&
-        SAFE_DISCRIMINATOR_VALUE_PATTERN.test(value)) ||
+        ((key === "type" && SAFE_ROOT_TYPE_VALUES.has(value)) ||
+          (key === "method" && SAFE_ROOT_METHOD_VALUES.has(value)))) ||
         SAFE_UNTRUSTED_STRING_VALUES.has(value))
     ) {
       return value;
