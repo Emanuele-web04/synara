@@ -2297,7 +2297,6 @@ export default function ChatView({
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const externalAgentProfilesQuery = useQuery(externalAgentProfilesQueryOptions());
   const externalAgentProfilePickerEntries = useMemo(
     () =>

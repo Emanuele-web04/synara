@@ -40,7 +40,7 @@ export function useProviderUsageSummary(input: {
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
-// External agent profiles have no Synara usage tracking.
+  // External agent profiles have no Synara usage tracking.
   const provider = input.provider === "external" ? null : (input.provider ?? null);
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
   const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;

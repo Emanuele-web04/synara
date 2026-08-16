@@ -575,7 +575,6 @@ const make = Effect.gen(function* () {
   });
 
   const managedAttachments = yield* ManagedAttachmentRepository;
-  const agentProfiles = yield* AgentProfileService;
   const serverConfig = yield* ServerConfig;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
@@ -771,6 +770,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly selection: ExternalAgentModelSelection;
   }) {
+    const agentProfiles = yield* AgentProfileService;
     const launch = yield* agentProfiles
       .resolveSessionLaunch({
         profileId: input.selection.profileId,

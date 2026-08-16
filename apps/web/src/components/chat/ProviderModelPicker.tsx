@@ -425,25 +425,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           </MenuSub>
         );
       })}
-{visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
+      {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
       <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
         <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
         <span>Add Providers</span>
       </MenuItem>
-      {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
-      {visibleUnavailableProviderOptions.map((option) => {
-        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
-        return (
-          <MenuItem key={option.value} disabled>
-            <OptionIcon
-              aria-hidden="true"
-              className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
-            />
-            <span>{option.label}</span>
-            <span className="ms-auto text-[11px] text-muted-foreground/80">Coming soon</span>
-          </MenuItem>
-        );
-      })}
       {props.externalProfiles && props.externalProfiles.length > 0 && <MenuSeparator />}
       {props.externalProfiles?.map((profile) => (
         <MenuItem key={profile.profileId} disabled>

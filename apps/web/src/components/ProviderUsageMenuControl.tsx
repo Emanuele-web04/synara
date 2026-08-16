@@ -1,7 +1,7 @@
 // FILE: ProviderUsageMenuControl.tsx
 // Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 import type { DisplayProvider } from "~/lib/providerIdentity";
 import { providerDisplayName } from "~/lib/providerIdentity";
 import { type ReactNode } from "react";

@@ -62,7 +62,11 @@ export interface AgentProfileServiceShape {
   readonly resolveSessionLaunch: (input: {
     readonly profileId: string;
     readonly revisionId: string;
-  }) => Effect.Effect<ExternalAgentSessionLaunch, ExternalAgentProfileError>;
+  }) => Effect.Effect<
+    ExternalAgentSessionLaunch,
+    ExternalAgentProfileError,
+    ServerSecretStore
+  >;
   /**
    * Creates the canonical legacy generic-ACP profile (idempotent) so persisted
    * provider:"acp" state always resolves to one deterministic external profile.
@@ -117,7 +121,6 @@ function buildContentFromEdit(input: {
 
 export const makeAgentProfileService = Effect.gen(function* () {
   const repository = yield* AgentProfileRepository;
-  const secrets = yield* ServerSecretStore;
   const decoder = new TextDecoder("utf-8", { fatal: true });
 
   const ensureLegacyAcpProfile: AgentProfileServiceShape["ensureLegacyAcpProfile"] = () =>
@@ -157,8 +160,13 @@ export const makeAgentProfileService = Effect.gen(function* () {
   const resolveCredentialEnv = (
     profile: AgentProfile,
     revision: AgentProfileRevision,
-  ): Effect.Effect<Readonly<Record<string, string>>, ExternalAgentProfileError> =>
+  ): Effect.Effect<
+    Readonly<Record<string, string>>,
+    ExternalAgentProfileError,
+    ServerSecretStore
+  > =>
     Effect.gen(function* () {
+      const secrets = yield* ServerSecretStore;
       const launchRefs = revision.launch.kind === "command" ? (revision.launch.envRefs ?? []) : [];
       // Launch env refs win over revision-level refs for the same env key; both
       // resolve from the same profile-scoped secret name.

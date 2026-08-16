@@ -327,7 +327,7 @@ export function prefetchModelsForNewThread(
     providerOverride?: ProviderKind | null;
     draftActiveProvider?: ProviderKind | null;
     stickyActiveProvider?: ProviderKind | null;
-    projectDefaultProvider?: ProviderKind | null;
+    projectDefaultProvider?: AnyModelProvider | null;
     projectCwd?: string | null;
     draftWorktreePath?: string | null;
     serverCwd?: string | null;
