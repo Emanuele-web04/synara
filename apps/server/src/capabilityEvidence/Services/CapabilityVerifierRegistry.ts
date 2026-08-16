@@ -21,6 +21,16 @@ export interface CapabilityVerificationRequest {
   readonly runtime: RuntimeIdentitySignals;
   readonly verifier: VerifierIdentity;
   readonly advertisement: { readonly advertised: boolean } | undefined;
+  /**
+   * Harness-specific spawn context for the verifier: the executable to invite
+   * into the run and its environment. Verifiers that own a child process use
+   * this instead of guessing from the runtime fingerprint. KAR-524.
+   */
+  readonly spawnContext?: {
+    readonly command: string;
+    readonly args?: ReadonlyArray<string>;
+    readonly env?: Readonly<Record<string, string>>;
+  };
 }
 
 export interface CapabilityVerificationOutcome {
@@ -28,10 +38,20 @@ export interface CapabilityVerificationOutcome {
   readonly outcome: EvidenceOutcome;
   readonly attribution: CapabilityAttribution;
   readonly detail?: string;
+  /** The runtime identity observed while verifying, for persistence (KAR-524). */
+  readonly runtime?: RuntimeIdentitySignals;
+  /** When the observation was captured; falls back to `new Date().toISOString()`. */
+  readonly observedAt?: string;
 }
 
 export interface CapabilityVerifierShape {
   readonly id: string;
+  /**
+   * Optional runtime-key predicate. When present, the registry only resolves
+   * this verifier for a runtime that matches (e.g. ACP verifiers match any
+   * runtime whose fingerprint is an ACP fingerprint). KAR-524.
+   */
+  readonly matchesRuntime?: (runtime: RuntimeIdentitySignals) => boolean;
   readonly verifies: (
     request: CapabilityVerificationRequest,
   ) => Effect.Effect<CapabilityVerificationOutcome, Error>;
@@ -63,7 +83,17 @@ export const makeCapabilityVerifierRegistry = Effect.sync((): CapabilityVerifier
     register: (verifier) => {
       verifiers.push(verifier);
     },
-    resolve: () => undefined,
+    resolve: ({ capabilityId, runtime }) => {
+      for (const verifier of verifiers) {
+        if (
+          verifier.id.startsWith(`${capabilityId}.`) &&
+          (runtime === undefined || (verifier.matchesRuntime?.(runtime) ?? true))
+        ) {
+          return verifier;
+        }
+      }
+      return undefined;
+    },
     list: () => [...verifiers],
   };
 });
