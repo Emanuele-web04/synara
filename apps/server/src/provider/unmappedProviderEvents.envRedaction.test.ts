@@ -25,6 +25,20 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).toContain("FIREBASE_PRIVATE_KEY=[REDACTED]");
   });
 
+  it("redacts prefixed secret-key assignments and serialized maps", () => {
+    const assignment = JSON.stringify(
+      sanitizeUnmappedProviderData("STRIPE_SECRET_KEY=assignment-secret"),
+    );
+    const serializedMap = JSON.stringify(
+      sanitizeUnmappedProviderData('{"STRIPE_SECRET_KEY":"map-secret"}'),
+    );
+
+    expect(assignment).not.toContain("assignment-secret");
+    expect(serializedMap).not.toContain("map-secret");
+    expect(assignment).toContain("STRIPE_SECRET_KEY=[REDACTED]");
+    expect(serializedMap).toContain('\\"STRIPE_SECRET_KEY\\":[REDACTED]');
+  });
+
   it("consumes escaped quotes inside quoted credential values", () => {
     const serialized = JSON.stringify(
       sanitizeUnmappedProviderData('DB_PASSWORD="abc\\"remaining-secret"'),
