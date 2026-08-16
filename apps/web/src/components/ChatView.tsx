@@ -2303,7 +2303,7 @@ export default function ChatView({
       (externalAgentProfilesQuery.data?.profiles ?? []).map((profile) => ({
         profileId: profile.profileId,
         name: profile.name,
-        removed: profile.status === "tombstoned",
+        removed: profile.status === "retired",
       })),
     [externalAgentProfilesQuery.data],
   );

@@ -109,6 +109,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { CapabilityEvidenceService } from "./capabilityEvidence/Services/CapabilityEvidenceService";
 import { AgentProfileService } from "./externalAgents/AgentProfileService";
+import { ProfileLifecycleService } from "./externalAgents/ProfileLifecycleService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -344,6 +345,7 @@ const makeWsRpcHandlersLayer = () =>
       const externalMcp = yield* ExternalMcpService;
       const capabilityEvidence = yield* CapabilityEvidenceService;
       const agentProfiles = yield* AgentProfileService;
+      const profileLifecycle = yield* ProfileLifecycleService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1685,6 +1687,27 @@ const makeWsRpcHandlersLayer = () =>
               .tombstoneProfile(input.profileId)
               .pipe(Effect.map((profile) => ({ profile }))),
             "Failed to remove external agent profile",
+          ),
+        [WS_METHODS.serverQuarantineExternalAgentProfile]: (input) =>
+          rpcEffect(
+            profileLifecycle
+              .quarantineProfile(input.profileId)
+              .pipe(Effect.map(({ profile, stoppedSessions }) => ({ profile, stoppedSessions }))),
+            "Failed to quarantine external agent profile",
+          ),
+        [WS_METHODS.serverUnquarantineExternalAgentProfile]: (input) =>
+          rpcEffect(
+            profileLifecycle
+              .unquarantineProfile(input.profileId)
+              .pipe(Effect.map((profile) => ({ profile }))),
+            "Failed to un-quarantine external agent profile",
+          ),
+        [WS_METHODS.serverRecertifyExternalAgentProfile]: (input) =>
+          rpcEffect(
+            profileLifecycle
+              .recertifyProfile(input.profileId)
+              .pipe(Effect.map(({ profile, states }) => ({ profile, states }))),
+            "Failed to re-certify external agent profile",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

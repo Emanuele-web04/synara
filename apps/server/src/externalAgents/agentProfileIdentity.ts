@@ -6,6 +6,7 @@ import type {
   AgentProfileLaunch,
   AgentProfileProvenance,
   AgentProfileRevision,
+  AgentProfileTrust,
   ConnectorKind,
 } from "@synara/contracts";
 
@@ -21,6 +22,7 @@ export interface AgentProfileRevisionContent {
   readonly launch: AgentProfileLaunch;
   readonly credentialRefs: ReadonlyArray<AgentProfileCredentialRef>;
   readonly provenance: AgentProfileProvenance;
+  readonly trust?: AgentProfileTrust;
 }
 
 export function toAgentProfileRevisionContent(
@@ -32,6 +34,7 @@ export function toAgentProfileRevisionContent(
     launch: revision.launch,
     credentialRefs: revision.credentialRefs ?? [],
     provenance: revision.provenance,
+    ...(revision.trust !== undefined ? { trust: revision.trust } : {}),
   };
 }
 

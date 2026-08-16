@@ -21,6 +21,7 @@ import {
   legacyAcpRevisionId,
 } from "./agentProfileIdentity";
 import { AgentProfileRepository, type AgentProfileRepositoryShape } from "./AgentProfileRepository";
+import { isAgentProfileRevisionTrusted } from "./agentProfileTrust";
 
 export class ExternalAgentProfileError extends Data.TaggedError("ExternalAgentProfileError")<{
   readonly code: string;
@@ -99,12 +100,27 @@ const profileRemovedError = (profileName: string) =>
     status: 409,
   });
 
+const profileQuarantinedError = (profileName: string) =>
+  new ExternalAgentProfileError({
+    code: "profile-quarantined",
+    message: `External agent profile "${profileName}" is quarantined; new sessions are blocked until it is re-certified.`,
+    status: 409,
+  });
+
+const profileUntrustedError = (profileName: string) =>
+  new ExternalAgentProfileError({
+    code: "profile-untrusted",
+    message: `External agent profile "${profileName}" is not trusted for credential release; attach a trusted workflow or verified vendor claim first.`,
+    status: 409,
+  });
+
 function buildContentFromEdit(input: {
   readonly displayName: string;
   readonly connectorKind: AgentProfileRevision["connectorKind"];
   readonly launch: AgentProfileRevision["launch"];
   readonly credentialRefs: ReadonlyArray<AgentProfileCredentialRef>;
   readonly provenance: AgentProfileRevision["provenance"];
+  readonly trust?: AgentProfileRevision["trust"];
 }) {
   return {
     displayName: input.displayName,
@@ -112,6 +128,7 @@ function buildContentFromEdit(input: {
     launch: input.launch,
     credentialRefs: input.credentialRefs,
     provenance: input.provenance,
+    ...(input.trust !== undefined ? { trust: input.trust } : {}),
   };
 }
 
@@ -220,12 +237,25 @@ export const makeAgentProfileService = Effect.gen(function* () {
         return yield* profileNotFoundError(input.profileId);
       }
       const current = profile.value;
-      if (current.status === "tombstoned") {
+      if (current.status === "retired") {
         return yield* profileRemovedError(current.name);
+      }
+      if (current.status === "quarantined") {
+        return yield* profileQuarantinedError(current.name);
       }
       const revision = yield* repository.getRevision(input.revisionId);
       if (Option.isNone(revision)) {
         return yield* revisionNotFoundError(current.name, input.revisionId);
+      }
+      // Provenance-based credential release: credentials are only handed to
+      // trusted streams. Untrusted profiles that need credentials are refused
+      // before the secret store is touched.
+      const launchRefs =
+        revision.value.launch.kind === "command" ? (revision.value.launch.envRefs ?? []) : [];
+      const needsCredentials =
+        (revision.value.credentialRefs?.length ?? 0) > 0 || launchRefs.length > 0;
+      if (needsCredentials && !isAgentProfileRevisionTrusted(revision.value)) {
+        return yield* profileUntrustedError(current.name);
       }
       const env = yield* resolveCredentialEnv(current, revision.value);
       return { profile: current, revision: revision.value, env };
@@ -297,7 +327,7 @@ export const makeAgentProfileService = Effect.gen(function* () {
         return yield* profileNotFoundError(input.profileId);
       }
       const profile = existing.value;
-      if (profile.status === "tombstoned") {
+      if (profile.status === "retired") {
         return yield* profileRemovedError(profile.name);
       }
       const currentRevision = yield* repository.getRevision(profile.currentRevisionId);
@@ -314,6 +344,11 @@ export const makeAgentProfileService = Effect.gen(function* () {
         launch: input.launch,
         credentialRefs: input.credentialRefs ?? [],
         provenance: input.provenance ?? previousProvenance ?? { source: "manual" },
+        ...(input.trust !== undefined
+          ? { trust: input.trust }
+          : Option.isSome(currentRevision) && currentRevision.value.trust !== undefined
+            ? { trust: currentRevision.value.trust }
+            : {}),
       });
       const revisionId = computeAgentProfileRevisionId(content);
       const revision: AgentProfileRevision = {
@@ -323,6 +358,11 @@ export const makeAgentProfileService = Effect.gen(function* () {
         launch: input.launch,
         credentialRefs: input.credentialRefs ?? [],
         provenance: content.provenance,
+        ...(input.trust !== undefined
+          ? { trust: input.trust }
+          : Option.isSome(currentRevision) && currentRevision.value.trust !== undefined
+            ? { trust: currentRevision.value.trust }
+            : {}),
         parentRevisionId: profile.currentRevisionId,
         createdAt: now,
       };
@@ -347,7 +387,7 @@ export const makeAgentProfileService = Effect.gen(function* () {
       if (Option.isNone(existing)) {
         return yield* profileNotFoundError(profileId);
       }
-      if (existing.value.status === "tombstoned") {
+      if (existing.value.status === "retired") {
         return existing.value;
       }
       const updated = yield* repository.tombstoneProfile(profileId, new Date().toISOString());
