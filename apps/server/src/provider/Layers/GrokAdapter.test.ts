@@ -326,14 +326,45 @@ describe("GrokAdapter runtime event scoping", () => {
       { slug: "grok-build-0.1", name: "Grok Build 0.1" },
       { slug: "grok-4.5", name: "Grok 4.5" },
     ]);
-    for (const model of models) {
-      expect(model.defaultReasoningEffort).toBe("low");
-      expect(model.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
-        "none",
-        "low",
-        "medium",
-        "high",
-      ]);
-    }
+    expect(models[0]?.defaultReasoningEffort).toBe("low");
+    expect(models[0]?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(models[2]?.defaultReasoningEffort).toBe("high");
+    expect(models[2]?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("stamps Grok 4.6 with Extra High instead of the grok-build None ladder", () => {
+    const [model] = mergeGrokModelDescriptors([[{ slug: "grok-4.6", name: "Grok 4.6" }]]);
+    expect(model?.defaultReasoningEffort).toBe("high");
+    expect(model?.supportedReasoningEfforts).toEqual([
+      {
+        value: "low",
+        label: "Low",
+        description: "Quick, fast implementations",
+      },
+      {
+        value: "medium",
+        label: "Medium",
+        description: "Balanced effort with standard implementation and testing",
+      },
+      {
+        value: "high",
+        label: "High",
+        description: "Higher implementation quality with extensive reasoning",
+      },
+      {
+        value: "xhigh",
+        label: "Extra High",
+        description: "Highest effort and reasoning level",
+      },
+    ]);
   });
 });

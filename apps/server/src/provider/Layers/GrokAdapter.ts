@@ -5,7 +5,6 @@
  */
 import {
   ApprovalRequestId,
-  GROK_REASONING_EFFORT_OPTIONS,
   type GrokModelOptions,
   EventId,
   type ProviderComposerCapabilities,
@@ -21,8 +20,9 @@ import {
   type ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { getDefaultEffort, getModelCapabilities } from "@synara/shared/model";
 import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -193,8 +193,6 @@ const GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const GROK_TURN_SETTLE_DRAIN_POLL_MS = 25;
 const GROK_EXIT_PLAN_RESPONSE_GRACE_MS = 25;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
-const GROK_DEFAULT_REASONING_EFFORT = "low";
-const GROK_RUNTIME_REASONING_EFFORTS = GROK_REASONING_EFFORT_OPTIONS.map((value) => ({ value }));
 const GROK_PLAN_MODE_PROMPT_PREFIX = [
   "Synara requested Grok's native plan mode.",
   "Do not implement or mutate files in this turn.",
@@ -576,11 +574,17 @@ export function mergeGrokModelDescriptors(
         continue;
       }
       seen.add(key);
+      const capabilities = getModelCapabilities("grok", slug);
+      const defaultReasoningEffort = getDefaultEffort(capabilities);
       models.push({
         slug,
         name: model.name.trim() || formatGrokModelName(slug),
-        supportedReasoningEfforts: GROK_RUNTIME_REASONING_EFFORTS,
-        defaultReasoningEffort: GROK_DEFAULT_REASONING_EFFORT,
+        supportedReasoningEfforts: capabilities.reasoningEffortLevels.map((level) => ({
+          value: level.value,
+          label: level.label,
+          ...(level.description ? { description: level.description } : {}),
+        })),
+        ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
       });
     }
   }

@@ -27,7 +27,18 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "max",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
-export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high"] as const;
+// Union of every Grok CLI ladder. Per-model capabilities pick a subset:
+// grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh.
+export const GROK_BUILD_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
+export const GROK_4_5_REASONING_EFFORTS = ["low", "medium", "high"] as const;
+export const GROK_4_6_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export const GROK_REASONING_EFFORT_OPTIONS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
   "off",
@@ -223,18 +234,54 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
   ],
 };
 
-const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
-  reasoningEffortLevels: [
-    { value: "none", label: "None" },
-    { value: "low", label: "Low", isDefault: true },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-  ],
-  supportsFastMode: false,
-  supportsThinkingToggle: false,
-  promptInjectedEffortLevels: [],
-  contextWindowOptions: [],
-};
+const GROK_CLI_EFFORT_DESCRIPTIONS = {
+  low: "Quick, fast implementations",
+  medium: "Balanced effort with standard implementation and testing",
+  high: "Higher implementation quality with extensive reasoning",
+  xhigh: "Highest effort and reasoning level",
+} as const;
+
+function grokCliEffortOption(
+  value: Exclude<GrokReasoningEffort, "none">,
+  options: Pick<EffortOption, "isDefault"> = {},
+): EffortOption {
+  return {
+    value,
+    label: value === "xhigh" ? "Extra High" : `${value.charAt(0).toUpperCase()}${value.slice(1)}`,
+    description: GROK_CLI_EFFORT_DESCRIPTIONS[value],
+    ...options,
+  };
+}
+
+function grokCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
+  return {
+    reasoningEffortLevels,
+    supportsFastMode: false,
+    supportsThinkingToggle: false,
+    promptInjectedEffortLevels: [],
+    contextWindowOptions: [],
+  };
+}
+
+const GROK_BUILD_CAPABILITIES = grokCapabilities([
+  { value: "none", label: "None" },
+  { value: "low", label: "Low", isDefault: true },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+]);
+
+const GROK_4_5_CAPABILITIES = grokCapabilities([
+  grokCliEffortOption("low"),
+  grokCliEffortOption("medium"),
+  grokCliEffortOption("high", { isDefault: true }),
+]);
+
+const GROK_4_6_CAPABILITIES = grokCapabilities([
+  grokCliEffortOption("low"),
+  grokCliEffortOption("medium"),
+  grokCliEffortOption("high", { isDefault: true }),
+  grokCliEffortOption("xhigh"),
+]);
 
 // Cursor's live catalog is discovered per session (see CursorAdapter.listModels);
 // these entries are the cold-start fallback and mirror the base model ids the
@@ -613,6 +660,16 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "grok-build",
       name: "Grok 4.3",
       capabilities: GROK_BUILD_CAPABILITIES,
+    },
+    {
+      slug: "grok-4.5",
+      name: "Grok 4.5",
+      capabilities: GROK_4_5_CAPABILITIES,
+    },
+    {
+      slug: "grok-4.6",
+      name: "Grok 4.6",
+      capabilities: GROK_4_6_CAPABILITIES,
     },
   ],
   droid: [
@@ -1160,6 +1217,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "grok-code-fast-1": "grok-build-0.1",
     "grok-code-fast-1-0825": "grok-build-0.1",
     "code-fast": "grok-build-0.1",
+    "4.5": "grok-4.5",
+    "grok-4.5": "grok-4.5",
+    "4.6": "grok-4.6",
+    "grok-4.6": "grok-4.6",
   },
   kilo: {},
   opencode: {},
