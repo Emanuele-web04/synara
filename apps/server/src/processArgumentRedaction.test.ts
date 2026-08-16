@@ -105,6 +105,65 @@ describe("redactSensitiveProcessArgs", () => {
     expect(redactSensitiveProcessArgs("PASSWORD=$((1 + (2 * 3)))supersecret remains useful")).toBe(
       "PASSWORD=[redacted] remains useful",
     );
+    expect(redactSensitiveProcessArgs("PASSWORD=$[1 + 2]supersecret remains useful")).toBe(
+      "PASSWORD=[redacted] remains useful",
+    );
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case x in x) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case y in x) printf esac;; y) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case case in case) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case 1 in 1) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case \\x in x) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case y in x) printf noop;; # esac\ny) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(printf noop\ncase y in y) printf supersecret;; esac\n)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(if true; then case y in y) printf supersecret;; esac; fi)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(time case y in y) printf supersecret;; esac)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs(
+        "PASSWORD=$(case y in\nx) cat <<EOF\n;;\nesac\nEOF\n;;\ny) printf supersecret;;\nesac\n)suffix remains useful",
+      ),
+    ).toBe("PASSWORD=[redacted]");
+    expect(redactSensitiveProcessArgs("PASSWORD=$(printf case)supersecret remains useful")).toBe(
+      "PASSWORD=[redacted] remains useful",
+    );
+    expect(redactSensitiveProcessArgs("PASSWORD=$(printf [)supersecret remains useful")).toBe(
+      "PASSWORD=[redacted] remains useful",
+    );
   });
 
   it("recognizes append-style sensitive assignments", () => {
@@ -113,6 +172,21 @@ describe("redactSensitiveProcessArgs", () => {
     );
     expect(redactProcessTableArgs("bash -c PASSWORD+=supersecret; sleep 30")).toBe(
       "bash -c PASSWORD+=[redacted]",
+    );
+  });
+
+  it("recognizes sensitive assignments nested in explicit environment options", () => {
+    expect(
+      redactSensitiveProcessArgs("systemd-run --setenv=PASSWORD=supersecret sleep infinity"),
+    ).toBe("systemd-run --setenv=PASSWORD=[redacted] sleep infinity");
+    expect(redactProcessTableArgs("systemd-run --setenv=PASSWORD=supersecret sleep infinity")).toBe(
+      "systemd-run --setenv=PASSWORD=[redacted]",
+    );
+    expect(
+      redactSensitiveProcessArgs('systemd-run "--setenv=PASSWORD=supersecret" sleep infinity'),
+    ).toBe('systemd-run "--setenv=PASSWORD=[redacted]" sleep infinity');
+    expect(redactSensitiveProcessArgs("prefix--setenv=PASSWORD=ordinary remains useful")).toBe(
+      "prefix--setenv=PASSWORD=ordinary remains useful",
     );
   });
 
