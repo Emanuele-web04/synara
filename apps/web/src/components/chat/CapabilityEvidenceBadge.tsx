@@ -27,7 +27,9 @@ export function summarizeCapabilityBadge(
   if (seen.has("broken")) return "broken";
   if (seen.has("degraded")) return "degraded";
   if (seen.has("provisional")) return "provisional";
-  if (seen.size === 0) return "unknown";
+  // An empty history and a history made up entirely of `unknown` readings both
+  // mean "no confidence evidence yet" — never a fabricated green check.
+  if (seen.size === 0 || (seen.size === 1 && seen.has("unknown"))) return "unknown";
   return "verified";
 }
 

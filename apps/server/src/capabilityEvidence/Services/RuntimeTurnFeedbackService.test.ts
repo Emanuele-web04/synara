@@ -21,6 +21,7 @@ import { externalAgentEvidenceNamespace } from "@synara/shared/capabilityEvidenc
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { capabilityEvidenceLayer } from "../Layers/CapabilityEvidenceService.ts";
+import { CapabilityEvidenceRepository } from "./CapabilityEvidenceRepository.ts";
 import { CapabilityEvidenceService } from "./CapabilityEvidenceService.ts";
 import { RUNTIME_FEEDBACK_VERIFIER_ID } from "./RuntimeTurnFeedbackClassifier.ts";
 import { RuntimeTurnFeedbackService } from "./RuntimeTurnFeedbackService.ts";
@@ -87,7 +88,7 @@ describe("RuntimeTurnFeedbackService", () => {
   });
 
   layer("withdraw (AC4): unsafe outcomes demote evidence, never inflate it", (it) => {
-    it.effect("withdraws prior claims and reads the capability as not verified", () =>
+    it.effect("withdraws prior claims and reads the capability as unknown, not broken", () =>
       Effect.gen(function* () {
         const service = yield* RuntimeTurnFeedbackService;
         const evidence = yield* CapabilityEvidenceService;
@@ -100,7 +101,7 @@ describe("RuntimeTurnFeedbackService", () => {
         const unsafe = {
           ...input,
           turnId: "turn-2",
-          outcome: "fail" as const,
+          outcome: "inconclusive" as const,
           attribution: "agent" as const,
           disposition: "withdraw" as const,
           detail: "agent produced corrupt output",
@@ -109,15 +110,56 @@ describe("RuntimeTurnFeedbackService", () => {
         const result = yield* service.recordTurnFeedback(unsafe);
         assert.strictEqual(result.disposition, "withdraw");
         assert.isAtLeast(result.demoted ?? 0, 1);
+        // The hardening observation withdraw leaves behind is inconclusive:
+        // the unsafe session withdraws prior claims but never fabricates a
+        // hard failure the policy would read as `broken`.
+        assert.strictEqual(result.observation.outcome, "inconclusive");
 
         // The badge no longer derives 'verified' — the unsafe outcome removed
-        // the claim rather than stacking on top of it.
+        // the claim rather than stacking on top of it, and reads `unknown`
+        // (the documented withdraw semantics), never `broken`.
         const badge = yield* evidence.queryBadge({
           namespace: externalAgentEvidenceNamespace(input.profileId),
         });
         const promptState = badge.states.find((state) => state.capabilityId === "prompt");
         assert.ok(promptState);
-        assert.notStrictEqual(promptState.state, "verified");
+        assert.strictEqual(promptState.state, "unknown");
+      }),
+    );
+
+    it.effect("preserves the raw withdrawn history for audit (includeWithdrawn)", () =>
+      Effect.gen(function* () {
+        const service = yield* RuntimeTurnFeedbackService;
+        const repository = yield* CapabilityEvidenceRepository;
+
+        const input = baseInput();
+        yield* service.recordTurnFeedback(input);
+        yield* service.recordTurnFeedback({
+          ...input,
+          turnId: "turn-2",
+          outcome: "inconclusive" as const,
+          attribution: "agent" as const,
+          disposition: "withdraw" as const,
+          completedAt: "2026-08-16T02:00:00.000Z",
+        });
+
+        // Active derivation excludes withdrawn rows…
+        const active = yield* repository.listObservations({
+          namespace: externalAgentEvidenceNamespace(input.profileId),
+          capabilityId: "prompt",
+        });
+        assert.strictEqual(active.length, 1);
+        assert.strictEqual(active[0]!.outcome, "inconclusive");
+
+        // …but the raw history is still fully readable for audit.
+        const full = yield* repository.listObservations({
+          namespace: externalAgentEvidenceNamespace(input.profileId),
+          capabilityId: "prompt",
+          includeWithdrawn: true,
+        });
+        const passRow = full.find((observation) => observation.outcome === "pass");
+        assert.ok(passRow, "withdrawn pass observation must survive for audit");
+        assert.strictEqual(full.length, 2);
       }),
     );
   });

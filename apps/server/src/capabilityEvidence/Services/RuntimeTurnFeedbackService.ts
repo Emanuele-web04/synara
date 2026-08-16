@@ -152,7 +152,10 @@ export const makeRuntimeTurnFeedbackService = Effect.gen(function* () {
         // A real session contradicted prior assertion. Withdraw (mark) the
         // profile's existing rows so the badge no longer claims the capability,
         // without fabricating an agent failure and without corrupting the raw
-        // evidence history (KAR-530 AC #4/#5).
+        // evidence history (KAR-530 AC #4/#5). The hardening observation is
+        // *inconclusive*: an agent-attributable live failure withdraws prior
+        // claims but is never a hard `fail` the policy would read as `broken`
+        // — the documented withdraw semantics are `unknown`/`provisional`.
         const demoteResult = yield* repository
           .demoteObservations({
             namespace,
@@ -161,7 +164,7 @@ export const makeRuntimeTurnFeedbackService = Effect.gen(function* () {
             withdrawnAt: now,
           })
           .pipe(Effect.mapError(feedbackError("demote")));
-        const observation = buildObservation(input.outcome === "fail" ? "fail" : "inconclusive");
+        const observation = buildObservation("inconclusive");
         yield* repository
           .appendObservation({ observation })
           .pipe(Effect.mapError(feedbackError("append")));

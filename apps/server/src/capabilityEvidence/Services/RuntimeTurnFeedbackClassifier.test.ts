@@ -83,14 +83,14 @@ describe("classifyRuntimeTurnFeedbackInput", () => {
     });
   });
 
-  it("maps a failed agent-attributable turn to a hard fail/withdraw (AC4)", () => {
+  it("maps a failed agent-attributable turn to inconclusive/withdraw (AC4)", () => {
     expect(
       classifyRuntimeTurnFeedbackInput({
         turnState: "failed",
         errorMessage: "agent corrupted the repository",
       }),
     ).toEqual({
-      outcome: "fail",
+      outcome: "inconclusive",
       attribution: "agent",
       disposition: "withdraw",
     });

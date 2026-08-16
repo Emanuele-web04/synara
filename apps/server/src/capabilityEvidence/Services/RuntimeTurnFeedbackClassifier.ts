@@ -81,6 +81,11 @@ export function classifyRuntimeTurnDisposition(
       return classifyRuntimeTurnAttribution(signals.errorMessage) === "agent"
         ? "withdraw"
         : "observe";
+    default: {
+      // A new turnState must be handled explicitly before this is reachable.
+      const exhaustive: never = signals.turnState;
+      return exhaustive;
+    }
   }
 }
 
@@ -93,10 +98,13 @@ export interface RuntimeTurnFeedbackInputShadow {
 
 /**
  * Builds the evidence shadow for a terminal turn. Completed turns attest; a
- * failed, agent-attributable turn records a hard fail (the policy honors the
- * failure count); a failed but possibly-environmental turn records
- * inconclusive; interrupted/cancelled turns record inconclusive too — they do
- * not promote and must not globally punish.
+ * failed, agent-attributable turn records a withdraw with an *inconclusive*
+ * hardening reading (the honest bookkeeping is "the capability did not hold
+ * this time" — that withdraws prior claims but never fabricates a hard agent
+ * failure that the policy would read as `broken`); a failed but
+ * possibly-environmental turn records inconclusive and observes;
+ * interrupted/cancelled turns record inconclusive too — they do not promote
+ * and must not globally punish.
  * Honeypot turns arrive with an explicit `honeypot` flag; the caller then owns
  * the `abuse` disposition (see classifyRuntimeTurnDisposition), which the
  * service turns into a purge — never a promotion.
@@ -114,11 +122,16 @@ export function classifyRuntimeTurnFeedbackInput(
     case "failed": {
       const attribution = classifyRuntimeTurnAttribution(signals.errorMessage);
       return attribution === "agent"
-        ? { outcome: "fail", attribution, disposition: "withdraw" }
+        ? { outcome: "inconclusive", attribution, disposition: "withdraw" }
         : { outcome: "inconclusive", attribution, disposition: "observe" };
     }
     case "interrupted":
     case "cancelled":
       return { outcome: "inconclusive", attribution: "unknown", disposition: "observe" };
+    default: {
+      // A new turnState must be handled explicitly before this is reachable.
+      const exhaustive: never = signals.turnState;
+      return exhaustive;
+    }
   }
 }
