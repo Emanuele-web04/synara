@@ -1,8 +1,6 @@
 const ENV_ASSIGNMENT_START_PATTERN = /(^|[\s;&|()'"])([A-Za-z_][A-Za-z0-9_]*)=/g;
-const SHELL_ASSIGNMENT_VALUE_PATTERN =
-  /(?:"(?:\\.|[^"\\])*"|'[^']*'|\$\((?:\\.|[^)])*\)|`(?:\\.|[^`\\])*`|\\[^\r\n]|[^\s"'\\;&|()<>])+/gy;
 const SENSITIVE_ENV_NAME =
-  /^(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
+  /^(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|MYSQL_PWD|PASSWORD|PASSPHRASE|PGPASSWORD|REDISCLI_AUTH|SECRET|TOKEN)$/;
 const SENSITIVE_ENV_NAME_SUFFIX =
   /_(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
 const URL_CREDENTIALS_AT_VALUE_START = /^["']?[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i;
@@ -33,6 +31,65 @@ function redactSensitiveEnvironmentRemainder(args: string): string {
   return args;
 }
 
+function boundedShellAssignmentValueEnd(
+  args: string,
+  valueStart: number,
+  boundary: string | undefined,
+): number {
+  if (boundary === "'" || boundary === '"') {
+    for (let index = valueStart; index < args.length; index += 1) {
+      if (args[index] === "\\") {
+        index += 1;
+        continue;
+      }
+      if (args[index] === boundary) return index;
+    }
+    return args.length;
+  }
+
+  let quote: "'" | '"' | "`" | null = null;
+  let commandSubstitutionDepth = 0;
+  let index = valueStart;
+  while (index < args.length) {
+    const character = args[index]!;
+    if (character === "\\") {
+      index += 2;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      if (character === "$" && args[index + 1] === "(") {
+        commandSubstitutionDepth += 1;
+        index += 2;
+        continue;
+      }
+      if (character === ")" && commandSubstitutionDepth > 0) {
+        commandSubstitutionDepth -= 1;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      index += 1;
+      continue;
+    }
+    if (character === "$" && args[index + 1] === "(") {
+      commandSubstitutionDepth += 1;
+      index += 2;
+      continue;
+    }
+    if (character === ")" && commandSubstitutionDepth > 0) {
+      commandSubstitutionDepth -= 1;
+      index += 1;
+      continue;
+    }
+    if (commandSubstitutionDepth === 0 && /[\s;&|()<>]/u.test(character)) break;
+    index += 1;
+  }
+  return index;
+}
+
 function redactBoundedSensitiveEnvironmentValues(args: string): string {
   let result = "";
   let cursor = 0;
@@ -40,10 +97,7 @@ function redactBoundedSensitiveEnvironmentValues(args: string): string {
     if (!isSensitiveEnvironmentName(match[2])) continue;
     const valueStart = match.index + match[0].length;
     if (valueStart < cursor) continue;
-    SHELL_ASSIGNMENT_VALUE_PATTERN.lastIndex = valueStart;
-    const value = SHELL_ASSIGNMENT_VALUE_PATTERN.exec(args);
-    const valueEnd =
-      value?.index === valueStart ? SHELL_ASSIGNMENT_VALUE_PATTERN.lastIndex : valueStart;
+    const valueEnd = boundedShellAssignmentValueEnd(args, valueStart, match[1]);
     result += `${args.slice(cursor, valueStart)}[redacted]`;
     cursor = valueEnd;
   }

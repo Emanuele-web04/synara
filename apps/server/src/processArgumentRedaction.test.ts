@@ -89,6 +89,26 @@ describe("redactSensitiveProcessArgs", () => {
     }
   });
 
+  it("redacts complete externally quoted and nested bounded assignment values", () => {
+    expect(redactSensitiveProcessArgs("'PASSWORD=correct horse' remains useful")).toBe(
+      "'PASSWORD=[redacted]' remains useful",
+    );
+    expect(
+      redactSensitiveProcessArgs('PASSWORD=$(printf x "$(printf y)")supersecret remains useful'),
+    ).toBe("PASSWORD=[redacted] remains useful");
+  });
+
+  it("redacts established database credential environment names", () => {
+    for (const name of ["PGPASSWORD", "MYSQL_PWD", "REDISCLI_AUTH"]) {
+      expect(redactProcessTableArgs(`env ${name}=supersecret server`)).toBe(
+        `env ${name}=[redacted]`,
+      );
+      expect(redactSensitiveProcessArgs(`${name}=supersecret remains useful`)).toBe(
+        `${name}=[redacted] remains useful`,
+      );
+    }
+  });
+
   it("redacts credential-bearing environment URLs in process tables", () => {
     expect(
       redactProcessTableArgs(
