@@ -6,6 +6,14 @@ const MAX_UNMAPPED_PROVIDER_DETAIL_CHARS = 500;
 const MAX_UNMAPPED_PROVIDER_NATIVE_TYPE_CHARS = 200;
 const MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS = 2_000;
 const REDACTED_VALUE = "[REDACTED]";
+const LOSSLESS_JSON = JSON as typeof JSON & {
+  isRawJSON(value: unknown): boolean;
+  rawJSON(value: string): unknown;
+};
+const parseJsonWithSource = JSON.parse as (
+  value: string,
+  reviver: (key: string, value: unknown, context?: { readonly source: string }) => unknown,
+) => unknown;
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
 const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
 const URL_CREDENTIAL_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^/\s@]+@/giu;
@@ -201,7 +209,9 @@ function redactSerializedJsonContainers(value: string): string {
 
 function redactParsedJsonValue(serializedValue: string): string {
   try {
-    const parsed: unknown = JSON.parse(serializedValue);
+    const parsed = parseJsonWithSource(serializedValue, (_key, value, context) =>
+      typeof value === "number" && context ? LOSSLESS_JSON.rawJSON(context.source) : value,
+    );
     const result = redactParsedEnvironmentValue(parsed);
     return result.changed ? JSON.stringify(result.value) : serializedValue;
   } catch {
@@ -210,6 +220,9 @@ function redactParsedJsonValue(serializedValue: string): string {
 }
 
 function redactParsedEnvironmentValue(value: unknown): { value: unknown; changed: boolean } {
+  if (LOSSLESS_JSON.isRawJSON(value)) {
+    return { value, changed: false };
+  }
   if (Array.isArray(value)) {
     if (isSensitiveEnvironmentTuple(value)) {
       return {

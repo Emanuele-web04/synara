@@ -258,6 +258,16 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).toContain("[REDACTED]");
   });
 
+  it("preserves unrelated JSON number tokens during redaction", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData('{"OPENAI_API_KEY":"secret","requestId":9007199254740993}'),
+    );
+
+    expect(serialized).not.toContain("secret");
+    expect(serialized).toContain("9007199254740993");
+    expect(serialized).not.toContain("9007199254740992");
+  });
+
   it("bounds URL scanning work for long diagnostics without URLs", () => {
     const sanitized = sanitizeUnmappedProviderData("a".repeat(50_000));
 
