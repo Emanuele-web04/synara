@@ -3,7 +3,17 @@
 //          temp root even when thread ids contain path-like characters.
 // Layer: Server filesystem utility tests
 
-import { chmodSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -45,6 +55,24 @@ describe("ensureIsolatedScratchWorkspace", () => {
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("moves a matching legacy workspace into the private per-user root", () => {
+    const threadId = ThreadId.makeUnsafe("legacy-thread");
+    const migratedRoot = path.join(testScratchParent, "migrated", SCRATCH_WORKSPACES_DIRNAME);
+    const legacyRoot = path.join(testScratchParent, "legacy", SCRATCH_WORKSPACES_DIRNAME);
+    const initialWorkspace = ensureIsolatedScratchWorkspace(threadId, migratedRoot);
+    const workspaceSegment = path.basename(initialWorkspace);
+    rmSync(migratedRoot, { recursive: true, force: true });
+
+    const legacyWorkspace = path.join(legacyRoot, workspaceSegment);
+    mkdirSync(legacyWorkspace, { recursive: true });
+    writeFileSync(path.join(legacyWorkspace, "resume.txt"), "preserved");
+
+    const migratedWorkspace = ensureIsolatedScratchWorkspace(threadId, migratedRoot, legacyRoot);
+
+    expect(readFileSync(path.join(migratedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
+    expect(existsSync(legacyWorkspace)).toBe(false);
   });
 
   it("does not let path-like thread ids escape the scratch root", () => {
