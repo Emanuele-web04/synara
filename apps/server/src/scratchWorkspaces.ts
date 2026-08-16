@@ -7,7 +7,7 @@
 // Exports: ensureIsolatedScratchWorkspace
 
 import { createHash } from "node:crypto";
-import { lstatSync, renameSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
@@ -47,31 +47,20 @@ function isOwnedRealDirectory(directoryPath: string): boolean {
   }
 }
 
-function migrateLegacyScratchWorkspace(
+function repairLegacyScratchWorkspace(
   legacyWorkspaceRoot: string,
-  workspaceRoot: string,
   workspaceSegment: string,
-): void {
-  const workspaceDir = path.join(workspaceRoot, workspaceSegment);
+): string | undefined {
   const legacyWorkspaceDir = path.join(legacyWorkspaceRoot, workspaceSegment);
-  if (
-    isOwnedRealDirectory(workspaceDir) ||
-    !isOwnedRealDirectory(legacyWorkspaceRoot) ||
-    !isOwnedRealDirectory(legacyWorkspaceDir)
-  ) {
-    return;
+  if (!isOwnedRealDirectory(legacyWorkspaceRoot) || !isOwnedRealDirectory(legacyWorkspaceDir)) {
+    return undefined;
   }
 
-  // Tighten both old paths before moving user content out of the former
-  // process-wide temp root. O_NOFOLLOW inside the helper rejects symlink swaps.
+  // Preserve historical absolute paths while making the legacy workspace safe
+  // to resume. O_NOFOLLOW inside the helper rejects symlink swaps.
   ensurePrivateDirectorySync(legacyWorkspaceRoot);
   ensurePrivateDirectorySync(legacyWorkspaceDir);
-  try {
-    renameSync(legacyWorkspaceDir, workspaceDir);
-  } catch (cause) {
-    // Another concurrent session may have completed the same migration.
-    if (!isOwnedRealDirectory(workspaceDir)) throw cause;
-  }
+  return legacyWorkspaceDir;
 }
 
 export function ensureIsolatedScratchWorkspace(
@@ -82,18 +71,40 @@ export function ensureIsolatedScratchWorkspace(
   const defaultWorkspaceRoot = resolveScratchWorkspacesRoot();
   const workspaceSegment = scratchWorkspaceSegment(threadId);
   const workspaceDir = path.join(workspaceRoot, workspaceSegment);
-  if (workspaceRoot === defaultWorkspaceRoot) {
-    ensurePrivateDirectorySync(path.dirname(workspaceRoot));
-  }
-  ensurePrivateDirectorySync(workspaceRoot);
   const legacyRoot =
     legacyWorkspaceRoot ??
     (workspaceRoot === defaultWorkspaceRoot
       ? path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME)
       : undefined);
   if (legacyRoot) {
-    migrateLegacyScratchWorkspace(legacyRoot, workspaceRoot, workspaceSegment);
+    const repairedLegacyWorkspace = repairLegacyScratchWorkspace(legacyRoot, workspaceSegment);
+    if (repairedLegacyWorkspace) return repairedLegacyWorkspace;
   }
+  if (workspaceRoot === defaultWorkspaceRoot) {
+    ensurePrivateDirectorySync(path.dirname(workspaceRoot));
+  }
+  ensurePrivateDirectorySync(workspaceRoot);
   ensurePrivateDirectorySync(workspaceDir);
   return workspaceDir;
+}
+
+export function resolveScratchWorkspaceCwd(
+  threadId: ThreadId,
+  persistedCwd?: string,
+  roots: {
+    readonly workspaceRoot?: string;
+    readonly legacyWorkspaceRoot?: string;
+  } = {},
+): string {
+  const workspaceRoot = roots.workspaceRoot ?? resolveScratchWorkspacesRoot();
+  const legacyWorkspaceRoot =
+    roots.legacyWorkspaceRoot ?? path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
+  if (!persistedCwd) {
+    return ensureIsolatedScratchWorkspace(threadId, workspaceRoot, legacyWorkspaceRoot);
+  }
+
+  const legacyWorkspace = path.join(legacyWorkspaceRoot, scratchWorkspaceSegment(threadId));
+  if (path.resolve(persistedCwd) !== path.resolve(legacyWorkspace)) return persistedCwd;
+
+  return ensureIsolatedScratchWorkspace(threadId, workspaceRoot, legacyWorkspaceRoot);
 }

@@ -5,7 +5,6 @@
 
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -21,7 +20,11 @@ import { ThreadId } from "@synara/contracts";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ensureIsolatedScratchWorkspace, resolveScratchWorkspacesRoot } from "./scratchWorkspaces";
+import {
+  ensureIsolatedScratchWorkspace,
+  resolveScratchWorkspaceCwd,
+  resolveScratchWorkspacesRoot,
+} from "./scratchWorkspaces";
 
 const testScratchParent = mkdtempSync(path.join(tmpdir(), "synara-scratch-test-"));
 const testScratchRoot = path.join(testScratchParent, SCRATCH_WORKSPACES_DIRNAME);
@@ -57,7 +60,7 @@ describe("ensureIsolatedScratchWorkspace", () => {
     }
   });
 
-  it("moves a matching legacy workspace into the private per-user root", () => {
+  it("securely reuses a matching legacy workspace without breaking historical paths", () => {
     const threadId = ThreadId.makeUnsafe("legacy-thread");
     const migratedRoot = path.join(testScratchParent, "migrated", SCRATCH_WORKSPACES_DIRNAME);
     const legacyRoot = path.join(testScratchParent, "legacy", SCRATCH_WORKSPACES_DIRNAME);
@@ -69,10 +72,46 @@ describe("ensureIsolatedScratchWorkspace", () => {
     mkdirSync(legacyWorkspace, { recursive: true });
     writeFileSync(path.join(legacyWorkspace, "resume.txt"), "preserved");
 
-    const migratedWorkspace = ensureIsolatedScratchWorkspace(threadId, migratedRoot, legacyRoot);
+    const resumedWorkspace = ensureIsolatedScratchWorkspace(threadId, migratedRoot, legacyRoot);
 
-    expect(readFileSync(path.join(migratedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
-    expect(existsSync(legacyWorkspace)).toBe(false);
+    expect(resumedWorkspace).toBe(legacyWorkspace);
+    expect(readFileSync(path.join(resumedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
+    if (process.platform !== "win32") {
+      expect(statSync(legacyRoot).mode & 0o777).toBe(0o700);
+      expect(statSync(resumedWorkspace).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it("leaves non-scratch persisted workspaces unchanged", () => {
+    const projectCwd = path.join(testScratchParent, "project");
+    expect(resolveScratchWorkspaceCwd(ThreadId.makeUnsafe("project-thread"), projectCwd)).toBe(
+      projectCwd,
+    );
+  });
+
+  it("repairs a persisted legacy cwd before session recovery", () => {
+    const threadId = ThreadId.makeUnsafe("persisted-legacy-thread");
+    const privateRoot = path.join(testScratchParent, "recovery", SCRATCH_WORKSPACES_DIRNAME);
+    const legacyRoot = path.join(testScratchParent, "persisted", SCRATCH_WORKSPACES_DIRNAME);
+    const workspaceSegment = path.basename(ensureIsolatedScratchWorkspace(threadId, privateRoot));
+    rmSync(privateRoot, { recursive: true, force: true });
+    const legacyWorkspace = path.join(legacyRoot, workspaceSegment);
+    mkdirSync(legacyWorkspace, { recursive: true });
+    if (process.platform !== "win32") {
+      chmodSync(legacyRoot, 0o755);
+      chmodSync(legacyWorkspace, 0o755);
+    }
+
+    expect(
+      resolveScratchWorkspaceCwd(threadId, legacyWorkspace, {
+        workspaceRoot: privateRoot,
+        legacyWorkspaceRoot: legacyRoot,
+      }),
+    ).toBe(legacyWorkspace);
+    if (process.platform !== "win32") {
+      expect(statSync(legacyRoot).mode & 0o777).toBe(0o700);
+      expect(statSync(legacyWorkspace).mode & 0o777).toBe(0o700);
+    }
   });
 
   it("does not let path-like thread ids escape the scratch root", () => {
