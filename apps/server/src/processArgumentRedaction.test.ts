@@ -24,31 +24,50 @@ describe("redactSensitiveProcessArgs", () => {
   });
 
   it("redacts secret environment assignments in process diagnostics", () => {
-    expect(
-      redactSensitiveProcessArgs(
-        "env OPENAI_API_KEY=sk-example ANTHROPIC_API_KEY='quoted-secret' GITHUB_TOKEN=ghp_example bun run dev",
-      ),
-    ).toBe(
-      "env OPENAI_API_KEY=[redacted] ANTHROPIC_API_KEY=[redacted] GITHUB_TOKEN=[redacted] bun run dev",
-    );
+    for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN"]) {
+      expect(redactSensitiveProcessArgs(`env ${name}=secret bun run dev`)).toBe(
+        `env ${name}=[redacted]`,
+      );
+    }
   });
 
   it("redacts common secret key environment names", () => {
-    expect(
-      redactSensitiveProcessArgs(
-        "env AWS_SECRET_ACCESS_KEY=aws-secret PRIVATE_KEY=private SECRET_KEY=secret AWS_SESSION_TOKEN=session",
-      ),
-    ).toBe(
-      "env AWS_SECRET_ACCESS_KEY=[redacted] PRIVATE_KEY=[redacted] SECRET_KEY=[redacted] AWS_SESSION_TOKEN=[redacted]",
-    );
+    for (const name of [
+      "AWS_SECRET_ACCESS_KEY",
+      "PRIVATE_KEY",
+      "SECRET_KEY",
+      "AWS_SESSION_TOKEN",
+      "JWT_SIGNING_KEY",
+      "ENCRYPTION_KEY",
+      "MASTER_KEY",
+      "PASSWORD",
+      "TOKEN",
+    ]) {
+      expect(redactSensitiveProcessArgs(`env ${name}=secret bun run dev`)).toBe(
+        `env ${name}=[redacted]`,
+      );
+    }
   });
 
   it("redacts complete shell-composed assignment values", () => {
+    for (const assignment of [
+      'PASSWORD="correct horse"battery',
+      "DB_PASSWORD=correct\\ horse\\ battery",
+      "TOKEN=prefix'middle'suffix",
+      "DB_PASSWORD=$(printf supersecret)",
+      "DB_PASSWORD=`printf supersecret`",
+    ]) {
+      const name = assignment.slice(0, assignment.indexOf("="));
+      expect(redactSensitiveProcessArgs(`env ${assignment} bun run dev`)).toBe(
+        `env ${name}=[redacted]`,
+      );
+    }
+  });
+
+  it("fails closed when process-table output loses a spaced secret's argv boundary", () => {
     expect(
-      redactSensitiveProcessArgs(
-        "env PASSWORD=\"correct horse\"battery DB_PASSWORD=correct\\ horse\\ battery TOKEN=prefix'middle'suffix bun run dev",
-      ),
-    ).toBe("env PASSWORD=[redacted] DB_PASSWORD=[redacted] TOKEN=[redacted] bun run dev");
+      redactSensitiveProcessArgs("docker run -e APP_PASSWORD=correct horse image --verbose"),
+    ).toBe("docker run -e APP_PASSWORD=[redacted]");
   });
 
   it("does not redact unrelated environment assignments", () => {
