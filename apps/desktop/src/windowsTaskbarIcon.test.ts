@@ -9,6 +9,8 @@ import {
   applyWindowsTaskbarIcon,
   clearWindowsTaskbarIconRefresh,
   collectWindowsShortcutPaths,
+  nextWindowsShellIconCacheKey,
+  resetWindowsShellIconGenerationForTests,
   syncWindowsShortcutIcons,
   windowsShellIconCachePath,
 } from "./windowsTaskbarIcon";
@@ -38,6 +40,7 @@ const iconPath = "C:\\Users\\synara\\userdata\\taskbar-icons\\taskbar-icon.ico";
 
 afterEach(() => {
   clearWindowsTaskbarIconRefresh();
+  resetWindowsShellIconGenerationForTests();
   vi.useRealTimers();
 });
 
@@ -49,6 +52,12 @@ describe("windowsShellIconCachePath", () => {
     expect(windowsShellIconCachePath(Path.join("cache"), "icon")).toBe(
       Path.join("cache", "taskbar-icon.ico"),
     );
+  });
+
+  it("issues a new cache key on every apply so reverting to default is not a stale path", () => {
+    expect(nextWindowsShellIconCacheKey("default")).toBe("default-1");
+    expect(nextWindowsShellIconCacheKey("icon")).toBe("icon-2");
+    expect(nextWindowsShellIconCacheKey("default")).toBe("default-3");
   });
 });
 

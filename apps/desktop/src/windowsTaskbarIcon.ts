@@ -27,8 +27,21 @@ export interface ApplyWindowsTaskbarIconInput {
 
 let taskbarReregisterTimer: ReturnType<typeof setTimeout> | null = null;
 
+let windowsShellIconGeneration = 0;
+
 export function windowsShellIconCachePath(cacheDirectory: string, iconKey: string): string {
   return Path.join(cacheDirectory, `taskbar-${iconKey}.ico`);
+}
+
+// Explorer caches taskbar artwork by path. Reusing taskbar-default.ico after a
+// custom icon leaves the scenic art on the button, so each apply gets a new file.
+export function nextWindowsShellIconCacheKey(iconKey: string): string {
+  windowsShellIconGeneration += 1;
+  return `${iconKey}-${windowsShellIconGeneration}`;
+}
+
+export function resetWindowsShellIconGenerationForTests(): void {
+  windowsShellIconGeneration = 0;
 }
 
 export interface WindowsShortcutDetails {

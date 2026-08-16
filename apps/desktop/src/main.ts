@@ -89,6 +89,7 @@ import {
 import {
   applyWindowsTaskbarIcon,
   collectWindowsShortcutPaths,
+  nextWindowsShellIconCacheKey,
   syncWindowsShortcutIcons,
   windowsShellIconCachePath,
 } from "./windowsTaskbarIcon";
@@ -1958,8 +1959,10 @@ function windowsShortcutSearchDirectories(): string[] {
   ];
 }
 
-function syncWindowsTaskbarShortcuts(icon: DesktopAppIcon, shellIconPath: string): void {
-  const shortcutIconPath = icon === "default" ? process.execPath : shellIconPath;
+function syncWindowsTaskbarShortcuts(shellIconPath: string): void {
+  // Always point shortcuts at the materialized ICO. Reverting to process.execPath
+  // leaves Explorer serving the previous custom icon from its AUMID cache.
+  const shortcutIconPath = shellIconPath;
   const shortcutPaths = collectWindowsShortcutPaths({
     directories: windowsShortcutSearchDirectories(),
     readdir: (directory) => FS.readdirSync(directory),
@@ -2002,9 +2005,12 @@ function syncWindowsTaskbarShortcuts(icon: DesktopAppIcon, shellIconPath: string
 function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): string {
   const cacheDirectory = Path.join(STATE_DIR, "taskbar-icons");
   FS.mkdirSync(cacheDirectory, { recursive: true });
-  const destinationPath = windowsShellIconCachePath(cacheDirectory, icon);
+  const destinationPath = windowsShellIconCachePath(
+    cacheDirectory,
+    nextWindowsShellIconCacheKey(icon),
+  );
   // Explorer cannot load ICOs from asar. Copy to a real path and keep a distinct
-  // file per preference so the shell icon cache cannot keep serving the previous art.
+  // file per apply so reverting to the default icon is not a stale cache hit.
   FS.writeFileSync(destinationPath, FS.readFileSync(sourcePath));
   return destinationPath;
 }
@@ -2046,7 +2052,7 @@ function applyDesktopAppIcon(
       );
     }
     try {
-      syncWindowsTaskbarShortcuts(icon, shellIconPath);
+      syncWindowsTaskbarShortcuts(shellIconPath);
     } catch (error) {
       console.warn(`[desktop] Failed to sync Windows shortcut icons: ${formatErrorMessage(error)}`);
     }
