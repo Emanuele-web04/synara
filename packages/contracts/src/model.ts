@@ -32,13 +32,7 @@ export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 export const GROK_BUILD_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
 export const GROK_4_5_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 export const GROK_4_6_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
-export const GROK_REASONING_EFFORT_OPTIONS = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const;
+export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
   "off",

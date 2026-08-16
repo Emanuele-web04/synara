@@ -616,11 +616,7 @@ describe("getComposerProviderState", () => {
       modelOptions: { grok: { reasoningEffort: "medium" } },
     });
 
-    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
-      "low",
-      "medium",
-      "high",
-    ]);
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual(["low", "medium", "high"]);
     expect(selection.defaultEffort).toBe("high");
     expect(selection.effort).toBe("medium");
     expect(state).toEqual({
@@ -644,7 +640,9 @@ describe("getComposerProviderState", () => {
       "xhigh",
     ]);
     expect(grok46.defaultEffort).toBe("high");
-    expect(grok46.effortLevels.find((effort) => effort.value === "xhigh")?.label).toBe("Extra High");
+    expect(grok46.effortLevels.find((effort) => effort.value === "xhigh")?.label).toBe(
+      "Extra High",
+    );
   });
 
   it("exposes and dispatches runtime-discovered Droid efforts for GPT-5.6", () => {

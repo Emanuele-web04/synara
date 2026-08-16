@@ -45,7 +45,9 @@ describe("ComposerModelEffortPicker", () => {
       await trigger.click();
       await expect.element(page.getByRole("menuitemradio", { name: "Low" })).toBeVisible();
       await expect.element(page.getByRole("menuitemradio", { name: "Medium" })).toBeVisible();
-      await expect.element(page.getByRole("menuitemradio", { name: "High (default)" })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "High (default)" }))
+        .toBeVisible();
       await expect.element(page.getByRole("menuitemradio", { name: "Extra High" })).toBeVisible();
     } finally {
       await screen.unmount();

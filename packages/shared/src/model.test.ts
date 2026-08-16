@@ -381,7 +381,9 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       controlSource: "api-effort",
     });
     expect(
-      getModelCapabilities("grok", "grok-4.6").reasoningEffortLevels.find((l) => l.value === "xhigh"),
+      getModelCapabilities("grok", "grok-4.6").reasoningEffortLevels.find(
+        (l) => l.value === "xhigh",
+      ),
     ).toMatchObject({
       value: "xhigh",
       label: "Extra High",
