@@ -569,8 +569,8 @@ export async function readExternalMcpResponseText(
   }
 }
 
-export async function verifyExternalMcpRuntime(
-  runtime: ReturnType<typeof discoverExternalMcpRuntime>,
+async function verifyPersistedServerRuntime(
+  runtime: ReturnType<typeof discoverServerRuntime>,
   fetchImpl: ExternalMcpFetch,
 ): Promise<void> {
   const nonce = randomBytes(24).toString("base64url");
@@ -599,9 +599,23 @@ export async function verifyExternalMcpRuntime(
     !runtimeProofsMatch(expected, body.proof)
   ) {
     throw new ExternalMcpBridgeError(
-      "The loopback endpoint did not prove it is the Synara process named by the private runtime-state file.",
+      "The server endpoint did not prove it is the Synara process named by the private runtime-state file.",
     );
   }
+}
+
+export async function verifyServerRuntime(
+  runtime: ReturnType<typeof discoverServerRuntime>,
+  fetchImpl: ExternalMcpFetch,
+): Promise<void> {
+  await verifyPersistedServerRuntime(runtime, fetchImpl);
+}
+
+export async function verifyExternalMcpRuntime(
+  runtime: ReturnType<typeof discoverExternalMcpRuntime>,
+  fetchImpl: ExternalMcpFetch,
+): Promise<void> {
+  await verifyPersistedServerRuntime(runtime, fetchImpl);
 }
 
 export function requestTimeoutForBody(body: string): number {

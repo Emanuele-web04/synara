@@ -18,6 +18,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { NetService } from "@synara/shared/Net";
 
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { computeExternalMcpRuntimeProof } from "./externalMcp/runtimeProof.ts";
 import { Open, type OpenShape } from "./open";
 import { Server, type ServerShape } from "./effectServer";
 import { makeServerShutdownController } from "./serverShutdown";
@@ -203,6 +204,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       const stateDir = path.join(flagHome, "userdata");
       fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
       fs.chmodSync(stateDir, 0o700);
+      const runtimeSecret = "x".repeat(32);
       fs.writeFileSync(
         path.join(stateDir, "server-runtime.json"),
         JSON.stringify({
@@ -212,12 +214,18 @@ it.layer(testLayer)("server CLI command", (it) => {
           host: "100.64.0.42",
           origin: "http://100.64.0.42:5444",
           startedAt: new Date().toISOString(),
-          externalMcpRuntimeSecret: "x".repeat(32),
+          externalMcpRuntimeSecret: runtimeSecret,
         }),
         { mode: 0o600 },
       );
 
-      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        if (String(input) === "http://100.64.0.42:5444/api/mcp/external/runtime-challenge") {
+          const challenge = JSON.parse(String(init?.body)) as { nonce: string };
+          return Response.json({
+            proof: computeExternalMcpRuntimeProof(runtimeSecret, challenge.nonce),
+          });
+        }
         assert.equal(String(input), "http://100.64.0.42:5444/health");
         return Response.json({
           status: "ok",
@@ -233,6 +241,53 @@ it.layer(testLayer)("server CLI command", (it) => {
         stdout.mockRestore();
       }
 
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("rejects a discovered endpoint that cannot prove the persisted runtime identity", () =>
+    Effect.gen(function* () {
+      const flagHome = makeTempHome("synara-main-status-proof-");
+      const stateDir = path.join(flagHome, "userdata");
+      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      fs.chmodSync(stateDir, 0o700);
+      fs.writeFileSync(
+        path.join(stateDir, "server-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          port: 5444,
+          host: "127.0.0.1",
+          origin: "http://127.0.0.1:5444",
+          startedAt: new Date().toISOString(),
+          externalMcpRuntimeSecret: "x".repeat(32),
+        }),
+        { mode: 0o600 },
+      );
+
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ proof: "wrong-runtime" }));
+      const output: string[] = [];
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      const previousExitCode = process.exitCode;
+      try {
+        yield* runCli(["server", "status", "--json", "--home-dir", flagHome]);
+        assert.equal(process.exitCode, 1);
+      } finally {
+        process.exitCode = previousExitCode;
+        fetch.mockRestore();
+        stdout.mockRestore();
+      }
+
+      assert.deepInclude(JSON.parse(output.join("")), {
+        reachable: false,
+        ready: false,
+        url: "http://127.0.0.1:5444",
+      });
       assert.equal(start.mock.calls.length, 0);
     }),
   );

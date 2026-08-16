@@ -50,6 +50,7 @@ import {
   pairExternalMcpClient,
   resolveExternalMcpBaseDir,
   serveExternalMcpStdio,
+  verifyServerRuntime,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
 import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
@@ -596,7 +597,8 @@ const serverStatusCommand = Command.make(
         : (() => {
             const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
             try {
-              return { url: discoverServerRuntime(baseDir).state.origin };
+              const runtime = discoverServerRuntime(baseDir);
+              return { url: runtime.state.origin, runtime };
             } catch (cause) {
               return {
                 error:
@@ -614,7 +616,24 @@ const serverStatusCommand = Command.make(
               url: "[undiscovered]",
               error: discovered.error,
             }
-          : yield* Effect.promise(() => fetchSynaraServerStatus({ url: discovered.url }));
+          : yield* Effect.promise(async () => {
+              try {
+                if ("runtime" in discovered) {
+                  await verifyServerRuntime(discovered.runtime, globalThis.fetch);
+                }
+                return await fetchSynaraServerStatus({ url: discovered.url });
+              } catch (cause) {
+                return {
+                  reachable: false as const,
+                  ready: false as const,
+                  url: discovered.url,
+                  error:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Failed to verify the discovered Synara server.",
+                };
+              }
+            });
       process.stdout.write(
         json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
       );
