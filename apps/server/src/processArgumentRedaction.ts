@@ -36,19 +36,10 @@ function boundedShellAssignmentValueEnd(
   valueStart: number,
   boundary: string | undefined,
 ): number {
-  if (boundary === "'" || boundary === '"') {
-    for (let index = valueStart; index < args.length; index += 1) {
-      if (args[index] === "\\") {
-        index += 1;
-        continue;
-      }
-      if (args[index] === boundary) return index;
-    }
-    return args.length;
-  }
-
-  let quote: "'" | '"' | "`" | null = null;
-  let commandSubstitutionDepth = 0;
+  type ShellQuote = "'" | '"' | "`";
+  const outerBoundaryQuote = boundary === "'" || boundary === '"' ? boundary : null;
+  let wordQuote: ShellQuote | null = outerBoundaryQuote;
+  const substitutionQuotes: Array<ShellQuote | null> = [];
   let index = valueStart;
   while (index < args.length) {
     const character = args[index]!;
@@ -56,35 +47,64 @@ function boundedShellAssignmentValueEnd(
       index += 2;
       continue;
     }
-    if (quote !== null) {
-      if (character === quote) quote = null;
+
+    if (substitutionQuotes.length > 0) {
+      const substitutionIndex = substitutionQuotes.length - 1;
+      const substitutionQuote = substitutionQuotes[substitutionIndex];
+      if (substitutionQuote !== null) {
+        if (character === substitutionQuote) substitutionQuotes[substitutionIndex] = null;
+        if (substitutionQuote !== "'" && character === "$" && args[index + 1] === "(") {
+          substitutionQuotes.push(null);
+          index += 2;
+          continue;
+        }
+        index += 1;
+        continue;
+      }
+      if (character === "'" || character === '"' || character === "`") {
+        substitutionQuotes[substitutionIndex] = character;
+        index += 1;
+        continue;
+      }
       if (character === "$" && args[index + 1] === "(") {
-        commandSubstitutionDepth += 1;
+        substitutionQuotes.push(null);
         index += 2;
         continue;
       }
-      if (character === ")" && commandSubstitutionDepth > 0) {
-        commandSubstitutionDepth -= 1;
+      if (character === ")") {
+        substitutionQuotes.pop();
       }
       index += 1;
       continue;
     }
+
+    if (wordQuote !== null) {
+      if (character === wordQuote) {
+        if (wordQuote === outerBoundaryQuote) return index;
+        wordQuote = null;
+        index += 1;
+        continue;
+      }
+      if (wordQuote !== "'" && character === "$" && args[index + 1] === "(") {
+        substitutionQuotes.push(null);
+        index += 2;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
     if (character === "'" || character === '"' || character === "`") {
-      quote = character;
+      wordQuote = character;
       index += 1;
       continue;
     }
     if (character === "$" && args[index + 1] === "(") {
-      commandSubstitutionDepth += 1;
+      substitutionQuotes.push(null);
       index += 2;
       continue;
     }
-    if (character === ")" && commandSubstitutionDepth > 0) {
-      commandSubstitutionDepth -= 1;
-      index += 1;
-      continue;
-    }
-    if (commandSubstitutionDepth === 0 && /[\s;&|()<>]/u.test(character)) break;
+    if (/[\s;&|()<>]/u.test(character)) break;
     index += 1;
   }
   return index;

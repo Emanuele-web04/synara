@@ -96,6 +96,9 @@ describe("redactSensitiveProcessArgs", () => {
     expect(
       redactSensitiveProcessArgs('PASSWORD=$(printf x "$(printf y)")supersecret remains useful'),
     ).toBe("PASSWORD=[redacted] remains useful");
+    expect(
+      redactSensitiveProcessArgs('"PASSWORD=$(printf x "$(printf y)")supersecret" remains useful'),
+    ).toBe('"PASSWORD=[redacted]" remains useful');
   });
 
   it("redacts established database credential environment names", () => {
