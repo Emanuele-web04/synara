@@ -14,7 +14,11 @@ import {
 
 import type { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { ensurePrivateDirectorySync } from "../privatePathPermissions.ts";
-import { computeExternalMcpRuntimeProof, runtimeProofsMatch } from "./runtimeProof.ts";
+import {
+  computeExternalMcpRuntimeProof,
+  EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER,
+  runtimeProofsMatch,
+} from "./runtimeProof.ts";
 
 const CLIENT_STORE_VERSION = 1;
 const CLIENT_STORE_DIRECTORY = path.join("mcp", "credentials");
@@ -579,8 +583,10 @@ async function verifyPersistedServerRuntime(
     new URL("/api/mcp/external/runtime-challenge", runtime.state.origin),
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ nonce }),
+      headers: {
+        [EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER]: nonce,
+        Accept: "application/json",
+      },
     },
     RUNTIME_CHALLENGE_TIMEOUT_MS,
   );

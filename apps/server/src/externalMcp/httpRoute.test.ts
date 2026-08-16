@@ -10,6 +10,7 @@ import { ServerAuth } from "../auth/Services/ServerAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { ExternalMcpGateway } from "./Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "./Services/ExternalMcpService.ts";
+import { EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER } from "./runtimeProof.ts";
 import {
   EXTERNAL_MCP_MAX_BODY_BYTES,
   externalMcpRouteLayer,
@@ -153,8 +154,9 @@ describe("externalMcpRouteLayer", () => {
     await withExternalMcpServer({ host: "0.0.0.0" }, async ({ origin }) => {
       const response = await fetch(`${origin}/api/mcp/external/runtime-challenge`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nonce: "remote-runtime-proof-nonce" }),
+        headers: {
+          [EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER]: "remote-runtime-proof-nonce",
+        },
       });
 
       expect(response.status).toBe(200);
@@ -162,6 +164,44 @@ describe("externalMcpRouteLayer", () => {
         proof: expect.any(String),
       });
     });
+  });
+
+  it("does not queue the runtime identity challenge behind stalled management bodies", async () => {
+    let startedReads = 0;
+    const stalledRequest = {
+      headers: {},
+      stream: Stream.concat(
+        Stream.fromEffect(
+          Effect.sync(() => {
+            startedReads += 1;
+            return new Uint8Array();
+          }),
+        ),
+        Stream.never,
+      ),
+    } as never;
+    const stalledManagementReads = Array.from({ length: 2 }, () =>
+      Effect.runPromise(readExternalMcpManagementBody(stalledRequest, 300)),
+    );
+    const deadline = Date.now() + 1_000;
+    while (startedReads < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(startedReads).toBe(2);
+
+    try {
+      await withExternalMcpServer({ host: "0.0.0.0" }, async ({ origin }) => {
+        const response = await fetch(`${origin}/api/mcp/external/runtime-challenge`, {
+          method: "POST",
+          headers: {
+            [EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER]: "remote-runtime-proof-nonce",
+          },
+        });
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      await Promise.all(stalledManagementReads);
+    }
   });
 
   it("bounds execution per integration without letting long waits starve another integration", async () => {

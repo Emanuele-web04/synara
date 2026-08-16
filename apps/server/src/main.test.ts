@@ -18,7 +18,10 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { NetService } from "@synara/shared/Net";
 
 import { ServerConfig, type ServerConfigShape } from "./config";
-import { computeExternalMcpRuntimeProof } from "./externalMcp/runtimeProof.ts";
+import {
+  computeExternalMcpRuntimeProof,
+  EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER,
+} from "./externalMcp/runtimeProof.ts";
 import { Open, type OpenShape } from "./open";
 import { Server, type ServerShape } from "./effectServer";
 import { makeServerShutdownController } from "./serverShutdown";
@@ -221,9 +224,9 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
         if (String(input) === "http://100.64.0.42:5444/api/mcp/external/runtime-challenge") {
-          const challenge = JSON.parse(String(init?.body)) as { nonce: string };
+          const nonce = new Headers(init?.headers).get(EXTERNAL_MCP_RUNTIME_CHALLENGE_HEADER)!;
           return Response.json({
-            proof: computeExternalMcpRuntimeProof(runtimeSecret, challenge.nonce),
+            proof: computeExternalMcpRuntimeProof(runtimeSecret, nonce),
           });
         }
         assert.equal(String(input), "http://100.64.0.42:5444/health");
