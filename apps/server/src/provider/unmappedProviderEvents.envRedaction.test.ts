@@ -109,12 +109,14 @@ describe("unmapped provider environment credential redaction", () => {
     );
     const raw = JSON.stringify(
       sanitizeUnmappedProviderData(
-        'env: [{"name":"OPENAI_API_KEY","value":"raw-secret"},{"name":"SAFE_ENV","value":"kept"}]',
+        'env: [{"name":"OPENAI_API_KEY","value":"raw-secret"},{"value":"reverse-secret","name":"GITHUB_TOKEN"},{"name":"STRIPE_SECRET_KEY","source":"process","value":"metadata-secret"},{"name":"SAFE_ENV","value":"kept"}]',
       ),
     );
 
     expect(decoded).not.toContain("decoded-secret");
     expect(raw).not.toContain("raw-secret");
+    expect(raw).not.toContain("reverse-secret");
+    expect(raw).not.toContain("metadata-secret");
     expect(decoded).toContain('"value":"[REDACTED]"');
     expect(raw).toContain('\\"value\\":[REDACTED]');
     expect(decoded).toContain("kept");

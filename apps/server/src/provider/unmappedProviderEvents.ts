@@ -12,8 +12,10 @@ const CREDENTIAL_ASSIGNMENT_PATTERN =
   /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
   /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
-const NAMED_VALUE_PAIR_PATTERN =
-  /("name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"\s*,\s*"value"\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;}]+)/giu;
+const SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*"|[^{}"])*\}/gu;
+const JSON_NAME_FIELD_PATTERN = /"name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"/iu;
+const JSON_VALUE_FIELD_PATTERN =
+  /("value"\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;}]+)/iu;
 const BEARER_CREDENTIAL_PATTERN = /\b(bearer\s+)[A-Za-z0-9._~+/=-]+/giu;
 const EXACT_SENSITIVE_KEYS = new Set([
   "authorization",
@@ -51,9 +53,7 @@ const SENSITIVE_ENV_NAME_SUFFIXES = [
 function redactText(value: string): string {
   return value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
-    .replace(NAMED_VALUE_PAIR_PATTERN, (match, prefix: string, name: string) =>
-      isSensitiveEnvironmentName(name) ? `${prefix}${REDACTED_VALUE}` : match,
-    )
+    .replace(SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
     .replace(
       ENV_CREDENTIAL_ASSIGNMENT_PATTERN,
       (match, delimiter: string, prefix: string, _quote: string, name: string) =>
@@ -101,6 +101,14 @@ function isSensitiveEnvironmentName(name: string): boolean {
   }
   const normalized = name.replace(/[^a-z0-9]/giu, "").toLowerCase();
   return SENSITIVE_ENV_NAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
+function redactNamedValueObject(serializedObject: string): string {
+  const name = JSON_NAME_FIELD_PATTERN.exec(serializedObject)?.[1];
+  if (!name || !isSensitiveEnvironmentName(name)) {
+    return serializedObject;
+  }
+  return serializedObject.replace(JSON_VALUE_FIELD_PATTERN, `$1${REDACTED_VALUE}`);
 }
 
 function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
