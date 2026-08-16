@@ -46,16 +46,13 @@ import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAcces
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
 import {
+  discoverExternalMcpRuntime,
   pairExternalMcpClient,
   resolveExternalMcpBaseDir,
   serveExternalMcpStdio,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
-import {
-  DEFAULT_SERVER_STATUS_URL,
-  fetchSynaraServerStatus,
-  formatSynaraServerStatus,
-} from "./serverStatusCli";
+import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -584,7 +581,7 @@ const serverStatusCommand = Command.make(
   {
     url: Flag.string("url").pipe(
       Flag.withDescription("Synara server base URL to probe."),
-      Flag.withDefault(DEFAULT_SERVER_STATUS_URL),
+      Flag.optional,
     ),
     json: Flag.boolean("json").pipe(
       Flag.withDescription("Print machine-readable JSON."),
@@ -592,19 +589,26 @@ const serverStatusCommand = Command.make(
     ),
   },
   ({ url, json }) =>
-    Effect.promise(() => fetchSynaraServerStatus({ url })).pipe(
-      Effect.tap((result) =>
-        Effect.sync(() => {
-          process.stdout.write(
-            json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
-          );
-          if (!result.ready) {
-            process.exitCode = 1;
-          }
-        }),
-      ),
-      Effect.asVoid,
-    ),
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const targetUrl = Option.isSome(url)
+        ? url.value
+        : yield* Effect.try({
+            try: () => {
+              const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+              return discoverExternalMcpRuntime(baseDir).state.origin;
+            },
+            catch: (cause) =>
+              new StartupError({ message: "Failed to discover a running Synara server.", cause }),
+          });
+      const result = yield* Effect.promise(() => fetchSynaraServerStatus({ url: targetUrl }));
+      process.stdout.write(
+        json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
+      );
+      if (!result.ready) {
+        process.exitCode = 1;
+      }
+    }),
 ).pipe(Command.withDescription("Check whether a Synara server is reachable and ready."));
 
 const serverToolsCommand = Command.make("server").pipe(

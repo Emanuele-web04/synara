@@ -197,6 +197,45 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
+  it.effect("discovers the persisted runtime origin for the server status subcommand", () =>
+    Effect.gen(function* () {
+      const flagHome = makeTempHome("synara-main-status-flag-");
+      const stateDir = path.join(flagHome, "userdata");
+      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      fs.chmodSync(stateDir, 0o700);
+      fs.writeFileSync(
+        path.join(stateDir, "server-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          port: 5444,
+          origin: "http://127.0.0.1:5444",
+          startedAt: new Date().toISOString(),
+          externalMcpRuntimeSecret: "x".repeat(32),
+        }),
+        { mode: 0o600 },
+      );
+
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        assert.equal(String(input), "http://127.0.0.1:5444/health");
+        return Response.json({
+          status: "ok",
+          startupReady: true,
+          projection: { state: "healthy" },
+        });
+      });
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        yield* runCli(["server", "status", "--home-dir", flagHome]);
+      } finally {
+        fetch.mockRestore();
+        stdout.mockRestore();
+      }
+
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("creates fresh local state directories with private permissions", () =>
     Effect.gen(function* () {
       if (process.platform === "win32") return;

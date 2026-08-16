@@ -41,15 +41,31 @@ export interface FetchSynaraServerStatusOptions {
   readonly fetch?: FetchLike;
 }
 
-function healthUrlFromBaseUrl(rawUrl: string): string {
+function displayUrlFromRawUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : "[invalid URL]";
+  } catch {
+    return "[invalid URL]";
+  }
+}
+
+function healthUrlFromBaseUrl(rawUrl: string): {
+  readonly displayUrl: string;
+  readonly url: string;
+} {
   const url = new URL(rawUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Server URL must use http:// or https://.");
   }
+  if (url.username.length > 0 || url.password.length > 0) {
+    throw new Error("Server URL must not contain credentials.");
+  }
+  const displayUrl = url.origin;
   url.pathname = "/health";
   url.search = "";
   url.hash = "";
-  return url.toString();
+  return { displayUrl, url: url.toString() };
 }
 
 function decodeHealthSnapshot(value: unknown): SynaraServerHealthSnapshot | null {
@@ -67,14 +83,14 @@ export async function fetchSynaraServerStatus(
   options: FetchSynaraServerStatusOptions = {},
 ): Promise<SynaraServerStatusResult> {
   const rawUrl = options.url ?? DEFAULT_SERVER_STATUS_URL;
-  let healthUrl: string;
+  let healthUrl: { readonly displayUrl: string; readonly url: string };
   try {
     healthUrl = healthUrlFromBaseUrl(rawUrl);
   } catch (cause) {
     return {
       reachable: false,
       ready: false,
-      url: rawUrl,
+      url: displayUrlFromRawUrl(rawUrl),
       error: cause instanceof Error ? cause.message : "Invalid server URL.",
     };
   }
@@ -82,7 +98,7 @@ export async function fetchSynaraServerStatus(
   const request: FetchLike = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_SERVER_STATUS_TIMEOUT_MS;
   try {
-    const response = await request(healthUrl, {
+    const response = await request(healthUrl.url, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: { Accept: "application/json" },
     });
@@ -90,7 +106,7 @@ export async function fetchSynaraServerStatus(
       return {
         reachable: false,
         ready: false,
-        url: rawUrl,
+        url: healthUrl.displayUrl,
         error: `Health request returned HTTP ${String(response.status)}.`,
       };
     }
@@ -100,7 +116,7 @@ export async function fetchSynaraServerStatus(
       return {
         reachable: false,
         ready: false,
-        url: rawUrl,
+        url: healthUrl.displayUrl,
         error: "Health response did not match the Synara health shape.",
       };
     }
@@ -109,14 +125,14 @@ export async function fetchSynaraServerStatus(
       reachable: true,
       ready:
         health.status === "ok" && health.startupReady && health.projection?.state === "healthy",
-      url: rawUrl,
+      url: healthUrl.displayUrl,
       health,
     };
   } catch (cause) {
     return {
       reachable: false,
       ready: false,
-      url: rawUrl,
+      url: healthUrl.displayUrl,
       error: cause instanceof Error ? cause.message : "Health request failed.",
     };
   }
@@ -128,8 +144,9 @@ export function formatSynaraServerStatus(result: SynaraServerStatusResult): stri
   }
 
   const projectionState = result.health.projection?.state;
+  const status = result.ready ? "ready" : result.health.startupReady ? "not ready" : "starting";
   return [
-    `Synara server: ${result.ready ? "ready" : "starting"}`,
+    `Synara server: ${status}`,
     `URL: ${result.url}`,
     ...(projectionState ? [`Projection: ${projectionState}`] : []),
   ].join("\n");

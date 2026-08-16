@@ -47,6 +47,20 @@ describe("server status CLI probe", () => {
     expect(formatSynaraServerStatus(result)).toContain("Synara server: starting");
   });
 
+  it("distinguishes an unhealthy projection from a server that is still starting", async () => {
+    const result = await fetchSynaraServerStatus({
+      fetch: async () =>
+        Response.json({
+          status: "ok",
+          startupReady: true,
+          projection: { state: "degraded" },
+        }),
+    });
+
+    expect(result).toMatchObject({ reachable: true, ready: false });
+    expect(formatSynaraServerStatus(result)).toContain("Synara server: not ready");
+  });
+
   it("treats an unknown or missing projection health state as not ready", async () => {
     for (const projection of [{ state: "unknown" }, undefined]) {
       const result = await fetchSynaraServerStatus({
@@ -76,6 +90,21 @@ describe("server status CLI probe", () => {
       "https://synara.example.com/health",
       expect.objectContaining({ headers: { Accept: "application/json" } }),
     );
+  });
+
+  it("rejects credentials and never reports URL secrets", async () => {
+    const result = await fetchSynaraServerStatus({
+      url: "https://user:password@synara.example.com/path?token=secret#fragment",
+    });
+
+    expect(result).toEqual({
+      reachable: false,
+      ready: false,
+      url: "https://synara.example.com",
+      error: "Server URL must not contain credentials.",
+    });
+    expect(JSON.stringify(result)).not.toContain("password");
+    expect(JSON.stringify(result)).not.toContain("secret");
   });
 
   it("fails closed for invalid URLs and malformed health responses", async () => {
