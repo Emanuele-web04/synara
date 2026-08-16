@@ -172,10 +172,25 @@ describe("redactSensitiveProcessArgs", () => {
     );
   });
 
-  it("handles deeply nested assignment syntax without rescanning the expansion stack", () => {
+  it("fails closed once nested assignment syntax exceeds the scan bound", () => {
     const nested = "(".repeat(512) + "secret" + ")".repeat(512);
     expect(redactSensitiveProcessArgs(`PASSWORD=$(${nested}) remains useful`)).toBe(
-      "PASSWORD=[redacted] remains useful",
+      "PASSWORD=[redacted]",
+    );
+  });
+
+  it("fails closed for process substitution in a sensitive assignment", () => {
+    expect(redactSensitiveProcessArgs("PASSWORD=<(printf supersecret) remains useful")).toBe(
+      "PASSWORD=[redacted]",
+    );
+    expect(redactSensitiveProcessArgs("PASSWORD=>(cat supersecret) remains useful")).toBe(
+      "PASSWORD=[redacted]",
+    );
+    expect(
+      redactSensitiveProcessArgs(`'PASSWORD=prefix'<(printf supersecret) remains useful`),
+    ).toBe(`'PASSWORD=[redacted]`);
+    expect(redactSensitiveProcessArgs("PASSWORD=(correct horse) remains useful")).toBe(
+      "PASSWORD=[redacted]",
     );
   });
 

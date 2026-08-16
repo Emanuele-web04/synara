@@ -6,6 +6,8 @@ const SENSITIVE_ENV_NAME_SUFFIX =
   /_(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
 const URL_CREDENTIALS_AT_VALUE_START = /^["']?[a-z][a-z0-9+.-]*:\/\/[^/\s]+@/i;
 const URL_CREDENTIALS_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s]+@/giu;
+const MAX_SHELL_ASSIGNMENT_SCAN_CHARS = 16_384;
+const MAX_SHELL_EXPANSION_DEPTH = 128;
 
 function isSensitiveEnvironmentName(name: string | undefined): boolean {
   if (!name) return false;
@@ -107,6 +109,12 @@ function boundedShellAssignmentValueEnd(
   const activeCommandExpansion = (): ShellExpansion | undefined => expansions.at(-1)?.activeCommand;
 
   while (index < args.length) {
+    if (
+      index - valueStart >= MAX_SHELL_ASSIGNMENT_SCAN_CHARS ||
+      expansions.length > MAX_SHELL_EXPANSION_DEPTH
+    ) {
+      return args.length;
+    }
     const character = args[index]!;
     if (character === "\\") {
       if (args[index + 1] !== "\n") {
@@ -209,7 +217,11 @@ function boundedShellAssignmentValueEnd(
       }
       const subjectCommandExpansion = activeCommandExpansion();
       const subjectCase = subjectCommandExpansion?.cases.at(-1);
-      if (subjectCase?.phase === "subject" && !/[\sA-Za-z_]/u.test(character)) {
+      if (
+        subjectCommandExpansion &&
+        subjectCase?.phase === "subject" &&
+        !/[\sA-Za-z_]/u.test(character)
+      ) {
         subjectCase.subjectSeen = true;
         subjectCommandExpansion.commandPosition = false;
       }
@@ -271,7 +283,7 @@ function boundedShellAssignmentValueEnd(
       if (character === wordQuote) {
         if (wordQuote === outerBoundaryQuote) {
           const next = args[index + 1];
-          return next === undefined || /[\s;&|()<>]/u.test(next) ? index : args.length;
+          return next === undefined || /[\s;&|)]/u.test(next) ? index : args.length;
         }
         wordQuote = null;
         index += 1;
@@ -298,6 +310,12 @@ function boundedShellAssignmentValueEnd(
       index += expansion.length;
       continue;
     }
+    if (args.startsWith("<(", index) || args.startsWith(">(", index)) {
+      // Parsing process-substitution bodies would require yet another shell
+      // grammar branch. Preserve no suffix when their boundary is ambiguous.
+      return args.length;
+    }
+    if (character === "(") return args.length;
     if (/[\s;&|()<>]/u.test(character)) break;
     index += 1;
   }
