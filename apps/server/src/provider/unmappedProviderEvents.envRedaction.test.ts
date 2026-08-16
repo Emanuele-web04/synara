@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
+import { registerProviderCredentialKey } from "../providerChildEnvironment.ts";
 import { sanitizeUnmappedProviderData } from "./unmappedProviderEvents.ts";
 
 describe("unmapped provider environment credential redaction", () => {
@@ -292,6 +293,43 @@ describe("unmapped provider environment credential redaction", () => {
     expect(assignment).toContain("MY_COMPANY_PROXY_KEY=[REDACTED]");
   });
 
+  it("redacts exact configured provider credential keys in every supported shape", () => {
+    registerProviderCredentialKey("ACME_LICENSE");
+    const sanitized = JSON.stringify(
+      sanitizeUnmappedProviderData({
+        assignment: "ACME_LICENSE=assignment-secret",
+        env: { ACME_LICENSE: "decoded-secret" },
+        tuple: ["ACME_LICENSE", "tuple-secret"],
+        named: { name: "ACME_LICENSE", value: "named-secret" },
+      }),
+    );
+
+    expect(sanitized).not.toContain("assignment-secret");
+    expect(sanitized).not.toContain("decoded-secret");
+    expect(sanitized).not.toContain("tuple-secret");
+    expect(sanitized).not.toContain("named-secret");
+  });
+
+  it("redacts Docker auth configuration as one credential value", () => {
+    const dockerAuth =
+      '{"auths":{"one.example":{"auth":"dXNlcjpmaXJzdA=="},"two.example":{"auth":"dXNlcjpzZWNvbmQ=","identitytoken":"identity-secret"}}}';
+    const assignment = JSON.stringify(
+      sanitizeUnmappedProviderData(`DOCKER_AUTH_CONFIG=${dockerAuth}`),
+    );
+    const decoded = JSON.stringify(
+      sanitizeUnmappedProviderData({ env: { DOCKER_AUTH_CONFIG: dockerAuth } }),
+    );
+
+    expect(assignment).not.toContain("dXNlcjpmaXJzdA");
+    expect(assignment).not.toContain("dXNlcjpzZWNvbmQ");
+    expect(assignment).not.toContain("identity-secret");
+    expect(decoded).not.toContain("dXNlcjpmaXJzdA");
+    expect(decoded).not.toContain("dXNlcjpzZWNvbmQ");
+    expect(decoded).not.toContain("identity-secret");
+    expect(assignment).toContain("DOCKER_AUTH_CONFIG=[REDACTED]");
+    expect(decoded).toContain('"DOCKER_AUTH_CONFIG":"[REDACTED]"');
+  });
+
   it("redacts environment tuples in text and decoded data", () => {
     const json = JSON.stringify(
       sanitizeUnmappedProviderData(
@@ -338,6 +376,22 @@ describe("unmapped provider environment credential redaction", () => {
     const sanitized = sanitizeUnmappedProviderData("a".repeat(50_000));
 
     expect(sanitized).toMatchObject({ __synaraTruncated: true });
+  });
+
+  it("fails closed without recursion on excessively nested inspected objects", () => {
+    const sanitized = sanitizeUnmappedProviderData(
+      `${"{".repeat(10_000)} name: 'OPENAI_API_KEY', value: 'deep-secret'`,
+    );
+
+    expect(sanitized).toBe("[REDACTED]");
+  });
+
+  it("keeps assignment redaction idempotent", () => {
+    const once = sanitizeUnmappedProviderData("OPENAI_API_KEY=raw-secret");
+    const twice = sanitizeUnmappedProviderData(once);
+
+    expect(once).toBe("OPENAI_API_KEY=[REDACTED]");
+    expect(twice).toBe(once);
   });
 
   it("fails closed on truncated raw name/value entries", () => {

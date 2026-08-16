@@ -1,10 +1,13 @@
 import type { ProviderEvent } from "@synara/contracts";
 
+import { isProviderCredentialKey } from "../providerChildEnvironment.ts";
+
 export const MAX_UNMAPPED_PROVIDER_DATA_JSON_CHARS = 16_000;
 
 const MAX_UNMAPPED_PROVIDER_DETAIL_CHARS = 500;
 const MAX_UNMAPPED_PROVIDER_NATIVE_TYPE_CHARS = 200;
 const MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS = 2_000;
+const MAX_UNMAPPED_PROVIDER_STRUCTURE_DEPTH = 64;
 const REDACTED_VALUE = "[REDACTED]";
 const LOSSLESS_JSON = JSON as typeof JSON & {
   isRawJSON(value: unknown): boolean;
@@ -18,7 +21,7 @@ const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu
 const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
 const URL_CREDENTIAL_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^/\s@]+@/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
-  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
+  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?!\[REDACTED\])(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN =
   /(?<![A-Za-z0-9_])((["']?)([A-Za-z_][A-Za-z0-9_]*)\2\s*(?::|=)\s*)/giu;
 const ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN =
@@ -96,6 +99,9 @@ function credentialValueEnd(value: string, valueStart: number): number {
       const endIndex = value.indexOf(endMarker, index + pemBegin[0].length);
       return endIndex < 0 ? value.length : endIndex + endMarker.length;
     }
+    if (value[index] === "{" || value[index] === "[") {
+      return structuredCredentialValueEnd(value, index);
+    }
   }
 
   while (index < value.length) {
@@ -118,6 +124,41 @@ function credentialValueEnd(value: string, valueStart: number): number {
   return index;
 }
 
+function structuredCredentialValueEnd(value: string, valueStart: number): number {
+  const closingCharacters: string[] = [];
+  let quote: "'" | '"' | "`" | undefined;
+  let escaped = false;
+  for (let index = valueStart; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+    } else if (character === "{" || character === "[") {
+      if (closingCharacters.length >= MAX_UNMAPPED_PROVIDER_STRUCTURE_DEPTH) {
+        return value.length;
+      }
+      closingCharacters.push(character === "{" ? "}" : "]");
+    } else if (character === closingCharacters.at(-1)) {
+      closingCharacters.pop();
+      if (closingCharacters.length === 0) {
+        return index + 1;
+      }
+    } else if (character === "}" || character === "]") {
+      return value.length;
+    }
+  }
+  return value.length;
+}
+
 function redactEnvironmentAssignments(value: string): string {
   let redacted = "";
   let cursor = 0;
@@ -132,6 +173,9 @@ function redactEnvironmentAssignments(value: string): string {
       continue;
     }
     const valueStart = match.index + match[0].length;
+    if (value.startsWith(REDACTED_VALUE, valueStart)) {
+      continue;
+    }
     const valueEnd = credentialValueEnd(value, valueStart);
     redacted += value.slice(cursor, match.index) + match[0] + REDACTED_VALUE;
     cursor = valueEnd;
@@ -195,6 +239,9 @@ function redactSerializedJsonContainers(value: string): string {
     if (character === '"') {
       inString = true;
     } else if (character === "{" || character === "[") {
+      if (closingCharacters.length >= MAX_UNMAPPED_PROVIDER_STRUCTURE_DEPTH) {
+        return REDACTED_VALUE;
+      }
       closingCharacters.push(character === "{" ? "}" : "]");
     } else if (character === closingCharacters.at(-1)) {
       closingCharacters.pop();
@@ -225,9 +272,20 @@ function redactParsedJsonValue(serializedValue: string): string {
   }
 }
 
-function redactParsedEnvironmentValue(value: unknown): { value: unknown; changed: boolean } {
+function redactParsedEnvironmentValue(
+  value: unknown,
+  environmentContext = false,
+  depth = 0,
+): { value: unknown; changed: boolean } {
   if (LOSSLESS_JSON.isRawJSON(value)) {
     return { value, changed: false };
+  }
+  if (
+    depth >= MAX_UNMAPPED_PROVIDER_STRUCTURE_DEPTH &&
+    value !== null &&
+    typeof value === "object"
+  ) {
+    return { value: REDACTED_VALUE, changed: true };
   }
   if (Array.isArray(value)) {
     if (isSensitiveEnvironmentTuple(value)) {
@@ -238,7 +296,7 @@ function redactParsedEnvironmentValue(value: unknown): { value: unknown; changed
     }
     let changed = false;
     const entries = value.map((entry) => {
-      const result = redactParsedEnvironmentValue(entry);
+      const result = redactParsedEnvironmentValue(entry, environmentContext, depth + 1);
       changed ||= result.changed;
       return result.value;
     });
@@ -257,11 +315,19 @@ function redactParsedEnvironmentValue(value: unknown): { value: unknown; changed
     typeof record.name === "string" && isSensitiveEnvironmentName(record.name);
   let changed = false;
   const entries = Object.entries(record).map(([key, entry]) => {
-    if (isSensitiveEnvironmentName(key) || (namedValueIsSensitive && key === "value")) {
+    if (
+      isSensitiveKey(key) ||
+      (environmentContext && isSensitiveEnvironmentName(key)) ||
+      (namedValueIsSensitive && key === "value")
+    ) {
       changed ||= entry !== REDACTED_VALUE;
       return [key, REDACTED_VALUE] as const;
     }
-    const result = redactParsedEnvironmentValue(entry);
+    const result = redactParsedEnvironmentValue(
+      entry,
+      environmentContext || isEnvironmentContainerKey(key),
+      depth + 1,
+    );
     changed ||= result.changed;
     return [key, result.value] as const;
   });
@@ -286,6 +352,9 @@ function keyTokens(key: string): ReadonlyArray<string> {
 }
 
 function isSensitiveKey(key: string): boolean {
+  if (isProviderCredentialKey(key)) {
+    return true;
+  }
   const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase();
   if (EXACT_SENSITIVE_KEYS.has(normalized)) {
     return true;
@@ -312,24 +381,30 @@ function isSensitiveEnvironmentTuple(value: ReadonlyArray<unknown>): boolean {
   return value.length === 2 && typeof value[0] === "string" && isSensitiveEnvironmentName(value[0]);
 }
 
-function redactNamedValueObject(serializedObject: string): string {
+interface TextReplacement {
+  readonly start: number;
+  readonly end: number;
+  readonly value: string;
+}
+
+function namedValueReplacement(serializedObject: string, offset: number): TextReplacement | null {
   const nameMatch = [...serializedObject.matchAll(JSON_NAME_FIELD_PATTERN)].find(
     (match) => match.index !== undefined && objectDepthAt(serializedObject, match.index) === 1,
   );
   if (!nameMatch?.[2] || !isSensitiveEnvironmentName(nameMatch[2])) {
-    return serializedObject;
+    return null;
   }
   const valueMatch = [...serializedObject.matchAll(JSON_VALUE_FIELD_PATTERN)].find(
     (match) => match.index !== undefined && objectDepthAt(serializedObject, match.index) === 1,
   );
   if (!valueMatch || valueMatch.index === undefined || valueMatch[0].includes(REDACTED_VALUE)) {
-    return serializedObject;
+    return null;
   }
-  return (
-    serializedObject.slice(0, valueMatch.index) +
-    `${valueMatch[1]}${REDACTED_VALUE}` +
-    serializedObject.slice(valueMatch.index + valueMatch[0].length)
-  );
+  return {
+    start: offset + valueMatch.index,
+    end: offset + valueMatch.index + valueMatch[0].length,
+    value: `${valueMatch[1]}${REDACTED_VALUE}`,
+  };
 }
 
 function objectDepthAt(value: string, targetIndex: number): number {
@@ -358,22 +433,13 @@ function objectDepthAt(value: string, targetIndex: number): number {
 }
 
 function redactInspectedNamedValueObjects(value: string): string {
-  let redacted = "";
-  let cursor = 0;
-  let objectStart = -1;
-  let depth = 0;
+  const objectStarts: number[] = [];
+  const objectRanges: Array<{ readonly start: number; readonly end: number }> = [];
   let quote: "'" | '"' | "`" | undefined;
   let escaped = false;
 
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
-    if (objectStart < 0) {
-      if (character === "{") {
-        objectStart = index;
-        depth = 1;
-      }
-      continue;
-    }
     if (quote) {
       if (escaped) {
         escaped = false;
@@ -387,24 +453,31 @@ function redactInspectedNamedValueObjects(value: string): string {
     if (character === "'" || character === '"' || character === "`") {
       quote = character;
     } else if (character === "{") {
-      depth += 1;
+      if (objectStarts.length >= MAX_UNMAPPED_PROVIDER_STRUCTURE_DEPTH) {
+        return REDACTED_VALUE;
+      }
+      objectStarts.push(index);
     } else if (character === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        const objectBody = redactInspectedNamedValueObjects(value.slice(objectStart + 1, index));
-        redacted += value.slice(cursor, objectStart) + redactNamedValueObject(`{${objectBody}}`);
-        cursor = index + 1;
-        objectStart = -1;
+      const objectStart = objectStarts.pop();
+      if (objectStart !== undefined) {
+        objectRanges.push({ start: objectStart, end: index + 1 });
       }
     }
   }
 
-  if (objectStart >= 0) {
-    const objectBody = redactInspectedNamedValueObjects(value.slice(objectStart + 1));
-    redacted += value.slice(cursor, objectStart) + redactNamedValueObject(`{${objectBody}`);
-    cursor = value.length;
+  for (const objectStart of objectStarts) {
+    objectRanges.push({ start: objectStart, end: value.length });
   }
-  return redacted + value.slice(cursor);
+  const replacements = objectRanges
+    .map(({ start, end }) => namedValueReplacement(value.slice(start, end), start))
+    .filter((replacement): replacement is TextReplacement => replacement !== null)
+    .sort((left, right) => right.start - left.start);
+  let redacted = value;
+  for (const replacement of replacements) {
+    redacted =
+      redacted.slice(0, replacement.start) + replacement.value + redacted.slice(replacement.end);
+  }
+  return redacted;
 }
 
 function isEnvironmentContainerKey(key: string): boolean {
@@ -416,19 +489,21 @@ function redactValue(
   value: unknown,
   seen = new WeakSet<object>(),
   environmentContext = false,
+  depth = 0,
 ): unknown {
   if (typeof value === "string") return redactText(value);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (value === null || typeof value === "boolean") return value;
   if (typeof value !== "object") return null;
+  if (depth >= MAX_UNMAPPED_PROVIDER_STRUCTURE_DEPTH) return REDACTED_VALUE;
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
   if (Array.isArray(value)) {
     if (isSensitiveEnvironmentTuple(value)) {
       return [value[0], REDACTED_VALUE];
     }
-    return value.map((entry) => redactValue(entry, seen, environmentContext));
+    return value.map((entry) => redactValue(entry, seen, environmentContext, depth + 1));
   }
 
   const namedValueIsSensitive =
@@ -440,7 +515,7 @@ function redactValue(
       (environmentContext && isSensitiveEnvironmentName(key)) ||
       (namedValueIsSensitive && key === "value")
         ? REDACTED_VALUE
-        : redactValue(entry, seen, environmentContext || isEnvironmentContainerKey(key));
+        : redactValue(entry, seen, environmentContext || isEnvironmentContainerKey(key), depth + 1);
   }
   return redacted;
 }

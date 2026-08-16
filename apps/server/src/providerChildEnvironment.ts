@@ -28,7 +28,19 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "GROK_CODE_XAI_API_KEY",
   "FACTORY_API_KEY",
   "CURSOR_API_KEY",
+  "DOCKER_AUTH_CONFIG",
 ]);
+
+export function registerProviderCredentialKey(key: string): void {
+  const normalized = key.trim().toUpperCase();
+  if (/^[A-Z_][A-Z0-9_]*$/u.test(normalized)) {
+    PROVIDER_CREDENTIAL_KEYS.add(normalized);
+  }
+}
+
+export function isProviderCredentialKey(key: string): boolean {
+  return PROVIDER_CREDENTIAL_KEYS.has(key.trim().toUpperCase());
+}
 
 const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<string>> = {
   antigravity: new Set(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]),
@@ -90,11 +102,7 @@ export function buildProviderChildEnvironment(input: {
     if (INHERITED_NATIVE_CAPABILITY_KEYS.has(key) && !allowedNativeCapabilities.has(key)) {
       continue;
     }
-    if (
-      PROVIDER_CREDENTIAL_KEYS.has(key) &&
-      credentialGrants !== "all" &&
-      !credentialGrants.has(key)
-    ) {
+    if (isProviderCredentialKey(key) && credentialGrants !== "all" && !credentialGrants.has(key)) {
       continue;
     }
     childEnv[key] = value;
