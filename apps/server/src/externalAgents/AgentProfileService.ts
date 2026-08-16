@@ -8,7 +8,11 @@ import type {
   ExternalAgentProfileUpdateInput,
   ExternalAgentProfileUpdateResult,
 } from "@synara/contracts";
-import { AgentProfileId } from "@synara/contracts";
+import {
+  AgentProfileId,
+  CLI_CONNECTOR_MAPPING_ERROR_MESSAGE,
+  validateCliConnectorMapping,
+} from "@synara/contracts";
 import { Data, Effect, Layer, Option, ServiceMap } from "effect";
 import { randomUUID } from "node:crypto";
 
@@ -304,6 +308,24 @@ export const makeAgentProfileService = Effect.gen(function* () {
       const connectorKind = Option.isSome(currentRevision)
         ? currentRevision.value.connectorKind
         : "acp";
+      // The update input does not carry `connectorKind`; the kind is preserved
+      // from the current revision. The create-input schema rejects bad
+      // cli-kind↔launch mappings, but the update path rebuilds the revision
+      // in memory and persists raw JSON, so re-check the preserved kind against
+      // the incoming launch here. This mirrors the schema refinement and keeps
+      // a profile from silently drifting into a contradictory launch shape.
+      if (
+        !validateCliConnectorMapping({
+          connectorKind,
+          launch: input.launch,
+        })
+      ) {
+        return yield* new ExternalAgentProfileError({
+          code: "invalid-connector-mapping",
+          message: CLI_CONNECTOR_MAPPING_ERROR_MESSAGE,
+          status: 400,
+        });
+      }
       const previousProvenance = Option.isSome(currentRevision)
         ? currentRevision.value.provenance
         : undefined;

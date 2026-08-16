@@ -9,11 +9,19 @@ import {
 /**
  * External agent connector kinds.
  *
- * Initial support is ACP. Future connector kinds (for example a generic
- * declarative CLI) extend this literal list additively; the launch metadata is
- * connector-shaped so new kinds stay backward-compatible with stored profiles.
+ * Adds the KAR-527 generic CLI tiers additively:
+ * - `acp` — Agent Client Protocol over stdio JSON-RPC.
+ * - `cli-structured` — a generic CLI speaking the Synara structured CLI wire
+ *   protocol (NDJSON events/commands, see `cliConnector.ts`). Distinct from
+ *   each provider's native runtime.
+ * - `cli-basic` — a generic CLI with no structured protocol. Honest limits:
+ *   streaming is line-based, cancellation asks the process tree to stop, and
+ *   resume/permissions/elicitation are never faked.
+ *
+ * The launch metadata is connector-shaped, so new kinds stay backward
+ * compatible with stored profiles.
  */
-export const ConnectorKind = Schema.Literals(["acp"]);
+export const ConnectorKind = Schema.Literals(["acp", "cli-structured", "cli-basic"]);
 export type ConnectorKind = typeof ConnectorKind.Type;
 
 /**
@@ -32,6 +40,14 @@ export type AgentProfileCredentialRef = typeof AgentProfileCredentialRef.Type;
 const LaunchCommand = TrimmedNonEmptyString.check(Schema.isMaxLength(4096));
 const LaunchArgument = Schema.String.check(Schema.isMaxLength(4096));
 
+/**
+ * How a generic CLI frames its output. `ndjson` is the structured protocol
+ * (one JSON object per line, schema in `cliConnector.ts`); `line` is plain
+ * text streaming used by the basic tier. Absent for ACP profiles.
+ */
+const CliLaunchFrameMode = Schema.Literals(["line", "ndjson"]);
+export type CliLaunchFrameMode = typeof CliLaunchFrameMode.Type;
+
 const AgentProfileCommandLaunch = Schema.Struct({
   kind: Schema.Literal("command"),
   command: LaunchCommand,
@@ -40,6 +56,12 @@ const AgentProfileCommandLaunch = Schema.Struct({
   envRefs: Schema.optional(
     Schema.Array(AgentProfileCredentialRef).pipe(Schema.withDecodingDefault(() => [])),
   ),
+  /**
+   * Required for the KAR-527 CLI tiers: `cli-structured` must be `ndjson` and
+   * `cli-basic` must be `line`. Optional so legacy ACP profiles (which never
+   * carry it) keep decoding.
+   */
+  frameMode: Schema.optional(CliLaunchFrameMode),
 });
 
 const AgentProfileEndpointLaunch = Schema.Struct({
@@ -57,6 +79,42 @@ export const AgentProfileLaunch = Schema.Union([
   AgentProfileEndpointLaunch,
 ]);
 export type AgentProfileLaunch = typeof AgentProfileLaunch.Type;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Connector-kind ↔ launch mapping validation (single source of truth)
+//
+// `cli-structured` and `cli-basic` are the only kinds with framing requirements,
+// and both must use a command launch. Enforcing the mapping here makes the
+// schema reject bad mappings at decode time (create input, update input, and
+// persisted revision reads all route through it), so a profile can never claim
+// a structured protocol while using line framing.
+interface CliConfigurableMappingValue {
+  readonly connectorKind: ConnectorKind;
+  readonly launch: AgentProfileLaunch;
+}
+export type CliConfigurableMappingValueShape = {
+  readonly connectorKind: ConnectorKind;
+  readonly launch: AgentProfileLaunch;
+};
+
+export function validateCliConnectorMapping<S extends CliConfigurableMappingValue>(
+  value: S,
+): value is S {
+  if (value.connectorKind === "cli-structured") {
+    return value.launch.kind === "command" && value.launch.frameMode === "ndjson";
+  }
+  if (value.connectorKind === "cli-basic") {
+    return value.launch.kind === "command" && value.launch.frameMode === "line";
+  }
+  return true;
+}
+
+export const CLI_CONNECTOR_MAPPING_ERROR_MESSAGE =
+  "cli CLI tiers require a command launch with the matching frame mode (cli-structured → ndjson, cli-basic → line)";
+
+const cliConnectorMappingRefinement = {
+  message: CLI_CONNECTOR_MAPPING_ERROR_MESSAGE,
+};
 
 export const AgentProfileProvenance = Schema.Struct({
   source: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
@@ -83,7 +141,7 @@ export const AgentProfileRevision = Schema.Struct({
   provenance: AgentProfileProvenance,
   parentRevisionId: Schema.optional(AgentProfileRevisionId),
   createdAt: IsoDateTime,
-});
+}).pipe(Schema.refine(validateCliConnectorMapping, cliConnectorMappingRefinement));
 export type AgentProfileRevision = typeof AgentProfileRevision.Type;
 
 export const AgentProfileStatus = Schema.Literals(["active", "tombstoned"]);
@@ -130,7 +188,9 @@ export const ExternalAgentProfileCreateInput = Schema.Struct({
   launch: AgentProfileLaunch,
   credentialRefs: Schema.optional(Schema.Array(AgentProfileCredentialRef)),
   provenance: Schema.optional(AgentProfileProvenance),
-}).annotate({ parseOptions: { onExcessProperty: "error" } });
+})
+  .pipe(Schema.refine(validateCliConnectorMapping, cliConnectorMappingRefinement))
+  .annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalAgentProfileCreateInput = typeof ExternalAgentProfileCreateInput.Type;
 
 export const ExternalAgentProfileCreateResult = Schema.Struct({

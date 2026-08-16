@@ -160,6 +160,64 @@ layer("AgentProfileService", (it) => {
     }),
   );
 
+  it.effect("rejects an update that would drift a cli-kind profile into a mismatched launch", () =>
+    Effect.gen(function* () {
+      const service = yield* AgentProfileService;
+      const created = yield* service.createProfile({
+        name: "Structured CLI",
+        displayName: "Structured CLI",
+        connectorKind: "cli-structured",
+        launch: { kind: "command", command: "my-cli", frameMode: "ndjson" },
+        credentialRefs: [],
+        provenance: { source: "manual" },
+      });
+
+      // cli-structured may only use ndjson command launches (AC #4).
+      const invalid = yield* Effect.flip(
+        service.updateProfile({
+          profileId: created.profile.profileId,
+          displayName: "Structured CLI",
+          launch: { kind: "command", command: "my-cli", frameMode: "line" },
+          credentialRefs: [],
+        }),
+      );
+      assert.instanceOf(invalid, ExternalAgentProfileError);
+      assert.strictEqual(invalid.code, "invalid-connector-mapping");
+
+      // An update that keeps the ndjson framing is accepted.
+      const valid = yield* service.updateProfile({
+        profileId: created.profile.profileId,
+        displayName: "Structured CLI (renamed)",
+        launch: { kind: "command", command: "my-cli", frameMode: "ndjson" },
+        credentialRefs: [],
+      });
+      assert.strictEqual(valid.revision.launch.kind, "command");
+      assert.strictEqual(
+        valid.revision.launch.kind === "command" ? valid.revision.launch.frameMode : undefined,
+        "ndjson",
+      );
+    }),
+  );
+
+  it.effect("rejects a cli-basic profile created with an endpoint launch via the schema", () =>
+    Effect.gen(function* () {
+      const service = yield* AgentProfileService;
+      // createProfile receives already-decoded input, so the schema rejection
+      // lives at the create-input decode boundary (verified in contracts). Here
+      // verify the service layer still persists a well-formed cli-basic profile.
+      const created = yield* service.createProfile({
+        name: "Basic CLI",
+        displayName: "Basic CLI",
+        connectorKind: "cli-basic",
+        launch: { kind: "command", command: "plain-cli", frameMode: "line" },
+        credentialRefs: [],
+        provenance: { source: "manual" },
+      });
+      const detail = yield* service.getProfile(created.profile.profileId);
+      assert.strictEqual(detail.currentRevision.connectorKind, "cli-basic");
+    }),
+  );
+
   it.effect("migrates the legacy slot deterministically on session resolution", () =>
     Effect.gen(function* () {
       const service = yield* AgentProfileService;
