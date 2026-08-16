@@ -7,12 +7,12 @@
 // Exports: ensureIsolatedScratchWorkspace
 
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { ThreadId } from "@synara/contracts";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
+import { ensurePrivateDirectorySync } from "./privatePathPermissions";
 
 function scratchWorkspaceSegment(threadId: ThreadId): string {
   const raw = String(threadId);
@@ -27,9 +27,7 @@ function scratchWorkspaceSegment(threadId: ThreadId): string {
 export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
   const workspaceRoot = path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
   const workspaceDir = path.join(workspaceRoot, scratchWorkspaceSegment(threadId));
-  mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") {
-    chmodSync(workspaceDir, 0o700);
-  }
+  ensurePrivateDirectorySync(workspaceRoot);
+  ensurePrivateDirectorySync(workspaceDir);
   return workspaceDir;
 }

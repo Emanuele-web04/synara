@@ -3,7 +3,7 @@
 //          temp root even when thread ids contain path-like characters.
 // Layer: Server filesystem utility tests
 
-import { chmodSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -62,6 +62,42 @@ describe("ensureIsolatedScratchWorkspace", () => {
         expect(statSync(workspace).mode & 0o777).toBe(0o700);
       } finally {
         rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "tightens permissions when reusing the shared scratch root",
+    () => {
+      const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("private-root"));
+      try {
+        chmodSync(scratchRoot(), 0o777);
+
+        ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("private-root"));
+
+        expect(statSync(scratchRoot()).mode & 0o777).toBe(0o700);
+      } finally {
+        chmodSync(scratchRoot(), 0o700);
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses to follow a reused scratch workspace symlink",
+    () => {
+      const threadId = ThreadId.makeUnsafe("symlinked-private-thread");
+      const workspace = ensureIsolatedScratchWorkspace(threadId);
+      const redirected = mkdtempSync(path.join(tmpdir(), "synara-scratch-redirect-"));
+      rmSync(workspace, { recursive: true, force: true });
+      symlinkSync(redirected, workspace, "dir");
+      try {
+        expect(() => ensureIsolatedScratchWorkspace(threadId)).toThrow(
+          /open without following symlinks/,
+        );
+      } finally {
+        rmSync(workspace, { force: true });
+        rmSync(redirected, { recursive: true, force: true });
       }
     },
   );
