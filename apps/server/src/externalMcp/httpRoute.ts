@@ -322,7 +322,6 @@ const runtimeChallenge = HttpRouter.add(
   "POST",
   "/api/mcp/external/runtime-challenge",
   Effect.gen(function* () {
-    if (!(yield* localExternalMcpEnabled)) return disabledResponse();
     const input = yield* decodeRuntimeChallenge(yield* readManagementBody).pipe(
       Effect.mapError(() => ({ message: "Invalid runtime challenge.", status: 400 as const })),
     );
