@@ -51,6 +51,11 @@ import {
   serveExternalMcpStdio,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import {
+  DEFAULT_SERVER_STATUS_URL,
+  fetchSynaraServerStatus,
+  formatSynaraServerStatus,
+} from "./serverStatusCli";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -574,6 +579,39 @@ const mcpPairCommand = Command.make(
     }),
 ).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
 
+const serverStatusCommand = Command.make(
+  "status",
+  {
+    url: Flag.string("url").pipe(
+      Flag.withDescription("Synara server base URL to probe."),
+      Flag.withDefault(DEFAULT_SERVER_STATUS_URL),
+    ),
+    json: Flag.boolean("json").pipe(
+      Flag.withDescription("Print machine-readable JSON."),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ url, json }) =>
+    Effect.promise(() => fetchSynaraServerStatus({ url })).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          process.stdout.write(
+            json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
+          );
+          if (!result.ready) {
+            process.exitCode = 1;
+          }
+        }),
+      ),
+      Effect.asVoid,
+    ),
+).pipe(Command.withDescription("Check whether a Synara server is reachable and ready."));
+
+const serverToolsCommand = Command.make("server").pipe(
+  Command.withDescription("Inspect and manage a running Synara server."),
+  Command.withSubcommands([serverStatusCommand]),
+);
+
 const mcpCommand = Command.make("mcp").pipe(
   Command.withDescription("Manage Synara's loopback external MCP bridge."),
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
@@ -581,7 +619,7 @@ const mcpCommand = Command.make("mcp").pipe(
 
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
-  Command.withSubcommands([mcpCommand]),
+  Command.withSubcommands([serverToolsCommand, mcpCommand]),
 );
 
 export const synaraCli = serverCommand;
