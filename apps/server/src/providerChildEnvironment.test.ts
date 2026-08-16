@@ -122,4 +122,17 @@ describe("buildProviderChildEnvironment", () => {
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ xai: "grok-secret" });
   });
+
+  it("matches declared provider credential grants case-insensitively", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "claude",
+      baseEnv: {
+        anthropic_api_key: "native-provider-secret",
+        gemini_api_key: "unrelated-provider-secret",
+      },
+    });
+
+    expect(env.anthropic_api_key).toBe("native-provider-secret");
+    expect(env.gemini_api_key).toBeUndefined();
+  });
 });

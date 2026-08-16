@@ -23,9 +23,9 @@ const URL_CREDENTIAL_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^/\s@]+@/gi
 const CREDENTIAL_ASSIGNMENT_PATTERN =
   /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?!\[REDACTED\])(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN =
-  /(?<![A-Za-z0-9_])((["']?)([A-Za-z_][A-Za-z0-9_]*)\2\s*(?::|=)\s*)/giu;
+  /(?<![A-Za-z0-9_.-])((["']?)([A-Za-z0-9_.-]+)\2\s*(?::|=)\s*)/giu;
 const ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN =
-  /((?:^|,|\[)\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\2\s*,\s*)/giu;
+  /((?:^|,|\[)\s*(["'])([A-Za-z0-9_.-]+)\2\s*,\s*)/giu;
 const JSON_NAME_FIELD_PATTERN =
   /(?:"name"|'name'|\bname)\s*:\s*(["'])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/giu;
 const JSON_VALUE_FIELD_PATTERN =
@@ -87,9 +87,12 @@ function credentialValueEnd(value: string, valueStart: number): number {
   if (value.startsWith("$'", index)) {
     quote = "'";
     index += 2;
-  } else if (value[index] === "'" || value[index] === '"' || value[index] === "`") {
-    quote = value[index];
-    index += 1;
+  } else {
+    const character = value[index];
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      index += 1;
+    }
   }
 
   if (!quote) {
@@ -105,17 +108,18 @@ function credentialValueEnd(value: string, valueStart: number): number {
   }
 
   while (index < value.length) {
-    if (value[index] === "\\" && index + 1 < value.length) {
+    const character = value[index];
+    if (character === "\\" && index + 1 < value.length) {
       index += 2;
-    } else if (quote && value[index] === quote) {
+    } else if (quote && character === quote) {
       quote = undefined;
       index += 1;
     } else if (quote) {
       index += 1;
-    } else if (value[index] === "'" || value[index] === '"' || value[index] === "`") {
-      quote = value[index];
+    } else if (character === "'" || character === '"' || character === "`") {
+      quote = character;
       index += 1;
-    } else if (/\s|[,;}\]]/u.test(value[index] ?? "")) {
+    } else if (/\s|[,;}\]]/u.test(character ?? "")) {
       break;
     } else {
       index += 1;
@@ -274,7 +278,6 @@ function redactParsedJsonValue(serializedValue: string): string {
 
 function redactParsedEnvironmentValue(
   value: unknown,
-  environmentContext = false,
   depth = 0,
 ): { value: unknown; changed: boolean } {
   if (LOSSLESS_JSON.isRawJSON(value)) {
@@ -296,7 +299,7 @@ function redactParsedEnvironmentValue(
     }
     let changed = false;
     const entries = value.map((entry) => {
-      const result = redactParsedEnvironmentValue(entry, environmentContext, depth + 1);
+      const result = redactParsedEnvironmentValue(entry, depth + 1);
       changed ||= result.changed;
       return result.value;
     });
@@ -315,19 +318,11 @@ function redactParsedEnvironmentValue(
     typeof record.name === "string" && isSensitiveEnvironmentName(record.name);
   let changed = false;
   const entries = Object.entries(record).map(([key, entry]) => {
-    if (
-      isSensitiveKey(key) ||
-      (environmentContext && isSensitiveEnvironmentName(key)) ||
-      (namedValueIsSensitive && key === "value")
-    ) {
+    if (isSensitiveEnvironmentName(key) || (namedValueIsSensitive && key === "value")) {
       changed ||= entry !== REDACTED_VALUE;
       return [key, REDACTED_VALUE] as const;
     }
-    const result = redactParsedEnvironmentValue(
-      entry,
-      environmentContext || isEnvironmentContainerKey(key),
-      depth + 1,
-    );
+    const result = redactParsedEnvironmentValue(entry, depth + 1);
     changed ||= result.changed;
     return [key, result.value] as const;
   });
@@ -480,15 +475,9 @@ function redactInspectedNamedValueObjects(value: string): string {
   return redacted;
 }
 
-function isEnvironmentContainerKey(key: string): boolean {
-  const terminal = keyTokens(key).at(-1);
-  return terminal === "env" || terminal === "environment";
-}
-
 function redactValue(
   value: unknown,
   seen = new WeakSet<object>(),
-  environmentContext = false,
   depth = 0,
 ): unknown {
   if (typeof value === "string") return redactText(value);
@@ -503,7 +492,7 @@ function redactValue(
     if (isSensitiveEnvironmentTuple(value)) {
       return [value[0], REDACTED_VALUE];
     }
-    return value.map((entry) => redactValue(entry, seen, environmentContext, depth + 1));
+    return value.map((entry) => redactValue(entry, seen, depth + 1));
   }
 
   const namedValueIsSensitive =
@@ -511,11 +500,9 @@ function redactValue(
   const redacted: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     redacted[key] =
-      isSensitiveKey(key) ||
-      (environmentContext && isSensitiveEnvironmentName(key)) ||
-      (namedValueIsSensitive && key === "value")
+      isSensitiveEnvironmentName(key) || (namedValueIsSensitive && key === "value")
         ? REDACTED_VALUE
-        : redactValue(entry, seen, environmentContext || isEnvironmentContainerKey(key), depth + 1);
+        : redactValue(entry, seen, depth + 1);
   }
   return redacted;
 }

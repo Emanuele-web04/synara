@@ -33,7 +33,7 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
 
 export function registerProviderCredentialKey(key: string): void {
   const normalized = key.trim().toUpperCase();
-  if (/^[A-Z_][A-Z0-9_]*$/u.test(normalized)) {
+  if (/^[A-Z0-9_.-]+$/u.test(normalized)) {
     PROVIDER_CREDENTIAL_KEYS.add(normalized);
   }
 }
@@ -102,7 +102,11 @@ export function buildProviderChildEnvironment(input: {
     if (INHERITED_NATIVE_CAPABILITY_KEYS.has(key) && !allowedNativeCapabilities.has(key)) {
       continue;
     }
-    if (isProviderCredentialKey(key) && credentialGrants !== "all" && !credentialGrants.has(key)) {
+    if (
+      isProviderCredentialKey(key) &&
+      credentialGrants !== "all" &&
+      !credentialGrants.has(key.toUpperCase())
+    ) {
       continue;
     }
     childEnv[key] = value;

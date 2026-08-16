@@ -229,11 +229,9 @@ describe("unmapped provider environment credential redaction", () => {
   it("redacts compact credential names in decoded environment maps", () => {
     const serialized = JSON.stringify(
       sanitizeUnmappedProviderData({
-        env: {
-          AWS_ACCESS_KEY_ID: "decoded-map-access-id",
-          SERVICE_APIKEY: "decoded-compact-key",
-          PGPASSWORD: "decoded-compact-password",
-        },
+        AWS_ACCESS_KEY_ID: "decoded-map-access-id",
+        SERVICE_APIKEY: "decoded-compact-key",
+        PGPASSWORD: "decoded-compact-password",
       }),
     );
 
@@ -294,13 +292,13 @@ describe("unmapped provider environment credential redaction", () => {
   });
 
   it("redacts exact configured provider credential keys in every supported shape", () => {
-    registerProviderCredentialKey("ACME_LICENSE");
+    registerProviderCredentialKey("ACME-LICENSE");
     const sanitized = JSON.stringify(
       sanitizeUnmappedProviderData({
-        assignment: "ACME_LICENSE=assignment-secret",
-        env: { ACME_LICENSE: "decoded-secret" },
-        tuple: ["ACME_LICENSE", "tuple-secret"],
-        named: { name: "ACME_LICENSE", value: "named-secret" },
+        assignment: "ACME-LICENSE=assignment-secret",
+        env: { "ACME-LICENSE": "decoded-secret" },
+        tuple: ["ACME-LICENSE", "tuple-secret"],
+        named: { name: "ACME-LICENSE", value: "named-secret" },
       }),
     );
 

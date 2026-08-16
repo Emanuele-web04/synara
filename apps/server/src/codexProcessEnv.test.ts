@@ -99,14 +99,14 @@ describe("buildCodexProcessEnv", () => {
         'model_provider = "acme"',
         "",
         "[model_providers.acme]",
-        'env_key = "ACME_LICENSE_INTEGRATION"',
+        'env_key = "ACME-LICENSE.INTEGRATION"',
       ].join("\n"),
       "utf8",
     );
 
     try {
       await buildCodexProcessEnv({ env: { CODEX_HOME: codexHome }, platform: "win32" });
-      expect(isProviderCredentialKey("ACME_LICENSE_INTEGRATION")).toBe(true);
+      expect(isProviderCredentialKey("ACME-LICENSE.INTEGRATION")).toBe(true);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
     }
