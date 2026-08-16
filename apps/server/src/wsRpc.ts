@@ -109,6 +109,8 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { CapabilityEvidenceService } from "./capabilityEvidence/Services/CapabilityEvidenceService";
 import { AgentProfileService } from "./externalAgents/AgentProfileService";
+import { DiscoveryService } from "./discovery/DiscoveryService";
+import { buildConnectionPlan } from "./discovery/ConnectionPlanPolicy";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -344,6 +346,7 @@ const makeWsRpcHandlersLayer = () =>
       const externalMcp = yield* ExternalMcpService;
       const capabilityEvidence = yield* CapabilityEvidenceService;
       const agentProfiles = yield* AgentProfileService;
+      const discovery = yield* DiscoveryService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1685,6 +1688,44 @@ const makeWsRpcHandlersLayer = () =>
               .tombstoneProfile(input.profileId)
               .pipe(Effect.map((profile) => ({ profile }))),
             "Failed to remove external agent profile",
+          ),
+        [WS_METHODS.serverListConnectionCandidates]: (input) =>
+          rpcEffect(
+            discovery
+              .listCandidates({
+                ...(input.customCommands !== undefined && input.customCommands.length > 0
+                  ? { customCommands: input.customCommands }
+                  : {}),
+              })
+              .pipe(Effect.map((result) => result)),
+            "Failed to list connection candidates",
+          ),
+        [WS_METHODS.serverResolveConnectionPlan]: (input) =>
+          rpcEffect(
+            discovery.listCandidates().pipe(
+              Effect.flatMap((result) => {
+                const candidate = result.candidates.find(
+                  (c) => c.candidateId === input.candidateId,
+                );
+                if (candidate === undefined) {
+                  return Effect.fail(
+                    new Error(
+                      `Connection candidate '${input.candidateId}' was not found in the current discovery snapshot.`,
+                    ),
+                  );
+                }
+                return Effect.sync(() => {
+                  const plan = buildConnectionPlan({
+                    candidate,
+                    planId: `plan:${candidate.candidateId}`,
+                    resolvedAt: new Date().toISOString(),
+                    ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+                  });
+                  return { plan };
+                });
+              }),
+            ),
+            "Failed to resolve connection plan",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

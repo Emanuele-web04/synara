@@ -17,6 +17,8 @@ export * from "./provider";
 export * from "./providerDiscovery";
 export * from "./providerRuntime";
 export * from "./capabilityEvidence";
+export * from "./connectionPlan";
+export * from "./recipes";
 export * from "./model";
 export * from "./agentMentions";
 export * from "./agentGateway";

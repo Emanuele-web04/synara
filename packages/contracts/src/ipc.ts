@@ -33,6 +33,12 @@ import type {
   ExternalAgentProfileUpdateResult,
 } from "./externalAgent";
 import type {
+  ConnectionCandidateListInput,
+  ConnectionCandidateListResult,
+  ConnectionPlanResolveInput,
+  ConnectionPlanResolveResult,
+} from "./connectionPlan";
+import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -769,6 +775,12 @@ export interface NativeApi {
     tombstoneExternalAgentProfile: (
       input: ExternalAgentProfileTombstoneInput,
     ) => Promise<ExternalAgentProfileTombstoneResult>;
+    listConnectionCandidates: (
+      input: ConnectionCandidateListInput,
+    ) => Promise<ConnectionCandidateListResult>;
+    resolveConnectionPlan: (
+      input: ConnectionPlanResolveInput,
+    ) => Promise<ConnectionPlanResolveResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;

@@ -82,6 +82,12 @@ import {
   ExternalAgentProfileUpdateInput,
   ExternalAgentProfileUpdateResult,
 } from "./externalAgent";
+import {
+  ConnectionCandidateListInput,
+  ConnectionCandidateListResult,
+  ConnectionPlanResolveInput,
+  ConnectionPlanResolveResult,
+} from "./connectionPlan";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitHubProjectProvisionInput,
@@ -1042,6 +1048,21 @@ export const WsServerTombstoneExternalAgentProfileRpc = Rpc.make(
   },
 );
 
+export const WsServerListConnectionCandidatesRpc = Rpc.make(
+  WS_METHODS.serverListConnectionCandidates,
+  {
+    payload: ConnectionCandidateListInput,
+    success: ConnectionCandidateListResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerResolveConnectionPlanRpc = Rpc.make(WS_METHODS.serverResolveConnectionPlan, {
+  payload: ConnectionPlanResolveInput,
+  success: ConnectionPlanResolveResult,
+  error: WsRpcError,
+});
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1374,6 +1395,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalAgentProfileRpc,
   WsServerUpdateExternalAgentProfileRpc,
   WsServerTombstoneExternalAgentProfileRpc,
+  WsServerListConnectionCandidatesRpc,
+  WsServerResolveConnectionPlanRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,

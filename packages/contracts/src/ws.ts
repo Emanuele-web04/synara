@@ -254,6 +254,8 @@ export const WS_METHODS = {
   serverCreateExternalAgentProfile: "server.createExternalAgentProfile",
   serverUpdateExternalAgentProfile: "server.updateExternalAgentProfile",
   serverTombstoneExternalAgentProfile: "server.tombstoneExternalAgentProfile",
+  serverListConnectionCandidates: "server.listConnectionCandidates",
+  serverResolveConnectionPlan: "server.resolveConnectionPlan",
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",

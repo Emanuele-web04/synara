@@ -25,6 +25,8 @@ import {
   type ExternalAgentProfileTombstoneResult,
   type ExternalAgentProfileUpdateInput,
   type ExternalAgentProfileUpdateResult,
+  type ConnectionCandidateListInput,
+  type ConnectionPlanResolveInput,
   type ExternalMcpCreateIntegrationInput,
   type ExternalMcpCreateIntegrationResult,
   type ExternalMcpIntegration,
@@ -708,6 +710,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverUpdateExternalAgentProfile, input),
       tombstoneExternalAgentProfile: (input: ExternalAgentProfileTombstoneInput) =>
         transport.request(WS_METHODS.serverTombstoneExternalAgentProfile, input),
+      listConnectionCandidates: (input: ConnectionCandidateListInput) =>
+        transport.request(WS_METHODS.serverListConnectionCandidates, input),
+      resolveConnectionPlan: (input: ConnectionPlanResolveInput) =>
+        transport.request(WS_METHODS.serverResolveConnectionPlan, input),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.

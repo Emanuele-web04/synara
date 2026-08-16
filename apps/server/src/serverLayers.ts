@@ -46,6 +46,9 @@ import { AgentProfileRepositoryLive } from "./externalAgents/AgentProfileReposit
 import { AgentProfileServiceLive } from "./externalAgents/AgentProfileService";
 import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService";
 import { ExternalMcpGatewayLive } from "./externalMcp/Layers/ExternalMcpGateway";
+import { DiscoveryServiceLive } from "./discovery/DiscoveryService";
+import { BinaryRecipeResolverLive } from "./discovery/BinaryRecipeResolver";
+import { AcpRegistryClientLive } from "./discovery/AcpRegistryClient";
 import { capabilityEvidenceLayer } from "./capabilityEvidence/Layers/CapabilityEvidenceService";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
@@ -195,6 +198,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(providerHealthLayer),
   );
   const capabilityEvidenceServiceLayer = capabilityEvidenceLayer;
+  const discoveryLayer = DiscoveryServiceLive.pipe(
+    Layer.provideMerge(BinaryRecipeResolverLive),
+    Layer.provideMerge(AcpRegistryClientLive),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
@@ -234,6 +241,7 @@ export function makeServerRuntimeServicesLayer(
     externalAgentProfilesLayer,
     externalMcpGatewayLayer,
     capabilityEvidenceServiceLayer,
+    discoveryLayer,
     providerHealthLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
