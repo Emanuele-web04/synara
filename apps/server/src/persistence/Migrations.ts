@@ -114,6 +114,7 @@ import Migration0095 from "./Migrations/095_ProjectionThreadsGoalTiming.ts";
 import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts";
 import Migration0097 from "./Migrations/097_ExternalAgentProfiles.ts";
 import Migration0098 from "./Migrations/098_CapabilityEvidence.ts";
+import Migration0100 from "./Migrations/100_CapabilityEvidenceWithdrawal.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -227,6 +228,7 @@ export const migrationEntries = [
   [96, "ProjectionThreadsGoalAchievements", Migration0096],
   [97, "ExternalAgentProfiles", Migration0097],
   [98, "CapabilityEvidence", Migration0098],
+  [100, "CapabilityEvidenceWithdrawal", Migration0100],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

@@ -15,6 +15,20 @@ import type {
   AuthWebSocketTokenResult,
 } from "./auth";
 import type {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceBadgeResult,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceDemoteResult,
+  CapabilityEvidenceInvalidateInput,
+  CapabilityEvidenceInvalidateResult,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceQueryResult,
+  CapabilityEvidenceRecordInput,
+  CapabilityEvidenceRecordResult,
+  RuntimeTurnFeedbackInput,
+  RuntimeTurnFeedbackResult,
+} from "./capabilityEvidence";
+import type {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpCreateIntegrationResult,
   ExternalMcpIntegration,
@@ -769,6 +783,21 @@ export interface NativeApi {
     tombstoneExternalAgentProfile: (
       input: ExternalAgentProfileTombstoneInput,
     ) => Promise<ExternalAgentProfileTombstoneResult>;
+    queryCapabilityEvidence: (
+      input: CapabilityEvidenceQuery,
+    ) => Promise<CapabilityEvidenceQueryResult>;
+    recordCapabilityEvidence: (
+      input: CapabilityEvidenceRecordInput,
+    ) => Promise<CapabilityEvidenceRecordResult>;
+    demoteCapabilityEvidence: (
+      input: CapabilityEvidenceDemoteInput,
+    ) => Promise<CapabilityEvidenceDemoteResult>;
+    queryCapabilityEvidenceBadge: (
+      input: CapabilityEvidenceBadge,
+    ) => Promise<CapabilityEvidenceBadgeResult>;
+    recordRuntimeTurnFeedback: (
+      input: RuntimeTurnFeedbackInput,
+    ) => Promise<RuntimeTurnFeedbackResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;

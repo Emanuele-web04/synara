@@ -1,4 +1,5 @@
 import type {
+  CapabilityEvidenceDemoteResult,
   CapabilityObservation,
   EffectiveCapabilityStateView,
   PolicySpec,
@@ -93,32 +94,62 @@ export const makeCapabilityEvidenceRepository = Effect.gen(function* () {
         ${input.observation.observedAt},
         ${input.observation.run === undefined ? null : JSON.stringify(input.observation.run)}
       )
+      ON CONFLICT (observation_id) DO NOTHING
     `.pipe(Effect.asVoid, Effect.mapError(repositoryError("appendObservation")));
 
+  // The raw history is preserved for audit; a withdrawn observation is
+  // excluded from active verdicts via `withdrawn_at` but never rewritten.
+  // `includeWithdrawn` is an escape hatch for diagnostics; all derivation paths
+  // leave it unset.
   const listObservations: CapabilityEvidenceRepositoryShape["listObservations"] = (input) =>
     (input.capabilityId === undefined
-      ? sql<ObservationRow>`
-          SELECT
-            observation_id AS "observationId", namespace, capability_id AS "capabilityId",
-            source, outcome, attribution,
-            runtime_identity_json AS "runtimeIdentityJson",
-            verifier_json AS "verifierJson", policy_json AS "policyJson",
-            observed_at AS "observedAt", run_metadata_json AS "runMetadataJson"
-          FROM capability_observations
-          WHERE namespace = ${input.namespace}
-          ORDER BY observed_at DESC, observation_id DESC
-        `
-      : sql<ObservationRow>`
-          SELECT
-            observation_id AS "observationId", namespace, capability_id AS "capabilityId",
-            source, outcome, attribution,
-            runtime_identity_json AS "runtimeIdentityJson",
-            verifier_json AS "verifierJson", policy_json AS "policyJson",
-            observed_at AS "observedAt", run_metadata_json AS "runMetadataJson"
-          FROM capability_observations
-          WHERE namespace = ${input.namespace} AND capability_id = ${input.capabilityId}
-          ORDER BY observed_at DESC, observation_id DESC
-        `
+      ? input.includeWithdrawn
+        ? sql<ObservationRow>`
+            SELECT
+              observation_id AS "observationId", namespace, capability_id AS "capabilityId",
+              source, outcome, attribution,
+              runtime_identity_json AS "runtimeIdentityJson",
+              verifier_json AS "verifierJson", policy_json AS "policyJson",
+              observed_at AS "observedAt", run_metadata_json AS "runMetadataJson"
+            FROM capability_observations
+            WHERE namespace = ${input.namespace}
+            ORDER BY observed_at DESC, observation_id DESC
+          `
+        : sql<ObservationRow>`
+            SELECT
+              observation_id AS "observationId", namespace, capability_id AS "capabilityId",
+              source, outcome, attribution,
+              runtime_identity_json AS "runtimeIdentityJson",
+              verifier_json AS "verifierJson", policy_json AS "policyJson",
+              observed_at AS "observedAt", run_metadata_json AS "runMetadataJson"
+            FROM capability_observations
+            WHERE namespace = ${input.namespace} AND withdrawn_at IS NULL
+            ORDER BY observed_at DESC, observation_id DESC
+          `
+      : input.includeWithdrawn
+        ? sql<ObservationRow>`
+            SELECT
+              observation_id AS "observationId", namespace, capability_id AS "capabilityId",
+              source, outcome, attribution,
+              runtime_identity_json AS "runtimeIdentityJson",
+              verifier_json AS "verifierJson", policy_json AS "policyJson",
+              observed_at AS "observedAt", run_metadata_json AS "runMetadataJson"
+            FROM capability_observations
+            WHERE namespace = ${input.namespace} AND capability_id = ${input.capabilityId}
+            ORDER BY observed_at DESC, observation_id DESC
+          `
+        : sql<ObservationRow>`
+            SELECT
+              observation_id AS "observationId", namespace, capability_id AS "capabilityId",
+              source, outcome, attribution,
+              runtime_identity_json AS "runtimeIdentityJson",
+              verifier_json AS "verifierJson", policy_json AS "policyJson",
+              observed_at AS "observedAt", run_metadata_json AS "runMetadataJson"
+            FROM capability_observations
+            WHERE namespace = ${input.namespace} AND capability_id = ${input.capabilityId}
+              AND withdrawn_at IS NULL
+            ORDER BY observed_at DESC, observation_id DESC
+          `
     ).pipe(
       Effect.map((rows) => rows.map(toObservation)),
       Effect.mapError(repositoryError("listObservations")),
@@ -212,6 +243,56 @@ export const makeCapabilityEvidenceRepository = Effect.gen(function* () {
       WHERE namespace = ${input.namespace}
     `.pipe(Effect.asVoid, Effect.mapError(repositoryError("clearEffectiveStates")));
 
+  const demoteObservations: CapabilityEvidenceRepositoryShape["demoteObservations"] = (input) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          if (input.decision === "purge") {
+            const purgedRows = yield* input.capabilityId === undefined
+              ? sql<{ readonly observationId: string }>`
+                  DELETE FROM capability_observations
+                  WHERE namespace = ${input.namespace}
+                  RETURNING observation_id
+                `
+              : sql<{ readonly observationId: string }>`
+                  DELETE FROM capability_observations
+                  WHERE namespace = ${input.namespace} AND capability_id = ${input.capabilityId}
+                  RETURNING observation_id
+                `;
+            yield* clearEffectiveStates(input);
+            return {
+              purged: purgedRows.length,
+              demoted: 0,
+            } satisfies CapabilityEvidenceDemoteResult;
+          }
+          // Demote: keep the rows but withdraw them. Raw history preserved for
+          // audit; policy derivation excludes withdrawn rows, so the capability
+          // reads `unknown`/`provisional` instead of `broken` without
+          // fabricating a failure (KAR-530 AC #4/#5).
+          const withdrawnAt = input.withdrawnAt ?? new Date().toISOString();
+          const demotedRows = yield* input.capabilityId === undefined
+            ? sql<{ readonly observationId: string }>`
+                UPDATE capability_observations
+                SET withdrawn_at = ${withdrawnAt}
+                WHERE namespace = ${input.namespace} AND withdrawn_at IS NULL
+                RETURNING observation_id
+              `
+            : sql<{ readonly observationId: string }>`
+                UPDATE capability_observations
+                SET withdrawn_at = ${withdrawnAt}
+                WHERE namespace = ${input.namespace} AND capability_id = ${input.capabilityId}
+                  AND withdrawn_at IS NULL
+                RETURNING observation_id
+              `;
+          yield* clearEffectiveStates(input);
+          return {
+            purged: 0,
+            demoted: demotedRows.length,
+          } satisfies CapabilityEvidenceDemoteResult;
+        }),
+      )
+      .pipe(Effect.mapError(repositoryError("demoteObservations")));
+
   return {
     appendObservation,
     listObservations,
@@ -221,6 +302,7 @@ export const makeCapabilityEvidenceRepository = Effect.gen(function* () {
     upsertEffectiveState,
     getEffectiveState,
     clearEffectiveStates,
+    demoteObservations,
   } satisfies CapabilityEvidenceRepositoryShape;
 });
 

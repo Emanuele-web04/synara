@@ -1,4 +1,8 @@
 import type {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceBadgeResult,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceDemoteResult,
   CapabilityAdvertisement,
   CapabilityEvidenceInvalidateInput,
   CapabilityEvidenceInvalidateResult,
@@ -7,6 +11,8 @@ import type {
   CapabilityEvidenceRecordInput,
   CapabilityEvidenceRecordResult,
   CapabilityObservation,
+  RuntimeTurnFeedbackInput,
+  RuntimeTurnFeedbackResult,
 } from "@synara/contracts";
 import { Data, Effect, Random, ServiceMap } from "effect";
 
@@ -15,6 +21,7 @@ import {
   CAPABILITY_EVIDENCE_POLICY_VERSION,
   CapabilityPolicyEngine,
 } from "./CapabilityPolicyEngine.ts";
+import { RuntimeTurnFeedbackService } from "./RuntimeTurnFeedbackService.ts";
 
 export class CapabilityEvidenceError extends Data.TaggedError("CapabilityEvidenceError")<{
   readonly code: "invalid_input" | "repository_error" | "not_found";
@@ -32,6 +39,33 @@ export interface CapabilityEvidenceServiceShape {
   readonly invalidate: (
     input: CapabilityEvidenceInvalidateInput,
   ) => Effect.Effect<CapabilityEvidenceInvalidateResult, CapabilityEvidenceError>;
+  /**
+   * Demote or purge capability observations for a profile (and optionally a
+   * single capability). `purge` hard-deletes dishonest evidence (honeypot
+   * verdicts); `demote` withdraws remaining evidence from verdicts while
+   * preserving the raw history (KAR-530).
+   */
+  readonly demote: (
+    input: CapabilityEvidenceDemoteInput,
+  ) => Effect.Effect<CapabilityEvidenceDemoteResult, CapabilityEvidenceError>;
+  /**
+   * Records a terminal live-session turn as capability evidence for the
+   * running external agent profile. The observation is attributed to the
+   * profile namespace and source `runtime`, so the badge and conformance
+   * history converge per profile (KAR-530).
+   */
+  readonly recordRuntimeTurnFeedback: (
+    input: RuntimeTurnFeedbackInput,
+  ) => Effect.Effect<RuntimeTurnFeedbackResult, CapabilityEvidenceError>;
+  /**
+   * Badge lookup for a profile: the effective capability state for every
+   * capability the evidence store knows about, derived under the current
+   * policy version (KAR-530 AC #2). The badge is evidence-driven, never a
+   * mutable compatibility flag.
+   */
+  readonly queryBadge: (
+    input: CapabilityEvidenceBadge,
+  ) => Effect.Effect<CapabilityEvidenceBadgeResult, CapabilityEvidenceError>;
 }
 
 export class CapabilityEvidenceService extends ServiceMap.Service<
@@ -52,9 +86,13 @@ const randomObservationId = (namespace: string, capabilityId: string, now: strin
     return `${namespace}:${capabilityId}:${now}:${suffix}`;
   });
 
+export const CAPABILITY_EVIDENCE_VERIFIER_ID = "synara-capability-evidence";
+export const RUNTIME_FEEDBACK_VERIFIER_ID = "runtime-turn-feedback";
+
 export const makeCapabilityEvidenceService = Effect.gen(function* () {
   const repository = yield* CapabilityEvidenceRepository;
   const policyEngine = yield* CapabilityPolicyEngine;
+  const runtimeTurnFeedback = yield* RuntimeTurnFeedbackService;
 
   const record: CapabilityEvidenceServiceShape["record"] = (input) =>
     Effect.gen(function* () {
@@ -133,5 +171,77 @@ export const makeCapabilityEvidenceService = Effect.gen(function* () {
       return { invalidated: 1 } satisfies CapabilityEvidenceInvalidateResult;
     });
 
-  return { record, query, invalidate } satisfies CapabilityEvidenceServiceShape;
+  const demote: CapabilityEvidenceServiceShape["demote"] = (input) =>
+    Effect.gen(function* () {
+      const result = yield* repository
+        .demoteObservations({
+          namespace: input.namespace,
+          ...(input.capabilityId ? { capabilityId: input.capabilityId } : {}),
+          decision: input.decision,
+          ...(input.observedAt ? { withdrawnAt: input.observedAt } : {}),
+        })
+        .pipe(Effect.mapError(toRepositoryError("demote")));
+      return result satisfies CapabilityEvidenceDemoteResult;
+    });
+
+  const recordRuntimeTurnFeedback: CapabilityEvidenceServiceShape["recordRuntimeTurnFeedback"] = (
+    input,
+  ) => runtimeTurnFeedback.recordTurnFeedback(input);
+
+  const queryBadge: CapabilityEvidenceServiceShape["queryBadge"] = (input) =>
+    Effect.gen(function* () {
+      const observations = yield* repository
+        .listObservations({ namespace: input.namespace })
+        .pipe(Effect.mapError(toRepositoryError("queryBadge")));
+
+      const byCapability = new Map<
+        CapabilityObservation["capabilityId"],
+        CapabilityObservation[]
+      >();
+      for (const observation of observations) {
+        const existing = byCapability.get(observation.capabilityId);
+        if (existing) existing.push(observation);
+        else byCapability.set(observation.capabilityId, [observation]);
+      }
+
+      const derivedAt = new Date().toISOString();
+      const states: Array<CapabilityEvidenceBadgeResult["states"][number]> = [];
+
+      for (const [capabilityId, capabilityObservations] of byCapability) {
+        const latestClaim = [...capabilityObservations]
+          .filter((observation) => observation.source === "protocol-claim")
+          .sort((a, b) => a.observedAt.localeCompare(b.observedAt))
+          .at(-1);
+        const advertisement: CapabilityAdvertisement | undefined =
+          latestClaim === undefined
+            ? undefined
+            : {
+                capabilityId: latestClaim.capabilityId,
+                advertised: latestClaim.outcome === "pass",
+                advertisedAt: latestClaim.observedAt,
+              };
+        const state = policyEngine.deriveEffectiveStateView({
+          namespace: input.namespace,
+          observations: capabilityObservations,
+          policy: { version: CAPABILITY_EVIDENCE_POLICY_VERSION, params: {} },
+          advertisement,
+          derivedAt,
+        });
+        states.push({
+          ...state,
+          capabilityId,
+        });
+      }
+
+      return { states, derivedAt } satisfies CapabilityEvidenceBadgeResult;
+    });
+
+  return {
+    record,
+    query,
+    invalidate,
+    demote,
+    recordRuntimeTurnFeedback,
+    queryBadge,
+  } satisfies CapabilityEvidenceServiceShape;
 });

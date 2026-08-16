@@ -48,6 +48,7 @@ import {
 } from "../../lib/modelFavorites";
 import { Skeleton } from "../ui/skeleton";
 import { PlusIcon } from "~/lib/icons";
+import { CapabilityEvidenceBadge } from "./CapabilityEvidenceBadge";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -586,21 +587,28 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
 
   if (isExternalActive) {
     // External agent selections cannot be re-targeted through the built-in
-    // provider/model menu in this build.
+    // provider/model menu in this build. The capability badge (evidence-driven,
+    // KAR-530) is mounted beside the trigger so the profile's derived state is
+    // always one glance away.
     return (
-      <PickerTriggerButton
-        disabled
-        compact={props.compact ?? false}
-        hideLabel={props.hideLabel ?? false}
-        className="text-[var(--color-text-foreground)]"
-        icon={
-          <span
-            aria-hidden="true"
-            className="size-3.5 shrink-0 rounded-full bg-current opacity-70"
-          />
-        }
-        label={selectedModelLabel}
-      />
+      <div className="flex items-center gap-1.5">
+        <PickerTriggerButton
+          disabled
+          compact={props.compact ?? false}
+          hideLabel={props.hideLabel ?? false}
+          className="text-[var(--color-text-foreground)]"
+          icon={
+            <span
+              aria-hidden="true"
+              className="size-3.5 shrink-0 rounded-full bg-current opacity-70"
+            />
+          }
+          label={selectedModelLabel}
+        />
+        {props.activeExternalProfileId ? (
+          <CapabilityEvidenceBadge profileId={props.activeExternalProfileId} />
+        ) : null}
+      </div>
     );
   }
 

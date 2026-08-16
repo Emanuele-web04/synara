@@ -20,11 +20,13 @@ export interface CapabilityEvidenceRepositoryShape {
   }) => Effect.Effect<void, Error>;
   /**
    * List observations for a profile (and optionally a single capability),
-   * newest first.
+   * newest first. Withdrawn observations are excluded unless `includeWithdrawn`
+   * is set, so derived verdicts and the badge never see demoted evidence.
    */
   readonly listObservations: (input: {
     readonly namespace: string;
     readonly capabilityId?: CapabilityId;
+    readonly includeWithdrawn?: boolean;
   }) => Effect.Effect<ReadonlyArray<CapabilityObservation>, Error>;
   /**
    * Latest observed runtime identity signals for a profile. Used to detect
@@ -64,6 +66,25 @@ export interface CapabilityEvidenceRepositoryShape {
   readonly clearEffectiveStates: (input: {
     readonly namespace: string;
   }) => Effect.Effect<void, Error>;
+  /**
+   * Demote or purge observations for a profile (and optionally a capability).
+   *
+   * `purge` hard-deletes the matching observations (honeypot verdicts and
+   * deliberately withheld evidence must not survive), while `demote` keeps the
+   * rows but marks them withdrawn by stamping `withdrawn_at` so policy
+   * derivation excludes them — it never rewrites the raw evidence itself
+   * (KAR-530 AC #5). Both paths then clear the derived effective-state cache so
+   * the next query re-derives from the new history.
+   *
+   * Returns how many observations were purged and how many were demoted so
+   * callers (and the web badge) can say what actually happened.
+   */
+  readonly demoteObservations: (input: {
+    readonly namespace: string;
+    readonly capabilityId?: CapabilityId;
+    readonly decision: "purge" | "demote";
+    readonly withdrawnAt?: string;
+  }) => Effect.Effect<{ readonly purged: number; readonly demoted: number }, Error>;
 }
 
 export class CapabilityEvidenceRepository extends ServiceMap.Service<

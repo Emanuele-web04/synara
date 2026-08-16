@@ -196,4 +196,52 @@ describe("CapabilityEvidenceService", () => {
       }),
     );
   });
+
+  layer("badge (AC #2): evidence store drives the badge", (it) => {
+    it.effect("collapses all known capabilities into a derived summary", () =>
+      Effect.gen(function* () {
+        const service = yield* CapabilityEvidenceService;
+        const ns = namespace();
+        // One capability verified, one inconclusive.
+        yield* service.record({
+          namespace: ns,
+          capabilityId: "prompt",
+          source: "synthetic-conformance",
+          outcome: "pass",
+          attribution: "synara",
+          runtime: identity,
+          verifier,
+          policy,
+          observedAt: observedAt(),
+        });
+        yield* service.record({
+          namespace: ns,
+          capabilityId: "stream",
+          source: "runtime",
+          outcome: "inconclusive",
+          attribution: "unknown",
+          runtime: identity,
+          verifier,
+          policy,
+          observedAt: observedAt(),
+        });
+
+        const badge = yield* service.queryBadge({ namespace: ns });
+        const prompt = badge.states.find((state) => state.capabilityId === "prompt");
+        const stream = badge.states.find((state) => state.capabilityId === "stream");
+        assert.strictEqual(prompt?.state, "verified");
+        assert.ok(stream);
+        assert.notStrictEqual(stream.state, "verified");
+        assert.ok(badge.derivedAt);
+      }),
+    );
+
+    it.effect("reads unknown for a profile with no evidence (never fabricates)", () =>
+      Effect.gen(function* () {
+        const service = yield* CapabilityEvidenceService;
+        const badge = yield* service.queryBadge({ namespace: namespace() });
+        assert.deepStrictEqual(badge.states, []);
+      }),
+    );
+  });
 });

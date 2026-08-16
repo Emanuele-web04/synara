@@ -158,9 +158,12 @@ import {
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
 import {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceDemoteInput,
   CapabilityEvidenceInvalidateInput,
   CapabilityEvidenceQuery,
   CapabilityEvidenceRecordInput,
+  RuntimeTurnFeedbackInput,
 } from "./capabilityEvidence";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
@@ -249,6 +252,9 @@ export const WS_METHODS = {
   capabilityEvidenceRecord: "capabilityEvidence.record",
   capabilityEvidenceQuery: "capabilityEvidence.query",
   capabilityEvidenceInvalidate: "capabilityEvidence.invalidate",
+  capabilityEvidenceDemote: "capabilityEvidence.demote",
+  capabilityEvidenceBadge: "capabilityEvidence.badge",
+  runtimeTurnFeedbackRecord: "runtimeTurnFeedback.record",
   serverListExternalAgentProfiles: "server.listExternalAgentProfiles",
   serverGetExternalAgentProfile: "server.getExternalAgentProfile",
   serverCreateExternalAgentProfile: "server.createExternalAgentProfile",
@@ -462,6 +468,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.capabilityEvidenceRecord, CapabilityEvidenceRecordInput),
   tagRequestBody(WS_METHODS.capabilityEvidenceQuery, CapabilityEvidenceQuery),
   tagRequestBody(WS_METHODS.capabilityEvidenceInvalidate, CapabilityEvidenceInvalidateInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceDemote, CapabilityEvidenceDemoteInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceBadge, CapabilityEvidenceBadge),
+  tagRequestBody(WS_METHODS.runtimeTurnFeedbackRecord, RuntimeTurnFeedbackInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),

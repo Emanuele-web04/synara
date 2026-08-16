@@ -23,12 +23,18 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceBadgeResult,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceDemoteResult,
   CapabilityEvidenceInvalidateInput,
   CapabilityEvidenceInvalidateResult,
   CapabilityEvidenceQuery,
   CapabilityEvidenceQueryResult,
   CapabilityEvidenceRecordInput,
   CapabilityEvidenceRecordResult,
+  RuntimeTurnFeedbackInput,
+  RuntimeTurnFeedbackResult,
 } from "./capabilityEvidence";
 import { OpenInEditorInput } from "./editor";
 import {
@@ -997,6 +1003,24 @@ export const WsCapabilityEvidenceInvalidateRpc = Rpc.make(WS_METHODS.capabilityE
   error: WsRpcError,
 });
 
+export const WsCapabilityEvidenceDemoteRpc = Rpc.make(WS_METHODS.capabilityEvidenceDemote, {
+  payload: CapabilityEvidenceDemoteInput,
+  success: CapabilityEvidenceDemoteResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceBadgeRpc = Rpc.make(WS_METHODS.capabilityEvidenceBadge, {
+  payload: CapabilityEvidenceBadge,
+  success: CapabilityEvidenceBadgeResult,
+  error: WsRpcError,
+});
+
+export const WsRuntimeTurnFeedbackRpc = Rpc.make(WS_METHODS.runtimeTurnFeedbackRecord, {
+  payload: RuntimeTurnFeedbackInput,
+  success: RuntimeTurnFeedbackResult,
+  error: WsRpcError,
+});
+
 export const WsServerListExternalAgentProfilesRpc = Rpc.make(
   WS_METHODS.serverListExternalAgentProfiles,
   {
@@ -1369,6 +1393,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsCapabilityEvidenceRecordRpc,
   WsCapabilityEvidenceQueryRpc,
   WsCapabilityEvidenceInvalidateRpc,
+  WsCapabilityEvidenceDemoteRpc,
+  WsCapabilityEvidenceBadgeRpc,
+  WsRuntimeTurnFeedbackRpc,
   WsServerListExternalAgentProfilesRpc,
   WsServerGetExternalAgentProfileRpc,
   WsServerCreateExternalAgentProfileRpc,

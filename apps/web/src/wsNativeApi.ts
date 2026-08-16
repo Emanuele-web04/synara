@@ -16,6 +16,10 @@ import {
   type AuthRevokePairingLinkInput,
   type AuthSessionState,
   type AuthWebSocketTokenResult,
+  type CapabilityEvidenceBadge,
+  type CapabilityEvidenceDemoteInput,
+  type CapabilityEvidenceRecordInput,
+  type CapabilityEvidenceQuery,
   type ExternalAgentProfileCreateInput,
   type ExternalAgentProfileCreateResult,
   type ExternalAgentProfileGetInput,
@@ -39,6 +43,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type RuntimeTurnFeedbackInput,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -708,6 +713,16 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverUpdateExternalAgentProfile, input),
       tombstoneExternalAgentProfile: (input: ExternalAgentProfileTombstoneInput) =>
         transport.request(WS_METHODS.serverTombstoneExternalAgentProfile, input),
+      queryCapabilityEvidence: (input: CapabilityEvidenceQuery) =>
+        transport.request(WS_METHODS.capabilityEvidenceQuery, input),
+      recordCapabilityEvidence: (input: CapabilityEvidenceRecordInput) =>
+        transport.request(WS_METHODS.capabilityEvidenceRecord, input),
+      demoteCapabilityEvidence: (input: CapabilityEvidenceDemoteInput) =>
+        transport.request(WS_METHODS.capabilityEvidenceDemote, input),
+      queryCapabilityEvidenceBadge: (input: CapabilityEvidenceBadge) =>
+        transport.request(WS_METHODS.capabilityEvidenceBadge, input),
+      recordRuntimeTurnFeedback: (input: RuntimeTurnFeedbackInput) =>
+        transport.request(WS_METHODS.runtimeTurnFeedbackRecord, input),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.

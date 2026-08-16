@@ -1665,6 +1665,18 @@ const makeWsRpcHandlersLayer = () =>
             capabilityEvidence.invalidate(input),
             "Failed to invalidate capability evidence",
           ),
+        [WS_METHODS.capabilityEvidenceDemote]: (input) =>
+          rpcEffect(capabilityEvidence.demote(input), "Failed to demote capability evidence"),
+        [WS_METHODS.capabilityEvidenceBadge]: (input) =>
+          rpcEffect(
+            capabilityEvidence.queryBadge(input),
+            "Failed to load capability evidence badge",
+          ),
+        [WS_METHODS.runtimeTurnFeedbackRecord]: (input) =>
+          rpcEffect(
+            capabilityEvidence.recordRuntimeTurnFeedback(input),
+            "Failed to record runtime turn feedback",
+          ),
         [WS_METHODS.serverListExternalAgentProfiles]: () =>
           rpcEffect(
             agentProfiles.listProfiles().pipe(Effect.map((profiles) => ({ profiles }))),
