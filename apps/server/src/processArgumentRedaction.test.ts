@@ -166,6 +166,19 @@ describe("redactSensitiveProcessArgs", () => {
     );
   });
 
+  it("fails closed for adjacent shell segments after an externally quoted assignment", () => {
+    expect(redactSensitiveProcessArgs(`env 'PASSWORD=prefix'"correct horse" app --verbose`)).toBe(
+      `env 'PASSWORD=[redacted]`,
+    );
+  });
+
+  it("handles deeply nested assignment syntax without rescanning the expansion stack", () => {
+    const nested = "(".repeat(512) + "secret" + ")".repeat(512);
+    expect(redactSensitiveProcessArgs(`PASSWORD=$(${nested}) remains useful`)).toBe(
+      "PASSWORD=[redacted] remains useful",
+    );
+  });
+
   it("recognizes append-style sensitive assignments", () => {
     expect(redactSensitiveProcessArgs("PASSWORD+=supersecret remains useful")).toBe(
       "PASSWORD+=[redacted] remains useful",
@@ -207,6 +220,14 @@ describe("redactSensitiveProcessArgs", () => {
         "env DATABASE_URL=postgres://alice:supersecret@db.example/app bun run dev",
       ),
     ).toBe("env DATABASE_URL=[redacted]");
+  });
+
+  it("redacts through the last userinfo marker in credential URLs", () => {
+    expect(
+      redactSensitiveProcessArgs(
+        "connection postgres://alice:p@ss@db.example/app failed without retry",
+      ),
+    ).toBe("connection postgres://[redacted]@db.example/app failed without retry");
   });
 
   it("preserves generic diagnostic context after a bounded assignment value", () => {

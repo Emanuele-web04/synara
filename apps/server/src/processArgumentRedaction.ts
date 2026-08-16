@@ -4,8 +4,8 @@ const SENSITIVE_ENV_NAME =
   /^(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|MYSQL_PWD|PASSWORD|PASSPHRASE|PGPASSWORD|REDISCLI_AUTH|SECRET|TOKEN)$/;
 const SENSITIVE_ENV_NAME_SUFFIX =
   /_(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
-const URL_CREDENTIALS_AT_VALUE_START = /^["']?[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i;
-const URL_CREDENTIALS_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/giu;
+const URL_CREDENTIALS_AT_VALUE_START = /^["']?[a-z][a-z0-9+.-]*:\/\/[^/\s]+@/i;
+const URL_CREDENTIALS_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s]+@/giu;
 
 function isSensitiveEnvironmentName(name: string | undefined): boolean {
   if (!name) return false;
@@ -61,6 +61,8 @@ function boundedShellAssignmentValueEnd(
     quote: ShellQuote | null;
     commandPosition: boolean;
     readonly cases: ShellCaseState[];
+    activeCommand: ShellExpansion | undefined;
+    activeNonGroup: ShellExpansion | undefined;
   }
 
   const outerBoundaryQuote = boundary === "'" || boundary === '"' ? boundary : null;
@@ -88,20 +90,21 @@ function boundedShellAssignmentValueEnd(
     readonly close: ExpansionClose;
     readonly kind: ExpansionKind;
   }): void => {
-    expansions.push({
+    const parent = expansions.at(-1);
+    const entry: ShellExpansion = {
       ...expansion,
+      activeCommand: parent?.activeCommand,
+      activeNonGroup: parent?.activeNonGroup,
       cases: [],
       commandPosition: expansion.kind === "command",
       quote: null,
-    });
+    };
+    if (entry.kind === "command") entry.activeCommand = entry;
+    if (entry.kind !== "group") entry.activeNonGroup = entry;
+    expansions.push(entry);
   };
 
-  const activeCommandExpansion = (): ShellExpansion | undefined => {
-    const shellExpansion = [...expansions]
-      .reverse()
-      .find((candidate) => candidate.kind !== "group");
-    return shellExpansion?.kind === "command" ? shellExpansion : undefined;
-  };
+  const activeCommandExpansion = (): ShellExpansion | undefined => expansions.at(-1)?.activeCommand;
 
   while (index < args.length) {
     const character = args[index]!;
@@ -192,9 +195,7 @@ function boundedShellAssignmentValueEnd(
         commentCommandExpansion.commandPosition = true;
         continue;
       }
-      const shellExpansion = [...expansions]
-        .reverse()
-        .find((candidate) => candidate.kind !== "group");
+      const shellExpansion = expansions.at(-1)?.activeNonGroup;
       const groupsBracket =
         character === "[" &&
         (shellExpansion?.kind === "arithmetic" || shellExpansion?.kind === "legacy-arithmetic");
@@ -268,7 +269,10 @@ function boundedShellAssignmentValueEnd(
 
     if (wordQuote !== null) {
       if (character === wordQuote) {
-        if (wordQuote === outerBoundaryQuote) return index;
+        if (wordQuote === outerBoundaryQuote) {
+          const next = args[index + 1];
+          return next === undefined || /[\s;&|()<>]/u.test(next) ? index : args.length;
+        }
         wordQuote = null;
         index += 1;
         continue;
