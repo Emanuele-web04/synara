@@ -11,7 +11,7 @@ const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu
 const CREDENTIAL_ASSIGNMENT_PATTERN =
   /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
-  /\b([A-Za-z_][A-Za-z0-9_]*(?:API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN)=)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu;
+  /(^|[^A-Za-z0-9_])("?[A-Za-z_][A-Za-z0-9_]*(?:API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|PASSWORD|PASSWD|PASSPHRASE|PRIVATE_?KEY|SECRET|TOKEN)"?\s*(?::|=)\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;]+)/gimu;
 const BEARER_CREDENTIAL_PATTERN = /\b(bearer\s+)[A-Za-z0-9._~+/=-]+/giu;
 const EXACT_SENSITIVE_KEYS = new Set([
   "authorization",
@@ -39,7 +39,7 @@ const SENSITIVE_TERMINAL_TOKENS = new Set([
 function redactText(value: string): string {
   return value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
-    .replace(ENV_CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
+    .replace(ENV_CREDENTIAL_ASSIGNMENT_PATTERN, `$1$2${REDACTED_VALUE}`)
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
 }

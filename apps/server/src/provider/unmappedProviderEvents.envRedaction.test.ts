@@ -15,4 +15,31 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).toContain("GITHUB_TOKEN=[REDACTED]");
     expect(serialized).toContain("NODE_ENV=development");
   });
+
+  it("redacts prefixed private keys", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData("env(FIREBASE_PRIVATE_KEY=private-key-material)"),
+    );
+
+    expect(serialized).not.toContain("private-key-material");
+    expect(serialized).toContain("FIREBASE_PRIVATE_KEY=[REDACTED]");
+  });
+
+  it("consumes escaped quotes inside quoted credential values", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData('DB_PASSWORD="abc\\"remaining-secret"'),
+    );
+
+    expect(serialized).not.toContain("remaining-secret");
+    expect(serialized).toContain("DB_PASSWORD=[REDACTED]");
+  });
+
+  it("redacts prefixed credentials in serialized environment maps", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData('{"OPENAI_API_KEY":"sk-secret"}'),
+    );
+
+    expect(serialized).not.toContain("sk-secret");
+    expect(serialized).toContain('\\"OPENAI_API_KEY\\":[REDACTED]');
+  });
 });
