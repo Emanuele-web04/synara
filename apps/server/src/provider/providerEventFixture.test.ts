@@ -204,6 +204,33 @@ describe("provider event fixtures", () => {
     expect(sanitized!.payload.token).toBe("<redacted>");
   });
 
+  it("preserves the structured OpenCode token-usage counters", () => {
+    const [sanitized] = sanitizeProviderEventFixtureEvents([
+      {
+        type: "message.updated",
+        properties: {
+          info: {
+            tokens: {
+              total: 18,
+              input: 10,
+              output: 5,
+              reasoning: 1,
+              cache: { read: 2, write: 0 },
+            },
+          },
+        },
+      },
+    ]) as Array<Record<string, any>>;
+
+    expect(sanitized!.properties.info.tokens).toEqual({
+      total: 18,
+      input: 10,
+      output: 5,
+      reasoning: 1,
+      cache: { read: 2, write: 0 },
+    });
+  });
+
   it("redacts string-valued message fields", () => {
     const [sanitized] = sanitizeProviderEventFixtureEvents([
       { type: "process/stderr", message: "private stderr text" },

@@ -37,6 +37,8 @@ const CAMEL_IDENTIFIER_KEY_PATTERN = /(?:Id|ID|Uuid|UUID)$/;
 const TIMESTAMP_KEY_PATTERN =
   /(?:timestamp|createdAt|updatedAt|observedAt|startedAt|endedAt|time)$/i;
 const SAFE_DISCRIMINATOR_VALUE_PATTERN = /^[A-Za-z0-9_.:/@-]{1,128}$/u;
+const OPENCODE_TOKEN_COUNTER_KEYS = new Set(["input", "output", "reasoning"]);
+const OPENCODE_CACHE_COUNTER_KEYS = new Set(["read", "write"]);
 
 const SAFE_STRING_KEYS = new Set([
   "type",
@@ -182,6 +184,7 @@ type SanitizerState = {
 
 type SanitizerContext = {
   readonly untrustedStrings: boolean;
+  readonly openCodeTokenLocation: "none" | "tokens" | "cache";
 };
 
 function redactIdentifier(value: unknown, state: SanitizerState): string {
@@ -209,8 +212,10 @@ function normalizeTimestamp(value: unknown): string | number {
   throw new ProviderEventFixtureError("Timestamp fields must be strings or finite numbers.");
 }
 
-function isClassifiedFixtureKey(key: string): boolean {
+function isClassifiedFixtureKey(key: string, context: SanitizerContext): boolean {
   return (
+    (context.openCodeTokenLocation === "tokens" && OPENCODE_TOKEN_COUNTER_KEYS.has(key)) ||
+    (context.openCodeTokenLocation === "cache" && OPENCODE_CACHE_COUNTER_KEYS.has(key)) ||
     SAFE_CONTAINER_KEYS.has(key) ||
     SAFE_STRING_KEYS.has(key) ||
     SAFE_SCALAR_KEYS.has(key) ||
@@ -228,9 +233,13 @@ function sanitizeValue(
   context: SanitizerContext,
 ): unknown {
   if (key && SENSITIVE_VALUE_KEYS.has(key)) {
+    const isOpenCodeTokenCounter =
+      context.openCodeTokenLocation === "tokens" &&
+      OPENCODE_TOKEN_COUNTER_KEYS.has(key) &&
+      typeof value === "number";
     const isStructuredMessage =
       key === "message" && value !== null && typeof value === "object" && !Array.isArray(value);
-    if (!isStructuredMessage) {
+    if (!isStructuredMessage && !isOpenCodeTokenCounter) {
       return REDACTED_VALUE;
     }
   }
@@ -280,14 +289,24 @@ function sanitizeValue(
   }
 
   const result = Object.create(null) as Record<string, unknown>;
+  const childContext: SanitizerContext = {
+    untrustedStrings: context.untrustedStrings,
+    openCodeTokenLocation:
+      key === "tokens"
+        ? "tokens"
+        : key === "cache" && context.openCodeTokenLocation === "tokens"
+          ? "cache"
+          : "none",
+  };
   for (const [childKey, childValue] of Object.entries(value)) {
-    if (!isClassifiedFixtureKey(childKey)) {
+    if (!isClassifiedFixtureKey(childKey, childContext)) {
       throw new ProviderEventFixtureError(
         `Refusing to preserve unclassified object key "${childKey}".`,
       );
     }
     result[childKey] = sanitizeValue(childValue, childKey, state, {
       untrustedStrings: context.untrustedStrings || UNTRUSTED_STRING_CONTAINER_KEYS.has(childKey),
+      openCodeTokenLocation: childContext.openCodeTokenLocation,
     });
   }
   return result;
@@ -301,6 +320,7 @@ export function sanitizeProviderEventFixtureEvents(events: readonly unknown[]): 
     }
     return sanitizeValue(event, null, state, {
       untrustedStrings: false,
+      openCodeTokenLocation: "none",
     });
   });
 }
