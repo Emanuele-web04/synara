@@ -1,11 +1,11 @@
 const ENV_ASSIGNMENT_START_PATTERN =
   /(^|[\s;&|()'"])((?:--?(?:e|env|environment|set-?env)=)?)([A-Za-z_][A-Za-z0-9_]*)(?:\+)?=/g;
 const SENSITIVE_ENV_NAME =
-  /^(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|MYSQL_PWD|PASSWORD|PASSPHRASE|PGPASSWORD|REDISCLI_AUTH|SECRET|TOKEN)$/;
+  /^(?:API_?KEY|ACCESS_TOKEN|AUTH|AUTH_TOKEN|AUTHORIZATION|CREDENTIALS?|KEY|MYSQL_PWD|PASS|PASSWORD|PASSPHRASE|PGPASSWORD|REDISCLI_AUTH|SECRET|TOKEN)$/;
 const SENSITIVE_ENV_NAME_SUFFIX =
-  /_(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
+  /_(?:API_?KEY|ACCESS_TOKEN|AUTH|AUTH_TOKEN|AUTHORIZATION|CREDENTIALS?|KEY|PASS|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
 const URL_CREDENTIALS_AT_VALUE_START = /^["']?[a-z][a-z0-9+.-]*:\/\/[^/\s]+@/i;
-const URL_CREDENTIALS_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s]+@/giu;
+const URL_CREDENTIALS_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s]+@/giu;
 const MAX_SHELL_ASSIGNMENT_SCAN_CHARS = 16_384;
 const MAX_SHELL_EXPANSION_DEPTH = 128;
 
@@ -137,6 +137,7 @@ function boundedShellAssignmentValueEnd(
         }
         const nestedExpansion = expansion.quote !== "'" ? expansionAtCursor() : null;
         if (nestedExpansion) {
+          if (nestedExpansion.kind === "command") return args.length;
           pushExpansion(nestedExpansion);
           index += nestedExpansion.length;
           continue;
@@ -185,6 +186,7 @@ function boundedShellAssignmentValueEnd(
       }
       const nestedExpansion = expansionAtCursor();
       if (nestedExpansion) {
+        if (nestedExpansion.kind === "command") return args.length;
         const commandExpansion = activeCommandExpansion();
         const commandCase = commandExpansion?.cases.at(-1);
         if (commandCase?.phase === "subject") commandCase.subjectSeen = true;
@@ -291,6 +293,7 @@ function boundedShellAssignmentValueEnd(
       }
       const nestedExpansion = wordQuote !== "'" ? expansionAtCursor() : null;
       if (nestedExpansion) {
+        if (nestedExpansion.kind === "command") return args.length;
         pushExpansion(nestedExpansion);
         index += nestedExpansion.length;
         continue;
@@ -306,6 +309,7 @@ function boundedShellAssignmentValueEnd(
     }
     const expansion = expansionAtCursor();
     if (expansion) {
+      if (expansion.kind === "command") return args.length;
       pushExpansion(expansion);
       index += expansion.length;
       continue;
