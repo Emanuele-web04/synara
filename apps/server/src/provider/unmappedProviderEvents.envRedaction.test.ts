@@ -190,6 +190,60 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).toContain('"PGPASSWORD":"[REDACTED]"');
   });
 
+  it("redacts delimited custom provider credential keys", () => {
+    const assignment = JSON.stringify(
+      sanitizeUnmappedProviderData("MY_COMPANY_PROXY_KEY=assignment-proxy-secret"),
+    );
+    const decoded = JSON.stringify(
+      sanitizeUnmappedProviderData({ MY_COMPANY_PROXY_KEY: "decoded-proxy-secret" }),
+    );
+    const named = JSON.stringify(
+      sanitizeUnmappedProviderData({
+        name: "MY_COMPANY_PROXY_KEY",
+        value: "named-proxy-secret",
+      }),
+    );
+
+    expect(assignment).not.toContain("assignment-proxy-secret");
+    expect(decoded).not.toContain("decoded-proxy-secret");
+    expect(named).not.toContain("named-proxy-secret");
+    expect(assignment).toContain("MY_COMPANY_PROXY_KEY=[REDACTED]");
+  });
+
+  it("redacts environment tuples in text and decoded data", () => {
+    const raw = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        'env: [["OPENAI_API_KEY","raw-tuple-secret"],["SAFE_ENV","kept"]]',
+      ),
+    );
+    const decoded = JSON.stringify(
+      sanitizeUnmappedProviderData([
+        ["MY_COMPANY_PROXY_KEY", "decoded-tuple-secret"],
+        ["SAFE_ENV", "kept"],
+      ]),
+    );
+
+    expect(raw).not.toContain("raw-tuple-secret");
+    expect(decoded).not.toContain("decoded-tuple-secret");
+    expect(raw).toContain("kept");
+    expect(decoded).toContain("kept");
+  });
+
+  it("redacts credentials inside nested serialized payload strings", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData('{"payload":"{\\"OPENAI_API_KEY\\":\\"nested-secret\\"}"}'),
+    );
+
+    expect(serialized).not.toContain("nested-secret");
+    expect(serialized).toContain("[REDACTED]");
+  });
+
+  it("bounds URL scanning work for long diagnostics without URLs", () => {
+    const sanitized = sanitizeUnmappedProviderData("a".repeat(50_000));
+
+    expect(sanitized).toMatchObject({ __synaraTruncated: true });
+  });
+
   it("fails closed on truncated raw name/value entries", () => {
     const raw = JSON.stringify(
       sanitizeUnmappedProviderData('env: {"name":"OPENAI_API_KEY","value":"raw-secret'),
