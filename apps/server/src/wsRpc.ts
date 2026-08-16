@@ -107,6 +107,7 @@ import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { CapabilityEvidenceService } from "./capabilityEvidence/Services/CapabilityEvidenceService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -340,6 +341,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const capabilityEvidence = yield* CapabilityEvidenceService;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1651,6 +1653,15 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
+          ),
+        [WS_METHODS.capabilityEvidenceRecord]: (input) =>
+          rpcEffect(capabilityEvidence.record(input), "Failed to record capability evidence"),
+        [WS_METHODS.capabilityEvidenceQuery]: (input) =>
+          rpcEffect(capabilityEvidence.query(input), "Failed to query capability evidence"),
+        [WS_METHODS.capabilityEvidenceInvalidate]: (input) =>
+          rpcEffect(
+            capabilityEvidence.invalidate(input),
+            "Failed to invalidate capability evidence",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

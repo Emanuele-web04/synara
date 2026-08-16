@@ -22,6 +22,14 @@ import {
   AutomationStreamEvent,
   AutomationUpdateInput,
 } from "./automation";
+import {
+  CapabilityEvidenceInvalidateInput,
+  CapabilityEvidenceInvalidateResult,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceQueryResult,
+  CapabilityEvidenceRecordInput,
+  CapabilityEvidenceRecordResult,
+} from "./capabilityEvidence";
 import { OpenInEditorInput } from "./editor";
 import {
   ExternalMcpCreateIntegrationInput,
@@ -960,6 +968,24 @@ export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
   },
 );
 
+export const WsCapabilityEvidenceRecordRpc = Rpc.make(WS_METHODS.capabilityEvidenceRecord, {
+  payload: CapabilityEvidenceRecordInput,
+  success: CapabilityEvidenceRecordResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceQueryRpc = Rpc.make(WS_METHODS.capabilityEvidenceQuery, {
+  payload: CapabilityEvidenceQuery,
+  success: CapabilityEvidenceQueryResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceInvalidateRpc = Rpc.make(WS_METHODS.capabilityEvidenceInvalidate, {
+  payload: CapabilityEvidenceInvalidateInput,
+  success: CapabilityEvidenceInvalidateResult,
+  error: WsRpcError,
+});
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1284,6 +1310,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
+  WsCapabilityEvidenceRecordRpc,
+  WsCapabilityEvidenceQueryRpc,
+  WsCapabilityEvidenceInvalidateRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,

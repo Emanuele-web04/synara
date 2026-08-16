@@ -157,6 +157,11 @@ import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
+import {
+  CapabilityEvidenceInvalidateInput,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceRecordInput,
+} from "./capabilityEvidence";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -241,6 +246,9 @@ export const WS_METHODS = {
   serverCreateExternalMcpIntegration: "server.createExternalMcpIntegration",
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
+  capabilityEvidenceRecord: "capabilityEvidence.record",
+  capabilityEvidenceQuery: "capabilityEvidence.query",
+  capabilityEvidenceInvalidate: "capabilityEvidence.invalidate",
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",
@@ -446,6 +454,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverCreateExternalMcpIntegration, ExternalMcpCreateIntegrationInput),
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceRecord, CapabilityEvidenceRecordInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceQuery, CapabilityEvidenceQuery),
+  tagRequestBody(WS_METHODS.capabilityEvidenceInvalidate, CapabilityEvidenceInvalidateInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),

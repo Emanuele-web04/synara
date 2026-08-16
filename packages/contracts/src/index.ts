@@ -16,6 +16,7 @@ export * from "./terminal";
 export * from "./provider";
 export * from "./providerDiscovery";
 export * from "./providerRuntime";
+export * from "./capabilityEvidence";
 export * from "./model";
 export * from "./agentMentions";
 export * from "./agentGateway";
