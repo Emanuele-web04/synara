@@ -100,7 +100,12 @@ export const CandidateVersionProbe = Schema.Struct({
   state: CandidateVersionState,
   /** Parsed upstream version reported by the probe, when parseable. */
   version: Schema.optional(Schema.String),
-  /** Diagnostics for missing/failure/nonzero/timeout (reasons only, never commands). */
+  /**
+   * Opaque display-only diagnostics for missing/failure/nonzero/timeout
+   * (e.g. the probed child's stderr, copied verbatim). Never a source of
+   * command/URL/install values: a hostile agent controls what it prints, so
+   * nothing may be derived from `detail` for a launch/install decision.
+   */
   detail: Schema.optional(Schema.String),
   probedAt: IsoDateTime,
 });
@@ -135,7 +140,12 @@ export const AcpProbeResult = Schema.Struct({
   identityFingerprint: Schema.optional(Schema.String),
   /** Failure reason when `state === "failed"`: timeout | auth | spawn | handshake | unknown. */
   reason: Schema.optional(Schema.String),
-  /** Failure detail (reasons only, never commands). */
+  /**
+   * Opaque display-only failure diagnostics (e.g. the child's stderr or the
+   * error text, copied verbatim). Never a source of command/URL/install
+   * values: a hostile agent controls what it prints, so nothing may be
+   * derived from `detail` for a launch/install decision.
+   */
   detail: Schema.optional(Schema.String),
   probedAt: IsoDateTime,
 });
@@ -224,6 +234,18 @@ export const ConnectionCandidateListInput = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ConnectionCandidateListInput = typeof ConnectionCandidateListInput.Type;
 
+/**
+ * A user-supplied custom command rejected at the discovery input edge. The
+ * command text is display-only; `reason` is a structured code so the UI can
+ * render a precise explanation without ever treating the text as a runnable
+ * command (shell metacharacters are rejected before anything is listed).
+ */
+export const InvalidCustomCandidate = Schema.Struct({
+  command: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+  reason: Schema.Literals(["not-absolute", "shell-metacharacters", "not-executable"]),
+});
+export type InvalidCustomCandidate = typeof InvalidCustomCandidate.Type;
+
 export const RegistrySnapshotStatus = Schema.Struct({
   /** Whether the registry could be loaded (from network or offline cache). */
   available: Schema.Boolean,
@@ -237,6 +259,14 @@ export type RegistrySnapshotStatus = typeof RegistrySnapshotStatus.Type;
 export const ConnectionCandidateListResult = Schema.Struct({
   candidates: Schema.Array(ConnectionCandidate),
   registryStatus: RegistrySnapshotStatus,
+  /**
+   * Custom commands rejected at the input edge (never launched, never listed).
+   * Always present on new encodings; defaults to [] when decoding older
+   * payloads so old callers keep round-tripping.
+   */
+  invalidCustomCandidates: Schema.optional(Schema.Array(InvalidCustomCandidate)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
 });
 export type ConnectionCandidateListResult = typeof ConnectionCandidateListResult.Type;
 

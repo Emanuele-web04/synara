@@ -102,6 +102,10 @@ function extractVersion(text: string): string | undefined {
  *   - `nonzero`/`timeout` → present but unusable at this version
  *   - `success` → present and healthy
  * The probe never runs docs text; `probeArgs` come from the trusted recipe.
+ *
+ * `detail` copies child stderr / error text verbatim. That text is OPAQUE
+ * display-only diagnostics (CandidateVersionProbe.detail): a hostile agent
+ * controls what it prints, so `detail` must never feed a launch/install value.
  */
 function classifyVersionProbe(
   outcome:
@@ -165,10 +169,35 @@ export const makeBinaryRecipeResolver = (options: BinaryRecipeResolverOptions = 
 
       for (const binaryName of recipe.binaryNames) {
         // One candidate per PATH entry that actually resolves (AC #2).
-        for (const candidate of executableCandidates(binaryName, lookup)) {
-          if (!isExecutableFile(candidate.path, lookup)) {
-            continue;
-          }
+        const hits = [...executableCandidates(binaryName, lookup)].filter((candidate) =>
+          isExecutableFile(candidate.path, lookup),
+        );
+
+        // AC #3/C3: a declared binary found in zero PATH dirs means the recipe
+        // is configured but not installed. Materialize a `missing` candidate so
+        // the list surface can tell "configured, absent" from "present, wrong
+        // version". It has no `resolvedPath`, so the plan policy can never turn
+        // it into a launch.
+        if (hits.length === 0) {
+          candidates.push({
+            candidateId: `recipe:${recipe.agentId}:${binaryName}`,
+            agentId: recipe.agentId,
+            displayName: recipe.primaryName,
+            description: `Configured agent \`${binaryName}\` was not found on PATH.`,
+            source: "recipe",
+            versionProbe: {
+              state: "missing",
+              detail: `No executable \`${binaryName}\` found on PATH.`,
+              probedAt: now,
+            },
+            compatibility: recipe.compatibility,
+            provenance: { source: RECIPE_DISCOVERY_SOURCE },
+            order: candidates.length,
+          } satisfies ConnectionCandidate);
+          continue;
+        }
+
+        for (const candidate of hits) {
           const commandToProbe = candidate.path;
           // Use the provider child environment builder so the probe process
           // carries a sane PATH (needed for `cmd`-style shims that re-exec)

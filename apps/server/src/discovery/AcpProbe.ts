@@ -139,6 +139,10 @@ export const runAcpInitializeProbe = (input: {
       return probeRun.success;
     }
 
+    // `detail` copies the child's error text verbatim. That text is OPAQUE
+    // display-only diagnostics (AcpProbeResult.detail): a hostile agent
+    // controls what it prints, so `detail` must never feed a launch/install
+    // value (C1).
     const failureToOutcome = (error: unknown): AcpProbeOutcome => {
       if (isAcpStartupTimeoutError(error)) {
         return {

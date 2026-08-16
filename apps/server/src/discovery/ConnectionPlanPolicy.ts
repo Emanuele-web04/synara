@@ -11,9 +11,20 @@ import { Data } from "effect";
 
 import type { ConnectionCandidate, ConnectionPlan } from "@synara/contracts";
 
+/**
+ * A candidate the policy gate refuses to turn into a launch plan. `code` is
+ * structured (never free-form) so the RPC layer can surface a precise,
+ * non-defect reason:
+ *   - `policyRefused` — a malformed launch target (non-absolute command,
+ *     shell operators, unsafe endpoint, missing provenance);
+ *   - `missingBinary` — a configured recipe binary that is not installed;
+ *   - `catalogOnly` — registry display entry with no local binary/endpoint.
+ * `reason` is the human-readable companion message.
+ */
 export class ConnectionPlanPolicyViolation extends Data.TaggedError(
   "ConnectionPlanPolicyViolation",
 )<{
+  readonly code: "policyRefused" | "missingBinary" | "catalogOnly";
   readonly reason: string;
 }> {}
 
@@ -40,17 +51,20 @@ export function assertSafeLaunchTarget(input: {
 }): void {
   if (!isAbsolutePath(input.command)) {
     throw new ConnectionPlanPolicyViolation({
+      code: "policyRefused",
       reason: `Launch command must be an absolute path, got: ${input.command}`,
     });
   }
   if (looksLikeShellConstruction(input.command)) {
     throw new ConnectionPlanPolicyViolation({
+      code: "policyRefused",
       reason: `Launch command must not contain shell operators or whitespace: ${input.command}`,
     });
   }
   for (const arg of input.args) {
     if (looksLikeShellConstruction(arg)) {
       throw new ConnectionPlanPolicyViolation({
+        code: "policyRefused",
         reason: `Launch argument must not contain shell operators or whitespace: ${JSON.stringify(arg)}`,
       });
     }
@@ -63,16 +77,19 @@ export function assertSafeEndpoint(input: { readonly endpoint: string }): void {
     url = new URL(input.endpoint);
   } catch {
     throw new ConnectionPlanPolicyViolation({
+      code: "policyRefused",
       reason: `Launch endpoint must be a valid URL, got: ${input.endpoint}`,
     });
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ConnectionPlanPolicyViolation({
+      code: "policyRefused",
       reason: `Launch endpoint must use http(s), got: ${input.endpoint}`,
     });
   }
   if (url.username || url.password) {
     throw new ConnectionPlanPolicyViolation({
+      code: "policyRefused",
       reason: `Launch endpoint must not embed credentials, got: ${input.endpoint}`,
     });
   }
@@ -106,7 +123,10 @@ export function buildConnectionPlan(input: ConnectionPlanBuildInput): Connection
   const { candidate } = input;
 
   if (candidate.provenance.source.trim().length === 0) {
-    throw new ConnectionPlanPolicyViolation({ reason: "Candidate has no provenance." });
+    throw new ConnectionPlanPolicyViolation({
+      code: "policyRefused",
+      reason: "Candidate has no provenance.",
+    });
   }
 
   if (candidate.resolvedPath !== undefined) {
@@ -147,7 +167,18 @@ export function buildConnectionPlan(input: ConnectionPlanBuildInput): Connection
     };
   }
 
+  // A `missing`-classified candidate (configured recipe binary absent from
+  // PATH) is its own refusal: distinguishable from a catalog-only display
+  // entry, and never resolvable to a launch.
+  if (candidate.versionProbe?.state === "missing") {
+    throw new ConnectionPlanPolicyViolation({
+      code: "missingBinary",
+      reason: `Configured binary for '${candidate.agentId}' is not installed; install it, then re-run discovery.`,
+    });
+  }
+
   throw new ConnectionPlanPolicyViolation({
+    code: "catalogOnly",
     reason:
       "Candidate is catalog-only (no local binary and no explicit endpoint); " +
       "install the agent first, then re-run discovery.",

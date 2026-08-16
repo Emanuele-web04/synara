@@ -57,7 +57,8 @@ describe("ConnectionPlanPolicy — safe plan gate (AC #6)", () => {
   });
 
   it("rejects a candidate with no local binary and no endpoint (registry-only)", () => {
-    expect(() =>
+    let thrown: unknown;
+    try {
       buildConnectionPlan({
         candidate: baseCandidate({
           resolvedPath: undefined,
@@ -66,8 +67,35 @@ describe("ConnectionPlanPolicy — safe plan gate (AC #6)", () => {
         }),
         planId: "plan:test",
         resolvedAt: "2026-08-16T00:00:00.000Z",
-      }),
-    ).toThrow(ConnectionPlanPolicyViolation);
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConnectionPlanPolicyViolation);
+    expect((thrown as ConnectionPlanPolicyViolation).code).toBe("catalogOnly");
+  });
+
+  it("refuses a configured-but-missing binary with code missingBinary", () => {
+    let thrown: unknown;
+    try {
+      buildConnectionPlan({
+        candidate: baseCandidate({
+          resolvedPath: undefined,
+          resolvedEndpoint: undefined,
+          versionProbe: {
+            state: "missing",
+            detail: "No executable `ghost-agent` found on PATH.",
+            probedAt: "2026-08-16T00:00:00.000Z",
+          },
+        }),
+        planId: "plan:test",
+        resolvedAt: "2026-08-16T00:00:00.000Z",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConnectionPlanPolicyViolation);
+    expect((thrown as ConnectionPlanPolicyViolation).code).toBe("missingBinary");
   });
 
   it("accepts an explicit http(s) endpoint candidate", () => {

@@ -169,4 +169,27 @@ describe("ConnectionCandidateListResult / ResolveResult round-trips", () => {
       }),
     ).toBe(false);
   });
+
+  it("decodes a list result carrying rejected custom candidates", () => {
+    const result = {
+      candidates: [candidateInput()],
+      registryStatus: { available: true },
+      invalidCustomCandidates: [
+        { command: "/bin/evil; rm -rf /", reason: "shell-metacharacters" },
+        { command: "relative-agent", reason: "not-absolute" },
+        { command: "/definitely/not/real", reason: "not-executable" },
+      ],
+    };
+    expect(decodes(ConnectionCandidateListResult, result)).toBe(true);
+  });
+
+  it("rejects an invalid custom candidate with an unknown reason code", () => {
+    expect(
+      decodes(ConnectionCandidateListResult, {
+        candidates: [],
+        registryStatus: { available: true },
+        invalidCustomCandidates: [{ command: "/bin/x", reason: "maybe-ok" }],
+      }),
+    ).toBe(false);
+  });
 });

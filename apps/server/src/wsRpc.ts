@@ -28,6 +28,8 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
+  type ConnectionCandidate,
+  type ConnectionPlanResolveResult,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
@@ -110,7 +112,10 @@ import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { CapabilityEvidenceService } from "./capabilityEvidence/Services/CapabilityEvidenceService";
 import { AgentProfileService } from "./externalAgents/AgentProfileService";
 import { DiscoveryService } from "./discovery/DiscoveryService";
-import { buildConnectionPlan } from "./discovery/ConnectionPlanPolicy";
+import {
+  buildConnectionPlan,
+  ConnectionPlanPolicyViolation,
+} from "./discovery/ConnectionPlanPolicy";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -303,6 +308,38 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   return new WsRpcError({
     message: cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
     cause,
+  });
+}
+
+/**
+ * Builds a launch plan for a single candidate, failing with a structured
+ * `WsRpcError` policy code when the candidate cannot launch (C6a): a
+ * catalog-only display entry, a configured-but-missing binary, or an unsafe
+ * launch target. A `ConnectionPlanPolicyViolation` is a typed non-install
+ * reason — never a defect — so its `code`/-`reason` pair is surfaced as the
+ * RPC error code/message instead of a generic failure.
+ */
+export function resolveConnectionPlanForCandidate(input: {
+  readonly candidate: ConnectionCandidate;
+  readonly cwd?: string;
+}): Effect.Effect<ConnectionPlanResolveResult, WsRpcError> {
+  return Effect.try({
+    try: () => {
+      const plan = buildConnectionPlan({
+        candidate: input.candidate,
+        planId: `plan:${input.candidate.candidateId}`,
+        resolvedAt: new Date().toISOString(),
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      });
+      return { plan };
+    },
+    catch: (cause) =>
+      cause instanceof ConnectionPlanPolicyViolation
+        ? new WsRpcError({
+            message: cause.reason,
+            code: `POLICY_${cause.code.toUpperCase()}`,
+          })
+        : toWsRpcError(cause, "Failed to resolve connection plan"),
   });
 }
 
@@ -1691,13 +1728,11 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverListConnectionCandidates]: (input) =>
           rpcEffect(
-            discovery
-              .listCandidates({
-                ...(input.customCommands !== undefined && input.customCommands.length > 0
-                  ? { customCommands: input.customCommands }
-                  : {}),
-              })
-              .pipe(Effect.map((result) => result)),
+            discovery.listCandidates({
+              ...(input.customCommands !== undefined && input.customCommands.length > 0
+                ? { customCommands: input.customCommands }
+                : {}),
+            }),
             "Failed to list connection candidates",
           ),
         [WS_METHODS.serverResolveConnectionPlan]: (input) =>
@@ -1709,19 +1744,21 @@ const makeWsRpcHandlersLayer = () =>
                 );
                 if (candidate === undefined) {
                   return Effect.fail(
-                    new Error(
-                      `Connection candidate '${input.candidateId}' was not found in the current discovery snapshot.`,
-                    ),
+                    new WsRpcError({
+                      message: `Connection candidate '${input.candidateId}' was not found in the current discovery snapshot.`,
+                      code: "CONNECTION_CANDIDATE_NOT_FOUND",
+                    }),
                   );
                 }
-                return Effect.sync(() => {
-                  const plan = buildConnectionPlan({
-                    candidate,
-                    planId: `plan:${candidate.candidateId}`,
-                    resolvedAt: new Date().toISOString(),
-                    ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-                  });
-                  return { plan };
+                // `buildConnectionPlan` throws ConnectionPlanPolicyViolation for
+                // candidates that cannot launch (registry-only, missing binary,
+                // unsafe target). Mapping it here — rather than letting
+                // `Effect.sync` swallow the throw as a defect — keeps the
+                // structured non-install reason visible as a typed policy code
+                // instead of a generic RPC failure (C6a).
+                return resolveConnectionPlanForCandidate({
+                  candidate,
+                  ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
                 });
               }),
             ),
