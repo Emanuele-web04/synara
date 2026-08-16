@@ -601,11 +601,10 @@ export function legacySyncModelSelectionOptions(
   if (modelSelection === null) {
     return null;
   }
-  const options = modelOptions?.[modelSelection.provider];
   const normalizedOptions =
     modelSelection.provider === "grok"
-      ? normalizeGrokModelOptions(modelSelection.model, options)
-      : options;
+      ? normalizeGrokModelOptions(modelSelection.model, modelOptions?.grok)
+      : modelOptions?.[modelSelection.provider];
   return makeModelSelection(
     modelSelection.provider,
     modelSelection.model,
@@ -662,7 +661,7 @@ export function legacyToModelSelectionByProvider(
           result[provider] = makeModelSelection(
             provider,
             model,
-            provider === "grok" ? normalizeGrokModelOptions(model, options) : options,
+            provider === "grok" ? normalizeGrokModelOptions(model, modelOptions.grok) : options,
           );
         }
       }
