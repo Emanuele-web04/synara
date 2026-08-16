@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 import { describe, expect, it } from "vitest";
 
 import { sanitizeUnmappedProviderData } from "./unmappedProviderEvents.ts";
@@ -78,6 +80,11 @@ describe("unmapped provider environment credential redaction", () => {
         'private_key="-----BEGIN PRIVATE KEY-----\nbare-secret\n-----END PRIVATE KEY-----"',
       ),
     );
+    const unquoted = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        "FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nremaining-unquoted-secret\n-----END PRIVATE KEY----- NODE_ENV=development",
+      ),
+    );
 
     expect(prefixed).not.toContain("BEGIN PRIVATE KEY");
     expect(prefixed).not.toContain("remaining-secret");
@@ -85,6 +92,10 @@ describe("unmapped provider environment credential redaction", () => {
     expect(bare).not.toContain("BEGIN PRIVATE KEY");
     expect(bare).not.toContain("bare-secret");
     expect(bare).toContain("private_key=[REDACTED]");
+    expect(unquoted).not.toContain("BEGIN PRIVATE KEY");
+    expect(unquoted).not.toContain("remaining-unquoted-secret");
+    expect(unquoted).toContain("FIREBASE_PRIVATE_KEY=[REDACTED]");
+    expect(unquoted).toContain("NODE_ENV=development");
   });
 
   it("fails closed on unterminated quoted credential values", () => {
@@ -176,6 +187,23 @@ describe("unmapped provider environment credential redaction", () => {
         'env: [{"name":"OPENAI_API_KEY","value":"raw-secret"},{"value":"reverse-secret","name":"GITHUB_TOKEN"},{"name":"STRIPE_SECRET_KEY","source":"process","value":"metadata-secret"},{"name":"OPENAI_API_KEY","metadata":{"source":"process"},"value":"nested-secret"},{"name":"SAFE_ENV","value":"kept"}]',
       ),
     );
+    const inspected = JSON.stringify(
+      sanitizeUnmappedProviderData("env: [{ name: 'OPENAI_API_KEY', value: 'inspected-secret' }]"),
+    );
+    const inspectedBacktick = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        inspect({ name: "OPENAI_API_KEY", value: "inspected-'\" secret{with-braces}" }),
+      ),
+    );
+    const inspectedNested = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        inspect({
+          value: "outer-safe",
+          nested: { name: "OPENAI_API_KEY", value: "nested-inspected-secret" },
+          sibling: { name: "GITHUB_TOKEN", value: "sibling-inspected-secret" },
+        }),
+      ),
+    );
 
     expect(decoded).not.toContain("decoded-secret");
     expect(decoded).not.toContain("decoded-access-id");
@@ -183,18 +211,28 @@ describe("unmapped provider environment credential redaction", () => {
     expect(raw).not.toContain("reverse-secret");
     expect(raw).not.toContain("metadata-secret");
     expect(raw).not.toContain("nested-secret");
+    expect(inspected).not.toContain("inspected-secret");
+    expect(inspectedBacktick).not.toContain("inspected-");
+    expect(inspectedBacktick).not.toContain("with-braces");
+    expect(inspectedNested).not.toContain("nested-inspected-secret");
+    expect(inspectedNested).not.toContain("sibling-inspected-secret");
+    expect(inspectedNested).toContain("outer-safe");
     expect(decoded).toContain('"value":"[REDACTED]"');
     expect(raw).toContain('\\"value\\":\\"[REDACTED]\\"');
     expect(decoded).toContain("kept");
     expect(raw).toContain("kept");
+    expect(inspected).toContain("value: [REDACTED]");
+    expect(inspectedBacktick).toContain("value: [REDACTED]");
   });
 
   it("redacts compact credential names in decoded environment maps", () => {
     const serialized = JSON.stringify(
       sanitizeUnmappedProviderData({
-        AWS_ACCESS_KEY_ID: "decoded-map-access-id",
-        SERVICE_APIKEY: "decoded-compact-key",
-        PGPASSWORD: "decoded-compact-password",
+        env: {
+          AWS_ACCESS_KEY_ID: "decoded-map-access-id",
+          SERVICE_APIKEY: "decoded-compact-key",
+          PGPASSWORD: "decoded-compact-password",
+        },
       }),
     );
 
@@ -204,6 +242,34 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).toContain('"AWS_ACCESS_KEY_ID":"[REDACTED]"');
     expect(serialized).toContain('"SERVICE_APIKEY":"[REDACTED]"');
     expect(serialized).toContain('"PGPASSWORD":"[REDACTED]"');
+  });
+
+  it("preserves ordinary decoded payload keys ending in key", () => {
+    const sanitized = sanitizeUnmappedProviderData({
+      public_key: "public-material",
+      request_key: "request-correlation",
+      cacheKey: "cache-entry",
+      env: {
+        public_key: "nested-public-material",
+        request_key: "nested-request-correlation",
+        cacheKey: "nested-cache-entry",
+        group: { SERVICE_APIKEY: "nested-credential-secret" },
+      },
+      named: { name: "public_key", value: "named-public-material" },
+    });
+
+    expect(sanitized).toEqual({
+      public_key: "public-material",
+      request_key: "request-correlation",
+      cacheKey: "cache-entry",
+      env: {
+        public_key: "nested-public-material",
+        request_key: "nested-request-correlation",
+        cacheKey: "nested-cache-entry",
+        group: { SERVICE_APIKEY: "[REDACTED]" },
+      },
+      named: { name: "public_key", value: "named-public-material" },
+    });
   });
 
   it("redacts delimited custom provider credential keys", () => {

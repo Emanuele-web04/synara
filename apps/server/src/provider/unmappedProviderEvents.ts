@@ -23,11 +23,10 @@ const ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN =
   /(?<![A-Za-z0-9_])((["']?)([A-Za-z_][A-Za-z0-9_]*)\2\s*(?::|=)\s*)/giu;
 const ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN =
   /((?:^|,|\[)\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\2\s*,\s*)/giu;
-const SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*"|[^{}"])*\}/gu;
-const INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|[^{}"])*$/gu;
-const JSON_NAME_FIELD_PATTERN = /"name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"/iu;
+const JSON_NAME_FIELD_PATTERN =
+  /(?:"name"|'name'|\bname)\s*:\s*(["'])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/giu;
 const JSON_VALUE_FIELD_PATTERN =
-  /("value"\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;}]+)/iu;
+  /((?:"value"|'value'|\bvalue)\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)|[^\s,;}]+)/giu;
 const BEARER_CREDENTIAL_PATTERN = /\b(bearer\s+)[A-Za-z0-9._~+/=-]+/giu;
 const EXACT_SENSITIVE_KEYS = new Set([
   "authorization",
@@ -68,9 +67,7 @@ function redactText(value: string): string {
   const preRedacted = value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(URL_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}@`);
-  const structured = redactSerializedJsonContainers(preRedacted)
-    .replace(SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
-    .replace(INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject);
+  const structured = redactInspectedNamedValueObjects(redactSerializedJsonContainers(preRedacted));
   return redactEnvironmentAssignments(redactEnvironmentTuples(structured))
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
@@ -83,13 +80,22 @@ function credentialValueEnd(value: string, valueStart: number): number {
     index += bearerPrefix.length;
   }
 
-  let quote: "'" | '"' | undefined;
+  let quote: "'" | '"' | "`" | undefined;
   if (value.startsWith("$'", index)) {
     quote = "'";
     index += 2;
-  } else if (value[index] === "'" || value[index] === '"') {
+  } else if (value[index] === "'" || value[index] === '"' || value[index] === "`") {
     quote = value[index];
     index += 1;
+  }
+
+  if (!quote) {
+    const pemBegin = /^-----BEGIN ([A-Z0-9][A-Z0-9 -]*?)-----/u.exec(value.slice(index));
+    if (pemBegin) {
+      const endMarker = `-----END ${pemBegin[1]}-----`;
+      const endIndex = value.indexOf(endMarker, index + pemBegin[0].length);
+      return endIndex < 0 ? value.length : endIndex + endMarker.length;
+    }
   }
 
   while (index < value.length) {
@@ -100,7 +106,7 @@ function credentialValueEnd(value: string, valueStart: number): number {
       index += 1;
     } else if (quote) {
       index += 1;
-    } else if (value[index] === "'" || value[index] === '"') {
+    } else if (value[index] === "'" || value[index] === '"' || value[index] === "`") {
       quote = value[index];
       index += 1;
     } else if (/\s|[,;}\]]/u.test(value[index] ?? "")) {
@@ -290,16 +296,12 @@ function isSensitiveKey(key: string): boolean {
     terminal !== undefined &&
     (SENSITIVE_TERMINAL_TOKENS.has(terminal) ||
       (terminal === "key" &&
-        tokens.slice(0, -1).some((token) => ["api", "private", "secret"].includes(token))))
+        tokens.slice(0, -1).some((token) => ["api", "private", "proxy", "secret"].includes(token))))
   );
 }
 
 function isSensitiveEnvironmentName(name: string): boolean {
   if (isSensitiveKey(name)) {
-    return true;
-  }
-  const tokens = keyTokens(name);
-  if (tokens.length > 1 && tokens.at(-1) === "key") {
     return true;
   }
   const normalized = name.replace(/[^a-z0-9]/giu, "").toLowerCase();
@@ -311,14 +313,110 @@ function isSensitiveEnvironmentTuple(value: ReadonlyArray<unknown>): boolean {
 }
 
 function redactNamedValueObject(serializedObject: string): string {
-  const name = JSON_NAME_FIELD_PATTERN.exec(serializedObject)?.[1];
-  if (!name || !isSensitiveEnvironmentName(name)) {
+  const nameMatch = [...serializedObject.matchAll(JSON_NAME_FIELD_PATTERN)].find(
+    (match) => match.index !== undefined && objectDepthAt(serializedObject, match.index) === 1,
+  );
+  if (!nameMatch?.[2] || !isSensitiveEnvironmentName(nameMatch[2])) {
     return serializedObject;
   }
-  return serializedObject.replace(JSON_VALUE_FIELD_PATTERN, `$1${REDACTED_VALUE}`);
+  const valueMatch = [...serializedObject.matchAll(JSON_VALUE_FIELD_PATTERN)].find(
+    (match) => match.index !== undefined && objectDepthAt(serializedObject, match.index) === 1,
+  );
+  if (!valueMatch || valueMatch.index === undefined || valueMatch[0].includes(REDACTED_VALUE)) {
+    return serializedObject;
+  }
+  return (
+    serializedObject.slice(0, valueMatch.index) +
+    `${valueMatch[1]}${REDACTED_VALUE}` +
+    serializedObject.slice(valueMatch.index + valueMatch[0].length)
+  );
 }
 
-function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
+function objectDepthAt(value: string, targetIndex: number): number {
+  let depth = 0;
+  let quote: "'" | '"' | "`" | undefined;
+  let escaped = false;
+  for (let index = 0; index < targetIndex; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+    } else if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+    }
+  }
+  return depth;
+}
+
+function redactInspectedNamedValueObjects(value: string): string {
+  let redacted = "";
+  let cursor = 0;
+  let objectStart = -1;
+  let depth = 0;
+  let quote: "'" | '"' | "`" | undefined;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (objectStart < 0) {
+      if (character === "{") {
+        objectStart = index;
+        depth = 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const objectBody = redactInspectedNamedValueObjects(value.slice(objectStart + 1, index));
+        redacted += value.slice(cursor, objectStart) + redactNamedValueObject(`{${objectBody}}`);
+        cursor = index + 1;
+        objectStart = -1;
+      }
+    }
+  }
+
+  if (objectStart >= 0) {
+    const objectBody = redactInspectedNamedValueObjects(value.slice(objectStart + 1));
+    redacted += value.slice(cursor, objectStart) + redactNamedValueObject(`{${objectBody}`);
+    cursor = value.length;
+  }
+  return redacted + value.slice(cursor);
+}
+
+function isEnvironmentContainerKey(key: string): boolean {
+  const terminal = keyTokens(key).at(-1);
+  return terminal === "env" || terminal === "environment";
+}
+
+function redactValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  environmentContext = false,
+): unknown {
   if (typeof value === "string") return redactText(value);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -330,7 +428,7 @@ function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
     if (isSensitiveEnvironmentTuple(value)) {
       return [value[0], REDACTED_VALUE];
     }
-    return value.map((entry) => redactValue(entry, seen));
+    return value.map((entry) => redactValue(entry, seen, environmentContext));
   }
 
   const namedValueIsSensitive =
@@ -338,9 +436,11 @@ function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
   const redacted: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     redacted[key] =
-      isSensitiveEnvironmentName(key) || (namedValueIsSensitive && key === "value")
+      isSensitiveKey(key) ||
+      (environmentContext && isSensitiveEnvironmentName(key)) ||
+      (namedValueIsSensitive && key === "value")
         ? REDACTED_VALUE
-        : redactValue(entry, seen);
+        : redactValue(entry, seen, environmentContext || isEnvironmentContainerKey(key));
   }
   return redacted;
 }
