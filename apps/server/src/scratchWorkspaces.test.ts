@@ -1,6 +1,6 @@
 // FILE: scratchWorkspaces.test.ts
-// Purpose: Verifies per-thread scratch workspace paths stay inside the shared
-//          temp root even when thread ids contain path-like characters.
+// Purpose: Verifies per-thread scratch workspace paths stay inside their
+//          private root even when thread ids contain path-like characters.
 // Layer: Server filesystem utility tests
 
 import {
@@ -13,7 +13,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
@@ -38,17 +38,72 @@ function ensureTestScratchWorkspace(threadId: ThreadId): string {
 }
 
 describe("ensureIsolatedScratchWorkspace", () => {
-  it("keeps the default scratch root in a per-user temporary container outside the checkout", () => {
+  it("keeps the default scratch root in a private user cache outside the checkout", () => {
     const root = resolveScratchWorkspacesRoot();
     const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("default-root"));
     try {
       expect(path.relative(process.cwd(), root).startsWith("..")).toBe(true);
+      expect(path.relative(homedir(), root).startsWith("..")).toBe(false);
       expect(path.dirname(root)).toMatch(/\.synara-[a-f0-9]{16}$/);
       expect(workspace.startsWith(`${root}${path.sep}`)).toBe(true);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  it("reuses a validated private workspace in place after the temporary root changes", () => {
+    const threadId = ThreadId.makeUnsafe("prior-private-thread");
+    const currentRoot = path.join(testScratchParent, "current", SCRATCH_WORKSPACES_DIRNAME);
+    const ownerContainerName = path.basename(path.dirname(resolveScratchWorkspacesRoot()));
+    const priorRoot = path.join(
+      testScratchParent,
+      "old-tmp",
+      ownerContainerName,
+      SCRATCH_WORKSPACES_DIRNAME,
+    );
+    const priorWorkspace = ensureIsolatedScratchWorkspace(threadId, priorRoot);
+    writeFileSync(path.join(priorWorkspace, "resume.txt"), "preserved");
+
+    const resumedWorkspace = resolveScratchWorkspaceCwd(threadId, priorWorkspace, {
+      workspaceRoot: currentRoot,
+      legacyWorkspaceRoot: path.join(testScratchParent, "unused-legacy"),
+    });
+
+    expect(resumedWorkspace).toBe(priorWorkspace);
+    expect(readFileSync(path.join(resumedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "uses a fresh private workspace when an earlier temporary cwd is a symlink",
+    () => {
+      const threadId = ThreadId.makeUnsafe("unsafe-prior-private-thread");
+      const currentRoot = path.join(testScratchParent, "fresh-current", SCRATCH_WORKSPACES_DIRNAME);
+      const ownerContainerName = path.basename(path.dirname(resolveScratchWorkspacesRoot()));
+      const priorRoot = path.join(
+        testScratchParent,
+        "unsafe-old-tmp",
+        ownerContainerName,
+        SCRATCH_WORKSPACES_DIRNAME,
+      );
+      const priorWorkspace = ensureIsolatedScratchWorkspace(threadId, priorRoot);
+      const redirected = mkdtempSync(path.join(tmpdir(), "synara-prior-redirect-"));
+      try {
+        rmSync(priorWorkspace, { recursive: true, force: true });
+        symlinkSync(redirected, priorWorkspace, "dir");
+
+        const resumedWorkspace = resolveScratchWorkspaceCwd(threadId, priorWorkspace, {
+          workspaceRoot: currentRoot,
+          legacyWorkspaceRoot: path.join(testScratchParent, "unused-legacy"),
+        });
+
+        expect(resumedWorkspace).not.toBe(priorWorkspace);
+        expect(resumedWorkspace.startsWith(`${currentRoot}${path.sep}`)).toBe(true);
+      } finally {
+        rmSync(priorWorkspace, { force: true });
+        rmSync(redirected, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("creates a readable per-thread directory under the scratch root", () => {
     const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("thread-1"));
@@ -80,7 +135,7 @@ describe("ensureIsolatedScratchWorkspace", () => {
     expect(resumedWorkspace).toBe(legacyWorkspace);
     expect(readFileSync(path.join(resumedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
     if (process.platform !== "win32") {
-      expect(statSync(legacyRoot).mode & 0o1777).toBe(0o1777);
+      expect(statSync(legacyRoot).mode & 0o1777).toBe(0o777);
       expect(statSync(resumedWorkspace).mode & 0o777).toBe(0o700);
     }
   });

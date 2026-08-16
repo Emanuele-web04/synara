@@ -96,7 +96,7 @@ export function isWorkspaceRootWithin(
   return normalizedCandidate.startsWith(prefix);
 }
 
-// Per-thread scratch working directories (under a per-user OS temp container)
+// Per-thread scratch working directories (under a per-user cache container)
 // used when a provider session starts before any project workspace exists,
 // e.g. a chat's first turn racing its workspace provisioning.
 export const SCRATCH_WORKSPACES_DIRNAME = "synara-codex-workspaces";

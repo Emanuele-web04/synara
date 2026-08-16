@@ -1,8 +1,8 @@
 // FILE: scratchWorkspaces.ts
 // Purpose: Per-thread scratch working directories for provider sessions that
 //          start before any project workspace exists (e.g. a chat's first
-//          turn). The root stays in a per-user OS-temporary container so it is
-//          outside project ancestry and remains eligible for system cleanup.
+//          turn). The root stays in the user's cache so it is outside project
+//          ancestry and outside temporary directories writable by agents.
 // Layer: Server filesystem utility
 // Exports: ensureIsolatedScratchWorkspace
 
@@ -15,15 +15,32 @@ import type { ThreadId } from "@synara/contracts";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 import { ensurePrivateDirectorySync } from "./privatePathPermissions";
 
-function scratchOwnerSegment(): string {
+function scratchOwnerSegment(homeDirectory = homedir()): string {
   const owner =
-    typeof process.getuid === "function" ? `uid:${String(process.getuid())}` : homedir();
+    typeof process.getuid === "function" ? `uid:${String(process.getuid())}` : homeDirectory;
   return createHash("sha256").update(owner).digest("hex").slice(0, 16);
 }
 
-export function resolveScratchWorkspacesRoot(): string {
-  const privateTempRoot = path.join(tmpdir(), `.synara-${scratchOwnerSegment()}`);
-  return path.join(privateTempRoot, SCRATCH_WORKSPACES_DIRNAME);
+function scratchCacheRoot(homeDirectory: string, platform: NodeJS.Platform): string {
+  if (platform === "darwin") return path.join(homeDirectory, "Library", "Caches", "synara");
+  if (platform === "win32") {
+    return path.join(homeDirectory, "AppData", "Local", "Synara", "Cache");
+  }
+  return path.join(homeDirectory, ".cache", "synara");
+}
+
+export function resolveScratchWorkspacesRoot(
+  options: {
+    readonly homeDirectory?: string;
+    readonly platform?: NodeJS.Platform;
+  } = {},
+): string {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const ownerContainer = path.join(
+    scratchCacheRoot(homeDirectory, options.platform ?? process.platform),
+    `.synara-${scratchOwnerSegment(homeDirectory)}`,
+  );
+  return path.join(ownerContainer, SCRATCH_WORKSPACES_DIRNAME);
 }
 
 function scratchWorkspaceSegment(threadId: ThreadId): string {
@@ -49,11 +66,8 @@ function isOwnedRealDirectory(directoryPath: string): boolean {
   }
 }
 
-function ensureSafeSharedLegacyRoot(directoryPath: string): boolean {
-  if (process.platform === "win32") {
-    return isOwnedRealDirectory(directoryPath);
-  }
-
+function openOwnedDirectoryDescriptor(directoryPath: string): number | undefined {
+  if (process.platform === "win32") return isOwnedRealDirectory(directoryPath) ? -1 : undefined;
   let descriptor: number;
   try {
     descriptor = openSync(
@@ -62,22 +76,52 @@ function ensureSafeSharedLegacyRoot(directoryPath: string): boolean {
     );
   } catch (cause) {
     if (["ELOOP", "ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) {
-      return false;
+      return undefined;
     }
     throw cause;
   }
-  try {
-    const stat = fstatSync(descriptor);
-    if (!stat.isDirectory()) return false;
-    const writableByOtherUsers = (stat.mode & 0o022) !== 0;
-    const hasStickyBit = (stat.mode & 0o1000) !== 0;
-    if (!writableByOtherUsers || hasStickyBit) return true;
-    if (typeof process.getuid !== "function" || stat.uid !== process.getuid()) return false;
+  const stat = fstatSync(descriptor);
+  if (
+    !stat.isDirectory() ||
+    (typeof process.getuid === "function" && stat.uid !== process.getuid())
+  ) {
+    closeSync(descriptor);
+    return undefined;
+  }
+  return descriptor;
+}
 
-    // Preserve shared access for other legacy users while preventing them from
-    // renaming one another's owned workspace entries.
-    fchmodSync(descriptor, (stat.mode & 0o7777) | 0o1000);
-    return true;
+function ensurePrivateScratchRoot(workspaceRoot: string): void {
+  if (workspaceRoot === resolveScratchWorkspacesRoot()) {
+    const ownerContainer = path.dirname(workspaceRoot);
+    ensurePrivateDirectorySync(path.dirname(ownerContainer));
+    ensurePrivateDirectorySync(ownerContainer);
+  }
+  ensurePrivateDirectorySync(workspaceRoot);
+}
+
+function repairOwnedScratchWorkspace(workspacePath: string): string | undefined {
+  const descriptor = openOwnedDirectoryDescriptor(workspacePath);
+  if (descriptor === undefined) return undefined;
+  if (descriptor === -1) return workspacePath;
+  try {
+    const openedStat = fstatSync(descriptor);
+    fchmodSync(descriptor, 0o700);
+    const currentStat = lstatSync(workspacePath);
+    if (
+      !currentStat.isDirectory() ||
+      currentStat.isSymbolicLink() ||
+      currentStat.dev !== openedStat.dev ||
+      currentStat.ino !== openedStat.ino
+    ) {
+      return undefined;
+    }
+    return workspacePath;
+  } catch (cause) {
+    if (["ELOOP", "ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) {
+      return undefined;
+    }
+    throw cause;
   } finally {
     closeSync(descriptor);
   }
@@ -88,24 +132,11 @@ function repairLegacyScratchWorkspace(
   workspaceSegment: string,
 ): string | undefined {
   const legacyWorkspaceDir = path.join(legacyWorkspaceRoot, workspaceSegment);
-  if (
-    !ensureSafeSharedLegacyRoot(legacyWorkspaceRoot) ||
-    !isOwnedRealDirectory(legacyWorkspaceDir)
-  ) {
-    return undefined;
-  }
-
-  // Preserve historical absolute paths while making the legacy workspace safe
-  // to resume. O_NOFOLLOW inside the helper rejects symlink swaps.
-  ensurePrivateDirectorySync(legacyWorkspaceDir);
-  return legacyWorkspaceDir;
+  return repairOwnedScratchWorkspace(legacyWorkspaceDir);
 }
 
 function ensurePrivateScratchWorkspace(workspaceRoot: string, workspaceSegment: string): string {
-  if (workspaceRoot === resolveScratchWorkspacesRoot()) {
-    ensurePrivateDirectorySync(path.dirname(workspaceRoot));
-  }
-  ensurePrivateDirectorySync(workspaceRoot);
+  ensurePrivateScratchRoot(workspaceRoot);
   const workspaceDir = path.join(workspaceRoot, workspaceSegment);
   ensurePrivateDirectorySync(workspaceDir);
   return workspaceDir;
@@ -152,7 +183,23 @@ export function resolveScratchWorkspaceCwd(
   }
 
   const legacyWorkspace = path.join(legacyWorkspaceRoot, workspaceSegment);
-  if (path.resolve(persistedCwd) !== path.resolve(legacyWorkspace)) return persistedCwd;
+  if (path.resolve(persistedCwd) === path.resolve(legacyWorkspace)) {
+    return (
+      repairOwnedScratchWorkspace(persistedCwd) ??
+      ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment)
+    );
+  }
 
-  return ensureIsolatedScratchWorkspace(threadId, workspaceRoot, legacyWorkspaceRoot);
+  const persistedWorkspaceRoot = path.dirname(persistedCwd);
+  const persistedOwnerContainer = path.dirname(persistedWorkspaceRoot);
+  const matchesPriorPrivateLayout =
+    path.basename(persistedCwd) === workspaceSegment &&
+    path.basename(persistedWorkspaceRoot) === SCRATCH_WORKSPACES_DIRNAME &&
+    path.basename(persistedOwnerContainer) === `.synara-${scratchOwnerSegment()}`;
+  if (!matchesPriorPrivateLayout) return persistedCwd;
+
+  return (
+    repairOwnedScratchWorkspace(persistedCwd) ??
+    ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment)
+  );
 }
