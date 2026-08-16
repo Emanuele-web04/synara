@@ -8,10 +8,11 @@ const MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS = 2_000;
 const REDACTED_VALUE = "[REDACTED]";
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
 const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
+const URL_CREDENTIAL_PATTERN = /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
-  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
+  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
-  /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
+  /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
 const SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*"|[^{}"])*\}/gu;
 const INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|[^{}"])*$/gu;
 const JSON_NAME_FIELD_PATTERN = /"name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"/iu;
@@ -22,6 +23,7 @@ const EXACT_SENSITIVE_KEYS = new Set([
   "authorization",
   "proxyauthorization",
   "apikey",
+  "awsaccesskeyid",
   "password",
   "passphrase",
   "cookie",
@@ -41,6 +43,7 @@ const SENSITIVE_TERMINAL_TOKENS = new Set([
   "token",
 ]);
 const SENSITIVE_ENV_NAME_SUFFIXES = [
+  "accesskeyid",
   "apikey",
   "password",
   "passwd",
@@ -54,6 +57,7 @@ const SENSITIVE_ENV_NAME_SUFFIXES = [
 function redactText(value: string): string {
   return value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
+    .replace(URL_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}@`)
     .replace(SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
     .replace(INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
     .replace(

@@ -28,19 +28,25 @@ describe("unmapped provider environment credential redaction", () => {
   it("redacts prefixed secret-key assignments and serialized maps", () => {
     const assignment = JSON.stringify(
       sanitizeUnmappedProviderData(
-        "STRIPE_SECRET_KEY=assignment-secret SERVICE_APIKEY=compact-secret",
+        "STRIPE_SECRET_KEY=assignment-secret SERVICE_APIKEY=compact-secret AWS_ACCESS_KEY_ID=assignment-access-id",
       ),
     );
     const serializedMap = JSON.stringify(
-      sanitizeUnmappedProviderData('{"STRIPE_SECRET_KEY":"map-secret"}'),
+      sanitizeUnmappedProviderData(
+        '{"STRIPE_SECRET_KEY":"map-secret","AWS_ACCESS_KEY_ID":"map-access-id"}',
+      ),
     );
 
     expect(assignment).not.toContain("assignment-secret");
     expect(assignment).not.toContain("compact-secret");
     expect(serializedMap).not.toContain("map-secret");
+    expect(assignment).not.toContain("assignment-access-id");
+    expect(serializedMap).not.toContain("map-access-id");
     expect(assignment).toContain("STRIPE_SECRET_KEY=[REDACTED]");
     expect(assignment).toContain("SERVICE_APIKEY=[REDACTED]");
     expect(serializedMap).toContain('\\"STRIPE_SECRET_KEY\\":[REDACTED]');
+    expect(assignment).toContain("AWS_ACCESS_KEY_ID=[REDACTED]");
+    expect(serializedMap).toContain('\\"AWS_ACCESS_KEY_ID\\":[REDACTED]');
   });
 
   it("consumes escaped quotes inside quoted credential values", () => {
@@ -100,10 +106,33 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).toContain("OPENAI_API_KEY=[REDACTED]");
   });
 
+  it("consumes ANSI-C-quoted multiline environment values", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        "FIREBASE_PRIVATE_KEY=$'-----BEGIN PRIVATE KEY-----\\nremaining-secret\\n-----END PRIVATE KEY-----'",
+      ),
+    );
+
+    expect(serialized).not.toContain("BEGIN PRIVATE KEY");
+    expect(serialized).not.toContain("remaining-secret");
+    expect(serialized).toContain("FIREBASE_PRIVATE_KEY=[REDACTED]");
+  });
+
+  it("redacts credentials embedded in connection URLs", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData("DATABASE_URL=postgres://user:secret@host/db"),
+    );
+
+    expect(serialized).not.toContain("user");
+    expect(serialized).not.toContain("secret");
+    expect(serialized).toContain("postgres://[REDACTED]@host/db");
+  });
+
   it("redacts decoded and raw name/value environment entries", () => {
     const decoded = JSON.stringify(
       sanitizeUnmappedProviderData([
         { name: "OPENAI_API_KEY", value: "decoded-secret" },
+        { name: "AWS_ACCESS_KEY_ID", value: "decoded-access-id" },
         { name: "SAFE_ENV", value: "kept" },
       ]),
     );
@@ -114,6 +143,7 @@ describe("unmapped provider environment credential redaction", () => {
     );
 
     expect(decoded).not.toContain("decoded-secret");
+    expect(decoded).not.toContain("decoded-access-id");
     expect(raw).not.toContain("raw-secret");
     expect(raw).not.toContain("reverse-secret");
     expect(raw).not.toContain("metadata-secret");
@@ -121,6 +151,15 @@ describe("unmapped provider environment credential redaction", () => {
     expect(raw).toContain('\\"value\\":[REDACTED]');
     expect(decoded).toContain("kept");
     expect(raw).toContain("kept");
+  });
+
+  it("redacts access IDs in decoded environment maps", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData({ AWS_ACCESS_KEY_ID: "decoded-map-access-id" }),
+    );
+
+    expect(serialized).not.toContain("decoded-map-access-id");
+    expect(serialized).toContain('"AWS_ACCESS_KEY_ID":"[REDACTED]"');
   });
 
   it("fails closed on truncated raw name/value entries", () => {
