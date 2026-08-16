@@ -13,6 +13,7 @@ const CREDENTIAL_ASSIGNMENT_PATTERN =
 const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
   /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
 const SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*"|[^{}"])*\}/gu;
+const INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|[^{}"])*$/gu;
 const JSON_NAME_FIELD_PATTERN = /"name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"/iu;
 const JSON_VALUE_FIELD_PATTERN =
   /("value"\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;}]+)/iu;
@@ -54,6 +55,7 @@ function redactText(value: string): string {
   return value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
+    .replace(INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
     .replace(
       ENV_CREDENTIAL_ASSIGNMENT_PATTERN,
       (match, delimiter: string, prefix: string, _quote: string, name: string) =>

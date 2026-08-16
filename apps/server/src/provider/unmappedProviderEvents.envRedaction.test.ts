@@ -122,4 +122,13 @@ describe("unmapped provider environment credential redaction", () => {
     expect(decoded).toContain("kept");
     expect(raw).toContain("kept");
   });
+
+  it("fails closed on truncated raw name/value entries", () => {
+    const raw = JSON.stringify(
+      sanitizeUnmappedProviderData('env: {"name":"OPENAI_API_KEY","value":"raw-secret'),
+    );
+
+    expect(raw).not.toContain("raw-secret");
+    expect(raw).toContain('\\"value\\":[REDACTED]');
+  });
 });
