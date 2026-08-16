@@ -212,6 +212,19 @@ describe("provider event fixtures", () => {
     expect(sanitized!.message).toBe("<redacted>");
   });
 
+  it("redacts structured sensitive values instead of traversing them", () => {
+    const [sanitized] = sanitizeProviderEventFixtureEvents([
+      {
+        type: "custom.event",
+        input: { count: 42 },
+        body: [true, false],
+      },
+    ]) as Array<Record<string, any>>;
+
+    expect(sanitized!.input).toBe("<redacted>");
+    expect(sanitized!.body).toBe("<redacted>");
+  });
+
   it("rejects non-object events and non-finite numbers before serialization", () => {
     for (const event of [null, 1, []]) {
       expect(() => serializeProviderEventFixture([event])).toThrow(/events must be objects/u);

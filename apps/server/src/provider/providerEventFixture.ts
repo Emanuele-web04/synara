@@ -227,8 +227,12 @@ function sanitizeValue(
   state: SanitizerState,
   context: SanitizerContext,
 ): unknown {
-  if (key && SENSITIVE_VALUE_KEYS.has(key) && (value === null || typeof value !== "object")) {
-    return REDACTED_VALUE;
+  if (key && SENSITIVE_VALUE_KEYS.has(key)) {
+    const isStructuredMessage =
+      key === "message" && value !== null && typeof value === "object" && !Array.isArray(value);
+    if (!isStructuredMessage) {
+      return REDACTED_VALUE;
+    }
   }
   if (key && (IDENTIFIER_KEY_PATTERN.test(key) || CAMEL_IDENTIFIER_KEY_PATTERN.test(key))) {
     if (value === null) {
