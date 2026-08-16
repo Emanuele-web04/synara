@@ -39,6 +39,22 @@ function normalizePathSeparators(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
+function isNormalizedWindowsAbsolutePath(value: string): boolean {
+  return isWindowsDrivePath(value) || value.startsWith("//");
+}
+
+function windowsRelativePathOf(targetPath: string, workspaceRoot: string): string | null {
+  const targetSegments = targetPath.split("/");
+  const rootSegments = workspaceRoot.split("/");
+  if (targetSegments.length <= rootSegments.length) {
+    return null;
+  }
+  const rootMatches = rootSegments.every(
+    (segment, index) => segment.toLowerCase() === targetSegments[index]?.toLowerCase(),
+  );
+  return rootMatches ? targetSegments.slice(rootSegments.length).join("/") : null;
+}
+
 // Converts an absolute path inside `workspaceRoot` to its workspace-relative
 // form (forward-slash separated). Returns null for the root itself, for paths
 // outside the root, and for anything that still fails the relative-path safety
@@ -53,15 +69,18 @@ export function workspaceRelativePathOf(targetPath: string, workspaceRoot: strin
   }
 
   const compareCaseInsensitively =
-    isWindowsAbsolutePath(trimmedTarget) && isWindowsAbsolutePath(trimmedRoot);
-  const comparisonTarget = compareCaseInsensitively
-    ? normalizedTarget.toLowerCase()
-    : normalizedTarget;
-  const comparisonRoot = compareCaseInsensitively ? normalizedRoot.toLowerCase() : normalizedRoot;
-  if (!comparisonTarget.startsWith(`${comparisonRoot}/`)) {
+    isNormalizedWindowsAbsolutePath(normalizedTarget) &&
+    isNormalizedWindowsAbsolutePath(normalizedRoot);
+  const relativePath = (
+    compareCaseInsensitively
+      ? windowsRelativePathOf(normalizedTarget, normalizedRoot)
+      : normalizedTarget.startsWith(`${normalizedRoot}/`)
+        ? normalizedTarget.slice(normalizedRoot.length + 1)
+        : null
+  )?.replace(/\/+$/, "");
+  if (!relativePath) {
     return null;
   }
-  const relativePath = normalizedTarget.slice(normalizedRoot.length + 1).replace(/\/+$/, "");
   return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
 }
 
