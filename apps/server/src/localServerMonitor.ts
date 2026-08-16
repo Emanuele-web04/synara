@@ -43,6 +43,8 @@ export interface ParsedLsofListener {
 export interface LocalServerProcessInfo {
   readonly ppid: number;
   readonly commandLine: string;
+  /** Unredacted process-table text retained only for internal classification. */
+  readonly rawCommandLine?: string;
 }
 
 interface DevServerCandidateInput {
@@ -258,11 +260,13 @@ function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
     if (!match) {
       continue;
     }
+    const rawCommandLine = (match[3] ?? "").slice(0, MAX_PROCESS_ARGS_CHARS);
     rows.set(Number(match[1]), {
       ppid: Number(match[2]),
-      commandLine: redactSensitiveProcessArgs(match[3] ?? "", {
+      commandLine: redactSensitiveProcessArgs(rawCommandLine, {
         truncateSensitiveEnvironmentRemainder: true,
       }).slice(0, MAX_PROCESS_ARGS_CHARS),
+      rawCommandLine,
     });
   }
   return rows;
@@ -330,8 +334,9 @@ function processLineageCommandLines(
     if (!processInfo) {
       break;
     }
-    if (processInfo.commandLine) {
-      commandLines.push(processInfo.commandLine);
+    const commandLine = processInfo.rawCommandLine ?? processInfo.commandLine;
+    if (commandLine) {
+      commandLines.push(commandLine);
     }
     if (processInfo.ppid <= 1) {
       break;

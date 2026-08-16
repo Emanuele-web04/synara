@@ -81,6 +81,14 @@ describe("redactSensitiveProcessArgs", () => {
     }
   });
 
+  it("recognizes sensitive assignments quoted as complete shell words", () => {
+    for (const quote of ["'", '"']) {
+      expect(redactProcessTableArgs(`sh -c env ${quote}PASSWORD=secret${quote} sleep 30`)).toBe(
+        `sh -c env ${quote}PASSWORD=[redacted]`,
+      );
+    }
+  });
+
   it("redacts credential-bearing environment URLs in process tables", () => {
     expect(
       redactProcessTableArgs(

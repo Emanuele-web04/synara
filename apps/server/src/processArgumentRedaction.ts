@@ -1,4 +1,4 @@
-const ENV_ASSIGNMENT_START_PATTERN = /(^|[\s;&|()])([A-Za-z_][A-Za-z0-9_]*)=/g;
+const ENV_ASSIGNMENT_START_PATTERN = /(^|[\s;&|()'"])([A-Za-z_][A-Za-z0-9_]*)=/g;
 const SHELL_ASSIGNMENT_VALUE_PATTERN =
   /(?:"(?:\\.|[^"\\])*"|'[^']*'|\$\((?:\\.|[^)])*\)|`(?:\\.|[^`\\])*`|\\[^\r\n]|[^\s"'\\;&|()<>])+/gy;
 const SENSITIVE_ENV_NAME =
