@@ -46,7 +46,7 @@ import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAcces
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
 import {
-  discoverExternalMcpRuntime,
+  discoverServerRuntime,
   pairExternalMcpClient,
   resolveExternalMcpBaseDir,
   serveExternalMcpStdio,
@@ -591,17 +591,30 @@ const serverStatusCommand = Command.make(
   ({ url, json }) =>
     Effect.gen(function* () {
       const parent = yield* baseServerCommand;
-      const targetUrl = Option.isSome(url)
-        ? url.value
-        : yield* Effect.try({
-            try: () => {
-              const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
-              return discoverExternalMcpRuntime(baseDir).state.origin;
-            },
-            catch: (cause) =>
-              new StartupError({ message: "Failed to discover a running Synara server.", cause }),
-          });
-      const result = yield* Effect.promise(() => fetchSynaraServerStatus({ url: targetUrl }));
+      const discovered = Option.isSome(url)
+        ? { url: url.value }
+        : (() => {
+            const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+            try {
+              return { url: discoverServerRuntime(baseDir).state.origin };
+            } catch (cause) {
+              return {
+                error:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Failed to discover a running Synara server.",
+              };
+            }
+          })();
+      const result =
+        "error" in discovered
+          ? {
+              reachable: false as const,
+              ready: false as const,
+              url: "[undiscovered]",
+              error: discovered.error,
+            }
+          : yield* Effect.promise(() => fetchSynaraServerStatus({ url: discovered.url }));
       process.stdout.write(
         json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
       );

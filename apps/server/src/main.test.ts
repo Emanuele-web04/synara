@@ -209,7 +209,8 @@ it.layer(testLayer)("server CLI command", (it) => {
           version: 1,
           pid: process.pid,
           port: 5444,
-          origin: "http://127.0.0.1:5444",
+          host: "100.64.0.42",
+          origin: "http://100.64.0.42:5444",
           startedAt: new Date().toISOString(),
           externalMcpRuntimeSecret: "x".repeat(32),
         }),
@@ -217,7 +218,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       );
 
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-        assert.equal(String(input), "http://127.0.0.1:5444/health");
+        assert.equal(String(input), "http://100.64.0.42:5444/health");
         return Response.json({
           status: "ok",
           startupReady: true,
@@ -232,6 +233,32 @@ it.layer(testLayer)("server CLI command", (it) => {
         stdout.mockRestore();
       }
 
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("reports an unreachable result when no persisted runtime exists", () =>
+    Effect.gen(function* () {
+      const flagHome = makeTempHome("synara-main-status-missing-");
+      const previousExitCode = process.exitCode;
+      const output: string[] = [];
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      try {
+        yield* runCli(["server", "status", "--json", "--home-dir", flagHome]);
+        assert.equal(process.exitCode, 1);
+      } finally {
+        process.exitCode = previousExitCode;
+        stdout.mockRestore();
+      }
+
+      assert.deepInclude(JSON.parse(output.join("")), {
+        reachable: false,
+        ready: false,
+        url: "[undiscovered]",
+      });
       assert.equal(start.mock.calls.length, 0);
     }),
   );

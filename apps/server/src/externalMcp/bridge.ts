@@ -148,7 +148,11 @@ export function externalMcpClientStorePath(baseDir: string, integrationId: strin
   return path.join(baseDir, CLIENT_STORE_DIRECTORY, `${safeIntegrationId(integrationId)}.json`);
 }
 
-function parseRuntimeState(raw: string, sourcePath: string): PersistedServerRuntimeState {
+function parseRuntimeState(
+  raw: string,
+  sourcePath: string,
+  options: { readonly requireLoopback: boolean },
+): PersistedServerRuntimeState {
   try {
     const state = JSON.parse(raw) as Partial<PersistedServerRuntimeState>;
     if (
@@ -163,8 +167,11 @@ function parseRuntimeState(raw: string, sourcePath: string): PersistedServerRunt
       throw new Error("invalid runtime-state shape");
     }
     const origin = new URL(state.origin);
+    if (origin.protocol !== "http:") {
+      throw new Error("runtime origin is not HTTP");
+    }
     if (
-      origin.protocol !== "http:" ||
+      options.requireLoopback &&
       !["127.0.0.1", "localhost", "[::1]", "::1"].includes(origin.hostname)
     ) {
       throw new Error("runtime origin is not loopback HTTP");
@@ -287,14 +294,17 @@ function readPrivateRuntimeState(sourcePath: string): string {
   }
 }
 
-export function discoverExternalMcpRuntime(baseDir: string): {
+function discoverRunningRuntime(
+  baseDir: string,
+  options: { readonly requireLoopback: boolean },
+): {
   readonly state: PersistedServerRuntimeState;
   readonly sourcePath: string;
 } {
   const candidates = RUNTIME_STATE_RELATIVE_PATHS.flatMap((relativePath) => {
     const sourcePath = path.join(baseDir, relativePath);
     if (!fs.existsSync(sourcePath)) return [];
-    const state = parseRuntimeState(readPrivateRuntimeState(sourcePath), sourcePath);
+    const state = parseRuntimeState(readPrivateRuntimeState(sourcePath), sourcePath, options);
     return processIsAlive(state.pid) ? [{ state, sourcePath }] : [];
   });
   if (candidates.length === 0) {
@@ -308,6 +318,20 @@ export function discoverExternalMcpRuntime(baseDir: string): {
     );
   }
   return candidates[0]!;
+}
+
+export function discoverServerRuntime(baseDir: string): {
+  readonly state: PersistedServerRuntimeState;
+  readonly sourcePath: string;
+} {
+  return discoverRunningRuntime(baseDir, { requireLoopback: false });
+}
+
+export function discoverExternalMcpRuntime(baseDir: string): {
+  readonly state: PersistedServerRuntimeState;
+  readonly sourcePath: string;
+} {
+  return discoverRunningRuntime(baseDir, { requireLoopback: true });
 }
 
 function assertPrivateFile(filePath: string): void {
