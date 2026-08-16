@@ -147,8 +147,8 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("allows PDFs inside the configured private scratch root without a cwd", async () => {
-    const stateDir = makeTempDir("synara-private-state-");
-    const scratchRoot = path.join(stateDir, "synara-codex-workspaces");
+    const privateTempRoot = makeTempDir("synara-private-scratch-");
+    const scratchRoot = path.join(privateTempRoot, "synara-codex-workspaces");
     const threadDir = path.join(scratchRoot, "private-thread");
     const pdfPath = path.join(threadDir, "private-scratch.pdf");
     mkdirSync(threadDir, { recursive: true });

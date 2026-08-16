@@ -11,7 +11,7 @@ import { ThreadId } from "@synara/contracts";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
+import { ensureIsolatedScratchWorkspace, resolveScratchWorkspacesRoot } from "./scratchWorkspaces";
 
 const testScratchParent = mkdtempSync(path.join(tmpdir(), "synara-scratch-test-"));
 const testScratchRoot = path.join(testScratchParent, SCRATCH_WORKSPACES_DIRNAME);
@@ -25,6 +25,18 @@ function ensureTestScratchWorkspace(threadId: ThreadId): string {
 }
 
 describe("ensureIsolatedScratchWorkspace", () => {
+  it("keeps the default scratch root in a per-user temporary container outside the checkout", () => {
+    const root = resolveScratchWorkspacesRoot();
+    const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("default-root"));
+    try {
+      expect(path.relative(process.cwd(), root).startsWith("..")).toBe(true);
+      expect(path.dirname(root)).toMatch(/\.synara-[a-f0-9]{16}$/);
+      expect(workspace.startsWith(`${root}${path.sep}`)).toBe(true);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("creates a readable per-thread directory under the scratch root", () => {
     const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("thread-1"));
     try {
