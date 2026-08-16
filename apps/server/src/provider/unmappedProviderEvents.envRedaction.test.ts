@@ -42,4 +42,54 @@ describe("unmapped provider environment credential redaction", () => {
     expect(serialized).not.toContain("sk-secret");
     expect(serialized).toContain('\\"OPENAI_API_KEY\\":[REDACTED]');
   });
+
+  it("redacts multiline quoted credential values through the closing quote", () => {
+    const prefixed = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        'FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nremaining-secret\n-----END PRIVATE KEY-----"',
+      ),
+    );
+    const bare = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        'private_key="-----BEGIN PRIVATE KEY-----\nbare-secret\n-----END PRIVATE KEY-----"',
+      ),
+    );
+
+    expect(prefixed).not.toContain("BEGIN PRIVATE KEY");
+    expect(prefixed).not.toContain("remaining-secret");
+    expect(prefixed).toContain("FIREBASE_PRIVATE_KEY=[REDACTED]");
+    expect(bare).not.toContain("BEGIN PRIVATE KEY");
+    expect(bare).not.toContain("bare-secret");
+    expect(bare).toContain("private_key=[REDACTED]");
+  });
+
+  it("consumes Bearer-prefixed unquoted environment values", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData("OPENAI_API_KEY=Bearer sk-secret"),
+    );
+
+    expect(serialized).not.toContain("sk-secret");
+    expect(serialized).toContain("OPENAI_API_KEY=[REDACTED]");
+  });
+
+  it("redacts decoded and raw name/value environment entries", () => {
+    const decoded = JSON.stringify(
+      sanitizeUnmappedProviderData([
+        { name: "OPENAI_API_KEY", value: "decoded-secret" },
+        { name: "SAFE_ENV", value: "kept" },
+      ]),
+    );
+    const raw = JSON.stringify(
+      sanitizeUnmappedProviderData(
+        'env: [{"name":"OPENAI_API_KEY","value":"raw-secret"},{"name":"SAFE_ENV","value":"kept"}]',
+      ),
+    );
+
+    expect(decoded).not.toContain("decoded-secret");
+    expect(raw).not.toContain("raw-secret");
+    expect(decoded).toContain('"value":"[REDACTED]"');
+    expect(raw).toContain('\\"value\\":[REDACTED]');
+    expect(decoded).toContain("kept");
+    expect(raw).toContain("kept");
+  });
 });
