@@ -71,13 +71,16 @@ describe("ensureIsolatedScratchWorkspace", () => {
     const legacyWorkspace = path.join(legacyRoot, workspaceSegment);
     mkdirSync(legacyWorkspace, { recursive: true });
     writeFileSync(path.join(legacyWorkspace, "resume.txt"), "preserved");
+    if (process.platform !== "win32") {
+      chmodSync(legacyRoot, 0o777);
+    }
 
     const resumedWorkspace = ensureIsolatedScratchWorkspace(threadId, migratedRoot, legacyRoot);
 
     expect(resumedWorkspace).toBe(legacyWorkspace);
     expect(readFileSync(path.join(resumedWorkspace, "resume.txt"), "utf8")).toBe("preserved");
     if (process.platform !== "win32") {
-      expect(statSync(legacyRoot).mode & 0o777).toBe(0o700);
+      expect(statSync(legacyRoot).mode & 0o1777).toBe(0o1777);
       expect(statSync(resumedWorkspace).mode & 0o777).toBe(0o700);
     }
   });
@@ -109,8 +112,28 @@ describe("ensureIsolatedScratchWorkspace", () => {
       }),
     ).toBe(legacyWorkspace);
     if (process.platform !== "win32") {
-      expect(statSync(legacyRoot).mode & 0o777).toBe(0o700);
+      expect(statSync(legacyRoot).mode & 0o777).toBe(0o755);
       expect(statSync(legacyWorkspace).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it("revalidates a persisted private scratch cwd before session recovery", () => {
+    const threadId = ThreadId.makeUnsafe("persisted-private-thread");
+    const privateRoot = path.join(testScratchParent, "private", SCRATCH_WORKSPACES_DIRNAME);
+    const legacyRoot = path.join(testScratchParent, "unused-legacy");
+    const privateWorkspace = ensureIsolatedScratchWorkspace(threadId, privateRoot, legacyRoot);
+    if (process.platform !== "win32") {
+      chmodSync(privateWorkspace, 0o755);
+    }
+
+    expect(
+      resolveScratchWorkspaceCwd(threadId, privateWorkspace, {
+        workspaceRoot: privateRoot,
+        legacyWorkspaceRoot: legacyRoot,
+      }),
+    ).toBe(privateWorkspace);
+    if (process.platform !== "win32") {
+      expect(statSync(privateWorkspace).mode & 0o777).toBe(0o700);
     }
   });
 

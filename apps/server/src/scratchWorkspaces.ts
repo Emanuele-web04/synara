@@ -7,7 +7,7 @@
 // Exports: ensureIsolatedScratchWorkspace
 
 import { createHash } from "node:crypto";
-import { lstatSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
@@ -42,8 +42,44 @@ function isOwnedRealDirectory(directoryPath: string): boolean {
     if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
     return typeof process.getuid !== "function" || stat.uid === process.getuid();
   } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (["ELOOP", "ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) {
+      return false;
+    }
     throw cause;
+  }
+}
+
+function ensureSafeSharedLegacyRoot(directoryPath: string): boolean {
+  if (process.platform === "win32") {
+    return isOwnedRealDirectory(directoryPath);
+  }
+
+  let descriptor: number;
+  try {
+    descriptor = openSync(
+      directoryPath,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+  } catch (cause) {
+    if (["ELOOP", "ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) {
+      return false;
+    }
+    throw cause;
+  }
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isDirectory()) return false;
+    const writableByOtherUsers = (stat.mode & 0o022) !== 0;
+    const hasStickyBit = (stat.mode & 0o1000) !== 0;
+    if (!writableByOtherUsers || hasStickyBit) return true;
+    if (typeof process.getuid !== "function" || stat.uid !== process.getuid()) return false;
+
+    // Preserve shared access for other legacy users while preventing them from
+    // renaming one another's owned workspace entries.
+    fchmodSync(descriptor, (stat.mode & 0o7777) | 0o1000);
+    return true;
+  } finally {
+    closeSync(descriptor);
   }
 }
 
@@ -52,15 +88,27 @@ function repairLegacyScratchWorkspace(
   workspaceSegment: string,
 ): string | undefined {
   const legacyWorkspaceDir = path.join(legacyWorkspaceRoot, workspaceSegment);
-  if (!isOwnedRealDirectory(legacyWorkspaceRoot) || !isOwnedRealDirectory(legacyWorkspaceDir)) {
+  if (
+    !ensureSafeSharedLegacyRoot(legacyWorkspaceRoot) ||
+    !isOwnedRealDirectory(legacyWorkspaceDir)
+  ) {
     return undefined;
   }
 
   // Preserve historical absolute paths while making the legacy workspace safe
   // to resume. O_NOFOLLOW inside the helper rejects symlink swaps.
-  ensurePrivateDirectorySync(legacyWorkspaceRoot);
   ensurePrivateDirectorySync(legacyWorkspaceDir);
   return legacyWorkspaceDir;
+}
+
+function ensurePrivateScratchWorkspace(workspaceRoot: string, workspaceSegment: string): string {
+  if (workspaceRoot === resolveScratchWorkspacesRoot()) {
+    ensurePrivateDirectorySync(path.dirname(workspaceRoot));
+  }
+  ensurePrivateDirectorySync(workspaceRoot);
+  const workspaceDir = path.join(workspaceRoot, workspaceSegment);
+  ensurePrivateDirectorySync(workspaceDir);
+  return workspaceDir;
 }
 
 export function ensureIsolatedScratchWorkspace(
@@ -70,7 +118,6 @@ export function ensureIsolatedScratchWorkspace(
 ): string {
   const defaultWorkspaceRoot = resolveScratchWorkspacesRoot();
   const workspaceSegment = scratchWorkspaceSegment(threadId);
-  const workspaceDir = path.join(workspaceRoot, workspaceSegment);
   const legacyRoot =
     legacyWorkspaceRoot ??
     (workspaceRoot === defaultWorkspaceRoot
@@ -80,12 +127,7 @@ export function ensureIsolatedScratchWorkspace(
     const repairedLegacyWorkspace = repairLegacyScratchWorkspace(legacyRoot, workspaceSegment);
     if (repairedLegacyWorkspace) return repairedLegacyWorkspace;
   }
-  if (workspaceRoot === defaultWorkspaceRoot) {
-    ensurePrivateDirectorySync(path.dirname(workspaceRoot));
-  }
-  ensurePrivateDirectorySync(workspaceRoot);
-  ensurePrivateDirectorySync(workspaceDir);
-  return workspaceDir;
+  return ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment);
 }
 
 export function resolveScratchWorkspaceCwd(
@@ -99,11 +141,17 @@ export function resolveScratchWorkspaceCwd(
   const workspaceRoot = roots.workspaceRoot ?? resolveScratchWorkspacesRoot();
   const legacyWorkspaceRoot =
     roots.legacyWorkspaceRoot ?? path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
+  const workspaceSegment = scratchWorkspaceSegment(threadId);
   if (!persistedCwd) {
     return ensureIsolatedScratchWorkspace(threadId, workspaceRoot, legacyWorkspaceRoot);
   }
 
-  const legacyWorkspace = path.join(legacyWorkspaceRoot, scratchWorkspaceSegment(threadId));
+  const privateWorkspace = path.join(workspaceRoot, workspaceSegment);
+  if (path.resolve(persistedCwd) === path.resolve(privateWorkspace)) {
+    return ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment);
+  }
+
+  const legacyWorkspace = path.join(legacyWorkspaceRoot, workspaceSegment);
   if (path.resolve(persistedCwd) !== path.resolve(legacyWorkspace)) return persistedCwd;
 
   return ensureIsolatedScratchWorkspace(threadId, workspaceRoot, legacyWorkspaceRoot);
