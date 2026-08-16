@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 
+const redactProcessTableArgs = (args: string) =>
+  redactSensitiveProcessArgs(args, { truncateSensitiveEnvironmentRemainder: true });
+
 describe("redactSensitiveProcessArgs", () => {
   it("redacts sensitive flag values in both supported forms", () => {
     expect(redactSensitiveProcessArgs("tool --api-key secret --token=other --verbose")).toBe(
@@ -25,7 +28,7 @@ describe("redactSensitiveProcessArgs", () => {
 
   it("redacts secret environment assignments in process diagnostics", () => {
     for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN"]) {
-      expect(redactSensitiveProcessArgs(`env ${name}=secret bun run dev`)).toBe(
+      expect(redactProcessTableArgs(`env ${name}=secret bun run dev`)).toBe(
         `env ${name}=[redacted]`,
       );
     }
@@ -43,7 +46,7 @@ describe("redactSensitiveProcessArgs", () => {
       "PASSWORD",
       "TOKEN",
     ]) {
-      expect(redactSensitiveProcessArgs(`env ${name}=secret bun run dev`)).toBe(
+      expect(redactProcessTableArgs(`env ${name}=secret bun run dev`)).toBe(
         `env ${name}=[redacted]`,
       );
     }
@@ -58,16 +61,38 @@ describe("redactSensitiveProcessArgs", () => {
       "DB_PASSWORD=`printf supersecret`",
     ]) {
       const name = assignment.slice(0, assignment.indexOf("="));
-      expect(redactSensitiveProcessArgs(`env ${assignment} bun run dev`)).toBe(
+      expect(redactProcessTableArgs(`env ${assignment} bun run dev`)).toBe(
         `env ${name}=[redacted]`,
       );
     }
   });
 
   it("fails closed when process-table output loses a spaced secret's argv boundary", () => {
+    expect(redactProcessTableArgs("docker run -e APP_PASSWORD=correct horse image --verbose")).toBe(
+      "docker run -e APP_PASSWORD=[redacted]",
+    );
+  });
+
+  it("recognizes sensitive assignments after flattened shell separators", () => {
+    for (const separator of [";", "&&", "||", "("]) {
+      expect(redactProcessTableArgs(`/bin/sh -c echo ready${separator}PASSWORD=secret app`)).toBe(
+        `/bin/sh -c echo ready${separator}PASSWORD=[redacted]`,
+      );
+    }
+  });
+
+  it("redacts credential-bearing environment URLs in process tables", () => {
     expect(
-      redactSensitiveProcessArgs("docker run -e APP_PASSWORD=correct horse image --verbose"),
-    ).toBe("docker run -e APP_PASSWORD=[redacted]");
+      redactProcessTableArgs(
+        "env DATABASE_URL=postgres://alice:supersecret@db.example/app bun run dev",
+      ),
+    ).toBe("env DATABASE_URL=[redacted]");
+  });
+
+  it("preserves generic diagnostic context after a bounded assignment value", () => {
+    expect(redactSensitiveProcessArgs("Configuration KEY=value is invalid at line 42")).toBe(
+      "Configuration KEY=[redacted] is invalid at line 42",
+    );
   });
 
   it("does not redact unrelated environment assignments", () => {

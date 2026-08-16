@@ -260,7 +260,9 @@ function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
     }
     rows.set(Number(match[1]), {
       ppid: Number(match[2]),
-      commandLine: redactSensitiveProcessArgs(match[3] ?? "").slice(0, MAX_PROCESS_ARGS_CHARS),
+      commandLine: redactSensitiveProcessArgs(match[3] ?? "", {
+        truncateSensitiveEnvironmentRemainder: true,
+      }).slice(0, MAX_PROCESS_ARGS_CHARS),
     });
   }
   return rows;
