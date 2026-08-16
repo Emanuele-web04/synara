@@ -11,8 +11,10 @@ const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu
 const URL_CREDENTIAL_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^/\s@]+@/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
   /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
-const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
-  /(^|[^A-Za-z0-9_])(("?)([A-Za-z_][A-Za-z0-9_]*)\3\s*(?::|=)\s*)(?:bearer\s+)?(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
+const ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN =
+  /(?<![A-Za-z0-9_])((["']?)([A-Za-z_][A-Za-z0-9_]*)\2\s*(?::|=)\s*)/giu;
+const ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN =
+  /((?:^|,|\[)\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\2\s*,\s*)/giu;
 const SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*"|[^{}"])*\}/gu;
 const INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN = /\{(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|[^{}"])*$/gu;
 const JSON_NAME_FIELD_PATTERN = /"name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"/iu;
@@ -58,16 +60,93 @@ function redactText(value: string): string {
   const preRedacted = value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(URL_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}@`);
-  return redactSerializedJsonContainers(preRedacted)
+  const structured = redactSerializedJsonContainers(preRedacted)
     .replace(SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
-    .replace(INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject)
-    .replace(
-      ENV_CREDENTIAL_ASSIGNMENT_PATTERN,
-      (match, delimiter: string, prefix: string, _quote: string, name: string) =>
-        isSensitiveEnvironmentName(name) ? `${delimiter}${prefix}${REDACTED_VALUE}` : match,
-    )
+    .replace(INCOMPLETE_SHALLOW_JSON_OBJECT_PATTERN, redactNamedValueObject);
+  return redactEnvironmentAssignments(redactEnvironmentTuples(structured))
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
+}
+
+function credentialValueEnd(value: string, valueStart: number): number {
+  let index = valueStart;
+  const bearerPrefix = /^bearer\s+/iu.exec(value.slice(index))?.[0];
+  if (bearerPrefix) {
+    index += bearerPrefix.length;
+  }
+
+  let quote: "'" | '"' | undefined;
+  if (value.startsWith("$'", index)) {
+    quote = "'";
+    index += 2;
+  } else if (value[index] === "'" || value[index] === '"') {
+    quote = value[index];
+    index += 1;
+  }
+
+  while (index < value.length) {
+    if (value[index] === "\\" && index + 1 < value.length) {
+      index += 2;
+    } else if (quote && value[index] === quote) {
+      quote = undefined;
+      index += 1;
+    } else if (quote) {
+      index += 1;
+    } else if (value[index] === "'" || value[index] === '"') {
+      quote = value[index];
+      index += 1;
+    } else if (/\s|[,;}\]]/u.test(value[index] ?? "")) {
+      break;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function redactEnvironmentAssignments(value: string): string {
+  let redacted = "";
+  let cursor = 0;
+  for (const match of value.matchAll(ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN)) {
+    const name = match[3];
+    if (
+      !name ||
+      !isSensitiveEnvironmentName(name) ||
+      match.index === undefined ||
+      match.index < cursor
+    ) {
+      continue;
+    }
+    const valueStart = match.index + match[0].length;
+    const valueEnd = credentialValueEnd(value, valueStart);
+    redacted += value.slice(cursor, match.index) + match[0] + REDACTED_VALUE;
+    cursor = valueEnd;
+  }
+  return redacted + value.slice(cursor);
+}
+
+function redactEnvironmentTuples(value: string): string {
+  let redacted = "";
+  let cursor = 0;
+  for (const match of value.matchAll(ENV_CREDENTIAL_TUPLE_PREFIX_PATTERN)) {
+    const name = match[3];
+    if (
+      !name ||
+      !isSensitiveEnvironmentName(name) ||
+      match.index === undefined ||
+      match.index < cursor
+    ) {
+      continue;
+    }
+    const valueStart = match.index + match[0].length;
+    if (value.startsWith(REDACTED_VALUE, valueStart)) {
+      continue;
+    }
+    const valueEnd = credentialValueEnd(value, valueStart);
+    redacted += value.slice(cursor, match.index) + match[0] + REDACTED_VALUE;
+    cursor = valueEnd;
+  }
+  return redacted + value.slice(cursor);
 }
 
 function redactSerializedJsonContainers(value: string): string {

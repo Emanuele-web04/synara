@@ -136,15 +136,31 @@ describe("unmapped provider environment credential redaction", () => {
   it("consumes escaped separators in unquoted shell values", () => {
     const serialized = JSON.stringify(
       sanitizeUnmappedProviderData(
-        "SERVICE_APIKEY=abc\\ remaining-secret OTHER_TOKEN=def\\,remaining-token THIRD_SECRET=ghi\\;remaining-secret",
+        "SERVICE_APIKEY=abc\\ remaining-secret OTHER_TOKEN=def\\,remaining-token THIRD_SECRET=ghi\\;remaining-secret FOURTH_TOKEN='quoted-'continued-secret",
       ),
     );
 
     expect(serialized).not.toContain("remaining-secret");
     expect(serialized).not.toContain("remaining-token");
+    expect(serialized).not.toContain("continued-secret");
     expect(serialized).toContain("SERVICE_APIKEY=[REDACTED]");
     expect(serialized).toContain("OTHER_TOKEN=[REDACTED]");
     expect(serialized).toContain("THIRD_SECRET=[REDACTED]");
+    expect(serialized).toContain("FOURTH_TOKEN=[REDACTED]");
+  });
+
+  it("redacts credentials nested inside non-sensitive wrapper assignments", () => {
+    const docker = JSON.stringify(
+      sanitizeUnmappedProviderData("docker run --env=OPENAI_API_KEY=sk-leaked image"),
+    );
+    const quoted = JSON.stringify(
+      sanitizeUnmappedProviderData('COMMAND="env GITHUB_TOKEN=gh-leaked app"'),
+    );
+
+    expect(docker).not.toContain("sk-leaked");
+    expect(quoted).not.toContain("gh-leaked");
+    expect(docker).toContain("OPENAI_API_KEY=[REDACTED]");
+    expect(quoted).toContain("GITHUB_TOKEN=[REDACTED]");
   });
 
   it("redacts decoded and raw name/value environment entries", () => {
@@ -211,10 +227,13 @@ describe("unmapped provider environment credential redaction", () => {
   });
 
   it("redacts environment tuples in text and decoded data", () => {
-    const raw = JSON.stringify(
+    const json = JSON.stringify(
       sanitizeUnmappedProviderData(
         'env: [["OPENAI_API_KEY","raw-tuple-secret"],["SAFE_ENV","kept"]]',
       ),
+    );
+    const inspected = JSON.stringify(
+      sanitizeUnmappedProviderData("env: [ [ 'GITHUB_TOKEN', 'inspected-tuple-secret' ] ]"),
     );
     const decoded = JSON.stringify(
       sanitizeUnmappedProviderData([
@@ -223,9 +242,10 @@ describe("unmapped provider environment credential redaction", () => {
       ]),
     );
 
-    expect(raw).not.toContain("raw-tuple-secret");
+    expect(json).not.toContain("raw-tuple-secret");
+    expect(inspected).not.toContain("inspected-tuple-secret");
     expect(decoded).not.toContain("decoded-tuple-secret");
-    expect(raw).toContain("kept");
+    expect(json).toContain("kept");
     expect(decoded).toContain("kept");
   });
 
