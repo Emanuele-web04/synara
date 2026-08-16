@@ -9,29 +9,36 @@ import path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 
-function scratchRoot(): string {
-  return path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
+const testScratchParent = mkdtempSync(path.join(tmpdir(), "synara-scratch-test-"));
+const testScratchRoot = path.join(testScratchParent, SCRATCH_WORKSPACES_DIRNAME);
+
+afterAll(() => {
+  rmSync(testScratchParent, { recursive: true, force: true });
+});
+
+function ensureTestScratchWorkspace(threadId: ThreadId): string {
+  return ensureIsolatedScratchWorkspace(threadId, testScratchRoot);
 }
 
 describe("ensureIsolatedScratchWorkspace", () => {
   it("creates a readable per-thread directory under the scratch root", () => {
-    const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("thread-1"));
+    const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("thread-1"));
     try {
       expect(workspace).toContain(`${path.sep}${SCRATCH_WORKSPACES_DIRNAME}${path.sep}thread-1-`);
-      expect(path.relative(scratchRoot(), workspace).startsWith("..")).toBe(false);
+      expect(path.relative(testScratchRoot, workspace).startsWith("..")).toBe(false);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
 
   it("does not let path-like thread ids escape the scratch root", () => {
-    const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("../outside/thread"));
+    const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("../outside/thread"));
     try {
-      const relative = path.relative(scratchRoot(), workspace);
+      const relative = path.relative(testScratchRoot, workspace);
       expect(relative.startsWith("..")).toBe(false);
       expect(path.isAbsolute(relative)).toBe(false);
       expect(workspace).not.toContain(`${path.sep}..${path.sep}`);
@@ -41,7 +48,7 @@ describe("ensureIsolatedScratchWorkspace", () => {
   });
 
   it.skipIf(process.platform === "win32")("uses owner-only permissions on POSIX", () => {
-    const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("private-thread"));
+    const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("private-thread"));
     try {
       expect(statSync(workspace).mode & 0o777).toBe(0o700);
     } finally {
@@ -53,12 +60,12 @@ describe("ensureIsolatedScratchWorkspace", () => {
     "tightens permissions when reusing an existing scratch workspace",
     () => {
       const threadId = ThreadId.makeUnsafe("reused-private-thread");
-      const workspace = ensureIsolatedScratchWorkspace(threadId);
+      const workspace = ensureTestScratchWorkspace(threadId);
       try {
         chmodSync(workspace, 0o755);
         expect(statSync(workspace).mode & 0o777).toBe(0o755);
 
-        expect(ensureIsolatedScratchWorkspace(threadId)).toBe(workspace);
+        expect(ensureTestScratchWorkspace(threadId)).toBe(workspace);
         expect(statSync(workspace).mode & 0o777).toBe(0o700);
       } finally {
         rmSync(workspace, { recursive: true, force: true });
@@ -69,15 +76,15 @@ describe("ensureIsolatedScratchWorkspace", () => {
   it.skipIf(process.platform === "win32")(
     "tightens permissions when reusing the shared scratch root",
     () => {
-      const workspace = ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("private-root"));
+      const workspace = ensureTestScratchWorkspace(ThreadId.makeUnsafe("private-root"));
       try {
-        chmodSync(scratchRoot(), 0o777);
+        chmodSync(testScratchRoot, 0o777);
 
-        ensureIsolatedScratchWorkspace(ThreadId.makeUnsafe("private-root"));
+        ensureTestScratchWorkspace(ThreadId.makeUnsafe("private-root"));
 
-        expect(statSync(scratchRoot()).mode & 0o777).toBe(0o700);
+        expect(statSync(testScratchRoot).mode & 0o777).toBe(0o700);
       } finally {
-        chmodSync(scratchRoot(), 0o700);
+        chmodSync(testScratchRoot, 0o700);
         rmSync(workspace, { recursive: true, force: true });
       }
     },
@@ -87,12 +94,12 @@ describe("ensureIsolatedScratchWorkspace", () => {
     "refuses to follow a reused scratch workspace symlink",
     () => {
       const threadId = ThreadId.makeUnsafe("symlinked-private-thread");
-      const workspace = ensureIsolatedScratchWorkspace(threadId);
+      const workspace = ensureTestScratchWorkspace(threadId);
       const redirected = mkdtempSync(path.join(tmpdir(), "synara-scratch-redirect-"));
       rmSync(workspace, { recursive: true, force: true });
       symlinkSync(redirected, workspace, "dir");
       try {
-        expect(() => ensureIsolatedScratchWorkspace(threadId)).toThrow(
+        expect(() => ensureTestScratchWorkspace(threadId)).toThrow(
           /open without following symlinks/,
         );
       } finally {

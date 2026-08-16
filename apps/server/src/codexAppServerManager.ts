@@ -973,6 +973,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
+  private readonly scratchWorkspacesRoot: string | undefined;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -983,6 +984,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
+      readonly scratchWorkspacesRoot?: string;
     },
   ) {
     super();
@@ -991,6 +993,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     this.taskCompleteFallbackGraceMs = Math.max(0, options?.taskCompleteFallbackGraceMs ?? 750);
+    this.scratchWorkspacesRoot = options?.scratchWorkspacesRoot;
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -1043,7 +1046,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         await this.stopSession(threadId);
       }
 
-      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
+      const resolvedCwd =
+        input.cwd ?? ensureIsolatedScratchWorkspace(threadId, this.scratchWorkspacesRoot);
 
       const session: ProviderSession = {
         provider: "codex",
@@ -1821,7 +1825,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         throw new Error("Provider fork is missing the source thread resume id.");
       }
 
-      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
+      const resolvedCwd =
+        input.cwd ?? ensureIsolatedScratchWorkspace(threadId, this.scratchWorkspacesRoot);
       const session: ProviderSession = {
         provider: "codex",
         status: "connecting",

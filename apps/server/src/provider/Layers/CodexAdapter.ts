@@ -32,6 +32,8 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
+import path from "node:path";
+import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 
 import {
   ProviderAdapterProcessError,
@@ -1742,6 +1744,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           options?.makeManager?.(services) ??
           new CodexAppServerManager(services, {
             synaraSkillsDir: synaraSkillsDir(serverConfig.baseDir),
+            scratchWorkspacesRoot: path.join(serverConfig.stateDir, SCRATCH_WORKSPACES_DIRNAME),
             ...(agentGatewayCredentials
               ? {
                   agentGatewayMcp: {

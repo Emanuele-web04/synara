@@ -1,16 +1,15 @@
 // FILE: scratchWorkspaces.ts
 // Purpose: Per-thread scratch working directories for provider sessions that
 //          start before any project workspace exists (e.g. a chat's first
-//          turn). Files agents create here are workspace-equivalent, so the
-//          local-preview allowlist also treats this root as servable.
+//          turn). The production root lives inside Synara's private state tree.
 // Layer: Server filesystem utility
 // Exports: ensureIsolatedScratchWorkspace
 
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { ThreadId } from "@synara/contracts";
+import { resolveSynaraHomeDirectory } from "@synara/shared/synaraHome";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 import { ensurePrivateDirectorySync } from "./privatePathPermissions";
 
@@ -24,8 +23,10 @@ function scratchWorkspaceSegment(threadId: ThreadId): string {
   return `${safePrefix || "thread"}-${digest}`;
 }
 
-export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
-  const workspaceRoot = path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
+export function ensureIsolatedScratchWorkspace(
+  threadId: ThreadId,
+  workspaceRoot = path.join(resolveSynaraHomeDirectory(), SCRATCH_WORKSPACES_DIRNAME),
+): string {
   const workspaceDir = path.join(workspaceRoot, scratchWorkspaceSegment(threadId));
   ensurePrivateDirectorySync(workspaceRoot);
   ensurePrivateDirectorySync(workspaceDir);
