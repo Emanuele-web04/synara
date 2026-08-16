@@ -1,0 +1,274 @@
+const PROVIDER_EVENT_FIXTURE_VERSION = 1 as const;
+const DEFAULT_MAX_FIXTURE_BYTES = 512 * 1024;
+const DEFAULT_MAX_FIXTURE_EVENTS = 2_000;
+
+const REDACTED_VALUE = "<redacted>";
+const NORMALIZED_ISO_TIMESTAMP = "2000-01-01T00:00:00.000Z";
+
+const SENSITIVE_KEY_PATTERN =
+  /(?:authorization|bearer|cookie|credential|secret|token|api.?key|prompt|content|text|body|input|output|attachment|file|path|cwd|environment|env|header|url)/i;
+const IDENTIFIER_KEY_PATTERN = /(?:^|_)(?:id|uuid)$/i;
+const CAMEL_IDENTIFIER_KEY_PATTERN = /(?:Id|ID|Uuid|UUID)$/;
+const TIMESTAMP_KEY_PATTERN =
+  /(?:timestamp|createdAt|updatedAt|observedAt|startedAt|endedAt|time)$/i;
+const SAFE_DISCRIMINATOR_VALUE_PATTERN = /^[A-Za-z0-9_.:/@-]{1,128}$/u;
+
+const SAFE_STRING_KEYS = new Set([
+  "type",
+  "provider",
+  "source",
+  "method",
+  "role",
+  "status",
+  "state",
+  "finish",
+  "permission",
+  "reply",
+  "action",
+  "kind",
+  "phase",
+  "streamKind",
+]);
+
+const SAFE_SCALAR_KEYS = new Set([
+  "code",
+  "sequence",
+  "count",
+  "total",
+  "attempt",
+  "retryCount",
+  "durationMs",
+  "enabled",
+  "completed",
+  "synthetic",
+  "ignored",
+]);
+
+const SAFE_CONTAINER_KEYS = new Set([
+  "event",
+  "properties",
+  "payload",
+  "params",
+  "info",
+  "part",
+  "raw",
+  "data",
+  "metadata",
+  "message",
+  "item",
+  "session",
+  "request",
+  "response",
+  "result",
+  "error",
+  "usage",
+  "cache",
+  "tokens",
+  "time",
+]);
+
+const UNTRUSTED_STRING_CONTAINER_KEYS = new Set(["data", "metadata", "raw"]);
+
+export interface ProviderEventFixtureRecord {
+  readonly version: typeof PROVIDER_EVENT_FIXTURE_VERSION;
+  readonly index: number;
+  readonly event: unknown;
+}
+
+export interface ProviderEventFixtureParseOptions {
+  readonly maxBytes?: number;
+  readonly maxEvents?: number;
+}
+
+export class ProviderEventFixtureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderEventFixtureError";
+  }
+}
+
+type SanitizerState = {
+  readonly ids: Map<string, string>;
+  nextId: number;
+};
+
+type SanitizerContext = {
+  readonly untrustedStrings: boolean;
+};
+
+function redactIdentifier(value: unknown, state: SanitizerState): string {
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new ProviderEventFixtureError("Identifier fields must be strings or numbers.");
+  }
+  const mapKey = `${typeof value}:${String(value)}`;
+  const existing = state.ids.get(mapKey);
+  if (existing) {
+    return existing;
+  }
+  const replacement = `<id-${String(state.nextId)}>`;
+  state.nextId += 1;
+  state.ids.set(mapKey, replacement);
+  return replacement;
+}
+
+function normalizeTimestamp(value: unknown): string | number {
+  if (typeof value === "string") {
+    return NORMALIZED_ISO_TIMESTAMP;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return 0;
+  }
+  throw new ProviderEventFixtureError("Timestamp fields must be strings or finite numbers.");
+}
+
+function isClassifiedFixtureKey(key: string): boolean {
+  return (
+    SAFE_CONTAINER_KEYS.has(key) ||
+    SAFE_STRING_KEYS.has(key) ||
+    SAFE_SCALAR_KEYS.has(key) ||
+    SENSITIVE_KEY_PATTERN.test(key) ||
+    IDENTIFIER_KEY_PATTERN.test(key) ||
+    CAMEL_IDENTIFIER_KEY_PATTERN.test(key) ||
+    TIMESTAMP_KEY_PATTERN.test(key)
+  );
+}
+
+function sanitizeValue(
+  value: unknown,
+  key: string | null,
+  state: SanitizerState,
+  context: SanitizerContext,
+): unknown {
+  if (key && SENSITIVE_KEY_PATTERN.test(key)) {
+    return REDACTED_VALUE;
+  }
+  if (key && (IDENTIFIER_KEY_PATTERN.test(key) || CAMEL_IDENTIFIER_KEY_PATTERN.test(key))) {
+    return redactIdentifier(value, state);
+  }
+  if (key && TIMESTAMP_KEY_PATTERN.test(key)) {
+    return normalizeTimestamp(value);
+  }
+
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    if (
+      key &&
+      SAFE_STRING_KEYS.has(key) &&
+      !context.untrustedStrings &&
+      SAFE_DISCRIMINATOR_VALUE_PATTERN.test(value)
+    ) {
+      return value;
+    }
+    throw new ProviderEventFixtureError(
+      `Refusing to preserve unclassified string field${key ? ` "${key}"` : ""}.`,
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeValue(entry, null, state, context));
+  }
+  if (typeof value !== "object") {
+    throw new ProviderEventFixtureError("Fixture values must be JSON-compatible.");
+  }
+
+  const result = Object.create(null) as Record<string, unknown>;
+  for (const [childKey, childValue] of Object.entries(value)) {
+    if (!isClassifiedFixtureKey(childKey)) {
+      throw new ProviderEventFixtureError(
+        `Refusing to preserve unclassified object key "${childKey}".`,
+      );
+    }
+    result[childKey] = sanitizeValue(childValue, childKey, state, {
+      untrustedStrings: context.untrustedStrings || UNTRUSTED_STRING_CONTAINER_KEYS.has(childKey),
+    });
+  }
+  return result;
+}
+
+export function sanitizeProviderEventFixtureEvents(events: readonly unknown[]): unknown[] {
+  const state: SanitizerState = { ids: new Map(), nextId: 1 };
+  return events.map((event) =>
+    sanitizeValue(event, null, state, {
+      untrustedStrings: false,
+    }),
+  );
+}
+
+export function serializeProviderEventFixture(events: readonly unknown[]): string {
+  return sanitizeProviderEventFixtureEvents(events)
+    .map((event, index) =>
+      JSON.stringify({
+        version: PROVIDER_EVENT_FIXTURE_VERSION,
+        index,
+        event,
+      } satisfies ProviderEventFixtureRecord),
+    )
+    .join("\n");
+}
+
+function parseFixtureRecord(line: string, expectedIndex: number): ProviderEventFixtureRecord {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch (cause) {
+    throw new ProviderEventFixtureError(
+      `Fixture record ${String(expectedIndex)} is not valid JSON: ${String(cause)}`,
+    );
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProviderEventFixtureError(
+      `Fixture record ${String(expectedIndex)} must be an object.`,
+    );
+  }
+  const record = value as Record<string, unknown>;
+  if (record.version !== PROVIDER_EVENT_FIXTURE_VERSION) {
+    throw new ProviderEventFixtureError(
+      `Fixture record ${String(expectedIndex)} has unsupported version ${String(record.version)}.`,
+    );
+  }
+  if (record.index !== expectedIndex) {
+    throw new ProviderEventFixtureError(
+      `Fixture record ${String(expectedIndex)} has out-of-order index ${String(record.index)}.`,
+    );
+  }
+  if (!record.event || typeof record.event !== "object" || Array.isArray(record.event)) {
+    throw new ProviderEventFixtureError(
+      `Fixture record ${String(expectedIndex)} event must be an object.`,
+    );
+  }
+  return {
+    version: PROVIDER_EVENT_FIXTURE_VERSION,
+    index: expectedIndex,
+    event: record.event,
+  };
+}
+
+export function parseProviderEventFixture(
+  text: string,
+  options: ProviderEventFixtureParseOptions = {},
+): ProviderEventFixtureRecord[] {
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_FIXTURE_BYTES;
+  const maxEvents = options.maxEvents ?? DEFAULT_MAX_FIXTURE_EVENTS;
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+    throw new ProviderEventFixtureError(`Fixture exceeds ${String(maxBytes)} bytes.`);
+  }
+
+  const lines = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length > maxEvents) {
+    throw new ProviderEventFixtureError(`Fixture exceeds ${String(maxEvents)} events.`);
+  }
+  return lines.map((line, index) => parseFixtureRecord(line, index));
+}
+
+export async function replayProviderEventFixture(
+  records: readonly ProviderEventFixtureRecord[],
+  consume: (event: unknown, index: number) => void | Promise<void>,
+): Promise<void> {
+  for (const record of records) {
+    await consume(record.event, record.index);
+  }
+}
