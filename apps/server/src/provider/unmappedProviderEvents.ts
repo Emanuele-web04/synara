@@ -37,17 +37,27 @@ const SENSITIVE_TERMINAL_TOKENS = new Set([
   "secret",
   "token",
 ]);
+const SENSITIVE_ENV_NAME_SUFFIXES = [
+  "apikey",
+  "password",
+  "passwd",
+  "passphrase",
+  "privatekey",
+  "secretkey",
+  "secret",
+  "token",
+] as const;
 
 function redactText(value: string): string {
   return value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(NAMED_VALUE_PAIR_PATTERN, (match, prefix: string, name: string) =>
-      isSensitiveKey(name) ? `${prefix}${REDACTED_VALUE}` : match,
+      isSensitiveEnvironmentName(name) ? `${prefix}${REDACTED_VALUE}` : match,
     )
     .replace(
       ENV_CREDENTIAL_ASSIGNMENT_PATTERN,
       (match, delimiter: string, prefix: string, _quote: string, name: string) =>
-        isSensitiveKey(name) ? `${delimiter}${prefix}${REDACTED_VALUE}` : match,
+        isSensitiveEnvironmentName(name) ? `${delimiter}${prefix}${REDACTED_VALUE}` : match,
     )
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
@@ -85,6 +95,14 @@ function isSensitiveKey(key: string): boolean {
   );
 }
 
+function isSensitiveEnvironmentName(name: string): boolean {
+  if (isSensitiveKey(name)) {
+    return true;
+  }
+  const normalized = name.replace(/[^a-z0-9]/giu, "").toLowerCase();
+  return SENSITIVE_ENV_NAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
 function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") return redactText(value);
   if (typeof value === "bigint") return value.toString();
@@ -96,7 +114,7 @@ function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (Array.isArray(value)) return value.map((entry) => redactValue(entry, seen));
 
   const namedValueIsSensitive =
-    "name" in value && typeof value.name === "string" && isSensitiveKey(value.name);
+    "name" in value && typeof value.name === "string" && isSensitiveEnvironmentName(value.name);
   const redacted: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     redacted[key] =

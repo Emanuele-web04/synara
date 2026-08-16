@@ -27,15 +27,19 @@ describe("unmapped provider environment credential redaction", () => {
 
   it("redacts prefixed secret-key assignments and serialized maps", () => {
     const assignment = JSON.stringify(
-      sanitizeUnmappedProviderData("STRIPE_SECRET_KEY=assignment-secret"),
+      sanitizeUnmappedProviderData(
+        "STRIPE_SECRET_KEY=assignment-secret SERVICE_APIKEY=compact-secret",
+      ),
     );
     const serializedMap = JSON.stringify(
       sanitizeUnmappedProviderData('{"STRIPE_SECRET_KEY":"map-secret"}'),
     );
 
     expect(assignment).not.toContain("assignment-secret");
+    expect(assignment).not.toContain("compact-secret");
     expect(serializedMap).not.toContain("map-secret");
     expect(assignment).toContain("STRIPE_SECRET_KEY=[REDACTED]");
+    expect(assignment).toContain("SERVICE_APIKEY=[REDACTED]");
     expect(serializedMap).toContain('\\"STRIPE_SECRET_KEY\\":[REDACTED]');
   });
 
