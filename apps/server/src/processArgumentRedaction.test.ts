@@ -99,6 +99,21 @@ describe("redactSensitiveProcessArgs", () => {
     expect(
       redactSensitiveProcessArgs('"PASSWORD=$(printf x "$(printf y)")supersecret" remains useful'),
     ).toBe('"PASSWORD=[redacted]" remains useful');
+    expect(
+      redactSensitiveProcessArgs("PASSWORD=${UNSET:-correct horse}suffix remains useful"),
+    ).toBe("PASSWORD=[redacted] remains useful");
+    expect(redactSensitiveProcessArgs("PASSWORD=$((1 + (2 * 3)))supersecret remains useful")).toBe(
+      "PASSWORD=[redacted] remains useful",
+    );
+  });
+
+  it("recognizes append-style sensitive assignments", () => {
+    expect(redactSensitiveProcessArgs("PASSWORD+=supersecret remains useful")).toBe(
+      "PASSWORD+=[redacted] remains useful",
+    );
+    expect(redactProcessTableArgs("bash -c PASSWORD+=supersecret; sleep 30")).toBe(
+      "bash -c PASSWORD+=[redacted]",
+    );
   });
 
   it("redacts established database credential environment names", () => {

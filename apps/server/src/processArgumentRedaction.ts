@@ -1,4 +1,4 @@
-const ENV_ASSIGNMENT_START_PATTERN = /(^|[\s;&|()'"])([A-Za-z_][A-Za-z0-9_]*)=/g;
+const ENV_ASSIGNMENT_START_PATTERN = /(^|[\s;&|()'"])([A-Za-z_][A-Za-z0-9_]*)(?:\+)?=/g;
 const SENSITIVE_ENV_NAME =
   /^(?:API_?KEY|ACCESS_TOKEN|AUTH_TOKEN|AUTHORIZATION|KEY|MYSQL_PWD|PASSWORD|PASSPHRASE|PGPASSWORD|REDISCLI_AUTH|SECRET|TOKEN)$/;
 const SENSITIVE_ENV_NAME_SUFFIX =
@@ -37,10 +37,27 @@ function boundedShellAssignmentValueEnd(
   boundary: string | undefined,
 ): number {
   type ShellQuote = "'" | '"' | "`";
+  type ExpansionClose = ")" | "}" | "))";
+  interface ShellExpansion {
+    readonly close: ExpansionClose;
+    quote: ShellQuote | null;
+  }
+
   const outerBoundaryQuote = boundary === "'" || boundary === '"' ? boundary : null;
   let wordQuote: ShellQuote | null = outerBoundaryQuote;
-  const substitutionQuotes: Array<ShellQuote | null> = [];
+  const expansions: ShellExpansion[] = [];
   let index = valueStart;
+
+  const expansionAtCursor = (): {
+    readonly close: ExpansionClose;
+    readonly length: number;
+  } | null => {
+    if (args.startsWith("$((", index)) return { close: "))", length: 3 };
+    if (args.startsWith("$(", index)) return { close: ")", length: 2 };
+    if (args.startsWith("${", index)) return { close: "}", length: 2 };
+    return null;
+  };
+
   while (index < args.length) {
     const character = args[index]!;
     if (character === "\\") {
@@ -48,31 +65,41 @@ function boundedShellAssignmentValueEnd(
       continue;
     }
 
-    if (substitutionQuotes.length > 0) {
-      const substitutionIndex = substitutionQuotes.length - 1;
-      const substitutionQuote = substitutionQuotes[substitutionIndex];
-      if (substitutionQuote !== null) {
-        if (character === substitutionQuote) substitutionQuotes[substitutionIndex] = null;
-        if (substitutionQuote !== "'" && character === "$" && args[index + 1] === "(") {
-          substitutionQuotes.push(null);
-          index += 2;
+    if (expansions.length > 0) {
+      const expansion = expansions.at(-1)!;
+      if (expansion.quote !== null) {
+        if (character === expansion.quote) {
+          expansion.quote = null;
+          index += 1;
+          continue;
+        }
+        const nestedExpansion = expansion.quote !== "'" ? expansionAtCursor() : null;
+        if (nestedExpansion) {
+          expansions.push({ close: nestedExpansion.close, quote: null });
+          index += nestedExpansion.length;
           continue;
         }
         index += 1;
         continue;
       }
       if (character === "'" || character === '"' || character === "`") {
-        substitutionQuotes[substitutionIndex] = character;
+        expansion.quote = character;
         index += 1;
         continue;
       }
-      if (character === "$" && args[index + 1] === "(") {
-        substitutionQuotes.push(null);
-        index += 2;
+      if (args.startsWith(expansion.close, index)) {
+        expansions.pop();
+        index += expansion.close.length;
         continue;
       }
-      if (character === ")") {
-        substitutionQuotes.pop();
+      const nestedExpansion = expansionAtCursor();
+      if (nestedExpansion) {
+        expansions.push({ close: nestedExpansion.close, quote: null });
+        index += nestedExpansion.length;
+        continue;
+      }
+      if (character === "(" || character === "{") {
+        expansions.push({ close: character === "(" ? ")" : "}", quote: null });
       }
       index += 1;
       continue;
@@ -85,9 +112,10 @@ function boundedShellAssignmentValueEnd(
         index += 1;
         continue;
       }
-      if (wordQuote !== "'" && character === "$" && args[index + 1] === "(") {
-        substitutionQuotes.push(null);
-        index += 2;
+      const nestedExpansion = wordQuote !== "'" ? expansionAtCursor() : null;
+      if (nestedExpansion) {
+        expansions.push({ close: nestedExpansion.close, quote: null });
+        index += nestedExpansion.length;
         continue;
       }
       index += 1;
@@ -99,9 +127,10 @@ function boundedShellAssignmentValueEnd(
       index += 1;
       continue;
     }
-    if (character === "$" && args[index + 1] === "(") {
-      substitutionQuotes.push(null);
-      index += 2;
+    const expansion = expansionAtCursor();
+    if (expansion) {
+      expansions.push({ close: expansion.close, quote: null });
+      index += expansion.length;
       continue;
     }
     if (/[\s;&|()<>]/u.test(character)) break;

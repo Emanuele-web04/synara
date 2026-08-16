@@ -253,14 +253,14 @@ export function parseLsofCwdOutput(output: string): Map<number, string> {
   return cwdByPid;
 }
 
-function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
+export function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
   const rows = new Map<number, LocalServerProcessInfo>();
   for (const line of output.split(/\r?\n/g)) {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/);
     if (!match) {
       continue;
     }
-    const rawCommandLine = (match[3] ?? "").slice(0, MAX_PROCESS_ARGS_CHARS);
+    const rawCommandLine = match[3] ?? "";
     rows.set(Number(match[1]), {
       ppid: Number(match[2]),
       commandLine: redactSensitiveProcessArgs(rawCommandLine, {
