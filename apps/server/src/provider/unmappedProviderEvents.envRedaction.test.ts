@@ -63,6 +63,16 @@ describe("unmapped provider environment credential redaction", () => {
     expect(bare).toContain("private_key=[REDACTED]");
   });
 
+  it("fails closed on unterminated quoted credential values", () => {
+    const serialized = JSON.stringify(
+      sanitizeUnmappedProviderData('FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nsecret'),
+    );
+
+    expect(serialized).not.toContain("BEGIN PRIVATE KEY");
+    expect(serialized).not.toContain("secret");
+    expect(serialized).toContain("FIREBASE_PRIVATE_KEY=[REDACTED]");
+  });
+
   it("consumes Bearer-prefixed unquoted environment values", () => {
     const serialized = JSON.stringify(
       sanitizeUnmappedProviderData("OPENAI_API_KEY=Bearer sk-secret"),

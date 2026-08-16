@@ -9,11 +9,11 @@ const REDACTED_VALUE = "[REDACTED]";
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
 const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
-  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[^\s,;]+)/giu;
+  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PATTERN =
-  /(^|[^A-Za-z0-9_])("?[A-Za-z_][A-Za-z0-9_]*(?:API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|PASSWORD|PASSWD|PASSPHRASE|PRIVATE_?KEY|SECRET|TOKEN)"?\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[^\s,;]+)/gimu;
+  /(^|[^A-Za-z0-9_])("?[A-Za-z_][A-Za-z0-9_]*(?:API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|PASSWORD|PASSWD|PASSPHRASE|PRIVATE_?KEY|SECRET|TOKEN)"?\s*(?::|=)\s*)(?:bearer\s+)?(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/giu;
 const NAMED_VALUE_PAIR_PATTERN =
-  /("name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"\s*,\s*"value"\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[^\s,;}]+)/giu;
+  /("name"\s*:\s*"((?:\\[\s\S]|[^"\\])*)"\s*,\s*"value"\s*:\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;}]+)/giu;
 const BEARER_CREDENTIAL_PATTERN = /\b(bearer\s+)[A-Za-z0-9._~+/=-]+/giu;
 const EXACT_SENSITIVE_KEYS = new Set([
   "authorization",
