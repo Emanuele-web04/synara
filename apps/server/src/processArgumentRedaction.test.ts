@@ -253,6 +253,15 @@ describe("redactSensitiveProcessArgs", () => {
     ).toBe("connection postgres://[redacted]@db.example/app failed without retry");
   });
 
+  it("does not confuse query or fragment emails with URL credentials", () => {
+    for (const url of [
+      "https://example.com?email=alice@example.com",
+      "https://example.com#alice@example.com",
+    ]) {
+      expect(redactSensitiveProcessArgs(`open ${url} now`)).toBe(`open ${url} now`);
+    }
+  });
+
   it("preserves generic diagnostic context after a bounded assignment value", () => {
     expect(redactSensitiveProcessArgs("Configuration KEY=value is invalid at line 42")).toBe(
       "Configuration KEY=[redacted] is invalid at line 42",
