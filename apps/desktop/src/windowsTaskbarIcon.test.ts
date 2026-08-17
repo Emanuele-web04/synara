@@ -9,10 +9,14 @@ import {
   applyWindowsTaskbarIcon,
   clearWindowsTaskbarIconRefresh,
   collectWindowsShortcutPaths,
+  isWindowsTaskbarIconRefreshPending,
   nextWindowsShellIconCacheKey,
   resetWindowsShellIconGenerationForTests,
+  resolveWindowsShellIconCacheDirectory,
   syncWindowsShortcutIcons,
+  WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS,
   windowsShellIconCachePath,
+  windowsTaskbarIconPropertyUpdates,
 } from "./windowsTaskbarIcon";
 
 interface FakeWindowState {
@@ -54,10 +58,27 @@ describe("windowsShellIconCachePath", () => {
     );
   });
 
-  it("issues a new cache key on every apply so reverting to default is not a stale path", () => {
+  it("reuses the cache key while the preference is unchanged and bumps it on a switch", () => {
+    expect(nextWindowsShellIconCacheKey("default")).toBe("default-1");
     expect(nextWindowsShellIconCacheKey("default")).toBe("default-1");
     expect(nextWindowsShellIconCacheKey("icon")).toBe("icon-2");
+    expect(nextWindowsShellIconCacheKey("icon")).toBe("icon-2");
     expect(nextWindowsShellIconCacheKey("default")).toBe("default-3");
+  });
+
+  it("prefers the packaged executable directory over userdata so Explorer loads a trusted ICO", () => {
+    expect(
+      resolveWindowsShellIconCacheDirectory({
+        executablePath: Path.join("Programs", "synara-desktop", "Synara.exe"),
+        fallbackDirectory: Path.join("userdata", "taskbar-icons"),
+      }),
+    ).toBe(Path.join("Programs", "synara-desktop"));
+    expect(
+      resolveWindowsShellIconCacheDirectory({
+        executablePath: Path.join("node_modules", "electron", "electron.exe"),
+        fallbackDirectory: Path.join("userdata", "taskbar-icons"),
+      }),
+    ).toBe(Path.join("userdata", "taskbar-icons"));
   });
 });
 
@@ -89,7 +110,7 @@ describe("syncWindowsShortcutIcons", () => {
   it("updates shortcuts that share the app identity and skips unrelated links", () => {
     const updateShortcut = vi.fn(() => true);
 
-    const updated = syncWindowsShortcutIcons({
+    const result = syncWindowsShortcutIcons({
       iconPath: Path.join("cache", "taskbar-icon.ico"),
       appId: SYNARA_PRODUCTION_BUNDLE_ID,
       executablePath: Path.join("Program Files", "Synara", "Synara.exe"),
@@ -115,7 +136,8 @@ describe("syncWindowsShortcutIcons", () => {
       updateShortcut,
     });
 
-    expect(updated).toEqual(["synara.lnk"]);
+    expect(result.updated).toEqual(["synara.lnk"]);
+    expect(result.matched).toEqual(["synara.lnk", "already.lnk"]);
     expect(updateShortcut).toHaveBeenCalledTimes(1);
     expect(updateShortcut).toHaveBeenCalledWith(
       "synara.lnk",
@@ -127,7 +149,7 @@ describe("syncWindowsShortcutIcons", () => {
   it("does not treat the Electron dev binary as a shortcut target", () => {
     const updateShortcut = vi.fn(() => true);
 
-    const updated = syncWindowsShortcutIcons({
+    const result = syncWindowsShortcutIcons({
       iconPath: Path.join("cache", "taskbar-icon.ico"),
       appId: SYNARA_PRODUCTION_BUNDLE_ID,
       executablePath: Path.join("node_modules", "electron", "electron.exe"),
@@ -138,8 +160,68 @@ describe("syncWindowsShortcutIcons", () => {
       updateShortcut,
     });
 
-    expect(updated).toEqual([]);
+    expect(result.matched).toEqual([]);
+    expect(result.updated).toEqual([]);
     expect(updateShortcut).not.toHaveBeenCalled();
+  });
+
+  it("reports every matching shortcut even when the icon is already current", () => {
+    const result = syncWindowsShortcutIcons({
+      iconPath: Path.join("cache", "taskbar-icon.ico"),
+      appId: SYNARA_PRODUCTION_BUNDLE_ID,
+      executablePath: Path.join("Program Files", "Synara", "Synara.exe"),
+      shortcutPaths: ["already.lnk", "other.lnk"],
+      readShortcut: (shortcutPath) => {
+        if (shortcutPath === "already.lnk") {
+          return {
+            appUserModelId: SYNARA_PRODUCTION_BUNDLE_ID,
+            icon: Path.join("cache", "taskbar-icon.ico"),
+            iconIndex: 0,
+          };
+        }
+        return { appUserModelId: "com.other.app" };
+      },
+      updateShortcut: () => true,
+    });
+
+    expect(result.matched).toEqual(["already.lnk"]);
+    expect(result.updated).toEqual([]);
+  });
+
+  it("matches shortcuts by executable basename when the link target path differs", () => {
+    const updateShortcut = vi.fn(() => true);
+
+    const result = syncWindowsShortcutIcons({
+      iconPath: Path.join("cache", "taskbar-icon.ico"),
+      appId: SYNARA_PRODUCTION_BUNDLE_ID,
+      executablePath: Path.join(
+        "Users",
+        "synara",
+        "AppData",
+        "Local",
+        "Programs",
+        "synara-desktop",
+        "Synara.exe",
+      ),
+      shortcutPaths: ["synara.lnk"],
+      readShortcut: () => ({
+        target: Path.join(
+          "C:",
+          "Users",
+          "synara",
+          "AppData",
+          "Local",
+          "Programs",
+          "synara-desktop",
+          "Synara.exe",
+        ),
+      }),
+      updateShortcut,
+    });
+
+    expect(result.matched).toEqual(["synara.lnk"]);
+    expect(result.updated).toEqual(["synara.lnk"]);
+    expect(updateShortcut).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -148,28 +230,28 @@ describe("applyWindowsTaskbarIcon", () => {
     vi.useFakeTimers();
     const window = makeWindow();
 
-    applyWindowsTaskbarIcon({ window, iconPath, identity });
+    applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
 
     expect(window.setIcon).toHaveBeenCalledWith(iconPath);
-    expect(window.setAppDetails).toHaveBeenCalledWith({
-      appId: identity.appId,
-      appIconPath: iconPath,
-      appIconIndex: 0,
-      relaunchCommand: identity.relaunchCommand,
-      relaunchDisplayName: identity.relaunchDisplayName,
-    });
+    const updates = windowsTaskbarIconPropertyUpdates({ iconPath, identity });
+    expect(window.setAppDetails).toHaveBeenNthCalledWith(1, updates.iconOnly);
+    expect(window.setAppDetails).toHaveBeenNthCalledWith(2, updates.withAppId);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(2);
     expect(window.setSkipTaskbar).toHaveBeenCalledWith(true);
     expect(window.setSkipTaskbar).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(249);
+    expect(isWindowsTaskbarIconRefreshPending()).toBe(true);
+    vi.advanceTimersByTime(WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS - 1);
     expect(window.setSkipTaskbar).toHaveBeenCalledTimes(1);
     expect(window.setIcon).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(1);
+    expect(isWindowsTaskbarIconRefreshPending()).toBe(false);
     expect(window.setIcon).toHaveBeenLastCalledWith(iconPath);
-    expect(window.setAppDetails).toHaveBeenCalledTimes(2);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(6);
     expect(window.setSkipTaskbar).toHaveBeenCalledWith(false);
     expect(window.setSkipTaskbar).toHaveBeenCalledTimes(2);
+    expect(window.setIcon).toHaveBeenCalledTimes(3);
   });
 
   it("binds a visible window without recreating the taskbar button when reregister is disabled", () => {
@@ -184,9 +266,9 @@ describe("applyWindowsTaskbarIcon", () => {
     });
 
     expect(window.setIcon).toHaveBeenCalledWith(iconPath);
-    expect(window.setAppDetails).toHaveBeenCalledTimes(1);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(2);
     expect(window.setSkipTaskbar).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS);
     expect(window.setSkipTaskbar).not.toHaveBeenCalled();
   });
 
@@ -194,12 +276,12 @@ describe("applyWindowsTaskbarIcon", () => {
     vi.useFakeTimers();
     const window = makeWindow({ visible: false });
 
-    applyWindowsTaskbarIcon({ window, iconPath, identity });
+    applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
 
     expect(window.setIcon).toHaveBeenCalledWith(iconPath);
-    expect(window.setAppDetails).toHaveBeenCalledTimes(1);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(2);
     expect(window.setSkipTaskbar).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS);
     expect(window.setSkipTaskbar).not.toHaveBeenCalled();
   });
 
@@ -212,7 +294,7 @@ describe("applyWindowsTaskbarIcon", () => {
     vi.useFakeTimers();
     const window = makeWindow({ destroyed: true });
 
-    applyWindowsTaskbarIcon({ window, iconPath, identity });
+    applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
 
     expect(window.setIcon).not.toHaveBeenCalled();
     expect(window.setAppDetails).not.toHaveBeenCalled();
@@ -223,15 +305,16 @@ describe("applyWindowsTaskbarIcon", () => {
     vi.useFakeTimers();
     const window = makeWindow();
 
-    applyWindowsTaskbarIcon({ window, iconPath, identity });
+    applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
     expect(window.setSkipTaskbar).toHaveBeenCalledWith(true);
 
-    vi.advanceTimersByTime(249);
+    vi.advanceTimersByTime(WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS - 1);
     (window.isDestroyed as ReturnType<typeof vi.fn>).mockReturnValue(true);
     vi.advanceTimersByTime(1);
 
     expect(window.setSkipTaskbar).toHaveBeenCalledTimes(1);
     expect(window.setIcon).toHaveBeenCalledTimes(1);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(2);
   });
 
   it("cancels an in-flight reregister when a newer icon is applied", () => {
@@ -239,16 +322,31 @@ describe("applyWindowsTaskbarIcon", () => {
     const window = makeWindow();
     const nextIconPath = "C:\\Users\\synara\\userdata\\taskbar-icons\\taskbar-default.ico";
 
-    applyWindowsTaskbarIcon({ window, iconPath, identity });
-    applyWindowsTaskbarIcon({ window, iconPath: nextIconPath, identity });
+    applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
+    applyWindowsTaskbarIcon({ window, iconPath: nextIconPath, identity, reregisterTaskbarButton: true });
 
     expect(window.setSkipTaskbar).toHaveBeenNthCalledWith(1, true);
     expect(window.setSkipTaskbar).toHaveBeenNthCalledWith(2, true);
     expect(window.setSkipTaskbar).toHaveBeenCalledTimes(2);
 
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS);
     expect(window.setIcon).toHaveBeenLastCalledWith(nextIconPath);
     expect(window.setSkipTaskbar).toHaveBeenCalledWith(false);
     expect(window.setSkipTaskbar).toHaveBeenCalledTimes(3);
+    expect(window.setIcon).toHaveBeenCalledTimes(4);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(8);
+  });
+
+  it("keeps the window off the taskbar if it is hidden before the refresh delay elapses", () => {
+    vi.useFakeTimers();
+    const window = makeWindow({ visible: true });
+
+    applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
+    (window.isVisible as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    vi.advanceTimersByTime(WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS);
+
+    expect(window.setSkipTaskbar).toHaveBeenLastCalledWith(true);
+    expect(window.setIcon).toHaveBeenCalledTimes(2);
+    expect(window.setAppDetails).toHaveBeenCalledTimes(4);
   });
 });

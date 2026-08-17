@@ -90,9 +90,17 @@ import {
   applyWindowsTaskbarIcon,
   collectWindowsShortcutPaths,
   nextWindowsShellIconCacheKey,
+  resolveWindowsShellIconCacheDirectory,
   syncWindowsShortcutIcons,
   windowsShellIconCachePath,
 } from "./windowsTaskbarIcon";
+import {
+  applyWindowsShellAppUserModel,
+  ensureWindowsShellAppUserModelHelper,
+  nativeWindowHandleToHwnd,
+} from "./windowsShellAppUserModel";
+import { createExclusiveApplyQueue } from "./exclusiveApplyQueue";
+import { extractIcoPngImages, toWindowsShellIco } from "./windowsShellIco";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -1959,7 +1967,7 @@ function windowsShortcutSearchDirectories(): string[] {
   ];
 }
 
-function syncWindowsTaskbarShortcuts(shellIconPath: string): void {
+function syncWindowsTaskbarShortcuts(shellIconPath: string): string[] {
   // Always point shortcuts at the materialized ICO. Reverting to process.execPath
   // leaves Explorer serving the previous custom icon from its AUMID cache.
   const shortcutIconPath = shellIconPath;
@@ -1974,7 +1982,7 @@ function syncWindowsTaskbarShortcuts(shellIconPath: string): void {
       }
     },
   });
-  syncWindowsShortcutIcons({
+  const { matched } = syncWindowsShortcutIcons({
     iconPath: shortcutIconPath,
     iconIndex: 0,
     appId: APP_USER_MODEL_ID,
@@ -1994,32 +2002,156 @@ function syncWindowsTaskbarShortcuts(shellIconPath: string): void {
           ...current,
           icon: iconPath,
           iconIndex,
+          appUserModelId: APP_USER_MODEL_ID,
         });
       } catch {
         return false;
       }
     },
   });
+  return matched;
 }
 
 function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): string {
-  const cacheDirectory = Path.join(STATE_DIR, "taskbar-icons");
-  FS.mkdirSync(cacheDirectory, { recursive: true });
-  const destinationPath = windowsShellIconCachePath(
-    cacheDirectory,
-    nextWindowsShellIconCacheKey(icon),
-  );
-  // Explorer cannot load ICOs from asar. Copy to a real path and keep a distinct
-  // file per apply so reverting to the default icon is not a stale cache hit.
-  FS.writeFileSync(destinationPath, FS.readFileSync(sourcePath));
-  return destinationPath;
+  const cacheKey = nextWindowsShellIconCacheKey(icon);
+  const fallbackDirectory = Path.join(STATE_DIR, "taskbar-icons");
+  const directories = [
+    ...new Set([
+      resolveWindowsShellIconCacheDirectory({
+        executablePath: process.execPath,
+        fallbackDirectory,
+      }),
+      fallbackDirectory,
+    ]),
+  ];
+  let lastError: unknown;
+  for (const directory of directories) {
+    try {
+      FS.mkdirSync(directory, { recursive: true });
+      const destinationPath = windowsShellIconCachePath(directory, cacheKey);
+      if (FS.existsSync(destinationPath)) return destinationPath;
+      const bytes = toWindowsTaskbarIcoBytes(sourcePath);
+      try {
+        FS.writeFileSync(destinationPath, bytes);
+      } catch (error) {
+        if (!FS.existsSync(destinationPath)) throw error;
+      }
+      return destinationPath;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Failed to materialize Windows shell icon");
 }
 
-function applyDesktopAppIcon(
+const windowsTaskbarIcoBytesCache = new Map<string, Buffer>();
+
+function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
+  const cached = windowsTaskbarIcoBytesCache.get(sourcePath);
+  if (cached) return cached;
+  const sourceBytes = FS.readFileSync(sourcePath);
+  try {
+    if (extractIcoPngImages(sourceBytes).length === 0) {
+      windowsTaskbarIcoBytesCache.set(sourcePath, sourceBytes);
+      return sourceBytes;
+    }
+    const converted = toWindowsShellIco(sourceBytes, (png, size) => {
+      const image = nativeImage.createFromBuffer(png);
+      if (image.isEmpty()) return null;
+      const resized = image.resize({ width: size, height: size });
+      const bgra = resized.toBitmap();
+      if (bgra.length !== size * size * 4) return null;
+      return { width: size, height: size, bgra };
+    });
+    windowsTaskbarIcoBytesCache.set(sourcePath, converted);
+    return converted;
+  } catch {
+    return sourceBytes;
+  }
+}
+
+let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
+let windowsShellStampResolve: (() => void) | null = null;
+let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
+
+function cancelDeferredWindowsShellStamp(): void {
+  if (windowsShellStampTimer === null) return;
+  clearImmediate(windowsShellStampTimer);
+  windowsShellStampTimer = null;
+  const resolve = windowsShellStampResolve;
+  windowsShellStampResolve = null;
+  resolve?.();
+}
+
+function stampWindowsShellAppUserModel(
+  input: Parameters<typeof applyWindowsShellAppUserModel>[0],
+  options?: {
+    flush?: boolean;
+  },
+): void {
+  try {
+    applyWindowsShellAppUserModel(input, Path.join(STATE_DIR, "taskbar-icons"), options);
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to stamp Windows AppUserModel icon properties: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function queueWindowsShellAppUserModelStamp(
+  input: Parameters<typeof applyWindowsShellAppUserModel>[0],
+  options?: {
+    flush?: boolean;
+    immediate?: boolean;
+  },
+): Promise<void> {
+  cancelDeferredWindowsShellStamp();
+  if (options?.immediate === true) {
+    stampWindowsShellAppUserModel(input, options);
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    windowsShellStampResolve = resolve;
+    windowsShellStampTimer = setImmediate(() => {
+      windowsShellStampTimer = null;
+      windowsShellStampResolve = null;
+      stampWindowsShellAppUserModel(input, options);
+      resolve();
+    });
+  });
+}
+
+async function applyDesktopAppIcon(
   icon: DesktopAppIcon,
   window: BrowserWindow | null = mainWindow,
-  options?: { reregisterTaskbarButton?: boolean },
-): void {
+  options?: { reregisterTaskbarButton?: boolean; flushShellIconCache?: boolean },
+): Promise<void> {
+  return enqueueDesktopAppIconJob(() => applyDesktopAppIconUnlocked(icon, window, options));
+}
+
+function applyPersistedDesktopAppIcon(
+  window: BrowserWindow | null = mainWindow,
+  options?: { reregisterTaskbarButton?: boolean; flushShellIconCache?: boolean },
+): Promise<void> {
+  return enqueueDesktopAppIconJob(() =>
+    applyDesktopAppIconUnlocked(readDesktopAppIcon(), window, options),
+  );
+}
+
+function enqueueDesktopAppIconJob(job: () => Promise<void>): Promise<void> {
+  const run = desktopAppIconApplyTail.then(job, job);
+  desktopAppIconApplyTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function applyDesktopAppIconUnlocked(
+  icon: DesktopAppIcon,
+  window: BrowserWindow | null = mainWindow,
+  options?: { reregisterTaskbarButton?: boolean; flushShellIconCache?: boolean },
+): Promise<void> {
   if (
     process.platform !== "darwin" &&
     process.platform !== "linux" &&
@@ -2051,11 +2183,22 @@ function applyDesktopAppIcon(
         `[desktop] Failed to materialize Windows taskbar icon: ${formatErrorMessage(error)}`,
       );
     }
+    let matchedShortcuts: string[] = [];
     try {
-      syncWindowsTaskbarShortcuts(shellIconPath);
+      matchedShortcuts = syncWindowsTaskbarShortcuts(shellIconPath);
     } catch (error) {
       console.warn(`[desktop] Failed to sync Windows shortcut icons: ${formatErrorMessage(error)}`);
     }
+    let hwnd: bigint | null = null;
+    try {
+      const handle = window?.getNativeWindowHandle();
+      if (handle) hwnd = nativeWindowHandleToHwnd(handle);
+    } catch {
+      hwnd = null;
+    }
+    // Never block window creation/show on Explorer COM. The helper used to
+    // wait on a synchronous window icon message while Electron waited in
+    // spawnSync — deadlock, no window. Stamp properties on the next turn.
     try {
       applyWindowsTaskbarIcon({
         window,
@@ -2065,9 +2208,7 @@ function applyDesktopAppIcon(
           relaunchCommand: `"${process.execPath}"`,
           relaunchDisplayName: APP_DISPLAY_NAME,
         },
-        ...(options?.reregisterTaskbarButton === undefined
-          ? {}
-          : { reregisterTaskbarButton: options.reregisterTaskbarButton }),
+        reregisterTaskbarButton: false,
       });
     } catch (error) {
       console.warn(`[desktop] Failed to apply Windows taskbar icon: ${formatErrorMessage(error)}`);
@@ -2079,6 +2220,22 @@ function applyDesktopAppIcon(
         );
       }
     }
+    // User-initiated changes stamp immediately so Explorer can finish before
+    // the next click. Startup still defers so window creation is not blocked.
+    await queueWindowsShellAppUserModelStamp(
+      {
+        appId: APP_USER_MODEL_ID,
+        iconPath: shellIconPath,
+        relaunchCommand: `"${process.execPath}"`,
+        displayName: APP_DISPLAY_NAME,
+        shortcutPaths: matchedShortcuts,
+        hwnd,
+      },
+      {
+        flush: options?.flushShellIconCache === true,
+        immediate: options?.flushShellIconCache === true,
+      },
+    );
     return;
   }
   window?.setIcon(image);
@@ -3841,13 +3998,18 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getAppIcon, () => readDesktopAppIcon());
 
   ipcMain.removeHandler(IPC.setAppIcon);
+  const enqueueDesktopAppIconApply = createExclusiveApplyQueue(async (icon: DesktopAppIcon) => {
+    const shouldPersist = shouldUpdateDesktopAppIcon(readDesktopAppIcon(), icon);
+    if (shouldPersist) persistDesktopAppIcon(icon);
+    // Renderer hydration mirrors this native preference. Avoid reapplying the
+    // icon selected during boot on macOS. Windows still reapplies so a click
+    // on the already-selected icon can retry a failed Explorer refresh.
+    if (!shouldPersist && process.platform !== "win32") return;
+    await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
+  });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
     if (!isDesktopAppIcon(rawIcon)) return;
-    // Renderer hydration mirrors this native preference. Avoid reapplying the icon selected
-    // during boot, especially the bundled default that modern macOS renders itself.
-    if (!shouldUpdateDesktopAppIcon(readDesktopAppIcon(), rawIcon)) return;
-    persistDesktopAppIcon(rawIcon);
-    applyDesktopAppIcon(rawIcon);
+    await enqueueDesktopAppIconApply(rawIcon);
   });
 
   ipcMain.removeHandler(IPC.contextMenu);
@@ -4265,10 +4427,7 @@ function createWindow(): BrowserWindow {
     }
     window.show();
     if (process.platform === "win32") {
-      const icon = readDesktopAppIcon();
-      applyDesktopAppIcon(icon, window, {
-        reregisterTaskbarButton: icon !== "default",
-      });
+      void applyPersistedDesktopAppIcon(window);
     }
     emitDesktopWindowState(window);
   });
@@ -4309,7 +4468,7 @@ function createWindow(): BrowserWindow {
 
   if (process.platform === "linux" || process.platform === "win32") {
     try {
-      applyDesktopAppIcon(readDesktopAppIcon(), window, { reregisterTaskbarButton: false });
+      void applyPersistedDesktopAppIcon(window, { reregisterTaskbarButton: false });
     } catch (error) {
       console.warn(`[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`);
     }
@@ -4644,6 +4803,15 @@ if (hasSingleInstanceLock) {
     .then(() => {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
+      if (process.platform === "win32") {
+        try {
+          ensureWindowsShellAppUserModelHelper(Path.join(STATE_DIR, "taskbar-icons"));
+        } catch (error) {
+          console.warn(
+            `[desktop] Failed to prepare Windows shell icon helper: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       applyInitialMacDockIcon();
       registerMacAppearanceIconSync();
       refreshMacIconCacheOnVersionChange();
