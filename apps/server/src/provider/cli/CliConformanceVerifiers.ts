@@ -49,6 +49,14 @@ const CLI_TIER_PARAM = "tier=";
  * connector. Structured and basic share the prefix but differ by a `tier=`
  * query param, so the registry's `matchesRuntime` predicate can route each
  * tier to its own verifier set.
+ *
+ * FINGERPRINT CONTRACT (do not change): the session-runtime dispatch site that
+ * spawns CLI connector sessions (KAR-521/528 territory) MUST stamp the same
+ * `synara://cli-connector` fingerprint — `cliConnectorTierFingerprint` for
+ * structured/basic tiers — into the runtime identity it reports. Evidence
+ * re-derivation resolves that fingerprint back to these CLI verifiers via
+ * `CLI_VERIFIER_RUNTIME_PREFIX`, so any future dispatch site must keep this
+ * exact string shape or re-derivation will fail to find the CLI verifiers.
  */
 export const cliConnectorRuntimePrefix = (runtime: RuntimeIdentitySignals): string =>
   (runtime.runtimeFingerprint ?? "").startsWith(CLI_VERIFIER_RUNTIME_PREFIX)
@@ -207,6 +215,9 @@ const runStructuredTurn = (
 ): Effect.Effect<string, unknown> =>
   runtime.getEvents().pipe(
     Stream.takeUntil((event) => {
+      if (event._tag === "protocol-error") {
+        return true;
+      }
       const maybeSettle = settleOf(event);
       return (
         maybeSettle !== undefined &&
@@ -217,7 +228,16 @@ const runStructuredTurn = (
     }),
     Stream.runCollect,
     Effect.timeout("5 seconds"),
-    Effect.map(collectStructuredTurn),
+    Effect.flatMap((events) => {
+      // A framing violation observed mid-turn is the agent speaking the wire
+      // protocol wrong (AC #3): fail the probe attributably with the offending
+      // CliProtocolError rather than summarizing it as "no-settle".
+      const violation = events.find((event) => event._tag === "protocol-error");
+      if (violation !== undefined && violation._tag === "protocol-error") {
+        return Effect.fail(violation.error);
+      }
+      return Effect.succeed(collectStructuredTurn(events));
+    }),
   );
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,7 +276,47 @@ const structuredProbeBodies: Readonly<
       });
       yield* Effect.sleep("150 millis");
       yield* runtime.cancel;
-      return "structured cancel: command sent and process tree settled";
+      // The structured fixture honors `cli.command.cancel` with
+      // `turn.cancelled`, so the acked cancel must settle the turn through the
+      // protocol: observe the terminal event on the events stream. A cancel
+      // that settled only via teardown would never surface a `turn.cancelled`.
+      const settled = yield* runtime.getEvents().pipe(
+        Stream.takeUntil((event) => {
+          if (event._tag === "protocol-error") {
+            return true;
+          }
+          const maybeSettle = settleOf(event);
+          return (
+            maybeSettle !== undefined &&
+            (maybeSettle.type === "turn.cancelled" ||
+              maybeSettle.type === "turn.completed" ||
+              maybeSettle.type === "turn.failed")
+          );
+        }),
+        Stream.runCollect,
+        Effect.timeout("5 seconds"),
+      );
+      const violation = settled.find((event) => event._tag === "protocol-error");
+      if (violation !== undefined && violation._tag === "protocol-error") {
+        return yield* Effect.fail(violation.error);
+      }
+      // A turn settles "through the protocol" only if a terminal event was
+      // observed. If the stream just ended (cancel fell back to tree teardown,
+      // so no turn.cancelled ever arrived) the settle is unobserved.
+      const settleEvent = settled.find((event) => {
+        const maybeSettle = settleOf(event);
+        return (
+          maybeSettle !== undefined &&
+          (maybeSettle.type === "turn.cancelled" ||
+            maybeSettle.type === "turn.completed" ||
+            maybeSettle.type === "turn.failed")
+        );
+      });
+      const settleType =
+        settleEvent !== undefined && settleEvent._tag === "structured"
+          ? settleEvent.event.type
+          : "unobserved-settle";
+      return `structured cancel: settled via ${settleType} (${String(settled.length)} events)`;
     }),
   // The structured wire contract only defines hello/start/text/complete/\
   // cancel/failed events. Every other capability is absent by construction.
@@ -429,13 +489,23 @@ const CLI_CAPABILITY_IDS = [
 const matchesCliTier = (
   tier: CliStructuredTier,
 ): ((runtime: RuntimeIdentitySignals) => boolean) => {
+  // Exact query-parameter boundary match (`tier=structured` / `tier=basic`),
+  // never a substring: a `tier=structured-v2` or `foo=tier=structured`
+  // fingerprint must not collide with either tier's verifier set.
   const expected = `tier=${tier}`;
   return (runtime: RuntimeIdentitySignals): boolean => {
     const fingerprint = runtime.runtimeFingerprint;
     if (!fingerprint?.startsWith(CLI_VERIFIER_RUNTIME_PREFIX)) {
       return false;
     }
-    return fingerprint.includes(expected);
+    const query = fingerprint.indexOf("?");
+    if (query === -1) {
+      return false;
+    }
+    return fingerprint
+      .slice(query + 1)
+      .split("&")
+      .includes(expected);
   };
 };
 

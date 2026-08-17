@@ -58,9 +58,12 @@ export class CliProtocolError extends Schema.TaggedErrorClass<CliProtocolError>(
 export const CliError = Schema.Union([CliSpawnError, CliTransportError, CliProtocolError]);
 export type CliError = typeof CliError.Type;
 
-type AssignableTo<Target, Source extends Target> = Source;
-
-export type CliErrorCompatibility = AssignableTo<
-  CliError,
-  CliSpawnError | CliTransportError | CliProtocolError
->;
+/**
+ * All typed CLI connector errors. The runtime fails through these classes and
+ * the conformance grader classifies them by `_tag` (CliSpawnError →
+ * inconclusive/environment, CliProtocolError / CliTransportError → fail/agent),
+ * so every constructed failure must be one of these members. `CliError` is
+ * both the runtime's failure channel and the schema the connector boundary
+ * persists; it is checked exhaustively whenever the shape is narrowed.
+ */
+export type CliErrorTyped = CliSpawnError | CliTransportError | CliProtocolError;

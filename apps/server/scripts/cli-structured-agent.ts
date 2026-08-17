@@ -40,6 +40,9 @@ const helloText = process.env.SYNARA_CLI_STRUCTURED_HELLO_TEXT ?? "hello from st
 const helloCount = Number(process.env.SYNARA_CLI_STRUCTURED_HELLO_COUNT ?? "3");
 const failTurns = process.env.SYNARA_CLI_STRUCTURED_FAIL_TURNS === "1";
 const malformedMode = process.env.SYNARA_CLI_STRUCTURED_MALFORMED ?? "none";
+// Emits one malformed (non-JSON) line mid-turn, after the hello: closes AC3's
+// mid-stream gap (non-JSON was only testable at startup before).
+const malformedAfterHello = process.env.SYNARA_CLI_STRUCTURED_MALFORMED_AFTER_HELLO === "1";
 const emitCancelled = process.env.SYNARA_CLI_STRUCTURED_EMIT_CANCELLED !== "0";
 const ignoreCancel = process.env.SYNARA_CLI_STRUCTURED_IGNORE_CANCEL === "1";
 const slowTextDelayMs = Number(process.env.SYNARA_CLI_STRUCTURED_TEXT_DELAY_MS ?? "5");
@@ -153,25 +156,64 @@ rl.on("line", (raw) => {
         break;
       }
       emit({ type: "turn.started", turnId });
-      emit({ type: "turn.text", turnId, text: helloText }, { waitMs: slowTextDelayMs });
-      for (let i = 1; i < helloCount; i++) {
-        emit({ type: "turn.text", turnId, text: `${helloText} ${i}` }, { waitMs: slowTextDelayMs });
-      }
-      const finishAt = setTimeout(() => {
+      // Mid-stream framing violation: emit the bad line after the hello, so the
+      // connector sees a well-formed start followed by an attributable fault.
+      if (malformedAfterHello) {
+        process.stdout.write("random mid-stream chatter\n");
         inFlight.delete(turnId);
-        emit({ type: "turn.completed", turnId, stopReason: "end_turn" });
-      }, slowTextDelayMs * helloCount);
-      finishAt.unref();
+        break;
+      }
+      if (slowTextDelayMs > 0) {
+        // A per-line delay gives cancel a window to land: the turn is kept
+        // in-flight for the full delayed-text duration and `turn.completed` is
+        // only emitted after the last delayed text has flushed — the same
+        // eventual completion as without the delay, but with `cli.command.cancel`
+        // still able to win the race and produce a `turn.cancelled` ack.
+        emit({ type: "turn.text", turnId, text: helloText }, { waitMs: slowTextDelayMs });
+        for (let i = 1; i < helloCount; i++) {
+          emit(
+            { type: "turn.text", turnId, text: `${helloText} ${i}` },
+            { waitMs: slowTextDelayMs },
+          );
+        }
+        const finishAt = setTimeout(
+          () => {
+            if (!inFlight.has(turnId)) return;
+            inFlight.delete(turnId);
+            emit({ type: "turn.completed", turnId, stopReason: "end_turn" });
+          },
+          slowTextDelayMs * helloCount + 1,
+        );
+        finishAt.unref();
+      } else {
+        emit({ type: "turn.text", turnId, text: helloText }, { waitMs: slowTextDelayMs });
+        for (let i = 1; i < helloCount; i++) {
+          emit(
+            { type: "turn.text", turnId, text: `${helloText} ${i}` },
+            { waitMs: slowTextDelayMs },
+          );
+        }
+        const finishAt = setTimeout(() => {
+          inFlight.delete(turnId);
+          emit({ type: "turn.completed", turnId, stopReason: "end_turn" });
+        }, slowTextDelayMs * helloCount);
+        finishAt.unref();
+      }
       break;
     }
 
     case "cli.command.cancel": {
       const { turnId } = command;
       if (ignoreCancel) break;
-      if (inFlight.has(turnId)) {
-        inFlight.delete(turnId);
-        if (emitCancelled) {
-          emit({ type: "turn.cancelled", turnId });
+      // `turnId: "all"` is the connector's wildcard: cancel every in-flight
+      // turn. Exact ids cancel just that turn.
+      const targets = turnId === "all" ? [...inFlight] : [turnId];
+      for (const target of targets) {
+        if (inFlight.has(target)) {
+          inFlight.delete(target);
+          if (emitCancelled) {
+            emit({ type: "turn.cancelled", turnId: target });
+          }
         }
       }
       break;

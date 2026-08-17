@@ -184,18 +184,62 @@ describe("CLI connector end-to-end conformance (AC #1, #2, #3, #5)", () => {
     assert.match(result.detail, /structured prompt/);
   });
 
-  it("structured fixture cancel settles the run", async () => {
+  it("structured fixture cancel settles the run through the protocol ack", async () => {
     const fixtures = fixturePathsForCli();
     const result = await runCliConformance({
       namespace: "external.cli-structured",
       capabilityId: "cancel",
       tier: "structured",
       agentCommand: fixtures.structured,
+      // Slow text keeps the turn in-flight (600ms) so the probe's cancel at
+      // ~150ms arrives while `turn.cancelled` can still be the terminal event.
+      agentEnv: { SYNARA_CLI_STRUCTURED_TEXT_DELAY_MS: "200" },
       advertised: true,
     });
     assert.equal(result.outcome, "pass", `detail: ${result.detail}`);
     assert.equal(result.attribution, "agent");
-    assert.match(result.detail, /structured cancel/);
+    // The cooperative fixture acks cancel with turn.cancelled, so the acked
+    // cancel must end the turn through the protocol — not via teardown.
+    assert.match(result.detail, /settled via turn\.cancelled/);
+  });
+
+  it("ignore-cancel structured fixture still settles via process-tree teardown", async () => {
+    const fixtures = fixturePathsForCli();
+    const result = await runCliConformance({
+      namespace: "external.cli-structured",
+      capabilityId: "cancel",
+      tier: "structured",
+      agentCommand: fixtures.structured,
+      // Same slow-text window as the cooperative case: the turn must still be
+      // in-flight when the probe's cancel arrives, so a missing ack is visible
+      // as an unobserved settle (no turn.cancelled, tree torn down).
+      agentEnv: {
+        SYNARA_CLI_STRUCTURED_IGNORE_CANCEL: "1",
+        SYNARA_CLI_STRUCTURED_TEXT_DELAY_MS: "200",
+      },
+      advertised: true,
+    });
+    assert.equal(result.outcome, "pass", `detail: ${result.detail}`);
+    assert.equal(result.attribution, "agent");
+    // An agent that never acks must still be stopped: the tree is torn down
+    // after the ack-grace window, and no turn.cancelled is observed.
+    assert.match(result.detail, /unobserved-settle/);
+  });
+
+  it("mid-stream malformed structured output is attributed to the agent", async () => {
+    const fixtures = fixturePathsForCli();
+    const result = await runCliConformance({
+      namespace: "external.cli-structured",
+      capabilityId: "prompt",
+      tier: "structured",
+      agentCommand: fixtures.structured,
+      agentEnv: { SYNARA_CLI_STRUCTURED_MALFORMED_AFTER_HELLO: "1" },
+      advertised: true,
+    });
+    assert.equal(result.outcome, "fail");
+    assert.equal(result.attribution, "agent");
+    assert.match(result.detail, /CliProtocolError/);
+    assert.match(result.detail, /random mid-stream chatter/);
   });
 
   it("basic fixture echoes a prompt line (honest prompt+stream)", async () => {

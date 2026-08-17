@@ -150,19 +150,61 @@ describe("structured CLI tier (AC #1)", () => {
     assert.include(texts[0], "steam");
   });
 
-  it("honors a cancel command on an in-flight turn", async () => {
+  it("honors a cancel command on an in-flight turn through the protocol ack", async () => {
     await Effect.runPromise(
-      runWithFixture(structuredFixture(), (runtime) =>
+      runWithFixture(
+        // Slow text keeps the turn in-flight long enough (600ms) for the
+        // cancel at ~150ms to arrive while `turn.cancelled` can still be the
+        // terminal event. With the default 15ms fixture the turn would already
+        // have completed and no `turn.cancelled` would exist to observe.
+        structuredFixture({ SYNARA_CLI_STRUCTURED_TEXT_DELAY_MS: "200" }),
+        (runtime) =>
+          Effect.gen(function* () {
+            const started = yield* runtime.start();
+            assert.equal(started.tier, "structured");
+            yield* runtime.sendCommand({
+              type: "cli.command.turn.start",
+              turnId: "t-cancel",
+              prompt: "slow work",
+            });
+            yield* Effect.sleep("150 millis");
+            // The cooperative fixture acks the cancel with `turn.cancelled`, so
+            // cancel must end the turn through the protocol: the ack arrives
+            // inside the grace window and the terminal event becomes observable.
+            yield* runtime.cancel;
+            const collected = yield* runtime
+              .getEvents()
+              .pipe(
+                Stream.takeUntil((event) => event._tag !== "structured"),
+                Stream.runCollect,
+              )
+              .pipe(Effect.timeout("5 seconds"));
+            const events = collected as ReadonlyArray<any>;
+            const cancelledSeen = events.some(
+              (event) => event._tag === "structured" && event.event.type === "turn.cancelled",
+            );
+            assert.isTrue(cancelledSeen, "expected turn.cancelled after acked cancel");
+          }),
+      ),
+    );
+  });
+
+  it("an ignore-cancel agent still gets process-tree teardown", async () => {
+    await Effect.runPromise(
+      runWithFixture(structuredFixture({ SYNARA_CLI_STRUCTURED_IGNORE_CANCEL: "1" }), (runtime) =>
         Effect.gen(function* () {
           const started = yield* runtime.start();
           assert.equal(started.tier, "structured");
           yield* runtime.sendCommand({
             type: "cli.command.turn.start",
-            turnId: "t-cancel",
+            turnId: "t-cancel-ignore",
             prompt: "slow work",
           });
           yield* Effect.sleep("150 millis");
-          // The fixture honors cancel with turn.cancelled; teardown follows.
+          // The fixture never acks `cli.command.cancel`, so the runtime must
+          // fall back to tree teardown after the ack-grace window. This must
+          // complete (the ack wait is bounded by cancelAckGraceMs) and must
+          // not surface a turn.cancelled.
           yield* runtime.cancel;
         }),
       ),
@@ -217,6 +259,35 @@ describe("basic CLI tier (AC #2)", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Malformed structured output (AC #3)
+
+describe("mid-stream framing violations (AC #3)", () => {
+  it("attributes a non-JSON line emitted mid-turn after the hello", async () => {
+    const failure = await Effect.gen(function* () {
+      const runtime = yield* CliStructuredRuntime;
+      yield* runtime.start();
+      yield* runtime.sendCommand({
+        type: "cli.command.turn.start",
+        turnId: "t-mid",
+        prompt: "ping",
+      });
+      const events = yield* runtime
+        .getEvents()
+        .pipe(Stream.take(5), Stream.runCollect, Effect.timeout("5 seconds"));
+      return events;
+    }).pipe(
+      Effect.provide(structuredFixture({ SYNARA_CLI_STRUCTURED_MALFORMED_AFTER_HELLO: "1" })),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      Effect.runPromise,
+    );
+    const events = failure as ReadonlyArray<any>;
+    const violation = events.find((event) => event?._tag === "protocol-error") as
+      | { error?: { line?: string } }
+      | undefined;
+    assert.isDefined(violation, `expected a protocol-error event, got ${JSON.stringify(events)}`);
+    assert.match(String(violation?.error?.line ?? ""), /random mid-stream chatter/);
+  });
+});
 
 describe("malformed structured output attribution (AC #3)", () => {
   const malformedLayer = (mode: string) =>

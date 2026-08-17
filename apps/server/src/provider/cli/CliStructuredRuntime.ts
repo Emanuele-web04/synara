@@ -6,7 +6,11 @@
 // the connector attributes to the agent) or the basic line tier. Commands flow
 // over stdin in structured mode; cancellation is a stdin command (structured) or
 // a process-tree teardown (basic). Process supervision uses the shared
-// supervisedProcessTeardown.
+// supervisedProcessTeardown. The structured tier's cancel waits for a protocol
+// acknowledgement (`turn.cancelled` / any turn-terminal event) inside the
+// `cancelAckGraceMs` window: an agent that acks within the grace ends its turn
+// through the protocol and the process is let down cleanly; an agent that does
+// not ack (or already exited) is stopped via process-tree teardown.
 // Layer: Server CLI connector runtime
 // Exports: CliStructuredRuntime, validateStructuredLine, teardownCliChildProcess,
 //          CliRuntimeEvent, CliStructuredTier
@@ -17,7 +21,19 @@ import {
   CliStructuredEvent as CliStructuredEventSchema,
 } from "@synara/contracts";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
-import { Deferred, Effect, Layer, Option, Queue, Schema, Scope, ServiceMap, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Schema,
+  Scope,
+  ServiceMap,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -42,7 +58,14 @@ export interface CliStructuredRuntimeOptions {
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
   /** Structured tier speaks the NDJSON wire protocol; basic tier is plain lines. */
   readonly structured: boolean;
-  /** Grace window for a structured CLI to answer a cancel before the tree is torn down. */
+  /**
+   * Structured-tier cancel-ack grace window. After `cli.command.cancel` is
+   * sent, the runtime waits up to this long for a turn-terminal
+   * acknowledgement before falling back to process-tree teardown. Tradeoff:
+   * a slow-but-honest agent that acks inside the window ends its turn through
+   * the protocol (no teardown); an agent that never acks is stopped after the
+   * window, so the ack wait cannot block cancellation indefinitely.
+   */
   readonly cancelAckGraceMs?: number;
   /** Startup readiness budget before start() fails. */
   readonly startupTimeoutMs?: number;
@@ -68,21 +91,25 @@ export interface CliSessionStartResult {
 
 export interface CliStructuredRuntimeShape {
   /** Startup: spawns the process and resolves once the hello (structured) or readiness line (basic) is seen. */
-  readonly start: () => Effect.Effect<CliSessionStartResult, CliErrors.CliError>;
+  readonly start: () => Effect.Effect<CliSessionStartResult, CliErrors.CliErrorTyped>;
   /** Completes when the owned CLI process exits, regardless of its exit status. */
   readonly awaitExit: Effect.Effect<void>;
   /** Stream of runtime events. Framing violations surface as `protocol-error` events. */
   readonly getEvents: () => Stream.Stream<CliRuntimeEvent, never>;
   /** Sends one structured command over stdin (structured tier only). */
-  readonly sendCommand: (command: CliStructuredCommand) => Effect.Effect<void, CliErrors.CliError>;
+  readonly sendCommand: (
+    command: CliStructuredCommand,
+  ) => Effect.Effect<void, CliErrors.CliErrorTyped>;
   /** Writes one raw line to stdin (basic tier only; structured tier errors). */
-  readonly sendInput: (line: string) => Effect.Effect<void, CliErrors.CliError>;
+  readonly sendInput: (line: string) => Effect.Effect<void, CliErrors.CliErrorTyped>;
   /**
-   * Cancels the in-flight turn. Structured: sends `cli.command.cancel`, waits a
-   * bounded grace window, then tears down the process tree. Basic: tears down
-   * the tree directly (no protocol).
+   * Cancels the in-flight turn. Structured: sends `cli.command.cancel`, then
+   * waits for a turn-terminal acknowledgement (e.g. `turn.cancelled`) inside
+   * the ack-grace window; an acked turn is ended honestly through the protocol
+   * and the process is torn down cleanly, otherwise the process tree is torn
+   * down. Basic: tears down the tree directly (no protocol).
    */
-  readonly cancel: Effect.Effect<void, CliErrors.CliError>;
+  readonly cancel: Effect.Effect<void, CliErrors.CliErrorTyped>;
 }
 
 interface CliOwnedChildProcess {
@@ -159,7 +186,7 @@ export class CliStructuredRuntime extends ServiceMap.Service<
     options: CliStructuredRuntimeOptions,
   ): Layer.Layer<
     CliStructuredRuntime,
-    CliErrors.CliError,
+    CliErrors.CliErrorTyped,
     ChildProcessSpawner.ChildProcessSpawner
   > {
     return Layer.effect(CliStructuredRuntime, makeCliStructuredRuntime(options));
@@ -170,14 +197,14 @@ const makeCliStructuredRuntime = (
   options: CliStructuredRuntimeOptions,
 ): Effect.Effect<
   CliStructuredRuntimeShape,
-  CliErrors.CliError,
+  CliErrors.CliErrorTyped,
   ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
 > =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
-    const eventQueue = yield* Queue.bounded<CliRuntimeEvent>(2_048);
-    const startDeferred = yield* Deferred.make<CliSessionStartResult, CliErrors.CliError>();
+    const startDeferred = yield* Deferred.make<CliSessionStartResult, CliErrors.CliErrorTyped>();
+    const cancelAckDeferred = yield* Deferred.make<void>();
     const structured = options.structured;
     const cancelAckGraceMs = options.cancelAckGraceMs ?? 250;
     const startupTimeoutMs = options.startupTimeoutMs ?? 15_000;
@@ -219,14 +246,26 @@ const makeCliStructuredRuntime = (
     const offerEvent = (event: CliRuntimeEvent): Effect.Effect<void> =>
       Queue.offer(eventQueue, event).pipe(Effect.asVoid);
 
-    const failStart = (error: CliErrors.CliError): Effect.Effect<void> =>
+    const failStart = (error: CliErrors.CliErrorTyped): Effect.Effect<void> =>
       Deferred.fail(startDeferred, error).pipe(
         Effect.asVoid,
         Effect.catchCause(() => Effect.void),
       );
 
-    const shutdownOnError = (): Effect.Effect<void> =>
-      Queue.shutdown(eventQueue).pipe(Effect.catchCause(() => Effect.void));
+    // Ends the events queue so consumers can drain remaining buffered events
+    // and then observe a clean end-of-stream. `Queue.end` (not `shutdown`) is
+    // required: `shutdown` clears the buffer and resumes blocked takers with an
+    // interrupt cause, which would surface to an active `getEvents()` consumer
+    // as "All fibers interrupted without error" instead of a drained stream.
+    // The queue is typed with a `Done<void>` error slot so `Queue.end` applies
+    // without widening; `Stream.fromQueue` strips the `Done` so consumers only
+    // ever see the success channel.
+    const eventQueue = yield* Queue.bounded<CliRuntimeEvent, Cause.Done<void>>(2_048);
+    const endEventQueue = (): Effect.Effect<void> =>
+      Queue.end(eventQueue).pipe(
+        Effect.asVoid,
+        Effect.catchCause(() => Effect.void),
+      );
 
     // Resolves to an effect that never fails: parse problems become
     // protocol-error events / start failures, never thrown errors.
@@ -258,7 +297,7 @@ const makeCliStructuredRuntime = (
         if (violation !== undefined) {
           return offerEvent({ _tag: "protocol-error", error: violation }).pipe(
             Effect.andThen(failStart(violation)),
-            Effect.andThen(shutdownOnError()),
+            Effect.andThen(endEventQueue()),
           );
         }
 
@@ -281,7 +320,7 @@ const makeCliStructuredRuntime = (
               detail: `unsupported structured CLI protocol version ${String(hello.protocolVersion)}`,
               line: trimmed.slice(0, 500),
             });
-            return failStart(mismatch).pipe(Effect.andThen(shutdownOnError()));
+            return failStart(mismatch).pipe(Effect.andThen(endEventQueue()));
           }
         }
         const event = decodeStructuredEvent(parsed);
@@ -302,10 +341,23 @@ const makeCliStructuredRuntime = (
             Effect.andThen(offerEvent({ _tag: "structured", event })),
           );
         }
+        if (
+          event.type === "turn.cancelled" ||
+          event.type === "turn.completed" ||
+          event.type === "turn.failed"
+        ) {
+          // Offer the terminal event to the events queue BEFORE waking the
+          // cancel ack. The cancel fiber ends the queue as soon as the ack
+          // fires; if the ack succeeded first, the subsequent offer would land
+          // on a closing queue and the terminal event would be dropped.
+          return offerEvent({ _tag: "structured", event }).pipe(
+            Effect.andThen(Deferred.succeed(cancelAckDeferred, undefined).pipe(Effect.asVoid)),
+          );
+        }
         return offerEvent({ _tag: "structured", event });
       });
 
-    const stdoutReader = yield* child.stdout.pipe(
+    const stdoutLinesReader = yield* child.stdout.pipe(
       Stream.runForEach((chunk) =>
         Effect.suspend(() => {
           const text = decoder.decode(chunk, { stream: true });
@@ -320,25 +372,28 @@ const makeCliStructuredRuntime = (
         }),
       ),
       Effect.matchEffect({
-        onFailure: () => shutdownOnError(),
+        onFailure: () => endEventQueue(),
         onSuccess: () =>
           Effect.suspend(() => {
-            // A final unterminated line: honest line tier emits it; the
-            // structured tier cannot frame it so it is dropped silently (the
-            // process exiting mid-line is not an attributable framing fault).
+            // EOF tail framing. Both tiers treat the exact same violation the
+            // same way: an unterminated final line is processed as a final line
+            // through handleLine/validateStructuredLine — never silently
+            // swallowed. In structured mode a non-blank, non-decodable tail is
+            // an attributable CliProtocolError; in basic mode the tail is
+            // emitted as the last line. A final line that is not a turn-terminal
+            // event is left for the caller to observe; the ack wait is owned by
+            // cancel() and bounded by cancelAckGraceMs, never blocking here.
             if (pendingLines.length > 0) {
               const tail = pendingLines;
               pendingLines = "";
-              if (!structured) {
-                return handleLine(tail);
-              }
+              return handleLine(tail);
             }
             return Effect.void;
-          }).pipe(Effect.andThen(shutdownOnError())),
+          }).pipe(Effect.andThen(endEventQueue())),
       }),
       Effect.forkIn(runtimeScope),
     );
-    void stdoutReader;
+    void stdoutLinesReader;
 
     const start = Deferred.await(startDeferred).pipe(
       Effect.timeoutOption(startupTimeoutMs),
@@ -359,7 +414,7 @@ const makeCliStructuredRuntime = (
     const outgoing = yield* Queue.bounded<Uint8Array>(256);
     yield* Stream.fromQueue(outgoing).pipe(Stream.run(child.stdin), Effect.forkIn(runtimeScope));
 
-    const writeLine = (line: string): Effect.Effect<void, CliErrors.CliError> =>
+    const writeLine = (line: string): Effect.Effect<void, CliErrors.CliErrorTyped> =>
       Queue.offer(outgoing, new TextEncoder().encode(`${line}\n`)).pipe(
         Effect.mapError(
           (cause) =>
@@ -370,7 +425,9 @@ const makeCliStructuredRuntime = (
         ),
       );
 
-    const sendCommand = (command: CliStructuredCommand): Effect.Effect<void, CliErrors.CliError> =>
+    const sendCommand = (
+      command: CliStructuredCommand,
+    ): Effect.Effect<void, CliErrors.CliErrorTyped> =>
       Effect.gen(function* () {
         if (!structured) {
           return yield* new CliErrors.CliTransportError({
@@ -381,7 +438,7 @@ const makeCliStructuredRuntime = (
         return yield* writeLine(JSON.stringify(command));
       });
 
-    const sendInput = (line: string): Effect.Effect<void, CliErrors.CliError> =>
+    const sendInput = (line: string): Effect.Effect<void, CliErrors.CliErrorTyped> =>
       Effect.gen(function* () {
         if (structured) {
           return yield* new CliErrors.CliTransportError({
@@ -392,12 +449,35 @@ const makeCliStructuredRuntime = (
         return yield* writeLine(line);
       });
 
-    const cancel: Effect.Effect<void, CliErrors.CliError> = Effect.gen(function* () {
+    const cancel: Effect.Effect<void, CliErrors.CliErrorTyped> = Effect.gen(function* () {
       if (structured) {
         yield* sendCommand({ type: "cli.command.cancel", turnId: "all" }).pipe(
           Effect.catchCause(() => Effect.void),
         );
-        yield* Effect.sleep(`${cancelAckGraceMs} millis`);
+        // Cancel-through-ack: wait for a turn-terminal acknowledgement
+        // (`turn.cancelled` / completed / failed) inside the ack-grace window.
+        // An acked turn ends honestly through the protocol; the process is then
+        // torn down cleanly. An agent that never acks (or already exited,
+        // surfacing as a race-safe fast fail) is stopped by tree teardown —
+        // the grace window bounds how long a hostile agent can block cancel.
+        const acked = yield* Deferred.await(cancelAckDeferred).pipe(
+          Effect.timeoutOption(Duration.millis(cancelAckGraceMs)),
+        );
+        if (Option.isSome(acked)) {
+          // The ack arrived within the grace window. The terminal event is
+          // already buffered on the events queue; end the queue so consumers
+          // drain it (including the turn.cancelled) and stop the process.
+          yield* endEventQueue();
+          return yield* teardownCliChildProcess(child, options.teardownProcessTree).pipe(
+            Effect.mapError(
+              (cause) =>
+                new CliErrors.CliTransportError({
+                  detail: "Failed to tear down the CLI process tree after cancel ack",
+                  cause,
+                }),
+            ),
+          );
+        }
       }
       yield* teardownCliChildProcess(child, options.teardownProcessTree).pipe(
         Effect.mapError(
