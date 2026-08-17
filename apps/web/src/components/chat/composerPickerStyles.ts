@@ -128,25 +128,28 @@ export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
   "group relative z-[1] chat-composer-shell transition-colors duration-200";
 
-/** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
-export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
+/** Defined border for raised opaque surfaces: the heaviest border token nudged a bit
+ *  darker with foreground. Full weight — the composer family runs a thinned variant. */
+export const RAISED_SURFACE_BORDER_CLASS_NAME =
   "border-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)]";
 
-/** Shared border for panels stacked above the composer; dark mode matches the live changes strip. */
-export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
-  "dark:border-[color:color-mix(in_srgb,var(--color-border-heavy)_50%,transparent)]",
-].join(" ");
+/** Composer border. Both light and dark values live on `--composer-border` in
+ *  `index.css`, behind the shared `--composer-border-strength` knob, so the input
+ *  shell, its attached banners, and the stacked rail can never drift apart. */
+export const COMPOSER_SURFACE_BORDER_CLASS_NAME = "border-[color:var(--composer-border)]";
 
-/** Border + shadow chrome for raised opaque surfaces (composer shell, kanban cards):
- *  a real border follows squircle/corner-shape geometry more evenly than an outer
- *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
-export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
+/** Shared border for panels stacked above the composer; dark mode matches the live changes strip. */
+export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME =
+  "border-[color:var(--composer-stacked-border)]";
+
+/** Border + shadow chrome for raised opaque surfaces (kanban cards): a real border
+ *  follows squircle/corner-shape geometry more evenly than an outer ring (box-shadow).
+ *  Dark mode drops the border and leans on the shadow for separation. */
+export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
 /** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
- *  dark mode using the same `border-border` token as the Environment panel, instead
- *  of dropping to shadow-only separation. */
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
+ *  dark mode (via `--composer-border`) instead of dropping to shadow-only separation. */
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
 /** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
 export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =

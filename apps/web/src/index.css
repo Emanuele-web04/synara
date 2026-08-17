@@ -2456,6 +2456,37 @@ diffs-container {
   --runtime-full-access-accent: #fe8549;
 }
 
+/* Composer-family outline — one knob for every border in the stack (input shell,
+   attached banners, and the stacked rail above it), so the composer never ends up
+   with three borders drifting apart across themes.
+
+   `--composer-border-strength` thins the underlying border token: the recipes below
+   are the raised-surface border (light) and the chrome border tokens (dark), each
+   faded toward transparent by that single percentage. Lower it to make the whole
+   composer outline recede; raise it toward 100% to restore the full-weight border. */
+:root {
+  --composer-border-strength: 72%;
+  --composer-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
+      var(--composer-border-strength),
+    transparent
+  );
+  /* Light keeps rail and input identical; only dark splits them (see below). */
+  --composer-stacked-border: var(--composer-border);
+}
+
+.dark {
+  --composer-border: color-mix(in srgb, var(--border) var(--composer-border-strength), transparent);
+  /* The stacked rail reads as a translucent continuation of the input shell, so it
+     runs at half the heavy token — matching the live-changes strip. */
+  --composer-stacked-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 50%, transparent) var(--composer-border-strength),
+    transparent
+  );
+}
+
 /* Composer shell/surface corner geometry — single source of truth so radius
    tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
 :root {
