@@ -21,7 +21,9 @@ describe("windowsShellAppUserModel", () => {
 
   it("writes relaunch icon, command, and display name before AppUserModelID", () => {
     const iconIndex = WINDOWS_SHELL_APPUSERMODEL_SOURCE.indexOf("uint[] { 3, 2, 4, 5 }");
-    const idComment = WINDOWS_SHELL_APPUSERMODEL_SOURCE.indexOf("set relaunch properties BEFORE AppUserModelID");
+    const idComment = WINDOWS_SHELL_APPUSERMODEL_SOURCE.indexOf(
+      "set relaunch properties BEFORE AppUserModelID",
+    );
     expect(iconIndex).toBeGreaterThan(0);
     expect(idComment).toBeGreaterThan(0);
     expect(idComment).toBeLessThan(iconIndex);
@@ -29,10 +31,10 @@ describe("windowsShellAppUserModel", () => {
     expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).toContain("[STAThread]");
     expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).toContain("ItemChangeNotify");
     expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).toContain("ApplyAll");
-    expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).toMatch(
-      /if \(next < 0\) return next;\s+return 0;/,
+    expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).toMatch(/if \(next < 0\) return next;\s+return 0;/);
+    expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).not.toContain(
+      "modify(list, pidl, pidl, PLMC_EXPLORER)",
     );
-    expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).not.toContain("modify(list, pidl, pidl, PLMC_EXPLORER)");
     expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).not.toContain("WM_SETICON");
     expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).not.toContain("PostMessage");
     expect(WINDOWS_SHELL_APPUSERMODEL_SOURCE).not.toContain("SendMessage");
@@ -41,7 +43,9 @@ describe("windowsShellAppUserModel", () => {
   });
 
   it("names the helper from the source hash so a source change rebuilds it", () => {
-    expect(windowsShellAppUserModelHelperName()).toMatch(/^windows-shell-appusermodel-[0-9a-f]{12}\.exe$/);
+    expect(windowsShellAppUserModelHelperName()).toMatch(
+      /^windows-shell-appusermodel-[0-9a-f]{12}\.exe$/,
+    );
   });
 
   it("bounds helper execution so Explorer COM cannot freeze Electron main", () => {

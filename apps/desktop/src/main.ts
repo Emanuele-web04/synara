@@ -2041,7 +2041,9 @@ function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): 
       lastError = error;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("Failed to materialize Windows shell icon");
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to materialize Windows shell icon");
 }
 
 const windowsTaskbarIcoBytesCache = new Map<string, Buffer>();

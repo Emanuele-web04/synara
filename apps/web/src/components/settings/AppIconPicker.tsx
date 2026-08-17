@@ -39,12 +39,7 @@ export function AppIconPicker({
   const busy = pendingIcon !== null;
 
   return (
-    <div
-      className="flex items-center gap-1"
-      role="group"
-      aria-label="App icon"
-      aria-busy={busy}
-    >
+    <div className="flex items-center gap-1" role="group" aria-label="App icon" aria-busy={busy}>
       {desktopAppIconsForPlatform(platform).map((icon) => {
         const option = APP_ICON_OPTIONS[icon];
         const selected = value === icon;
@@ -63,7 +58,9 @@ export function AppIconPicker({
               "relative grid place-items-center rounded-[14px] border-2 p-[3px] transition-colors motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               "disabled:pointer-events-none",
-              selected || applying ? "border-foreground" : "border-transparent hover:border-foreground/25",
+              selected || applying
+                ? "border-foreground"
+                : "border-transparent hover:border-foreground/25",
             )}
             onClick={() => {
               if (busy) return;

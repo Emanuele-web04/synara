@@ -252,7 +252,10 @@ export function nativeWindowHandleToHwnd(handle: Buffer): bigint {
 }
 
 export function windowsShellAppUserModelHelperName(): string {
-  const hash = Crypto.createHash("sha1").update(WINDOWS_SHELL_APPUSERMODEL_SOURCE).digest("hex").slice(0, 12);
+  const hash = Crypto.createHash("sha1")
+    .update(WINDOWS_SHELL_APPUSERMODEL_SOURCE)
+    .digest("hex")
+    .slice(0, 12);
   return `windows-shell-appusermodel-${hash}.exe`;
 }
 
@@ -264,7 +267,9 @@ export function cscCompilerCandidates(): string[] {
   ];
 }
 
-export function resolveCscCompiler(exists: (path: string) => boolean = FS.existsSync): string | null {
+export function resolveCscCompiler(
+  exists: (path: string) => boolean = FS.existsSync,
+): string | null {
   for (const candidate of cscCompilerCandidates()) {
     if (exists(candidate)) return candidate;
   }
@@ -281,7 +286,14 @@ export function ensureWindowsShellAppUserModelHelper(cacheDirectory: string): st
   FS.writeFileSync(csPath, WINDOWS_SHELL_APPUSERMODEL_SOURCE, "utf8");
   const compiled = ChildProcess.spawnSync(
     csc,
-    ["/nologo", "/target:exe", "/platform:x64", `/main:Synara.ShellAppUserModel`, `/out:${exePath}`, csPath],
+    [
+      "/nologo",
+      "/target:exe",
+      "/platform:x64",
+      `/main:Synara.ShellAppUserModel`,
+      `/out:${exePath}`,
+      csPath,
+    ],
     { windowsHide: true, encoding: "utf8" },
   );
   if (compiled.status !== 0 || !FS.existsSync(exePath)) {
@@ -320,6 +332,8 @@ function runHelper(helper: string, args: string[]): void {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(result.stderr?.trim() || result.stdout?.trim() || `helper exited ${result.status}`);
+    throw new Error(
+      result.stderr?.trim() || result.stdout?.trim() || `helper exited ${result.status}`,
+    );
   }
 }

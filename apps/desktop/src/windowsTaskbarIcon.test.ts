@@ -323,7 +323,12 @@ describe("applyWindowsTaskbarIcon", () => {
     const nextIconPath = "C:\\Users\\synara\\userdata\\taskbar-icons\\taskbar-default.ico";
 
     applyWindowsTaskbarIcon({ window, iconPath, identity, reregisterTaskbarButton: true });
-    applyWindowsTaskbarIcon({ window, iconPath: nextIconPath, identity, reregisterTaskbarButton: true });
+    applyWindowsTaskbarIcon({
+      window,
+      iconPath: nextIconPath,
+      identity,
+      reregisterTaskbarButton: true,
+    });
 
     expect(window.setSkipTaskbar).toHaveBeenNthCalledWith(1, true);
     expect(window.setSkipTaskbar).toHaveBeenNthCalledWith(2, true);
