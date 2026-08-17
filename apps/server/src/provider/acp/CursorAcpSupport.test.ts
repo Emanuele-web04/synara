@@ -517,7 +517,7 @@ describe("applyCursorAcpModelSelection", () => {
     expect(calls).toEqual([{ type: "model", value: "default[]" }]);
   });
 
-  it("maps legacy Cursor base slugs to parameterized ACP model values", async () => {
+  it("maps legacy Cursor base slugs with fast mode defaulted off", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
@@ -556,7 +556,7 @@ describe("applyCursorAcpModelSelection", () => {
       }),
     );
 
-    expect(calls).toEqual([{ type: "model", value: "composer-2[fast=true]" }]);
+    expect(calls).toEqual([{ type: "model", value: "composer-2[fast=false]" }]);
   });
 
   it("maps unsupported false boolean parameters to an available Cursor ACP model value", async () => {
@@ -786,6 +786,7 @@ describe("applyCursorAcpModelSelection", () => {
       { type: "config", configId: "thinking", value: true },
       { type: "model", value: "gpt-5.3-codex-spark[reasoning=low]" },
       { type: "config", configId: "reasoning", value: "low" },
+      { type: "config", configId: "fast", value: "false" },
     ]);
   });
 
@@ -834,8 +835,168 @@ describe("applyCursorAcpModelSelection", () => {
     expect(calls).toEqual([
       {
         type: "model",
-        value: "grok-4.5[effort=high,fast=true]",
+        value: "grok-4.5[effort=high,fast=false]",
       },
+    ]);
+  });
+
+  it("keeps Cursor Grok fast mode off even when ACP advertises fast=true", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "default[]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Cursor Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { reasoningEffort: "high", fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+    ]);
+  });
+
+  it("lets an explicit fastMode=false override a persisted parameterized fast model", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=high,fast=true]",
+          options: [
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6[effort=high,fast=true]",
+        options: { fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+    ]);
+  });
+
+  it("defaults Cursor fast mode off through the dedicated ACP config option", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=high,fast=true]",
+          options: [
+            {
+              value: "grok-4.6[effort=high,fast=true]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "true",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: undefined,
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=false]",
+      },
+      { type: "config", configId: "fast", value: "false" },
     ]);
   });
 
