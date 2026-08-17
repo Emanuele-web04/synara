@@ -273,7 +273,6 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           antigravity: [],
           grok: [],
-          deepseek: [],
           droid: [],
           kilo: [],
           opencode: [],
@@ -294,7 +293,6 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           antigravity: [],
           grok: [],
-          deepseek: [],
           droid: [],
           kilo: [],
           opencode: [],
@@ -315,7 +313,6 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           antigravity: [],
           grok: [],
-          deepseek: [],
           droid: [],
           kilo: [],
           opencode: [],
@@ -336,7 +333,6 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           antigravity: [],
           grok: [],
-          deepseek: [],
           droid: [],
           kilo: [],
           opencode: [],
@@ -357,7 +353,6 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           antigravity: [],
           grok: [],
-          deepseek: [],
           droid: [],
           kilo: [],
           opencode: [],
@@ -474,8 +469,6 @@ describe("normalizeStoredAppSettings", () => {
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
-        deepSeekBinaryPath: "dsh-acp-demo",
-        deepSeekConfigPath: "",
         droidBinaryPath: "droid",
         kiloBinaryPath: "kilo",
         openCodeBinaryPath: "opencode",
@@ -518,8 +511,6 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "/usr/local/bin/agent",
         antigravityBinaryPath: "/usr/local/bin/agy",
         grokBinaryPath: "/usr/local/bin/grok",
-        deepSeekBinaryPath: "",
-        deepSeekConfigPath: "",
         droidBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerUrl: "",
@@ -559,8 +550,6 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "",
         antigravityBinaryPath: "",
         grokBinaryPath: "",
-        deepSeekBinaryPath: "",
-        deepSeekConfigPath: "",
         droidBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerUrl: "",
@@ -583,8 +572,6 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
-        deepSeekBinaryPath: "dsh-acp-demo",
-        deepSeekConfigPath: "",
         droidBinaryPath: "droid",
         kiloBinaryPath: "kilo",
         kiloServerUrl: "",
@@ -605,7 +592,6 @@ describe("provider-indexed custom model settings", () => {
     customCursorModels: ["cursor/custom-model"],
     customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
-    customDeepSeekModels: ["deepseek/custom-pro"],
     customDroidModels: ["claude-opus-4-8-custom"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
@@ -619,7 +605,6 @@ describe("provider-indexed custom model settings", () => {
       "cursor",
       "antigravity",
       "grok",
-      "deepseek",
       "droid",
       "kilo",
       "opencode",
@@ -638,7 +623,6 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
-    expect(getCustomModelsForProvider(settings, "deepseek")).toEqual(["deepseek/custom-pro"]);
     expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
@@ -652,7 +636,6 @@ describe("provider-indexed custom model settings", () => {
       customCursorModels: ["cursor/default-model"],
       customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
       customGrokModels: ["grok/default-fast"],
-      customDeepSeekModels: ["deepseek/default-pro"],
       customDroidModels: ["droid/default-model"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
@@ -668,9 +651,6 @@ describe("provider-indexed custom model settings", () => {
       "Gemini 3.5 Flash (Experimental)",
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
-    expect(getDefaultCustomModelsForProvider(defaults, "deepseek")).toEqual([
-      "deepseek/default-pro",
-    ]);
     expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
@@ -698,12 +678,6 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for grok", () => {
     expect(patchCustomModels("grok", ["grok/custom-fast"])).toEqual({
       customGrokModels: ["grok/custom-fast"],
-    });
-  });
-
-  it("patches custom models for DeepSeek", () => {
-    expect(patchCustomModels("deepseek", ["deepseek/custom-pro"])).toEqual({
-      customDeepSeekModels: ["deepseek/custom-pro"],
     });
   });
 
@@ -744,7 +718,6 @@ describe("provider-indexed custom model settings", () => {
       cursor: ["cursor/custom-model"],
       antigravity: ["Gemini 3.5 Flash (Experimental)"],
       grok: ["grok/custom-fast"],
-      deepseek: ["deepseek/custom-pro"],
       droid: ["claude-opus-4-8-custom"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
@@ -773,9 +746,6 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
-      modelOptionsByProvider.deepseek.some((option) => option.slug === "deepseek/custom-pro"),
-    ).toBe(true);
-    expect(
       modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
     ).toBe(true);
     expect(
@@ -797,7 +767,6 @@ describe("provider-indexed custom model settings", () => {
         "Gemini 3.5 Flash (Experimental)",
       ],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
-      customDeepSeekModels: [" deepseek-v4-pro ", "deepseek/custom-pro", "deepseek/custom-pro"],
       customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [

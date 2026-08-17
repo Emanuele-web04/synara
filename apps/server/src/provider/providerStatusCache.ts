@@ -16,7 +16,6 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "cursor",
   "antigravity",
   "grok",
-  "deepseek",
   "droid",
   "kilo",
   "opencode",

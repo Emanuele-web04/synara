@@ -302,11 +302,6 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("grok", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("grok", input),
   },
-  deepseek: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("deepseek", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("deepseek", input),
-  },
   droid: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("droid", input),

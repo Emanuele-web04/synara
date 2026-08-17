@@ -309,12 +309,6 @@ describe("wsNativeApi", () => {
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
-          deepseek: {
-            enabled: true,
-            binaryPath: "dsh-acp-demo",
-            configPath: "",
-            customModels: [],
-          },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
           kilo: {
             enabled: true,

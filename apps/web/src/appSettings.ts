@@ -121,7 +121,6 @@ type CustomModelSettingsKey =
   | "customCursorModels"
   | "customAntigravityModels"
   | "customGrokModels"
-  | "customDeepSeekModels"
   | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
@@ -142,7 +141,6 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
-  deepseek: new Set(getModelOptions("deepseek").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
@@ -169,7 +167,6 @@ const PersistedProviderKind = Schema.Literals([
   "antigravity",
   "gemini",
   "grok",
-  "deepseek",
   "droid",
   "kilo",
   "opencode",
@@ -202,8 +199,6 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
   geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
-  deepSeekBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
-  deepSeekConfigPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   droidBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -278,7 +273,6 @@ export const AppSettingsSchema = Schema.Struct({
   customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
-  customDeepSeekModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -383,16 +377,6 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Grok model slugs for the picker and `/model` command.",
     placeholder: "your-grok-model-slug",
     example: "grok-build-0.1",
-  },
-  deepseek: {
-    provider: "deepseek",
-    settingsKey: "customDeepSeekModels",
-    defaultSettingsKey: "customDeepSeekModels",
-    title: "DeepSeek Harness",
-    description:
-      "Save DeepSeek Harness model slugs for the picker. Harness ACP itself does not expose runtime model discovery.",
-    placeholder: "deepseek-model-slug",
-    example: "deepseek-v4-pro",
   },
   droid: {
     provider: "droid",
@@ -555,11 +539,6 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       settings.antigravityBinaryPath || legacyGeminiBinaryPath,
     ),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
-    deepSeekBinaryPath: normalizeProviderBinaryPathOverride(
-      "deepseek",
-      settings.deepSeekBinaryPath,
-    ),
-    deepSeekConfigPath: settings.deepSeekConfigPath.trim(),
     droidBinaryPath: normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath),
     kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
     openCodeBinaryPath: normalizeProviderBinaryPathOverride(
@@ -580,7 +559,6 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       "antigravity",
     ),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),
-    customDeepSeekModels: normalizeCustomModelSlugs(settings.customDeepSeekModels, "deepseek"),
     customDroidModels: normalizeCustomModelSlugs(settings.customDroidModels, "droid"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
@@ -603,8 +581,6 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
-    deepSeekBinaryPath: settings.providers.deepseek.binaryPath,
-    deepSeekConfigPath: settings.providers.deepseek.configPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
     kiloServerPasswordConfigured: settings.providers.kilo.serverPasswordConfigured,
@@ -620,7 +596,6 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customCursorModels: settings.providers.cursor.customModels,
     customAntigravityModels: settings.providers.antigravity.customModels,
     customGrokModels: settings.providers.grok.customModels,
-    customDeepSeekModels: settings.providers.deepseek.customModels,
     customDroidModels: settings.providers.droid.customModels,
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
@@ -732,23 +707,6 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     providers.grok = {
       ...(hasOwn(patch, "grokBinaryPath") ? { binaryPath: patch.grokBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customGrokModels") ? { customModels: patch.customGrokModels ?? [] } : {}),
-    };
-  }
-  if (
-    hasOwn(patch, "deepSeekBinaryPath") ||
-    hasOwn(patch, "deepSeekConfigPath") ||
-    hasOwn(patch, "customDeepSeekModels")
-  ) {
-    providers.deepseek = {
-      ...(hasOwn(patch, "deepSeekBinaryPath")
-        ? { binaryPath: patch.deepSeekBinaryPath ?? "" }
-        : {}),
-      ...(hasOwn(patch, "deepSeekConfigPath")
-        ? { configPath: patch.deepSeekConfigPath ?? "" }
-        : {}),
-      ...(hasOwn(patch, "customDeepSeekModels")
-        ? { customModels: patch.customDeepSeekModels ?? [] }
-        : {}),
     };
   }
   if (hasOwn(patch, "droidBinaryPath") || hasOwn(patch, "customDroidModels")) {
@@ -868,7 +826,6 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCursorModels",
     "customAntigravityModels",
     "customGrokModels",
-    "customDeepSeekModels",
     "customDroidModels",
     "customKiloModels",
     "customOpenCodeModels",
@@ -918,7 +875,6 @@ export function getCustomModelsByProvider(
     cursor: getCustomModelsForProvider(settings, "cursor"),
     antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
-    deepseek: getCustomModelsForProvider(settings, "deepseek"),
     droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
@@ -1067,7 +1023,6 @@ export function getCustomModelOptionsByProvider(
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     antigravity: getAppModelOptions("antigravity", customModelsByProvider.antigravity),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
-    deepseek: getAppModelOptions("deepseek", customModelsByProvider.deepseek),
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
@@ -1085,8 +1040,6 @@ export function getProviderStartOptions(
     | "cursorBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
-    | "deepSeekBinaryPath"
-    | "deepSeekConfigPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
     | "kiloServerUrl"
@@ -1108,11 +1061,6 @@ export function getProviderStartOptions(
     settings.antigravityBinaryPath,
   );
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
-  const deepSeekBinaryPath = normalizeProviderBinaryPathOverride(
-    "deepseek",
-    settings.deepSeekBinaryPath,
-  );
-  const deepSeekConfigPath = settings.deepSeekConfigPath.trim();
   const droidBinaryPath = normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
   const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
@@ -1158,14 +1106,6 @@ export function getProviderStartOptions(
       ? {
           grok: {
             binaryPath: grokBinaryPath,
-          },
-        }
-      : {}),
-    ...(deepSeekBinaryPath || deepSeekConfigPath
-      ? {
-          deepseek: {
-            ...(deepSeekBinaryPath ? { binaryPath: deepSeekBinaryPath } : {}),
-            ...(deepSeekConfigPath ? { configPath: deepSeekConfigPath } : {}),
           },
         }
       : {}),
@@ -1242,7 +1182,6 @@ export function getCustomBinaryPathForProvider(
     | "cursorBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
-    | "deepSeekBinaryPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
@@ -1261,8 +1200,6 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":
       return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
-    case "deepseek":
-      return normalizeProviderBinaryPathOverride(provider, settings.deepSeekBinaryPath);
     case "droid":
       return normalizeProviderBinaryPathOverride(provider, settings.droidBinaryPath);
     case "kilo":

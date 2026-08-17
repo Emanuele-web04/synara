@@ -177,8 +177,6 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
           : {}),
       };
-    case "deepseek":
-      return { provider, model };
     case "droid":
       return {
         provider,

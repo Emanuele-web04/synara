@@ -27,7 +27,6 @@ export type ProviderModelPrefetchSettings = Pick<
   | "cursorApiEndpoint"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
-  | "deepSeekBinaryPath"
   | "droidBinaryPath"
   | "kiloBinaryPath"
   | "openCodeBinaryPath"
@@ -143,11 +142,6 @@ export function providerModelsPrefetchQueryOptions(input: {
       return providerModelsQueryOptions({
         provider: "grok",
         binaryPath: settings.grokBinaryPath || null,
-      });
-    case "deepseek":
-      return providerModelsQueryOptions({
-        provider: "deepseek",
-        binaryPath: settings.deepSeekBinaryPath || null,
       });
     case "droid":
       return providerModelsQueryOptions({

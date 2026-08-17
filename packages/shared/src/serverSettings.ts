@@ -68,10 +68,6 @@ export function providerStartOptionsFromServerSettings(
     grok: {
       ...(providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
     },
-    deepseek: {
-      ...(providers.deepseek.binaryPath ? { binaryPath: providers.deepseek.binaryPath } : {}),
-      ...(providers.deepseek.configPath ? { configPath: providers.deepseek.configPath } : {}),
-    },
     droid: {
       ...(providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
     },
