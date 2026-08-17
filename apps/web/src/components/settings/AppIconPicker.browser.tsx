@@ -54,14 +54,16 @@ it("shows a loading state and ignores extra clicks while an apply is in flight",
   );
 
   const iconButton = mounted.getByRole("button", { name: "Icon", exact: true });
+  const defaultIconButton = mounted.getByRole("button", { name: "Default icon" });
   await iconButton.click();
   await expect.element(mounted.getByRole("status", { name: "Updating app icon" })).toBeVisible();
-
-  await mounted.getByRole("button", { name: "Default icon" }).click();
+  await expect.element(defaultIconButton).toBeDisabled();
+  await expect.element(iconButton).toBeDisabled();
   expect(onValueChange).toHaveBeenCalledTimes(1);
 
   release?.();
-  await vi.waitFor(() => expect(onValueChange).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect.element(defaultIconButton).toBeEnabled());
+  expect(onValueChange).toHaveBeenCalledTimes(1);
 });
 
 it("offers the dark icon on macOS", async () => {
