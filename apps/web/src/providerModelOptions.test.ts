@@ -193,6 +193,24 @@ describe("mergeDynamicModelOptions", () => {
       },
     ]);
   });
+
+  it("treats the live Grok CLI catalog as authoritative", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "grok",
+        staticOptions: [
+          { slug: "grok-4.6", name: "Grok 4.6" },
+          { slug: "grok-4.5", name: "Grok 4.5" },
+          { slug: "grok-build", name: "Grok 4.3" },
+          { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
+      }),
+    ).toEqual([
+      { slug: "grok-4.6", name: "Grok 4.6" },
+      { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
+    ]);
+  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {
