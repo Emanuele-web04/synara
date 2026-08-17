@@ -82,13 +82,35 @@ const isEnvironmental = (observation: CapabilityObservation) =>
     observation.attribution === "auth" ||
     observation.attribution === "network");
 
+/**
+ * Verifier families that never signal staleness. A profile's evidence can come
+ * from two different verifier *families*: conformance runs (per-capability,
+ * harness-versioned ids like `prompt.acp.conformance.v<v>`) and live-session
+ * runtime feedback (`runtime-turn-feedback`, KAR-530). A mixed-source profile
+ * is normal and healthy — conformance measured the capability, live sessions
+ * corroborated it — so cross-family verifier drift must not read `provisional`
+ * forever. Staleness is only meaningful within a family.
+ */
+const RUNTIME_FEEDBACK_VERIFIER_FAMILIES: ReadonlySet<string> = new Set([
+  "runtime-turn-feedback",
+]);
+
+const isRuntimeVerifierFamily = (verifierId: string): boolean =>
+  RUNTIME_FEEDBACK_VERIFIER_FAMILIES.has(verifierId);
+
 /** True when the observation's verifier (incl. harness version) or policy drifted from the reference. */
 const isStale = (
   observation: CapabilityObservation,
   reference: CapabilityObservation,
   policyVersion: string,
 ) =>
-  observation.verifier.verifierId !== reference.verifier.verifierId ||
+  // The runtime verifier never signals staleness: live-observed evidence is
+  // always current (it was just produced by the running session), so it must
+  // not drag a profile's verdict to `provisional` merely because a conformance
+  // run recorded under a different verifier family.
+  (!isRuntimeVerifierFamily(observation.verifier.verifierId) &&
+    !isRuntimeVerifierFamily(reference.verifier.verifierId) &&
+    observation.verifier.verifierId !== reference.verifier.verifierId) ||
   observation.policy.version !== policyVersion;
 
 /**

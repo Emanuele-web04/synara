@@ -232,6 +232,36 @@ describe("CapabilityPolicyEngine", () => {
       expect(deriveEffectiveState(list, "v2")).toBe("provisional");
     });
 
+    it("mixed conformance + runtime evidence stays verified (runtime never signals staleness)", () => {
+      // A conformance pass under the harness-versioned conformance verifier and
+      // a live-session runtime attest under `runtime-turn-feedback` share one
+      // profile namespace. They are different verifier *families*, so the
+      // cross-family verifier-id mismatch is not staleness — the profile must
+      // read `verified`, never `provisional` (KAR-530 review C2).
+      const conformancePass = makeObservation({
+        source: "synthetic-conformance",
+        verifier: {
+          verifierId: `prompt.acp.conformance.v2026-08-16.1`,
+          harnessVersion: "2026-08-16.1",
+        },
+      });
+      const runtimeAttest = makeObservation({
+        source: "runtime",
+        verifier: { verifierId: "runtime-turn-feedback" },
+      });
+      runtimeAttest.observedAt = new Date(Date.UTC(2026, 7, 16, 0, 0, 50)).toISOString();
+      const state = deriveEffectiveState([conformancePass, runtimeAttest], "v1");
+      expect(state).toBe("verified");
+    });
+
+    it("runtime-only evidence also stays verified (runtime attest never drifts)", () => {
+      const runtimeAttest = makeObservation({
+        source: "runtime",
+        verifier: { verifierId: "runtime-turn-feedback" },
+      });
+      expect(deriveEffectiveState([runtimeAttest], "v1")).toBe("verified");
+    });
+
     it("runtime drift marks only the drifted evidence provisional (AC #6 signal-specific)", () => {
       // Current runtime signals differ on version only; the agent itself
       // upgraded. The matched (package identity / endpoint) evidence still
