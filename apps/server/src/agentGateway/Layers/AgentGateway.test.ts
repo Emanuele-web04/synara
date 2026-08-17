@@ -15,6 +15,7 @@ import type {
 import {
   AutomationId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ModelSelection,
@@ -809,7 +810,7 @@ function makeHarnessLayer(
             ],
           },
         ],
-        grok: [{ slug: "grok-build", name: "Grok Build" }],
+        grok: [{ slug: DEFAULT_MODEL_BY_PROVIDER.grok, name: "Grok 4.6" }],
         droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
         kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto" }],
         opencode: [{ slug: "openai/gpt-5", name: "OpenAI GPT-5" }],
@@ -2009,6 +2010,7 @@ describe("AgentGateway", () => {
         assert.strictEqual("parentThreadId" in create, false);
         assert.strictEqual("subagentNickname" in create, false);
         assert.equal(create.modelSelection.provider, "grok");
+        assert.equal(create.modelSelection.model, DEFAULT_MODEL_BY_PROVIDER.grok);
         // Project and runtime mode default from the calling thread.
         assert.equal(create.projectId, PROJECT_ID);
         assert.equal(create.runtimeMode, "approval-required");
