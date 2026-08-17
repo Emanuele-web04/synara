@@ -2456,33 +2456,35 @@ diffs-container {
   --runtime-full-access-accent: #fe8549;
 }
 
-/* Composer-family outline — one knob for every border in the stack (input shell,
-   attached banners, and the stacked rail above it), so the composer never ends up
-   with three borders drifting apart across themes.
+/* Raised-chrome outline — the single border shared by every surface that floats over
+   the transcript as a solid card: the composer input shell and its attached banners,
+   the stacked rail above it, the docked Environment panel, and kanban cards. These all
+   drew the same color before this token existed (the light recipe below; plain
+   `--border` in dark), so they live on one knob and cannot drift apart again.
 
-   `--composer-border-strength` thins the underlying border token: the recipes below
-   are the raised-surface border (light) and the chrome border tokens (dark), each
-   faded toward transparent by that single percentage. Lower it to make the whole
-   composer outline recede; raise it toward 100% to restore the full-weight border. */
+   `--surface-border-strength` thins that base color toward transparent. Lower it to
+   make the whole raised-chrome outline recede; 100% restores the full-weight border.
+   Floating menus, pickers, and popovers deliberately stay on plain `border-border` —
+   they are transient overlays, not part of this raised-card family. */
 :root {
-  --composer-border-strength: 72%;
-  --composer-border: color-mix(
+  --surface-border-strength: 72%;
+  --surface-border: color-mix(
     in srgb,
     color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
-      var(--composer-border-strength),
+      var(--surface-border-strength),
     transparent
   );
   /* Light keeps rail and input identical; only dark splits them (see below). */
-  --composer-stacked-border: var(--composer-border);
+  --composer-stacked-border: var(--surface-border);
 }
 
 .dark {
-  --composer-border: color-mix(in srgb, var(--border) var(--composer-border-strength), transparent);
+  --surface-border: color-mix(in srgb, var(--border) var(--surface-border-strength), transparent);
   /* The stacked rail reads as a translucent continuation of the input shell, so it
      runs at half the heavy token — matching the live-changes strip. */
   --composer-stacked-border: color-mix(
     in srgb,
-    color-mix(in srgb, var(--color-border-heavy) 50%, transparent) var(--composer-border-strength),
+    color-mix(in srgb, var(--color-border-heavy) 50%, transparent) var(--surface-border-strength),
     transparent
   );
 }

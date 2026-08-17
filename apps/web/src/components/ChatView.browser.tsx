@@ -6055,7 +6055,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const workspacePickerTrigger = page.getByTestId("workspace-picker-trigger");
       await expect.element(workspacePickerTrigger).toBeInTheDocument();
       const controlsBefore = document.querySelector<HTMLElement>(
-        'form[data-chat-composer-form="true"] + .chat-composer-shell',
+        '[data-empty-landing-controls="true"]',
       );
       const composerBlockBefore = document.querySelector<HTMLElement>(
         '[data-empty-landing-composer-block="true"]',
@@ -6092,7 +6092,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       const controlsAfter = document.querySelector<HTMLElement>(
-        'form[data-chat-composer-form="true"] + .chat-composer-shell',
+        '[data-empty-landing-controls="true"]',
       );
       const composerBlockAfter = document.querySelector<HTMLElement>(
         '[data-empty-landing-composer-block="true"]',
