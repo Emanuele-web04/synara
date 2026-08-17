@@ -2077,7 +2077,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.
                       className={cn(
-                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-muted-foreground/90",
+                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
                         MUTED_LABEL_TEXT_CLASS_NAME,
                       )}
                       style={{ fontSize: chatTypographyStyle.fontSize }}
@@ -2089,7 +2089,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
-                        className="text-muted-foreground/38"
+                        className="text-muted-foreground/70"
                       />
                     </CollapsibleTrigger>
                     <CollapsiblePanel>
