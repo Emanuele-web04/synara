@@ -806,9 +806,9 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.grok.filter((option) => option.slug === "grok/custom-fast"),
     ).toHaveLength(1);
     expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-4.6")).toBe(true);
-    expect(modelOptionsByProvider.grok.filter((option) => option.slug === "grok-build")).toHaveLength(
-      1,
-    );
+    expect(
+      modelOptionsByProvider.grok.filter((option) => option.slug === "grok-build"),
+    ).toHaveLength(1);
     expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
     ).toHaveLength(1);
