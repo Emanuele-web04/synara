@@ -152,6 +152,7 @@ const allProvidersDisabledSettings = {
     cursor: { enabled: false },
     antigravity: { enabled: false },
     grok: { enabled: false },
+    deepseek: { enabled: false },
     droid: { enabled: false },
     kilo: { enabled: false },
     opencode: { enabled: false },
@@ -167,6 +168,7 @@ const allProvidersDisabledServerSettings = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
     antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
+    deepseek: { ...DEFAULT_SERVER_SETTINGS.providers.deepseek, enabled: false },
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
@@ -247,6 +249,18 @@ function withTempCodexHome(configContent?: string) {
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   describe("provider update commands", () => {
+    it("does not offer the incomplete DeepSeek Harness preview package as a managed install", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.deepseek;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "dsh-acp-demo",
+      });
+
+      assert.strictEqual(capabilities.packageName, null);
+      assert.strictEqual(capabilities.update, null);
+    });
+
     it("delegates native Claude release-channel truth to Claude", () => {
       const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.claudeAgent;
       assert.ok(definition);
@@ -418,7 +432,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 9);
+      assert.strictEqual(statuses.length, 10);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -553,7 +567,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 9);
+        assert.strictEqual(statuses.length, 10);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
