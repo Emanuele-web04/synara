@@ -29,10 +29,34 @@ import {
   parseXaiLanguageModelDescriptors,
   selectGrokDiscoveredModelGroups,
   resolveGrokPlanHookResponse,
+  resolveGrokRuntimeModelSettings,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
   takeGrokSynaraHarnessPolicyTextPart,
 } from "./GrokAdapter.ts";
+
+describe("Grok runtime model settings", () => {
+  it("keeps only reasoning efforts supported by the selected model family", () => {
+    expect(
+      resolveGrokRuntimeModelSettings({
+        model: "grok-build",
+        options: { reasoningEffort: "xhigh" },
+      }),
+    ).toEqual({ model: "grok-build" });
+    expect(
+      resolveGrokRuntimeModelSettings({
+        model: "grok-4.6",
+        options: { reasoningEffort: "xhigh" },
+      }),
+    ).toEqual({ model: "grok-4.6", reasoningEffort: "xhigh" });
+    expect(
+      resolveGrokRuntimeModelSettings({
+        model: "grok-build",
+        options: { reasoningEffort: "high" },
+      }),
+    ).toEqual({ model: "grok-build", reasoningEffort: "high" });
+  });
+});
 
 describe("Grok Synara harness policy", () => {
   it("delivers private scoped host context once", () => {

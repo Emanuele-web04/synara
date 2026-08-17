@@ -447,7 +447,10 @@ export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" 
 
   const version = /grok-(\d+)\.(\d+)/u.exec(slug);
   if (!version) {
-    return "4.6";
+    // Preserve the legacy Grok Build ladder for custom or future aliases we
+    // cannot classify. Discovery can still opt known versioned models into
+    // the newer ladders without silently changing persisted custom models.
+    return "build";
   }
   const major = Number(version[1]);
   const minor = Number(version[2]);

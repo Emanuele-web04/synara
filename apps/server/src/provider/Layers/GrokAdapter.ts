@@ -20,7 +20,11 @@ import {
   type ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { getDefaultEffort, getModelCapabilities } from "@synara/shared/model";
+import {
+  getDefaultEffort,
+  getModelCapabilities,
+  normalizeGrokModelOptions,
+} from "@synara/shared/model";
 import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
@@ -677,6 +681,22 @@ function applyRequestedModelSelection<E>(input: {
   });
 }
 
+export function resolveGrokRuntimeModelSettings(
+  modelSelection:
+    | {
+        readonly model: string;
+        readonly options?: GrokModelOptions | null | undefined;
+      }
+    | undefined,
+): GrokAcpRuntimeSettings {
+  if (!modelSelection) return {};
+  const options = normalizeGrokModelOptions(modelSelection.model, modelSelection.options);
+  return {
+    model: modelSelection.model,
+    ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+  };
+}
+
 function resolveGrokSessionCwd(
   inputCwd: string | undefined,
   serverConfig: ServerConfigShape,
@@ -1094,6 +1114,7 @@ export function makeGrokAdapter(
               payload.includes("grokShell") || payload.includes("x.ai/fs_notify"),
           });
           const providerGrokOptions = input.providerOptions?.grok;
+          const runtimeGrokModelSettings = resolveGrokRuntimeModelSettings(grokModelSelection);
           const effectiveGrokSettings: GrokAcpRuntimeSettings = {
             ...(grokSettings.binaryPath !== undefined
               ? { binaryPath: grokSettings.binaryPath }
@@ -1101,10 +1122,7 @@ export function makeGrokAdapter(
             ...(providerGrokOptions?.binaryPath !== undefined
               ? { binaryPath: providerGrokOptions.binaryPath }
               : {}),
-            ...(grokModelSelection?.model ? { model: grokModelSelection.model } : {}),
-            ...(grokModelSelection?.options?.reasoningEffort
-              ? { reasoningEffort: grokModelSelection.options.reasoningEffort }
-              : {}),
+            ...runtimeGrokModelSettings,
           };
 
           yield* Effect.logInfo("grok.acp.start", {
