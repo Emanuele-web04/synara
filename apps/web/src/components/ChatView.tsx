@@ -11146,6 +11146,7 @@ export default function ChatView({
     // and activity panels, so the landing composer reads as one unit.
     <ComposerStackedPanel
       data-empty-landing-controls="true"
+      borderless
       className="flex min-h-8 min-w-0 flex-nowrap items-center gap-x-1.5 px-2 py-1 sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
