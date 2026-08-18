@@ -337,7 +337,7 @@ import { randomTerminalId } from "./terminal/terminalIds";
 import { cn, isMacNavigatorPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
-import { type NewProjectScriptInput } from "./ProjectScriptsControl";
+import ProjectScriptsControl, { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
   commandForProjectScript,
   nextProjectScriptId,
@@ -11203,6 +11203,21 @@ export default function ChatView({
           />
         ) : null}
       </div>
+      {/* Project scripts moved down from the header, which runs minimal chrome on the
+          empty landing — drafts still need to run/edit actions before the first turn. */}
+      {showEmptyLandingBranchToolbar && activeProjectScripts ? (
+        <ProjectScriptsControl
+          scripts={activeProjectScripts}
+          keybindings={keybindings}
+          preferredScriptId={
+            activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+          }
+          onRunScript={onRunProjectScriptFromHeader}
+          onAddScript={saveProjectScript}
+          onUpdateScript={updateProjectScript}
+          onDeleteScript={deleteProjectScript}
+        />
+      ) : null}
       {showEmptyLandingBranchToolbar ? (
         <Button
           type="button"
