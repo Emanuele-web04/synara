@@ -21,7 +21,16 @@ export interface ProviderDescriptor {
   } | null;
 }
 
-export const PROVIDER_DESCRIPTORS = [
+type ExhaustiveProviderDescriptors<Descriptors extends readonly ProviderDescriptor[]> =
+  Exclude<ProviderKind, Descriptors[number]["kind"]> extends never ? Descriptors : never;
+
+function defineProviderDescriptors<const Descriptors extends readonly ProviderDescriptor[]>(
+  descriptors: ExhaustiveProviderDescriptors<Descriptors>,
+): Descriptors {
+  return descriptors;
+}
+
+export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
   {
     kind: "codex",
     displayName: PROVIDER_DISPLAY_NAMES.codex,
@@ -94,7 +103,7 @@ export const PROVIDER_DESCRIPTORS = [
     supportsNativeTurnSteering: true,
     usage: null,
   },
-] as const satisfies readonly ProviderDescriptor[];
+] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(
   PROVIDER_DESCRIPTORS.map((descriptor) => [descriptor.kind, descriptor]),
