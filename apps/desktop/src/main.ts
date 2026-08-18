@@ -92,6 +92,7 @@ import {
   nextWindowsShellIconCacheKey,
   resolveWindowsShellIconCacheDirectory,
   syncWindowsShortcutIcons,
+  windowsShellIconContentKey,
   windowsShellIconCachePath,
 } from "./windowsTaskbarIcon";
 import {
@@ -2013,7 +2014,9 @@ function syncWindowsTaskbarShortcuts(shellIconPath: string): string[] {
 }
 
 function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): string {
-  const cacheKey = nextWindowsShellIconCacheKey(icon);
+  const bytes = toWindowsTaskbarIcoBytes(sourcePath);
+  const contentKey = windowsShellIconContentKey(icon, bytes);
+  const cacheKey = nextWindowsShellIconCacheKey(contentKey);
   const fallbackDirectory = Path.join(STATE_DIR, "taskbar-icons");
   const directories = [
     ...new Set([
@@ -2030,7 +2033,6 @@ function materializeWindowsShellIcon(icon: DesktopAppIcon, sourcePath: string): 
       FS.mkdirSync(directory, { recursive: true });
       const destinationPath = windowsShellIconCachePath(directory, cacheKey);
       if (FS.existsSync(destinationPath)) return destinationPath;
-      const bytes = toWindowsTaskbarIcoBytes(sourcePath);
       try {
         FS.writeFileSync(destinationPath, bytes);
       } catch (error) {

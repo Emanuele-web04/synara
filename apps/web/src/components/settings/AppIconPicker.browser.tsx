@@ -66,6 +66,35 @@ it("shows a loading state and ignores extra clicks while an apply is in flight",
   expect(onValueChange).toHaveBeenCalledTimes(1);
 });
 
+it("clears the loading state without leaking a rejected apply", async () => {
+  const applyError = new Error("native icon apply failed");
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    event.preventDefault();
+    unhandledRejections.push(event.reason);
+  };
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
+
+  try {
+    const mounted = await render(
+      <AppIconPicker
+        platform="Win32"
+        value="default"
+        onValueChange={() => Promise.reject(applyError)}
+      />,
+    );
+    const iconButton = mounted.getByRole("button", { name: "Icon", exact: true });
+
+    await iconButton.click();
+    await vi.waitFor(() => expect.element(iconButton).toBeEnabled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(unhandledRejections).toEqual([]);
+  } finally {
+    window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  }
+});
+
 it("offers the dark icon on macOS", async () => {
   const onValueChange = vi.fn();
   const mounted = await render(

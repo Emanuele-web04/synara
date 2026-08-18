@@ -65,9 +65,16 @@ export function AppIconPicker({
             onClick={() => {
               if (busy) return;
               setPendingIcon(icon);
-              void Promise.resolve(onValueChange(icon)).finally(() => {
-                setPendingIcon((current) => (current === icon ? null : current));
-              });
+              void (async () => {
+                try {
+                  await onValueChange(icon);
+                } catch {
+                  // Native preference synchronization owns rollback. The picker
+                  // only owns its transient loading state.
+                } finally {
+                  setPendingIcon((current) => (current === icon ? null : current));
+                }
+              })();
             }}
           >
             <img

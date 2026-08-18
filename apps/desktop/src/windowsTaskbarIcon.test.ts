@@ -15,6 +15,7 @@ import {
   resolveWindowsShellIconCacheDirectory,
   syncWindowsShortcutIcons,
   WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS,
+  windowsShellIconContentKey,
   windowsShellIconCachePath,
   windowsTaskbarIconPropertyUpdates,
 } from "./windowsTaskbarIcon";
@@ -49,6 +50,15 @@ afterEach(() => {
 });
 
 describe("windowsShellIconCachePath", () => {
+  it("changes the cache identity when packaged icon bytes change", () => {
+    const first = windowsShellIconContentKey("default", Buffer.from("first artwork"));
+    const second = windowsShellIconContentKey("default", Buffer.from("updated artwork"));
+
+    expect(first).toMatch(/^default-[0-9a-f]{12}$/);
+    expect(second).toMatch(/^default-[0-9a-f]{12}$/);
+    expect(second).not.toBe(first);
+  });
+
   it("keeps a distinct on-disk ICO per preference so Explorer cannot reuse a stale cache entry", () => {
     expect(windowsShellIconCachePath(Path.join("cache"), "default")).toBe(
       Path.join("cache", "taskbar-default.ico"),

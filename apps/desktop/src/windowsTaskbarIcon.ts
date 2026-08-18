@@ -2,6 +2,7 @@
 // Purpose: Bind a shell-visible ICO to the Windows taskbar and force Explorer to re-read it.
 // Layer: Desktop-native preference logic
 
+import Crypto from "node:crypto";
 import Path from "node:path";
 
 import type { BrowserWindow } from "electron";
@@ -32,6 +33,11 @@ let lastMaterializedIconKey: string | null = null;
 
 export function windowsShellIconCachePath(cacheDirectory: string, iconKey: string): string {
   return Path.join(cacheDirectory, `taskbar-${iconKey}.ico`);
+}
+
+export function windowsShellIconContentKey(iconKey: string, ico: Buffer): string {
+  const digest = Crypto.createHash("sha256").update(ico).digest("hex").slice(0, 12);
+  return `${iconKey}-${digest}`;
 }
 
 export function resolveWindowsShellIconCacheDirectory(input: {
