@@ -115,6 +115,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectPrewarmSearchIndexInput,
+  ProjectPrewarmSearchIndexResult,
   ProjectResolveOutOfRootFileReferenceInput,
   ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
@@ -625,6 +627,9 @@ export interface NativeApi {
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     searchContent: (input: ProjectSearchContentInput) => Promise<ProjectSearchContentResult>;
+    prewarmSearchIndex: (
+      input: ProjectPrewarmSearchIndexInput,
+    ) => Promise<ProjectPrewarmSearchIndexResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
     resolveOutOfRootFileReference: (
       input: ProjectResolveOutOfRootFileReferenceInput,

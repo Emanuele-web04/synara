@@ -279,6 +279,10 @@
     "./deviceHelperCache": {
       "types": "./src/deviceHelperCache.ts",
       "import": "./src/deviceHelperCache.ts"
+    },
+    "./searchQuery": {
+      "types": "./src/searchQuery.ts",
+      "import": "./src/searchQuery.ts"
     }
   },
   "scripts": {
