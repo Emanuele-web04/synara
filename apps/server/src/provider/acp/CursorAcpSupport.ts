@@ -1497,6 +1497,32 @@ function makeCursorRejectedModelNotice(
   };
 }
 
+function resolveCursorMergedSessionOptions(input: {
+  readonly configOptions: ReadonlyArray<Acp.SessionConfigOption>;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
+  readonly baseModel: string;
+  readonly model: string | null | undefined;
+  readonly options: CursorModelOptions | null | undefined;
+}): CursorModelOptions | undefined {
+  const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+    configOptions: input.configOptions,
+    choices: input.choices,
+    baseModel: input.baseModel,
+    options: mergeCursorModelOptions(
+      cursorModelOptionsFromModelParameters(input.model),
+      input.options,
+    ),
+  });
+  return withCursorDefaultReasoningEffort(
+    input.baseModel,
+    withCursorFastModeDefault(
+      input.choices,
+      input.baseModel,
+      mergeCursorModelOptions(cursorModelOptionsFromCliModelId(input.model), runtimeSafeOptions),
+    ),
+  );
+}
+
 export function applyCursorAcpModelSelection<E>(input: {
   readonly runtime: CursorAcpModelSelectionRuntime;
   readonly model: string | null | undefined;
@@ -1511,23 +1537,13 @@ export function applyCursorAcpModelSelection<E>(input: {
     const initialConfigOptions = yield* input.runtime.getConfigOptions;
     const choices = flattenCursorAcpModelChoices(initialConfigOptions);
     const baseModel = resolveCursorAcpBaseModelId(input.model);
-    const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+    const mergedOptions = resolveCursorMergedSessionOptions({
       configOptions: initialConfigOptions,
       choices,
       baseModel,
-      options: mergeCursorModelOptions(
-        cursorModelOptionsFromModelParameters(input.model),
-        input.options,
-      ),
+      model: input.model,
+      options: input.options,
     });
-    const mergedOptions = withCursorDefaultReasoningEffort(
-      baseModel,
-      withCursorFastModeDefault(
-        choices,
-        baseModel,
-        mergeCursorModelOptions(cursorModelOptionsFromCliModelId(input.model), runtimeSafeOptions),
-      ),
-    );
     const selection = resolveCursorAcpModelSelection(
       initialConfigOptions,
       input.model,
@@ -1553,10 +1569,19 @@ export function applyCursorAcpModelSelection<E>(input: {
       );
     }
 
-    const configUpdates = collectCursorAcpConfigUpdates(
-      yield* input.runtime.getConfigOptions,
-      mergedOptions,
-    );
+    // Re-read after setModel: Auto/default often has no fast/effort options,
+    // so the first pass would drop fast=true and then write fast=false once
+    // GPT/Grok's dedicated toggles appear.
+    const appliedConfigOptions = yield* input.runtime.getConfigOptions;
+    const appliedChoices = flattenCursorAcpModelChoices(appliedConfigOptions);
+    const appliedOptions = resolveCursorMergedSessionOptions({
+      configOptions: appliedConfigOptions,
+      choices: appliedChoices,
+      baseModel,
+      model: input.model,
+      options: input.options,
+    });
+    const configUpdates = collectCursorAcpConfigUpdates(appliedConfigOptions, appliedOptions);
     for (const update of configUpdates) {
       yield* input.runtime.setConfigOption(update.configId, update.value).pipe(
         Effect.mapError((cause) =>

@@ -645,6 +645,65 @@ describe("applyCursorAcpModelSelection", () => {
     ]);
   });
 
+  it("keeps GPT-5.4 fast=true after switching away from Auto", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+    let currentModel = "default";
+    const modelOption = {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      options: [
+        { value: "default", name: "Auto" },
+        { value: "gpt-5.4", name: "GPT-5.4" },
+      ],
+    } as const;
+    const gpt54TraitOptions = parameterizedGpt54ConfigOptions.filter(
+      (option) => option.id !== "model",
+    );
+
+    const runtime = {
+      getConfigOptions: Effect.sync(
+        (): ReadonlyArray<Acp.SessionConfigOption> =>
+          currentModel === "gpt-5.4"
+            ? [{ ...modelOption, currentValue: "gpt-5.4" }, ...gpt54TraitOptions]
+            : [{ ...modelOption, currentValue: currentModel }],
+      ),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          currentModel = value;
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "gpt-5.4",
+        options: {
+          reasoningEffort: "xhigh",
+          contextWindow: "1m",
+          fastMode: true,
+        },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      { type: "model", value: "gpt-5.4" },
+      { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
+    ]);
+  });
+
   it("maps synthetic Cursor model variants back to ACP model plus config options", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
