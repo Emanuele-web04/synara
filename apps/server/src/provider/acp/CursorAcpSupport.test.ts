@@ -651,26 +651,27 @@ describe("applyCursorAcpModelSelection", () => {
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
     > = [];
     let currentModel = "default";
-    const modelOption = {
+    const gpt54TraitOptions = parameterizedGpt54ConfigOptions.filter(
+      (option) => option.id !== "model",
+    );
+    const modelOption = (currentValue: string): Acp.SessionConfigOption => ({
       id: "model",
       name: "Model",
       category: "model",
       type: "select",
+      currentValue,
       options: [
         { value: "default", name: "Auto" },
         { value: "gpt-5.4", name: "GPT-5.4" },
       ],
-    } as const;
-    const gpt54TraitOptions = parameterizedGpt54ConfigOptions.filter(
-      (option) => option.id !== "model",
-    );
+    });
 
     const runtime = {
       getConfigOptions: Effect.sync(
         (): ReadonlyArray<Acp.SessionConfigOption> =>
           currentModel === "gpt-5.4"
-            ? [{ ...modelOption, currentValue: "gpt-5.4" }, ...gpt54TraitOptions]
-            : [{ ...modelOption, currentValue: currentModel }],
+            ? [modelOption("gpt-5.4"), ...gpt54TraitOptions]
+            : [modelOption(currentModel)],
       ),
       setModel: (value: string) =>
         Effect.sync(() => {
