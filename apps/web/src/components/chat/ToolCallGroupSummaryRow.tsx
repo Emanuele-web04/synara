@@ -52,7 +52,7 @@ export function ToolCallGroupSummaryRow(props: {
         type="button"
         aria-expanded={open}
         className={cn(
-          "inline-flex items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-muted-foreground/90",
+          "inline-flex items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-foreground",
           MUTED_LABEL_TEXT_CLASS_NAME,
         )}
         style={{ fontSize: `${fontSizePx}px` }}
@@ -67,7 +67,7 @@ export function ToolCallGroupSummaryRow(props: {
         </span>
         <span>{summary.label}</span>
         {/* One step quieter than the label, matching the per-row disclosure chevron. */}
-        <DisclosureChevron open={open} className="text-muted-foreground/38" />
+        <DisclosureChevron open={open} className="text-muted-foreground/70" />
       </button>
       <DisclosureRegion open={open}>
         {shouldRenderChildren ? renderChildren() : null}

@@ -32,21 +32,25 @@ export const ELEVATED_HOVER_SURFACE_CLASS_NAME =
 export const ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME = `${ELEVATED_HOVER_SURFACE_CLASS_NAME} hover:text-foreground`;
 
 /**
- * The app's quiet label tone — text that is present but deliberately recedes: the
- * composer picker effort/thinking labels and the transcript tool-call / file rows.
- * `--muted-foreground` is itself translucent ink (`--color-text-foreground-secondary`),
- * so this lands around 29% effective alpha.
+ * The app's muted label tone — secondary text that reads as chrome rather than
+ * content: transcript tool-call / file rows, the "Worked for" and "Thinking"
+ * headers, composer picker labels, the composer placeholder.
  *
- * Keep every "quiet gray" on this one token: the transcript rows and the picker
- * labels sit a few pixels apart on screen, and any drift between them reads as two
- * different grays rather than one muted tone.
+ * The reference surface is the assistant message action bar (copy / branch / fork
+ * and its timestamp, see `MessageActionButton`), which is the tone every other
+ * quiet label in the transcript is read against.
+ *
+ * Deliberately the FULL `--muted-foreground`, not a faded slice of it: that token
+ * is already translucent ink (`--color-text-foreground-secondary`, ~0.65 alpha),
+ * so an extra opacity modifier on top dims it twice. In dark mode that second dim
+ * pulls the text toward the background rather than lightening it, which reads as a
+ * darker, muddier gray than the action bar right below it.
  */
-export const MUTED_LABEL_TEXT_CLASS_NAME = "text-muted-foreground/45";
+export const MUTED_LABEL_TEXT_CLASS_NAME = "text-muted-foreground";
 
 /**
  * {@link MUTED_LABEL_TEXT_CLASS_NAME} as a raw CSS color, for the few call sites that
  * must pass a `color` through an inline style (e.g. markdown previews rendered inside
  * a tool row) instead of a class.
  */
-export const MUTED_LABEL_TEXT_COLOR =
-  "color-mix(in srgb, var(--muted-foreground) 45%, transparent)";
+export const MUTED_LABEL_TEXT_COLOR = "var(--muted-foreground)";

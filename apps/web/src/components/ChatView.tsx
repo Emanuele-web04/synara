@@ -337,7 +337,7 @@ import { randomTerminalId } from "./terminal/terminalIds";
 import { cn, isMacNavigatorPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
-import { type NewProjectScriptInput } from "./ProjectScriptsControl";
+import ProjectScriptsControl, { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
   commandForProjectScript,
   nextProjectScriptId,
@@ -11146,6 +11146,7 @@ export default function ChatView({
     // and activity panels, so the landing composer reads as one unit.
     <ComposerStackedPanel
       data-empty-landing-controls="true"
+      borderless
       className="flex min-h-8 min-w-0 flex-nowrap items-center gap-x-1.5 px-2 py-1 sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
@@ -11202,6 +11203,21 @@ export default function ChatView({
           />
         ) : null}
       </div>
+      {/* Project scripts moved down from the header, which runs minimal chrome on the
+          empty landing — drafts still need to run/edit actions before the first turn. */}
+      {showEmptyLandingBranchToolbar && activeProjectScripts ? (
+        <ProjectScriptsControl
+          scripts={activeProjectScripts}
+          keybindings={keybindings}
+          preferredScriptId={
+            activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+          }
+          onRunScript={onRunProjectScriptFromHeader}
+          onAddScript={saveProjectScript}
+          onUpdateScript={updateProjectScript}
+          onDeleteScript={deleteProjectScript}
+        />
+      ) : null}
       {showEmptyLandingBranchToolbar ? (
         <Button
           type="button"
