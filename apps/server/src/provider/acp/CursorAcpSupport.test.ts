@@ -639,9 +639,9 @@ describe("applyCursorAcpModelSelection", () => {
 
     expect(calls).toEqual([
       { type: "model", value: "gpt-5.4-medium-fast" },
-      { type: "config", configId: "reasoning", value: "extra-high" },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
     ]);
   });
 
@@ -677,9 +677,9 @@ describe("applyCursorAcpModelSelection", () => {
         type: "model",
         value: "claude-opus-4-6[thinking=true,context=1m,effort=extra-high,fast=true]",
       },
-      { type: "config", configId: "reasoning", value: "extra-high" },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
     ]);
   });
 
@@ -781,12 +781,12 @@ describe("applyCursorAcpModelSelection", () => {
         type: "model",
         value: "claude-opus-4-6[thinking=true,context=1m,effort=max,fast=true]",
       },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
       { type: "config", configId: "thinking", value: true },
+      { type: "config", configId: "context", value: "1m" },
       { type: "model", value: "gpt-5.3-codex-spark[reasoning=low]" },
-      { type: "config", configId: "reasoning", value: "low" },
       { type: "config", configId: "fast", value: "false" },
+      { type: "config", configId: "reasoning", value: "low" },
     ]);
   });
 
@@ -1000,6 +1000,122 @@ describe("applyCursorAcpModelSelection", () => {
     ]);
   });
 
+  it("does not inherit advertised low effort when enabling Cursor Grok fast mode", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6[effort=low,fast=false]",
+          options: [
+            {
+              value: "grok-4.6[effort=low,fast=false]",
+              name: "Grok 4.6",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { fastMode: true },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.6[effort=high,fast=true]",
+      },
+    ]);
+  });
+
+  it("applies Cursor Grok effort after fast so the fast variant keeps HIGH", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4.6",
+          options: [{ value: "grok-4.6", name: "Grok 4.6" }],
+        },
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "low",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "xhigh", name: "Extra High" },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "false",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
+        },
+      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { reasoningEffort: "high", fastMode: true },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      { type: "model", value: "grok-4.6" },
+      { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "effort", value: "high" },
+    ]);
+  });
+
   it("keeps OpenAI CLI 1M context in the ACP model value so unsupported variants fail instead of falling back", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
@@ -1141,9 +1257,9 @@ describe("applyCursorAcpModelSelection", () => {
         type: "model",
         value: "claude-opus-4-6[thinking=true,context=1m,effort=extra-high,fast=true]",
       },
-      { type: "config", configId: "reasoning", value: "extra-high" },
-      { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+      { type: "config", configId: "context", value: "1m" },
+      { type: "config", configId: "reasoning", value: "extra-high" },
     ]);
   });
 
