@@ -11143,14 +11143,11 @@ export default function ChatView({
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
-      // The same united-but-not-fused tray the landing used below the composer, mirrored to
-      // sit ABOVE it at a narrower width (w-11/12): it carries extra bottom height (pb-6)
-      // and is pulled down by that amount (-mb-5 = 20px, just past the --composer-radius
-      // ~19px corner). That hidden bottom slice sits BEHIND the composer's rounded top
-      // corners (z-0 under the input shell's z-[1]), so its tint fills those corner notches
-      // and its straight bottom edge stays covered by the composer's solid sides. The
-      // composer keeps its own rounded shape; the tray keeps its tint + rounded top.
-      className="chat-composer-shell relative z-0 mx-auto -mb-5 flex min-h-8 w-11/12 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-6 pt-1.5 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      // United-but-not-fused tray sitting in normal flow directly above the composer at a
+      // narrower width (w-11/12): tinted, rounded on top only, flush against the input
+      // shell below. No overlap/underlay tricks — in dark mode a slice tucked behind the
+      // composer's translucent corners reads as a visible cut along the seam.
+      className="chat-composer-shell mx-auto flex min-h-8 w-11/12 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 py-1.5 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
