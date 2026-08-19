@@ -65,6 +65,12 @@ export const ProviderKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
+  // `external` is a profile-driven connector: its launch command/args/env come
+  // from an AgentProfileRevision resolved at session start, not from a fixed
+  // binary path. It shares the adapter registry and provider-service dispatch
+  // path with built-in providers, but has no built-in model catalog or settings
+  // binary — the profile supplies everything needed to spawn the agent.
+  "external",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([

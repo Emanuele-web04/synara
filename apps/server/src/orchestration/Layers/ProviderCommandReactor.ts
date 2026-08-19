@@ -97,7 +97,10 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { AgentProfileService } from "../../externalAgents/AgentProfileService.ts";
+import {
+  AgentProfileService,
+  type ExternalAgentSessionLaunch,
+} from "../../externalAgents/AgentProfileService.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -762,9 +765,10 @@ const make = Effect.gen(function* () {
   /**
    * External agent profile session start: resolve the pinned revision, refuse
    * new sessions for missing or removed profiles, and expand credential
-   * references. The generic ACP adapter that consumes the resolved launch spec
-   * is not part of this build (KAR-521), so a valid profile still stops here
-   * with an attributable error instead of being silently misrouted.
+   * references into the launch environment. Returns the resolved launch spec
+   * (profile, revision, env) for the ExternalAgentAdapter to spawn. The error
+   * mapping preserves profile-not-found / tombstoned / missing-credential as
+   * attributable validation failures instead of silent misroutes.
    */
   const resolveExternalAgentSessionStart = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -786,13 +790,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-    return yield* Effect.fail(
-      new ProviderAdapterValidationError({
-        provider: "external",
-        operation: "thread.turn.start",
-        issue: `External agent profile '${launch.profile.name}' is configured, but external agent sessions are not available in this build.`,
-      }),
-    );
+    return launch;
   });
 
   const appendProviderFailureActivity = (input: {
@@ -1224,14 +1222,19 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
+    // External agent profiles dispatch through the same provider-service path as
+    // built-in providers, but their launch spec (profile + credential env) is
+    // resolved here and handed to the ExternalAgentAdapter. External has no
+    // settings-binary or built-in model catalog, so it skips the settings
+    // enabled/providerOptions resolution below.
+    let externalAgentLaunch: ExternalAgentSessionLaunch | undefined;
     if (desiredModelSelection.provider === "external") {
-      return yield* resolveExternalAgentSessionStart({
+      externalAgentLaunch = yield* resolveExternalAgentSessionStart({
         threadId,
         selection: desiredModelSelection,
       });
-    }
-    if (threadProvider === "external") {
-      // Unreachable: external selections return in the branch above, and a
+    } else if (threadProvider === "external") {
+      // Unreachable: external selections are handled in the branch above, and a
       // requested built-in switch from an external thread fails the mismatch
       // check above. Kept as a narrow safety net for future refactors.
       return yield* Effect.fail(
@@ -1243,17 +1246,20 @@ const make = Effect.gen(function* () {
       );
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
-    const settingsSnapshot = yield* serverSettings.getSnapshot;
-    if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
-      return yield* new ProviderAdapterValidationError({
-        provider: preferredProvider,
-        operation: "thread.turn.start",
-        issue: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
-      });
+    let resolvedProviderOptions: ProviderStartOptions | undefined;
+    if (preferredProvider !== "external") {
+      const settingsSnapshot = yield* serverSettings.getSnapshot;
+      if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
+        return yield* new ProviderAdapterValidationError({
+          provider: preferredProvider,
+          operation: "thread.turn.start",
+          issue: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
+        });
+      }
+      resolvedProviderOptions = providerStartOptionsFromServerSettings(
+        settingsSnapshot.settings,
+      );
     }
-    const resolvedProviderOptions = providerStartOptionsFromServerSettings(
-      settingsSnapshot.settings,
-    );
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
@@ -1270,8 +1276,11 @@ const make = Effect.gen(function* () {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
       modelSelection: desiredModelSelection,
-      providerOptions: resolvedProviderOptions,
+      ...(resolvedProviderOptions !== undefined ? { providerOptions: resolvedProviderOptions } : {}),
       runtimeMode: desiredRuntimeMode,
+      ...(externalAgentLaunch !== undefined
+        ? { externalAgentLaunch }
+        : {}),
     };
 
     const resolveActiveSession = (threadId: ThreadId) =>
