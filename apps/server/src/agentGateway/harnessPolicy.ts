@@ -84,6 +84,9 @@ const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
   "opencode",
   "kilo",
   "pi",
+  // External agents resolve through the same agent gateway as built-in
+  // providers, so a scoped gateway connection gives them synara_* control.
+  "external",
 ]);
 
 export function providerHasSynaraGatewayControl(input: {
