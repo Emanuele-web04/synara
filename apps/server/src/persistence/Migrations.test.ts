@@ -300,7 +300,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ExternalAgentProfiles"],
         [98, "CapabilityEvidence"],
-        [100, "CapabilityEvidenceWithdrawal"],
+,
+,
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -349,6 +350,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 96, name: "ProjectionThreadsGoalAchievements" },
         { migration_id: 97, name: "ExternalAgentProfiles" },
         { migration_id: 98, name: "CapabilityEvidence" },
+        { migration_id: 99, name: "ExternalAgentLifecycle" },
         { migration_id: 100, name: "CapabilityEvidenceWithdrawal" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
@@ -440,7 +442,8 @@ agentGatewayRetentionLegacyLayer(
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ExternalAgentProfiles"],
           [98, "CapabilityEvidence"],
-          [100, "CapabilityEvidenceWithdrawal"],
+,
+,
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -534,7 +537,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ExternalAgentProfiles"],
         [98, "CapabilityEvidence"],
-        [100, "CapabilityEvidenceWithdrawal"],
+,
+,
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -569,7 +573,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ExternalAgentProfiles"],
           [98, "CapabilityEvidence"],
-          [100, "CapabilityEvidenceWithdrawal"],
+,
+,
         ],
       );
 
@@ -658,7 +663,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [96, "ProjectionThreadsGoalAchievements"],
         [97, "ExternalAgentProfiles"],
         [98, "CapabilityEvidence"],
-        [100, "CapabilityEvidenceWithdrawal"],
+,
+,
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -689,7 +695,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [96, "ProjectionThreadsGoalAchievements"],
           [97, "ExternalAgentProfiles"],
           [98, "CapabilityEvidence"],
-          [100, "CapabilityEvidenceWithdrawal"],
+,
+,
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

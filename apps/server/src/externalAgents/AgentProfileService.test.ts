@@ -105,7 +105,7 @@ layer("AgentProfileService", (it) => {
     }),
   );
 
-  it.effect("refuses new sessions for tombstoned profiles but keeps history readable", () =>
+  it.effect("refuses new sessions for retired profiles but keeps history readable", () =>
     Effect.gen(function* () {
       const service = yield* AgentProfileService;
       const created = yield* service.createProfile({
@@ -127,9 +127,11 @@ layer("AgentProfileService", (it) => {
       assert.instanceOf(launchResult, ExternalAgentProfileError);
       assert.strictEqual(launchResult.code, "profile-removed");
 
-      // Historical thread reads still resolve the pinned revision.
+      // Historical thread reads still resolve the pinned revision and record
+      // the retire lifecycle event alongside the retired status.
       const detail = yield* service.getProfile(created.profile.profileId);
-      assert.strictEqual(detail.profile.status, "tombstoned");
+      assert.strictEqual(detail.profile.status, "retired");
+      assert.strictEqual(detail.profile.lifecycleEvent?.kind, "retire");
       assert.strictEqual(detail.currentRevision.revisionId, created.revision.revisionId);
     }),
   );
@@ -146,6 +148,16 @@ layer("AgentProfileService", (it) => {
         credentialRefs: [{ name: "api-key", envKey: "CLINE_API_KEY", required: true }],
         provenance: { source: "manual" },
       });
+      // KAR-529 provenance gate: a profile with credentials must be trusted
+      // before the secret store is touched.
+      const updated = yield* service.updateProfile({
+        profileId: created.profile.profileId,
+        displayName: "Cline",
+        launch: { kind: "command", command: "cline", args: [], envRefs: [] },
+        credentialRefs: [{ name: "api-key", envKey: "CLINE_API_KEY", required: true }],
+        provenance: { source: "manual" },
+        trust: { brands: ["openai"] },
+      });
       yield* secrets.set(
         `external-agent-profile:${created.profile.profileId}:api-key`,
         new TextEncoder().encode("secret-value"),
@@ -153,7 +165,7 @@ layer("AgentProfileService", (it) => {
 
       const resolved = yield* service.resolveSessionLaunch({
         profileId: created.profile.profileId,
-        revisionId: created.revision.revisionId,
+        revisionId: updated.revision.revisionId,
       });
       assert.strictEqual(resolved.profile.profileId, created.profile.profileId);
       assert.strictEqual(resolved.env.CLINE_API_KEY, "secret-value");
@@ -215,6 +227,30 @@ layer("AgentProfileService", (it) => {
       });
       const detail = yield* service.getProfile(created.profile.profileId);
       assert.strictEqual(detail.currentRevision.connectorKind, "cli-basic");
+    }),
+  );
+
+  it.effect("refuses credential expansion for an untrusted profile", () =>
+    Effect.gen(function* () {
+      const service = yield* AgentProfileService;
+      const created = yield* service.createProfile({
+        name: "Rogue",
+        displayName: "Rogue",
+        connectorKind: "acp",
+        launch: { kind: "command", command: "rogue", args: [], envRefs: [] },
+        credentialRefs: [{ name: "api-key", envKey: "ROGUE_API_KEY", required: true }],
+        provenance: { source: "manual" },
+      });
+      // No trust claims attached, so credential release must be refused even
+      // though the profile is active.
+      const launchResult = yield* Effect.flip(
+        service.resolveSessionLaunch({
+          profileId: created.profile.profileId,
+          revisionId: created.revision.revisionId,
+        }),
+      );
+      assert.instanceOf(launchResult, ExternalAgentProfileError);
+      assert.strictEqual(launchResult.code, "profile-untrusted");
     }),
   );
 

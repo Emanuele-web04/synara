@@ -70,7 +70,11 @@ import {
 import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
 import { settleTurnStateFromSession } from "../turnLifecycle.ts";
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "../turnStartSession.ts";
+import {
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+  deriveTurnAttribution,
+} from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
@@ -1470,12 +1474,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.turn-start-requested": {
+          const attribution = deriveTurnAttribution({
+            modelSelection: event.payload.modelSelection,
+          });
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
             sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
             sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
             requestedAt: event.payload.createdAt,
+            externalAgentRevisionId: attribution.externalAgentRevisionId,
+            spawningProfileId: attribution.spawningProfileId,
           });
           return;
         }
@@ -1551,6 +1560,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 (Option.isSome(pendingTurnStart)
                   ? pendingTurnStart.value.sourceProposedPlanId
                   : null),
+              // KAR-529 attribution: prefer the revision/spawning profile pinned
+              // at turn start, falling back to the pending-start placeholder
+              // (resumed threads re-project after restart).
+              externalAgentRevisionId:
+                existingTurn.value.externalAgentRevisionId ??
+                (Option.isSome(pendingTurnStart)
+                  ? pendingTurnStart.value.externalAgentRevisionId
+                  : null),
+              spawningProfileId:
+                existingTurn.value.spawningProfileId ??
+                (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.spawningProfileId : null),
               startedAt:
                 existingTurn.value.startedAt ?? event.payload.session.updatedAt ?? event.occurredAt,
               requestedAt:
@@ -1571,6 +1591,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : null,
               sourceProposedPlanId: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.sourceProposedPlanId
+                : null,
+              externalAgentRevisionId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.externalAgentRevisionId
+                : null,
+              spawningProfileId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.spawningProfileId
                 : null,
               assistantMessageId: null,
               state: "running",
@@ -1628,6 +1654,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             pendingMessageId: null,
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
+            externalAgentRevisionId: null,
+            spawningProfileId: null,
             assistantMessageId: event.payload.messageId,
             state: "running",
             requestedAt: event.payload.createdAt,
@@ -1709,6 +1737,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             pendingMessageId: null,
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
+            externalAgentRevisionId: null,
+            spawningProfileId: null,
             assistantMessageId: event.payload.assistantMessageId,
             state: nextState,
             requestedAt: event.payload.completedAt,
@@ -1756,6 +1786,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                     sourceProposedPlanThreadId: turn.sourceProposedPlanThreadId,
                     sourceProposedPlanId: turn.sourceProposedPlanId,
                     requestedAt: turn.requestedAt,
+                    externalAgentRevisionId: turn.externalAgentRevisionId,
+                    spawningProfileId: turn.spawningProfileId,
                   })
               : projectionTurnRepository.upsertByTurnId({
                   ...turn,

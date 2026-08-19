@@ -25,6 +25,7 @@ import {
   legacyAcpRevisionId,
 } from "./agentProfileIdentity";
 import { AgentProfileRepository, type AgentProfileRepositoryShape } from "./AgentProfileRepository";
+import { assertSessionAllowed, ProfileSessionRefused } from "./agentProfileTrust";
 
 export class ExternalAgentProfileError extends Data.TaggedError("ExternalAgentProfileError")<{
   readonly code: string;
@@ -109,6 +110,7 @@ function buildContentFromEdit(input: {
   readonly launch: AgentProfileRevision["launch"];
   readonly credentialRefs: ReadonlyArray<AgentProfileCredentialRef>;
   readonly provenance: AgentProfileRevision["provenance"];
+  readonly trust?: AgentProfileRevision["trust"];
 }) {
   return {
     displayName: input.displayName,
@@ -116,6 +118,7 @@ function buildContentFromEdit(input: {
     launch: input.launch,
     credentialRefs: input.credentialRefs,
     provenance: input.provenance,
+    ...(input.trust !== undefined ? { trust: input.trust } : {}),
   };
 }
 
@@ -224,12 +227,37 @@ export const makeAgentProfileService = Effect.gen(function* () {
         return yield* profileNotFoundError(input.profileId);
       }
       const current = profile.value;
-      if (current.status === "tombstoned") {
-        return yield* profileRemovedError(current.name);
-      }
       const revision = yield* repository.getRevision(input.revisionId);
       if (Option.isNone(revision)) {
         return yield* revisionNotFoundError(current.name, input.revisionId);
+      }
+      // Shared launch gate (KAR-529 AC5): refuses quarantined/retired profiles
+      // and untrusted credential release — the same trust/status rules the
+      // lifecycle service's assertSessionAllowed enforces. `Effect.try` keeps
+      // the thrown ProfileSessionRefused on the error channel.
+      const refusal = yield* Effect.try({
+        try: () => assertSessionAllowed({ profile: current, revision: revision.value }),
+        catch: (cause) =>
+          cause instanceof ProfileSessionRefused
+            ? cause
+            : cause instanceof Error
+              ? cause
+              : new Error(String(cause)),
+      }).pipe(
+        Effect.match({
+          onFailure: (cause) =>
+            cause instanceof ProfileSessionRefused ? Option.some(cause) : Option.none(),
+          onSuccess: () => Option.none<ProfileSessionRefused>(),
+        }),
+      );
+      if (Option.isSome(refusal)) {
+        return yield* Effect.fail(
+          new ExternalAgentProfileError({
+            code: refusal.value.code,
+            message: refusal.value.message,
+            status: 409,
+          }),
+        );
       }
       const env = yield* resolveCredentialEnv(current, revision.value);
       return { profile: current, revision: revision.value, env };
@@ -301,7 +329,7 @@ export const makeAgentProfileService = Effect.gen(function* () {
         return yield* profileNotFoundError(input.profileId);
       }
       const profile = existing.value;
-      if (profile.status === "tombstoned") {
+      if (profile.status === "retired") {
         return yield* profileRemovedError(profile.name);
       }
       const currentRevision = yield* repository.getRevision(profile.currentRevisionId);
@@ -336,6 +364,11 @@ export const makeAgentProfileService = Effect.gen(function* () {
         launch: input.launch,
         credentialRefs: input.credentialRefs ?? [],
         provenance: input.provenance ?? previousProvenance ?? { source: "manual" },
+        ...(input.trust !== undefined
+          ? { trust: input.trust }
+          : Option.isSome(currentRevision) && currentRevision.value.trust !== undefined
+            ? { trust: currentRevision.value.trust }
+            : {}),
       });
       const revisionId = computeAgentProfileRevisionId(content);
       const revision: AgentProfileRevision = {
@@ -345,6 +378,11 @@ export const makeAgentProfileService = Effect.gen(function* () {
         launch: input.launch,
         credentialRefs: input.credentialRefs ?? [],
         provenance: content.provenance,
+        ...(input.trust !== undefined
+          ? { trust: input.trust }
+          : Option.isSome(currentRevision) && currentRevision.value.trust !== undefined
+            ? { trust: currentRevision.value.trust }
+            : {}),
         parentRevisionId: profile.currentRevisionId,
         createdAt: now,
       };
@@ -369,7 +407,7 @@ export const makeAgentProfileService = Effect.gen(function* () {
       if (Option.isNone(existing)) {
         return yield* profileNotFoundError(profileId);
       }
-      if (existing.value.status === "tombstoned") {
+      if (existing.value.status === "retired") {
         return existing.value;
       }
       const updated = yield* repository.tombstoneProfile(profileId, new Date().toISOString());

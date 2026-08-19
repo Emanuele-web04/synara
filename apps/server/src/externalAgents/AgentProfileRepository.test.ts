@@ -175,12 +175,14 @@ layer("AgentProfileRepository", (it) => {
       const tombstoned = Option.getOrUndefined(
         yield* repository.tombstoneProfile("agentprofile_remove", "2026-08-03T00:00:00.000Z"),
       );
-      assert.strictEqual(tombstoned?.status, "tombstoned");
+      assert.strictEqual(tombstoned?.status, "retired");
+      assert.strictEqual(tombstoned?.lifecycleEvent?.kind, "retire");
 
       // The profile row and its revisions survive for historical reads.
       const stored = Option.getOrUndefined(yield* repository.getProfile("agentprofile_remove"));
       assert.isDefined(stored);
-      assert.strictEqual(stored?.status, "tombstoned");
+      assert.strictEqual(stored?.status, "retired");
+      assert.strictEqual(stored?.lifecycleEvent?.kind, "retire");
       const historical = Option.getOrUndefined(
         yield* repository.getRevision(created.revision.revisionId),
       );

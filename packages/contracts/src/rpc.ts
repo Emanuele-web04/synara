@@ -83,8 +83,14 @@ import {
   ExternalAgentProfileGetInput,
   ExternalAgentProfileGetResult,
   ExternalAgentProfileListResult,
+  ExternalAgentProfileQuarantineInput,
+  ExternalAgentProfileQuarantineResult,
+  ExternalAgentProfileRecertifyInput,
+  ExternalAgentProfileRecertifyResult,
   ExternalAgentProfileTombstoneInput,
   ExternalAgentProfileTombstoneResult,
+  ExternalAgentProfileUnquarantineInput,
+  ExternalAgentProfileUnquarantineResult,
   ExternalAgentProfileUpdateInput,
   ExternalAgentProfileUpdateResult,
 } from "./externalAgent";
@@ -1087,6 +1093,33 @@ export const WsServerResolveConnectionPlanRpc = Rpc.make(WS_METHODS.serverResolv
   error: WsRpcError,
 });
 
+export const WsServerQuarantineExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverQuarantineExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileQuarantineInput,
+    success: ExternalAgentProfileQuarantineResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerUnquarantineExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverUnquarantineExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileUnquarantineInput,
+    success: ExternalAgentProfileUnquarantineResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerRecertifyExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverRecertifyExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileRecertifyInput,
+    success: ExternalAgentProfileRecertifyResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1424,6 +1457,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerTombstoneExternalAgentProfileRpc,
   WsServerListConnectionCandidatesRpc,
   WsServerResolveConnectionPlanRpc,
+  WsServerQuarantineExternalAgentProfileRpc,
+  WsServerUnquarantineExternalAgentProfileRpc,
+  WsServerRecertifyExternalAgentProfileRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,

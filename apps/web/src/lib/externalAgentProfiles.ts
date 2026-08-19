@@ -76,5 +76,5 @@ export function externalAgentProfileDisplayName(
 }
 
 export function isExternalAgentProfileRemoved(profile: AgentProfile): boolean {
-  return profile.status === "tombstoned";
+  return profile.status === "retired";
 }
