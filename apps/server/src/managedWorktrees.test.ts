@@ -281,7 +281,7 @@ describe("managed worktrees", () => {
     expect(remaining).toEqual([{ path: paths[0], workspaceRoot: "/repo/project" }]);
   });
 
-  it("removes orphan managed worktrees with no thread owner", async () => {
+  it("preserves managed worktrees with no projected thread owner", async () => {
     const { root, paths } = await makeManagedRoot(2);
     const removals: string[] = [];
     const git = makeGit({ removals });
@@ -304,7 +304,7 @@ describe("managed worktrees", () => {
       }),
     );
 
-    expect(removals).toEqual([paths[1]]);
+    expect(removals).toEqual([]);
   });
 
   it("never removes active worktrees", async () => {
@@ -335,7 +335,7 @@ describe("managed worktrees", () => {
     expect(remaining).toHaveLength(2);
   });
 
-  it("classifies deleted, retention, and orphan candidates without touching active keepers", () => {
+  it("classifies deleted candidates without touching active or unowned worktrees", () => {
     const inventory = [
       { path: "/wt/active", workspaceRoot: "/repo" },
       { path: "/wt/deleted", workspaceRoot: "/repo" },
@@ -381,7 +381,6 @@ describe("managed worktrees", () => {
 
     expect(candidates.map((candidate) => [candidate.entry.path, candidate.reason])).toEqual([
       ["/wt/deleted", "deleted"],
-      ["/wt/orphan", "orphan"],
     ]);
   });
 });

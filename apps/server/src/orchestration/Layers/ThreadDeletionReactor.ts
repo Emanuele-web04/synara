@@ -19,9 +19,7 @@ import {
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
 type ThreadArchivedEvent = Extract<OrchestrationEvent, { type: "thread.archived" }>;
-type ProjectDeletedEvent = Extract<OrchestrationEvent, { type: "project.deleted" }>;
 type ThreadLifecycleCleanupEvent = ThreadDeletedEvent | ThreadArchivedEvent;
-type LifecycleCleanupEvent = ThreadLifecycleCleanupEvent | ProjectDeletedEvent;
 
 // Crash recovery / backfill: threads soft-deleted before the purge could run
 // (or before purge existed) are archived and purged shortly after startup.
@@ -38,10 +36,6 @@ export function isThreadLifecycleCleanupEvent(
   event: OrchestrationEvent,
 ): event is ThreadLifecycleCleanupEvent {
   return event.type === "thread.deleted" || event.type === "thread.archived";
-}
-
-export function isLifecycleCleanupEvent(event: OrchestrationEvent): event is LifecycleCleanupEvent {
-  return isThreadLifecycleCleanupEvent(event) || event.type === "project.deleted";
 }
 
 export function isThreadCurrentlyArchived(
@@ -119,9 +113,8 @@ const make = Effect.gen(function* () {
   const git = yield* GitCore;
 
   const pruneManagedWorktreesAfterLifecycle = (context: {
-    readonly eventType: LifecycleCleanupEvent["type"];
+    readonly eventType: ThreadDeletedEvent["type"];
     readonly threadId?: string;
-    readonly projectId?: string;
   }) =>
     pruneProjectedArchivedManagedWorktrees({
       homeDir: serverConfig.homeDir,
@@ -300,32 +293,12 @@ const make = Effect.gen(function* () {
       return;
     }
     yield* purgeThreadData(event);
-    // After hard purge, any leftover path is an orphan and should be swept.
-    yield* pruneManagedWorktreesAfterLifecycle({
-      eventType: event.type,
-      threadId,
-    });
   });
 
-  const processProjectDeleted = Effect.fn(function* (event: ProjectDeletedEvent) {
-    yield* pruneManagedWorktreesAfterLifecycle({
-      eventType: event.type,
-      projectId: event.payload.projectId,
-    });
-  });
+  const processLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
+    event.type === "thread.deleted" ? processThreadDeleted(event) : cleanupArchivedThread(event);
 
-  const processLifecycleEvent = (event: LifecycleCleanupEvent) => {
-    switch (event.type) {
-      case "thread.deleted":
-        return processThreadDeleted(event);
-      case "thread.archived":
-        return cleanupArchivedThread(event);
-      case "project.deleted":
-        return processProjectDeleted(event);
-    }
-  };
-
-  const processLifecycleEventSafely = (event: LifecycleCleanupEvent) =>
+  const processLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
     processLifecycleEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -333,9 +306,7 @@ const make = Effect.gen(function* () {
         }
         return Effect.logWarning("thread lifecycle cleanup reactor failed to process event", {
           eventType: event.type,
-          ...(event.type === "project.deleted"
-            ? { projectId: event.payload.projectId }
-            : { threadId: event.payload.threadId }),
+          threadId: event.payload.threadId,
           cause: Cause.pretty(cause),
         });
       }),
@@ -351,7 +322,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* Effect.forkScoped(
           Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-            if (!isLifecycleCleanupEvent(event)) {
+            if (!isThreadLifecycleCleanupEvent(event)) {
               return Effect.void;
             }
             return worker.enqueue(event);
@@ -365,7 +336,16 @@ const make = Effect.gen(function* () {
                   cleanupThreadBeforePurge(ThreadId.makeUnsafe(threadId)).pipe(
                     Effect.flatMap((cleaned) =>
                       cleaned
-                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId))
+                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId)).pipe(
+                            Effect.flatMap((fenced) =>
+                              fenced
+                                ? pruneManagedWorktreesAfterLifecycle({
+                                    eventType: "thread.deleted",
+                                    threadId,
+                                  }).pipe(Effect.as(true))
+                                : Effect.succeed(false),
+                            ),
+                          )
                         : Effect.succeed(false),
                     ),
                   ),

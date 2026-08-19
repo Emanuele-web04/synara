@@ -29,11 +29,11 @@ export interface ManagedWorktreeThreadRef {
   readonly associatedWorktreePath?: string | null | undefined;
 }
 
-export type ManagedWorktreeRemovalReason = "deleted" | "archived-retention" | "orphan";
+export type ManagedWorktreeRemovalReason = "deleted" | "archived-retention";
 
 export interface ManagedWorktreeRemovalCandidate {
   readonly entry: ServerManagedWorktree;
-  readonly thread: ManagedWorktreeThreadRef | null;
+  readonly thread: ManagedWorktreeThreadRef;
   readonly reason: ManagedWorktreeRemovalReason;
 }
 
@@ -155,11 +155,11 @@ function canonicalizeThreadWorktreePaths(
 
 function snapshotOutputPath(input: {
   readonly snapshotsDir: string;
-  readonly threadId: string | null;
+  readonly threadId: string;
   readonly worktreePath: string;
 }): string {
   const digest = createHash("sha256").update(input.worktreePath).digest("hex").slice(0, 12);
-  const threadPathSegment = String(input.threadId ?? "orphan")
+  const threadPathSegment = input.threadId
     .replace(/[^a-z0-9._-]+/giu, "-")
     .replace(/^-+|-+$/gu, "")
     .slice(0, 80);
@@ -168,8 +168,10 @@ function snapshotOutputPath(input: {
 
 /**
  * Classify inventory entries into immediate reclaim vs retained archived keepers.
- * Active owners are never reclaim candidates. Deleted and orphan paths bypass the
- * archived retention window; only non-deleted archived worktrees honor it.
+ * Active owners are never reclaim candidates. Deleted paths bypass the archived
+ * retention window; only non-deleted archived worktrees honor it. Unowned inventory
+ * is deliberately preserved: a newly-created worktree exists briefly before its
+ * thread association is projected, and standalone worktrees are valid user data.
  */
 export function classifyManagedWorktreeRemovalCandidates(input: {
   readonly inventory: ReadonlyArray<ServerManagedWorktree>;
@@ -231,9 +233,6 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
       return true;
     });
 
-  const retainedArchivedPaths = new Set(
-    archivedKeepers.slice(0, MANAGED_WORKTREE_RETENTION_COUNT).map(({ entry }) => entry.path),
-  );
   const archivedRetentionCandidates = archivedKeepers.slice(MANAGED_WORKTREE_RETENTION_COUNT).map(
     ({ thread, entry }): ManagedWorktreeRemovalCandidate => ({
       entry,
@@ -242,20 +241,7 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
     }),
   );
 
-  // Orphans: on disk under the managed root, but not owned by an active thread
-  // and not among the retained archived keepers (nor already queued above).
-  const queuedPaths = new Set([
-    ...deletedCandidates.map((candidate) => candidate.entry.path),
-    ...archivedRetentionCandidates.map((candidate) => candidate.entry.path),
-  ]);
-  const protectedPaths = new Set([...activePaths, ...retainedArchivedPaths]);
-  const orphanCandidates: ManagedWorktreeRemovalCandidate[] = [];
-  for (const entry of input.inventory) {
-    if (protectedPaths.has(entry.path) || queuedPaths.has(entry.path)) continue;
-    orphanCandidates.push({ entry, thread: null, reason: "orphan" });
-  }
-
-  return [...deletedCandidates, ...archivedRetentionCandidates, ...orphanCandidates];
+  return [...deletedCandidates, ...archivedRetentionCandidates];
 }
 
 const ensureSnapshotsDir = (snapshotsDir: string) =>
@@ -285,7 +271,7 @@ function removeManagedWorktreeSafely(input: {
   const { entry, thread, reason } = input.candidate;
   const snapshotPath = snapshotOutputPath({
     snapshotsDir: input.snapshotsDir,
-    threadId: thread?.id ?? null,
+    threadId: thread.id,
     worktreePath: entry.path,
   });
 
@@ -301,7 +287,7 @@ function removeManagedWorktreeSafely(input: {
         const status = yield* input.git.statusDetails(entry.path).pipe(
           Effect.catch((error) =>
             Effect.logWarning("managed worktree cleanup could not read dirty state", {
-              threadId: thread?.id ?? null,
+              threadId: thread.id,
               worktreePath: entry.path,
               reason,
               error: error instanceof Error ? error.message : String(error),
@@ -312,7 +298,7 @@ function removeManagedWorktreeSafely(input: {
           yield* Effect.logWarning(
             "managed worktree cleanup skipped dirty worktree; refusing silent data loss",
             {
-              threadId: thread?.id ?? null,
+              threadId: thread.id,
               worktreePath: entry.path,
               reason,
               branch: status.branch,
@@ -333,7 +319,7 @@ function removeManagedWorktreeSafely(input: {
     .pipe(
       Effect.catch((error) =>
         Effect.logWarning("managed worktree retention skipped an unsafe cleanup", {
-          threadId: thread?.id ?? null,
+          threadId: thread.id,
           worktreePath: entry.path,
           reason,
           error: error instanceof Error ? error.message : String(error),
