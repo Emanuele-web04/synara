@@ -93,28 +93,31 @@ async function appendApprovalResponse(
     readonly occurredAt: string;
   },
 ): Promise<OrchestrationReadModel> {
-  return Effect.runPromise(
-    projectEvent(readModel, {
-      sequence: input.sequence,
-      eventId: asEventId(`evt-approval-response-${input.sequence}`),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      type: "thread.approval-response-requested",
-      occurredAt: input.occurredAt,
-      commandId: CommandId.makeUnsafe(`cmd-approval-response-${input.sequence}`),
-      causationEventId: null,
-      correlationId: CommandId.makeUnsafe(`cmd-approval-response-${input.sequence}`),
-      metadata: {
-        requestId: input.requestId,
-      },
-      payload: {
-        threadId: THREAD_ID,
-        requestId: input.requestId,
-        decision: "accept",
-        createdAt: input.occurredAt,
-      },
-    }),
-  );
+  return {
+    ...readModel,
+    threads: readModel.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            pendingInteractions: [
+              {
+                interactionKind: "approval",
+                requestId: input.requestId,
+                threadId: THREAD_ID,
+                turnId: null,
+                lifecycleGeneration: null,
+                status: "responding",
+                decision: "accept",
+                responseCommandId: CommandId.makeUnsafe(`cmd-approval-response-${input.sequence}`),
+                responseRequestedAt: input.occurredAt,
+                createdAt: input.occurredAt,
+                resolvedAt: null,
+              },
+            ],
+          }
+        : thread,
+    ),
+  };
 }
 
 async function appendApprovalRespondFailure(
@@ -126,36 +129,21 @@ async function appendApprovalRespondFailure(
     readonly settlementStatus: "retryable" | "uncertain";
   },
 ): Promise<OrchestrationReadModel> {
-  return Effect.runPromise(
-    projectEvent(readModel, {
-      sequence: input.sequence,
-      eventId: asEventId(`evt-approval-respond-failed-${input.sequence}`),
-      aggregateKind: "thread",
-      aggregateId: THREAD_ID,
-      type: "thread.activity-appended",
-      occurredAt: input.occurredAt,
-      commandId: CommandId.makeUnsafe(`cmd-approval-respond-failed-${input.sequence}`),
-      causationEventId: null,
-      correlationId: CommandId.makeUnsafe(`cmd-approval-respond-failed-${input.sequence}`),
-      metadata: {},
-      payload: {
-        threadId: THREAD_ID,
-        activity: {
-          id: asEventId(`activity-approval-respond-failed-${input.sequence}`),
-          tone: "error",
-          kind: "provider.approval.respond.failed",
-          summary: "Provider approval response failed",
-          payload: {
-            detail: "No active provider session is bound to this thread.",
-            requestId: input.requestId,
-            settlementStatus: input.settlementStatus,
-          },
-          turnId: null,
-          createdAt: input.occurredAt,
-        },
-      },
-    }),
-  );
+  return {
+    ...readModel,
+    threads: readModel.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            pendingInteractions: thread.pendingInteractions?.map((interaction) =>
+              interaction.requestId === input.requestId
+                ? { ...interaction, status: input.settlementStatus }
+                : interaction,
+            ),
+          }
+        : thread,
+    ),
+  };
 }
 
 describe("decider approval idempotency", () => {
@@ -298,5 +286,47 @@ describe("decider approval idempotency", () => {
     );
 
     expect(failure._tag).toBe("OrchestrationCommandInvariantError");
+  });
+
+  it("accepts the same request id for a new lifecycle generation", async () => {
+    const now = new Date().toISOString();
+    const withThread = await createThreadReadModel(now);
+    const withResponse = await appendApprovalResponse(withThread, {
+      sequence: 3,
+      requestId: REQUEST_ID,
+      occurredAt: now,
+    });
+    const readModel = {
+      ...withResponse,
+      threads: withResponse.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? {
+              ...thread,
+              pendingInteractions: thread.pendingInteractions?.map((interaction) => ({
+                ...interaction,
+                lifecycleGeneration: "generation-1",
+              })),
+            }
+          : thread,
+      ),
+    };
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.approval.respond",
+          commandId: CommandId.makeUnsafe("cmd-approval-respond-new-generation"),
+          threadId: THREAD_ID,
+          requestId: REQUEST_ID,
+          lifecycleGeneration: "generation-2",
+          decision: "accept",
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event.type).toBe("thread.approval-response-requested");
   });
 });

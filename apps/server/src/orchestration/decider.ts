@@ -1939,6 +1939,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
         requestId: command.requestId,
+        ...(command.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: command.lifecycleGeneration }
+          : {}),
       });
       return {
         ...withEventBase({

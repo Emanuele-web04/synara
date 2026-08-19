@@ -381,10 +381,21 @@ export function requireApprovalNotResponded(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
   readonly requestId: ApprovalRequestId;
+  readonly lifecycleGeneration?: string;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
   const thread = findThreadById(input.readModel, input.threadId);
-  const responded = thread?.respondedApprovalRequestIds ?? [];
-  if (!responded.includes(input.requestId)) {
+  const interaction = thread?.pendingInteractions?.find(
+    (entry) =>
+      entry.interactionKind === "approval" &&
+      entry.requestId === input.requestId &&
+      (input.lifecycleGeneration === undefined ||
+        entry.lifecycleGeneration === input.lifecycleGeneration),
+  );
+  if (
+    interaction === undefined ||
+    interaction.status === "pending" ||
+    interaction.status === "retryable"
+  ) {
     return Effect.void;
   }
   return Effect.fail(
