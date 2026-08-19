@@ -1841,6 +1841,14 @@ function EventRouter() {
         isTerminalThreadSessionStatus(item.thread.session.status)
       ) {
         armThreadProjectionTerminalFence(item.thread.id, item.sequence);
+      } else if (
+        item.kind === "thread-upserted" &&
+        subscribedThreadIds.has(item.thread.id) &&
+        item.thread.session !== null
+      ) {
+        // A new turn needs its own terminal fence and hold clock. Do not let an
+        // unresolved fence from the previous turn carry into the running one.
+        clearThreadProjectionTerminalFence(item.thread.id);
       }
       if (
         item.kind === "thread-upserted" &&
@@ -1910,6 +1918,8 @@ function EventRouter() {
           // Arm even while buffered: the immediate reconcile below may return a
           // premature session-set snapshot, and the fence must outlive it (#548).
           armThreadProjectionTerminalFence(threadId, item.event.sequence);
+        } else if (item.event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
         }
         if (subscribedThreadIds.has(threadId)) {
           void reconcileThreadProjection(threadId).catch(() => undefined);
@@ -1930,6 +1940,9 @@ function EventRouter() {
         // delay is not overwritten back to the slower cadence.
         armThreadProjectionTerminalFence(threadId, item.event.sequence);
       } else {
+        if (item.event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
         nextThreadProjectionReconcileAtById.set(
           threadId,
           Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,

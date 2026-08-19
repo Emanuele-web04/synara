@@ -45,11 +45,7 @@ export function doesSnapshotSatisfyTerminalFence(input: {
     return false;
   }
 
-  // Anything projected after the terminal session-set includes the buffered
-  // assistant finalize commands that follow it in the same ingestion turn.
-  if (input.snapshotSequence > input.fenceSequence) {
-    return true;
-  }
+  if (input.snapshotSequence < input.fenceSequence) return false;
 
   const latestTurn = input.latestTurn;
   if (latestTurn === null) {
@@ -66,8 +62,10 @@ export function doesSnapshotSatisfyTerminalFence(input: {
     return true;
   }
 
-  // Still at the session-set sequence without an assistant row. Buffered turns
-  // look like this briefly (completed + null assistantMessageId) before finals
-  // land; only empty turns stay here permanently, so require the hold window.
+  // A global projection sequence can advance because another thread was
+  // updated while this turn's buffered final is still waiting. The expected
+  // assistant row, not sequence advancement alone, is the proof that the reply
+  // is visible. Only genuinely empty turns may retire after the hold window.
+  if (latestTurn.assistantMessageId !== null) return false;
   return input.nowMs - input.armedAtMs >= TERMINAL_FENCE_EMPTY_TURN_HOLD_MS;
 }

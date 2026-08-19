@@ -75,6 +75,23 @@ describe("doesSnapshotSatisfyTerminalFence", () => {
     ).toBe(false);
   });
 
+  it("keeps the fence when an unrelated projection advanced but the assistant row is absent", () => {
+    expect(
+      doesSnapshotSatisfyTerminalFence({
+        snapshotSequence: 6,
+        fenceSequence: 5,
+        sessionStatus: "ready",
+        latestTurn: {
+          state: "completed",
+          assistantMessageId: assistantId,
+        },
+        messages: [],
+        armedAtMs,
+        nowMs: armedAtMs + 10_000,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps a buffered-style completed+null snapshot at the fence sequence before the empty-turn hold", () => {
     expect(
       doesSnapshotSatisfyTerminalFence({
