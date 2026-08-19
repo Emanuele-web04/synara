@@ -220,11 +220,13 @@ function SettingsRouteView() {
   const customTitleBarState = useDesktopCustomTitleBarState();
   const customTitleBarRestartRequired =
     customTitleBarState.supported && settings.useCustomTitleBar !== customTitleBarState.active;
+  const customTitleBarPreferenceDirty =
+    supportsCustomTitleBarSetting &&
+    (settings.useCustomTitleBar !== defaults.useCustomTitleBar ||
+      (customTitleBarState.supported &&
+        customTitleBarState.preference !== defaults.useCustomTitleBar));
 
-  async function applyCustomTitleBarPreference(enabled: boolean): Promise<void> {
-    updateSettings({ useCustomTitleBar: enabled });
-    const state = await window.desktopBridge?.customTitleBar?.setPreference(enabled);
-    if (!state?.restartRequired) return;
+  function showCustomTitleBarRestartToast(): void {
     toastManager.add({
       type: "warning",
       title: "Restart to apply title bar",
@@ -237,6 +239,38 @@ function SettingsRouteView() {
         },
       },
     });
+  }
+
+  async function persistCustomTitleBarPreference(
+    enabled: boolean,
+  ): Promise<{ readonly restartRequired: boolean } | null> {
+    try {
+      const bridge = window.desktopBridge?.customTitleBar;
+      if (!bridge) throw new Error("Desktop title bar bridge is unavailable.");
+      const state = await bridge.setPreference(enabled);
+      if (!state.supported || state.preference !== enabled) {
+        throw new Error("Desktop title bar preference was not persisted.");
+      }
+      return state;
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not update title bar",
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  async function applyCustomTitleBarPreference(enabled: boolean): Promise<void> {
+    const previous = settings.useCustomTitleBar;
+    updateSettings({ useCustomTitleBar: enabled });
+    const state = await persistCustomTitleBarPreference(enabled);
+    if (state === null) {
+      updateSettings({ useCustomTitleBar: previous });
+      return;
+    }
+    if (state.restartRequired) showCustomTitleBarRestartToast();
   }
 
   const visibleTerminalFontFamilySuggestions = useMemo(() => {
@@ -282,9 +316,7 @@ function SettingsRouteView() {
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
     ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
-    ...(supportsCustomTitleBarSetting && settings.useCustomTitleBar !== defaults.useCustomTitleBar
-      ? ["Custom title bar"]
-      : []),
+    ...(customTitleBarPreferenceDirty ? ["Custom title bar"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -352,6 +384,12 @@ function SettingsRouteView() {
       ),
     );
     if (!confirmed) return;
+
+    if (customTitleBarPreferenceDirty) {
+      const state = await persistCustomTitleBarPreference(defaults.useCustomTitleBar);
+      if (state === null) return;
+      if (state.restartRequired) showCustomTitleBarRestartToast();
+    }
 
     setTheme("system");
     resetAllThemes();
