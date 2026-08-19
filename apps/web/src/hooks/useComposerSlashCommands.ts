@@ -437,7 +437,7 @@ export function useComposerSlashCommands(input: {
     ],
   );
 
-  const sidechatCreationBySourceThreadIdRef = useRef(new Map<ThreadId, SidechatCreationFlight>());
+  const sidechatCreationByKeyRef = useRef(new Map<string, SidechatCreationFlight>());
   const createSidechatFromSlashCommand = useCallback(
     (inputOptions?: { initialPrompt?: string; targetProvider?: ProviderKind }): Promise<true> => {
       const api = readNativeApi();
@@ -469,8 +469,8 @@ export function useComposerSlashCommands(input: {
           : selectedModelSelection;
 
       return createOrJoinSidechat({
-        inFlightBySourceThreadId: sidechatCreationBySourceThreadIdRef.current,
-        sourceThreadId: activeThread.id,
+        inFlightByKey: sidechatCreationByKeyRef.current,
+        flightKey: `${activeThread.id}:${sidechatModelSelection.provider}`,
         initialPrompt: inputOptions?.initialPrompt,
         startCreation: (initialPrompt) =>
           createSidechatThread({
