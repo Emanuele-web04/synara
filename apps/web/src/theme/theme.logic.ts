@@ -750,19 +750,14 @@ export function buildThemeCssVariables(
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    "--app-sidebar-shadow":
-      material === "translucent"
-        ? variant === "dark"
-          ? "inset 0 1px 0 rgba(255,255,255,0.024)"
-          : "inset 0 1px 0 rgba(0,0,0,0.025)"
-        : variant === "dark"
-          ? "inset 0 1px 0 rgba(255,255,255,0.025)"
-          : "inset 0 1px 0 rgba(0,0,0,0.03)",
+    // Translucent shells lean lighter than the raw surface: light mode raises the
+    // white share so the frost doesn't read grey, dark mode lifts the near-black
+    // surface a step toward white before thinning it over the vibrancy.
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
-          ? `color-mix(in srgb, ${sidebarSurface} 56%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 48%, transparent)`
+          ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 88%, white) 56%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurface} 62%, transparent)`
         : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.
