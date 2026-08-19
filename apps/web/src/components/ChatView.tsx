@@ -10289,6 +10289,7 @@ export default function ChatView({
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
     canOfferSideCommand,
+    sidechatTargetProviders: handoffTargetProviders,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
