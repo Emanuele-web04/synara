@@ -5,7 +5,7 @@ const SENSITIVE_ENV_NAME =
 const SENSITIVE_ENV_NAME_SUFFIX =
   /_(?:API_?KEY|ACCESS_TOKEN|AUTH|AUTH_TOKEN|AUTHORIZATION|CREDENTIALS?|KEY|PASS|PASSWORD|PASSPHRASE|SECRET|TOKEN)$/;
 const SENSITIVE_FLAG_VALUE_PATTERN =
-  /(--?(?:api[-_]?key|auth|authorization|key|password|secret|token)(?:=|\s+))(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|\S+)/gi;
+  /(--?(?:api[-_]?key|auth|authorization|key|password|secret|token)(?:=|\s+))(?:(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|`(?:\\.|[^`\\])*(?:`|$)|[^\s'"`]+)+)/gi;
 const URL_CREDENTIALS_AT_VALUE_START = /^["']?[a-z][a-z0-9+.-]*:\/\/[^/?#\s]+@/i;
 const URL_CREDENTIALS_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/?#\s]+@/giu;
 const MAX_SHELL_ASSIGNMENT_SCAN_CHARS = 16_384;
