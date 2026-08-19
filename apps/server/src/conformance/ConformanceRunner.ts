@@ -29,6 +29,7 @@ import {
   makePolicySpec,
 } from "../capabilityEvidence/Services/CapabilityPolicyEngine.ts";
 import { makeAcpVerifierRegistry } from "./AcpConformanceVerifiers.ts";
+import { makeCliVerifierRegistry } from "../provider/cli/CliConformanceVerifiers.ts";
 
 export const CONFORMANCE_RUN_COMPLETED_AT_LABEL = "conformance";
 export const CONFORMANCE_EVIDENCE_SOURCE = "synthetic-conformance";
@@ -198,6 +199,12 @@ export const CapabilityVerifierRegistryLive = Layer.effect(
   CapabilityVerifierRegistry,
   Effect.gen(function* () {
     const registry = yield* makeCapabilityVerifierRegistry;
+    // Register CLI verifiers first: they gate on a CLI runtime fingerprint
+    // (matchesRuntime), so a `synara://cli-connector` runtime resolves here and
+    // an ACP/other runtime falls through to the unguarded ACP bindings.
+    makeCliVerifierRegistry({
+      register: (verifier) => registry.register(verifier),
+    });
     makeAcpVerifierRegistry({
       fixturePath: fixturePathFromServerDir(),
       register: (verifier) => registry.register(verifier),

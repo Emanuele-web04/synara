@@ -22,6 +22,7 @@ export * from "./agentMentions";
 export * from "./agentGateway";
 export * from "./externalMcp";
 export * from "./externalAgent";
+export * from "./cliConnector";
 export * from "./ws";
 export * from "./wsCompatibility";
 export * from "./keybindings";
