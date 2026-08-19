@@ -1552,13 +1552,16 @@ export function applyCursorAcpModelSelection<E>(input: {
     if (selection._tag === "Fallback" || selection._tag === "Unavailable") {
       yield* notify(makeCursorUnavailableModelNotice(selection));
     }
+    let shouldApplyRequestedOptions = selection._tag === "None";
     if (selection._tag === "Resolved" || selection._tag === "Fallback") {
       const modelValue = selection.value;
-      yield* input.runtime.setModel(modelValue).pipe(
-        Effect.asVoid,
+      const modelApplied = yield* input.runtime.setModel(modelValue).pipe(
+        Effect.as(true),
         Effect.catch((cause) =>
           isCursorModelRejection(cause)
-            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause))
+            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause)).pipe(
+                Effect.as(false),
+              )
             : Effect.fail(
                 input.mapError({
                   cause,
@@ -1567,6 +1570,14 @@ export function applyCursorAcpModelSelection<E>(input: {
               ),
         ),
       );
+      shouldApplyRequestedOptions = selection._tag === "Resolved" && modelApplied;
+    }
+
+    // A fallback keeps a different model than the one whose options were
+    // requested. Applying the requested fast/effort values to that model can
+    // silently mutate an unrelated session configuration.
+    if (!shouldApplyRequestedOptions) {
+      return;
     }
 
     // Re-read after setModel: Auto/default often has no fast/effort options,

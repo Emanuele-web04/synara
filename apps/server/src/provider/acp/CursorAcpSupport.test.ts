@@ -1109,6 +1109,68 @@ describe("applyCursorAcpModelSelection", () => {
     ]);
   });
 
+  it("does not apply requested Grok options to a fallback model", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+    const configOptions: ReadonlyArray<Acp.SessionConfigOption> = [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "gpt-5.4",
+        options: [{ value: "gpt-5.4", name: "GPT-5.4" }],
+      },
+      {
+        id: "fast",
+        name: "Fast",
+        category: "model_config",
+        type: "select",
+        currentValue: "false",
+        options: [
+          { value: "false", name: "Off" },
+          { value: "true", name: "Fast" },
+        ],
+      },
+      {
+        id: "reasoning",
+        name: "Reasoning",
+        category: "thought_level",
+        type: "select",
+        currentValue: "medium",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "medium", name: "Medium" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ];
+    const runtime = {
+      getConfigOptions: Effect.succeed(configOptions),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4.6",
+        options: { reasoningEffort: "high", fastMode: true },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([{ type: "model", value: "gpt-5.4" }]);
+  });
+
   it("applies Cursor Grok effort after fast so the fast variant keeps HIGH", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
