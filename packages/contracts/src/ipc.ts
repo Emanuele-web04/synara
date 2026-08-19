@@ -47,6 +47,12 @@ import type {
   ExternalAgentProfileUpdateResult,
 } from "./externalAgent";
 import type {
+  ConnectionCandidateListInput,
+  ConnectionCandidateListResult,
+  ConnectionPlanResolveInput,
+  ConnectionPlanResolveResult,
+} from "./connectionPlan";
+import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -798,6 +804,12 @@ export interface NativeApi {
     recordRuntimeTurnFeedback: (
       input: RuntimeTurnFeedbackInput,
     ) => Promise<RuntimeTurnFeedbackResult>;
+    listConnectionCandidates: (
+      input: ConnectionCandidateListInput,
+    ) => Promise<ConnectionCandidateListResult>;
+    resolveConnectionPlan: (
+      input: ConnectionPlanResolveInput,
+    ) => Promise<ConnectionPlanResolveResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
