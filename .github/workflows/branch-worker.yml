@@ -1,0 +1,42 @@
+name: Temporary Branch Worker
+
+on:
+  push:
+    branches:
+      - agent/wsl2-workspaces
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: |
+          if [ -f .automation.patch ]; then
+            git apply --whitespace=nowarn .automation.patch
+            rm .automation.patch
+          fi
+          rm -f .automation-touch .github/workflows/branch-worker.yml
+          bun run fmt
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "chore: apply automated branch patch"
+          git push
