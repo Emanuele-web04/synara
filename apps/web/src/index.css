@@ -398,7 +398,7 @@
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 62%, transparent);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 68%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -508,11 +508,7 @@
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-    --app-sidebar-surface: color-mix(
-      in srgb,
-      color-mix(in srgb, var(--card) 88%, var(--color-white)) 56%,
-      transparent
-    );
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
