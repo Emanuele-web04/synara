@@ -1,10 +1,11 @@
-import { EventId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
+import { EventId, ProjectId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { Cause, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
   cleanupSucceededUnlessInterrupted,
   detachThreadDevice,
+  isLifecycleCleanupEvent,
   isThreadCurrentlyArchived,
   isThreadLifecycleCleanupEvent,
   logCleanupCauseUnlessInterrupted,
@@ -30,10 +31,32 @@ function lifecycleEvent(type: "thread.archived" | "thread.deleted"): Orchestrati
   } as OrchestrationEvent;
 }
 
+function projectDeletedEvent(): OrchestrationEvent {
+  const projectId = ProjectId.makeUnsafe("project-deleted");
+  const now = "2026-07-23T20:00:00.000Z";
+  return {
+    sequence: 1,
+    eventId: EventId.makeUnsafe("event-project-deleted"),
+    aggregateKind: "project",
+    aggregateId: projectId,
+    type: "project.deleted",
+    occurredAt: now,
+    payload: { projectId, deletedAt: now },
+  } as OrchestrationEvent;
+}
+
 describe("isThreadLifecycleCleanupEvent", () => {
   it("routes both archive and delete through server-owned cleanup", () => {
     expect(isThreadLifecycleCleanupEvent(lifecycleEvent("thread.archived"))).toBe(true);
     expect(isThreadLifecycleCleanupEvent(lifecycleEvent("thread.deleted"))).toBe(true);
+  });
+});
+
+describe("isLifecycleCleanupEvent", () => {
+  it("also sweeps managed worktrees after project deletion", () => {
+    expect(isLifecycleCleanupEvent(lifecycleEvent("thread.deleted"))).toBe(true);
+    expect(isLifecycleCleanupEvent(projectDeletedEvent())).toBe(true);
+    expect(isThreadLifecycleCleanupEvent(projectDeletedEvent())).toBe(false);
   });
 });
 

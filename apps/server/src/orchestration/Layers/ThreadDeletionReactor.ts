@@ -2,7 +2,10 @@ import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import { ServerConfig } from "../../config";
 import { DeviceService } from "../../device/Services/DeviceService";
+import { GitCore } from "../../git/Services/GitCore";
+import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
 import { TerminalManager } from "../../terminal/Services/Manager";
@@ -16,7 +19,9 @@ import {
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
 type ThreadArchivedEvent = Extract<OrchestrationEvent, { type: "thread.archived" }>;
+type ProjectDeletedEvent = Extract<OrchestrationEvent, { type: "project.deleted" }>;
 type ThreadLifecycleCleanupEvent = ThreadDeletedEvent | ThreadArchivedEvent;
+type LifecycleCleanupEvent = ThreadLifecycleCleanupEvent | ProjectDeletedEvent;
 
 // Crash recovery / backfill: threads soft-deleted before the purge could run
 // (or before purge existed) are archived and purged shortly after startup.
@@ -33,6 +38,10 @@ export function isThreadLifecycleCleanupEvent(
   event: OrchestrationEvent,
 ): event is ThreadLifecycleCleanupEvent {
   return event.type === "thread.deleted" || event.type === "thread.archived";
+}
+
+export function isLifecycleCleanupEvent(event: OrchestrationEvent): event is LifecycleCleanupEvent {
+  return isThreadLifecycleCleanupEvent(event) || event.type === "project.deleted";
 }
 
 export function isThreadCurrentlyArchived(
@@ -106,6 +115,28 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const serverConfig = yield* ServerConfig;
+  const git = yield* GitCore;
+
+  const pruneManagedWorktreesAfterLifecycle = (context: {
+    readonly eventType: LifecycleCleanupEvent["type"];
+    readonly threadId?: string;
+    readonly projectId?: string;
+  }) =>
+    pruneProjectedArchivedManagedWorktrees({
+      homeDir: serverConfig.homeDir,
+      worktreesDir: serverConfig.worktreesDir,
+      snapshotQuery: projectionSnapshotQuery,
+      git,
+    }).pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        Effect.logWarning("thread lifecycle cleanup skipped managed worktree prune", {
+          ...context,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
 
   const refreshCommandReadModelAfterPurge = (threadId: string) =>
     orchestrationEngine.refreshCommandReadModel().pipe(
@@ -256,6 +287,12 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
+    // Reclaim while the soft-deleted projection row still names the worktree.
+    // Dirty managed worktrees are snapped and left with a warning (no force).
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      threadId,
+    });
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {
         threadId,
@@ -263,26 +300,48 @@ const make = Effect.gen(function* () {
       return;
     }
     yield* purgeThreadData(event);
+    // After hard purge, any leftover path is an orphan and should be swept.
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      threadId,
+    });
   });
 
-  const processThreadLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>
-    event.type === "thread.deleted" ? processThreadDeleted(event) : cleanupArchivedThread(event);
+  const processProjectDeleted = Effect.fn(function* (event: ProjectDeletedEvent) {
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      projectId: event.payload.projectId,
+    });
+  });
 
-  const processThreadLifecycleEventSafely = (event: ThreadLifecycleCleanupEvent) =>
-    processThreadLifecycleEvent(event).pipe(
+  const processLifecycleEvent = (event: LifecycleCleanupEvent) => {
+    switch (event.type) {
+      case "thread.deleted":
+        return processThreadDeleted(event);
+      case "thread.archived":
+        return cleanupArchivedThread(event);
+      case "project.deleted":
+        return processProjectDeleted(event);
+    }
+  };
+
+  const processLifecycleEventSafely = (event: LifecycleCleanupEvent) =>
+    processLifecycleEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
         return Effect.logWarning("thread lifecycle cleanup reactor failed to process event", {
           eventType: event.type,
-          threadId: event.payload.threadId,
+          ...(event.type === "project.deleted"
+            ? { projectId: event.payload.projectId }
+            : { threadId: event.payload.threadId }),
           cause: Cause.pretty(cause),
         });
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processThreadLifecycleEventSafely, {
+  const worker = yield* makeDrainableWorker(processLifecycleEventSafely, {
     capacity: THREAD_LIFECYCLE_REACTOR_CAPACITY,
   });
 
@@ -292,7 +351,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* Effect.forkScoped(
           Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-            if (!isThreadLifecycleCleanupEvent(event)) {
+            if (!isLifecycleCleanupEvent(event)) {
               return Effect.void;
             }
             return worker.enqueue(event);
