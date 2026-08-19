@@ -17,6 +17,10 @@ const hangOnPrompt = process.env.SYNARA_CLI_BASIC_HANG_ON_PROMPT === "1";
 const ignoreStdin = process.env.SYNARA_CLI_BASIC_IGNORE_STDIN === "1";
 const slowLineDelayMs = Number(process.env.SYNARA_CLI_BASIC_LINE_DELAY_MS ?? "5");
 const stderrNotes = process.env.SYNARA_CLI_BASIC_STDERR_NOTES === "1";
+// One-shot mode: exit cleanly after echoing the response for one prompt. The
+// basic tier has no turn-completion protocol event, so process exit (EOF) is
+// the honest turn boundary the connector waits on.
+const exitAfterEcho = process.env.SYNARA_CLI_BASIC_EXIT_AFTER_ECHO === "1";
 
 process.stdout.write(`${greeting}\n`);
 if (stderrNotes) {
@@ -46,6 +50,14 @@ rl.on("line", (raw) => {
       process.stdout.write(`${text}\n`);
     }, slowLineDelayMs * i);
     timer.unref();
+  }
+  if (exitAfterEcho) {
+    // One-shot: flush the echoed lines, then exit so the connector observes EOF
+    // as the turn boundary. The delay is the last line's offset plus a margin.
+    const exitAt = setTimeout(() => {
+      process.exit(0);
+    }, slowLineDelayMs * echoLines + 50);
+    exitAt.unref();
   }
 });
 
