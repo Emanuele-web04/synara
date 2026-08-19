@@ -81,15 +81,23 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { toastManager } from "../components/ui/toast";
 import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
+import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
 import { RotateCcwIcon } from "../lib/icons";
-import { cn, getNavigatorPlatform, isMacPlatform } from "../lib/utils";
+import {
+  cn,
+  getNavigatorPlatform,
+  isLinuxPlatform,
+  isMacPlatform,
+  isWindowsPlatform,
+} from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { sameProviderOrder } from "../providerOrdering";
 import {
@@ -207,6 +215,30 @@ function SettingsRouteView() {
   const [resetEpoch, setResetEpoch] = useState(0);
   const platform = getNavigatorPlatform();
   const shouldShowFontSmoothing = isMacPlatform(platform);
+  const supportsCustomTitleBarSetting =
+    isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
+  const customTitleBarState = useDesktopCustomTitleBarState();
+  const customTitleBarRestartRequired =
+    customTitleBarState.supported && settings.useCustomTitleBar !== customTitleBarState.active;
+
+  async function applyCustomTitleBarPreference(enabled: boolean): Promise<void> {
+    updateSettings({ useCustomTitleBar: enabled });
+    const state = await window.desktopBridge?.customTitleBar?.setPreference(enabled);
+    if (!state?.restartRequired) return;
+    toastManager.add({
+      type: "warning",
+      title: "Restart to apply title bar",
+      description: "The window frame updates the next time Synara launches.",
+      actionProps: {
+        "aria-label": "Restart Synara",
+        children: "Restart",
+        onClick: () => {
+          void window.desktopBridge?.customTitleBar?.relaunch();
+        },
+      },
+    });
+  }
+
   const visibleTerminalFontFamilySuggestions = useMemo(() => {
     const query = settings.terminalFontFamily.trim().toLowerCase();
     if (!query) return TERMINAL_FONT_FAMILY_SUGGESTIONS;
@@ -250,6 +282,9 @@ function SettingsRouteView() {
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
     ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
+    ...(supportsCustomTitleBarSetting && settings.useCustomTitleBar !== defaults.useCustomTitleBar
+      ? ["Custom title bar"]
+      : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -704,6 +739,50 @@ function SettingsRouteView() {
               />
             }
           />
+          {supportsCustomTitleBarSetting ? (
+            <SettingsRow
+              title="Use custom title bar"
+              description={
+                customTitleBarRestartRequired
+                  ? "Restart Synara to apply. Some Linux window managers work better with the system title bar."
+                  : "Replace the system title bar with Synara's frameless chrome and window controls. Restart required to apply."
+              }
+              status={customTitleBarRestartRequired ? "Restart required" : undefined}
+              resetAction={
+                settings.useCustomTitleBar !== defaults.useCustomTitleBar ? (
+                  <SettingResetButton
+                    label="custom title bar"
+                    onClick={() => {
+                      void applyCustomTitleBarPreference(defaults.useCustomTitleBar);
+                    }}
+                  />
+                ) : null
+              }
+              control={
+                <div className="flex items-center gap-2">
+                  {customTitleBarRestartRequired ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => {
+                        void window.desktopBridge?.customTitleBar?.relaunch();
+                      }}
+                    >
+                      Restart
+                    </Button>
+                  ) : null}
+                  <Switch
+                    checked={settings.useCustomTitleBar}
+                    onCheckedChange={(checked) => {
+                      void applyCustomTitleBarPreference(Boolean(checked));
+                    }}
+                    aria-label="Use custom title bar"
+                  />
+                </div>
+              }
+            />
+          ) : null}
         </SettingsSection>
       ) : null}
 
