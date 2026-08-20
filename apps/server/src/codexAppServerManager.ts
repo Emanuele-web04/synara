@@ -2832,6 +2832,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.discoverySessionIdleTimers.set(discoveryKey, timer);
   }
 
+  private restartDiscoverySessionIdleTimer(context: CodexSessionContext): void {
+    if (!context.discovery || context.stopping) {
+      return;
+    }
+    const discoveryKey = context.session.cwd?.trim();
+    if (!discoveryKey || this.discoverySessions.get(discoveryKey) !== context) {
+      return;
+    }
+    this.scheduleDiscoverySessionIdleStop(discoveryKey);
+  }
+
   private async stopDiscoverySession(discoveryKey: string): Promise<void> {
     const idleTimer = this.discoverySessionIdleTimers.get(discoveryKey);
     if (idleTimer) {
@@ -3462,6 +3473,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.pending.delete(String(id));
         reject(error);
       });
+    }).finally(() => {
+      this.restartDiscoverySessionIdleTimer(context);
     });
 
     return result as TResponse;
