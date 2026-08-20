@@ -2103,6 +2103,49 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it("stops an idle discovery session after its configured grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", {
+        stopping: false,
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+      });
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+      expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("wires model discovery through model/list", async () => {
     const manager = new CodexAppServerManager();
     const context = {
