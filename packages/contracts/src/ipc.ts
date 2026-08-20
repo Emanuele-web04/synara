@@ -62,8 +62,14 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListRecentCommitsInput,
+  GitListRecentCommitsResult,
   GitPullInput,
   GitPullResult,
+  GitBlameLineInput,
+  GitBlameLineResult,
+  GitReadFileAtRevInput,
+  GitReadFileAtRevResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
   GitWorkingTreeDiffStatsResult,
@@ -684,6 +690,7 @@ export interface NativeApi {
     // Existing branch/worktree API
     githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
+    listRecentCommits: (input: GitListRecentCommitsInput) => Promise<GitListRecentCommitsResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
       input: GitCreateDetachedWorktreeInput,
@@ -712,9 +719,11 @@ export interface NativeApi {
     readWorkingTreeDiff: (
       input: GitReadWorkingTreeDiffInput,
     ) => Promise<GitReadWorkingTreeDiffResult>;
+    readFileAtRev: (input: GitReadFileAtRevInput) => Promise<GitReadFileAtRevResult>;
     workingTreeDiffStats: (
       input: GitReadWorkingTreeDiffInput,
     ) => Promise<GitWorkingTreeDiffStatsResult>;
+    blameLine: (input: GitBlameLineInput) => Promise<GitBlameLineResult>;
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;

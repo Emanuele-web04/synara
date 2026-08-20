@@ -30,6 +30,7 @@ export function useRepoDiffTotals({
   const refetchInterval = refetchIntervalProp ?? false;
   // Match the Diff panel source selector so every surface shows the selected scope.
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
+  const repoDiffCompareRef = useRepoDiffScopeStore((store) => store.compareRef);
   // Counts only. These poll every few seconds during a live turn, and the patch they used to
   // be derived from grows with the working tree, so fetching it here made a large diff cost
   // megabytes of transfer plus a main-thread reparse per poll. The server counts the same
@@ -38,6 +39,7 @@ export function useRepoDiffTotals({
     gitWorkingTreeDiffStatsQueryOptions({
       cwd: gitCwd,
       scope: repoDiffScope,
+      compareRef: repoDiffCompareRef,
       enabled: isGitRepo,
       refetchInterval,
     }),

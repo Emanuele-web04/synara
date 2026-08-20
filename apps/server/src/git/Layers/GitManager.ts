@@ -1413,6 +1413,16 @@ export const makeGitManager = Effect.gen(function* () {
   const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
     function* (input) {
       switch (input.scope) {
+        case "ref": {
+          const compareRef = input.compareRef?.trim() ?? "";
+          if (compareRef.length === 0) {
+            return yield* gitManagerError(
+              "readWorkingTreeDiff",
+              "A branch or commit is required to compare the working tree against.",
+            );
+          }
+          return yield* gitCore.readRefPatch(input.cwd, compareRef);
+        }
         case "branch":
           return yield* gitCore.readBranchPatch(input.cwd);
         case "staged":
@@ -1425,6 +1435,14 @@ export const makeGitManager = Effect.gen(function* () {
       }
     },
   );
+
+  const blameLine: GitManagerShape["blameLine"] = Effect.fnUntraced(function* (input) {
+    return yield* gitCore.blameLine(input);
+  });
+
+  const readFileAtRev: GitManagerShape["readFileAtRev"] = Effect.fnUntraced(function* (input) {
+    return yield* gitCore.readFileAtRev(input);
+  });
 
   // Same reason as summarizeDiff below: the badge surfaces need three integers, not the patch.
   // Deriving them from the very patch readWorkingTreeDiff would have returned keeps the numbers
@@ -2784,6 +2802,8 @@ The local stash entry was kept for recovery.`,
     pullRequestForBranch,
     readWorkingTreeDiff,
     readWorkingTreeDiffStats,
+    blameLine,
+    readFileAtRev,
     summarizeDiff,
     resolvePullRequest,
     pullRequestSnapshot,

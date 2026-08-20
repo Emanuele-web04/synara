@@ -19,7 +19,7 @@ import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { basenameOfPath } from "~/file-icons";
 import { useCopyFileContentsToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, CodeIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
+import { ChevronRightIcon, CodeIcon, EllipsisIcon, EyeOpenIcon, PencilIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -49,6 +49,7 @@ interface WorkspaceFilePreviewHeaderProps {
   contentsForCopy?: string | null;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  onEditFile?: (() => void) | undefined;
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
   /** Short reason the current source cannot be edited safely. */
@@ -321,6 +322,18 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
               );
             })}
           </div>
+        ) : null}
+
+        {props.onEditFile ? (
+          <ChatHeaderIconButton
+            type="button"
+            tone="plain"
+            label="Edit file"
+            title="Edit file"
+            onClick={props.onEditFile}
+          >
+            <PencilIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
         ) : null}
 
         {hasOverflowMenu ? (
