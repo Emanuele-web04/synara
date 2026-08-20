@@ -317,7 +317,10 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
 const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
-const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
+// Discovery results live in the bounded caches below, so keeping a dedicated
+// app-server process alive for ten minutes only retains its process tree. A
+// short grace period still collapses startup bursts from adjacent UI queries.
+const CODEX_DISCOVERY_SESSION_IDLE_MS = 15_000;
 const CODEX_VOICE_AUTH_CACHE_TTL_MS = 60_000;
 const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
 
@@ -974,6 +977,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     | undefined;
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
+  private readonly discoverySessionIdleMs: number;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -984,6 +988,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
+      readonly discoverySessionIdleMs?: number;
     },
   ) {
     super();
@@ -992,6 +997,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.agentGatewayMcp = options?.agentGatewayMcp;
     this.teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     this.taskCompleteFallbackGraceMs = Math.max(0, options?.taskCompleteFallbackGraceMs ?? 750);
+    this.discoverySessionIdleMs = Math.max(
+      0,
+      options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
+    );
   }
 
   // The Synara MCP server rides on the shared overlay config (no secrets),
@@ -2818,9 +2827,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       void this.stopDiscoverySession(discoveryKey).catch((error) => {
         log.warn("Failed to stop idle Codex discovery session", { discoveryKey, error });
       });
-    }, CODEX_DISCOVERY_SESSION_IDLE_MS);
+    }, this.discoverySessionIdleMs);
     timer.unref();
     this.discoverySessionIdleTimers.set(discoveryKey, timer);
+  }
+
+  private restartDiscoverySessionIdleTimer(context: CodexSessionContext): void {
+    if (!context.discovery || context.stopping) {
+      return;
+    }
+    const discoveryKey = context.session.cwd?.trim();
+    if (!discoveryKey || this.discoverySessions.get(discoveryKey) !== context) {
+      return;
+    }
+    this.scheduleDiscoverySessionIdleStop(discoveryKey);
   }
 
   private async stopDiscoverySession(discoveryKey: string): Promise<void> {
@@ -3453,6 +3473,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.pending.delete(String(id));
         reject(error);
       });
+    }).finally(() => {
+      this.restartDiscoverySessionIdleTimer(context);
     });
 
     return result as TResponse;
