@@ -2714,15 +2714,15 @@ diffs-container {
 
 /* Fixed width — only the composer model/effort/provider pickers opt in. */
 .composer-picker-menu-fixed.composer-picker-menu--normal {
-  width: 13rem;
-  min-width: 13rem;
-  max-width: min(13rem, 92vw);
+  width: 14.5rem;
+  min-width: 14.5rem;
+  max-width: min(14.5rem, 92vw);
 }
 
 .composer-picker-menu-fixed.composer-picker-menu--small {
-  width: 10rem;
-  min-width: 10rem;
-  max-width: min(10rem, 92vw);
+  width: 11.25rem;
+  min-width: 11.25rem;
+  max-width: min(11.25rem, 92vw);
 }
 
 /* Size-aware option rows inside composer picker shells. */
