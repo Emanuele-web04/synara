@@ -377,6 +377,8 @@ export interface BrowserSetPanelBoundsInput {
   threadId: ThreadId;
   bounds: BrowserPanelBounds | null;
   surface?: "native" | "renderer";
+  /** Guest page zoom for a presentation surface; omitted/1 keeps the normal 100% viewport. */
+  pageZoomFactor?: number;
 }
 
 export interface BrowserAttachWebviewInput extends BrowserTabInput {
