@@ -111,6 +111,11 @@ import {
   settleDeferredDesktopQuitAfterUpdaterFailure,
 } from "./desktopQuitIntent";
 import {
+  makeRunningChatsQuitGuard,
+  quitConfirmationPresentationForPlatform,
+  shouldPromptForRunningChatsBeforeQuit,
+} from "./runningChatsQuitGuard";
+import {
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
@@ -365,6 +370,7 @@ let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
+const runningChatsQuitGuard = makeRunningChatsQuitGuard();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
 let desktopShutdownComplete = false;
@@ -3875,6 +3881,21 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   }
 }
 
+function hideDesktopWindowForImmediateQuit(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      window.setSkipTaskbar(true);
+    }
+    window.hide();
+  } catch (error: unknown) {
+    writeDesktopLogHeader(`hide window for quit failed message=${formatErrorMessage(error)}`);
+  }
+}
+
 // Keeps Electron alive long enough for backend finalizers to reap provider child processes.
 async function shutdownDesktopRuntime(reason: string): Promise<void> {
   if (desktopShutdownPromise) {
@@ -3882,6 +3903,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   }
 
   isQuitting = true;
+  hideDesktopWindowForImmediateQuit();
   writeDesktopLogHeader(`${reason} shutdown start`);
   const shutdown = runAfterDesktopShutdown(
     stopBackendAndWaitForExit(),
@@ -3910,6 +3932,51 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
     }
     throw error;
   }
+}
+
+function isMainRendererAvailable(): boolean {
+  return Boolean(
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed() &&
+    !mainWindow.webContents.isCrashed(),
+  );
+}
+
+async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
+  if (
+    !shouldPromptForRunningChatsBeforeQuit(reason) ||
+    runningChatsQuitGuard.hasAllowedQuit() ||
+    isQuitting ||
+    desktopShutdownPromise !== null ||
+    desktopShutdownComplete
+  ) {
+    requestGracefulAppQuit(reason);
+    return;
+  }
+
+  const window = mainWindow;
+  const presentation = quitConfirmationPresentationForPlatform();
+  const allowed = await runningChatsQuitGuard.askRenderer({
+    send: (request) => {
+      if (!isMainRendererAvailable() || !window) {
+        throw new Error("Renderer unavailable.");
+      }
+      if (window.isMinimized()) {
+        window.restore();
+      }
+      window.show();
+      window.focus();
+      window.webContents.send(IPC.quitConfirmationRequest, request);
+    },
+    isRendererAvailable: isMainRendererAvailable,
+    presentation,
+  });
+  if (!allowed) {
+    writeDesktopLogHeader(`${reason} stayed because chats are still running`);
+    return;
+  }
+  requestGracefulAppQuit(reason);
 }
 
 function requestGracefulAppQuit(reason: string): void {
@@ -3999,6 +4066,11 @@ function registerIpcHandlers(): void {
 
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
     return showDesktopConfirmDialog(message, owner);
+  });
+
+  ipcMain.removeAllListeners(IPC.quitConfirmationResponse);
+  ipcMain.on(IPC.quitConfirmationResponse, (_event, payload: unknown) => {
+    runningChatsQuitGuard.receiveResponse(payload);
   });
 
   ipcMain.removeHandler(IPC.setTheme);
@@ -4505,7 +4577,17 @@ function createWindow(): BrowserWindow {
       })
     ) {
       event.preventDefault();
-      requestGracefulAppQuit("window-close");
+      void confirmRunningChatsThenQuit("window-close");
+      return;
+    }
+
+    if (
+      process.platform === "linux" &&
+      !desktopShutdownComplete &&
+      !isUpdaterQuitAndInstallInFlight
+    ) {
+      event.preventDefault();
+      void confirmRunningChatsThenQuit("window-close");
     }
   });
 
@@ -4525,6 +4607,7 @@ function createWindow(): BrowserWindow {
   }
 
   window.on("closed", () => {
+    runningChatsQuitGuard.cancelPending();
     if (mainWindow === window) {
       mainWindow = null;
     }
@@ -4550,6 +4633,7 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
+    runningChatsQuitGuard.cancelPending();
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -4591,6 +4675,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   });
   window.webContents.on("responsive", () => {
     writeDesktopLogHeader("renderer responsive");
+  });
+
+  window.webContents.on("did-start-loading", () => {
+    runningChatsQuitGuard.cancelPending();
   });
 
   window.on("closed", clearReloadTimer);
@@ -4844,7 +4932,7 @@ app.on("before-quit", (event) => {
   }
 
   event.preventDefault();
-  requestGracefulAppQuit("before-quit");
+  void confirmRunningChatsThenQuit("before-quit");
 });
 
 if (hasSingleInstanceLock) {
