@@ -112,8 +112,8 @@ import {
   makeDroidAcpRuntime,
   type DroidAcpRuntimeSettings,
 } from "../acp/DroidAcpSupport.ts";
-import { makeDroidSessionTeardownGate } from "../acp/DroidSessionTeardownGate.ts";
-import { cancelDroidTurnAndWait } from "../acp/DroidTurnCancellation.ts";
+import { makeSessionTeardownGate } from "../acp/SessionTeardownGate.ts";
+import { cancelTurnAndWait } from "../acp/TurnCancellation.ts";
 import {
   elicitationQuestionsFromRequest,
   elicitationResponseFromAnswers,
@@ -393,7 +393,7 @@ export function makeDroidAdapter(
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, DroidSessionContext>();
-    const sessionTeardownGate = makeDroidSessionTeardownGate();
+    const sessionTeardownGate = makeSessionTeardownGate();
     const modelDiscoveryCache = new Map<
       string,
       { readonly expiresAt: number; readonly result: ProviderListModelsResult }
@@ -643,7 +643,7 @@ export function makeDroidAdapter(
       promptFiber: Fiber.Fiber<void, never> | undefined,
     ) =>
       Effect.gen(function* () {
-        const result = yield* cancelDroidTurnAndWait({
+        const result = yield* cancelTurnAndWait({
           cancel: ctx.acp.cancel,
           promptFiber,
           graceMs: DROID_CANCEL_GRACE_MS,
