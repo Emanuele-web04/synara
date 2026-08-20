@@ -975,6 +975,10 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+      // Let V8 persist compiled bytecode for renderer bundles served over this scheme
+      // (Chromium only code-caches http(s) by default), so cold launches skip
+      // recompiling the multi-MB app bundle.
+      codeCache: true,
     },
   },
   {
