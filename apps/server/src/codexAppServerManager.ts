@@ -344,11 +344,12 @@ function asString(value: unknown): string | undefined {
 }
 
 function normalizeCodexProcessLine(rawLine: string): string {
-  return rawLine.replaceAll(ANSI_ESCAPE_REGEX, "").trim();
+  return (
+    rawLine.includes(ANSI_ESCAPE_CHAR) ? rawLine.replaceAll(ANSI_ESCAPE_REGEX, "") : rawLine
+  ).trim();
 }
 
-function isIgnorableCodexProcessLine(rawLine: string): boolean {
-  const line = normalizeCodexProcessLine(rawLine);
+function isIgnorableCodexProcessLine(line: string): boolean {
   if (!line) {
     return true;
   }
@@ -367,10 +368,10 @@ function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
   );
 }
 
-function logIgnoredCodexStdout(rawLine: string, reason: string): void {
+function logIgnoredCodexStdout(rawLine: string, line: string, reason: string): void {
   log.warn("ignoring non-protocol codex app-server stdout", {
     reason,
-    preview: normalizeCodexProcessLine(rawLine).slice(0, 160),
+    preview: line.slice(0, 160),
     length: rawLine.length,
   });
 }
@@ -871,10 +872,10 @@ export function parseCodexUserInputQuestions(
 }
 
 export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  if (isIgnorableCodexProcessLine(rawLine)) {
+  const line = normalizeCodexProcessLine(rawLine);
+  if (isIgnorableCodexProcessLine(line)) {
     return null;
   }
-  const line = normalizeCodexProcessLine(rawLine);
 
   const match = line.match(CODEX_STDERR_LOG_REGEX);
   if (match) {
@@ -2872,7 +2873,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (context.stopping) return;
       try {
         for (const line of context.stdoutFramer.push(chunk)) {
-          if (!isIgnorableCodexProcessLine(line)) this.handleStdoutLine(context, line);
+          this.handleStdoutLine(context, line);
         }
       } catch (cause) {
         this.handleTransportFailure(context, cause);
@@ -2975,20 +2976,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
-  private handleStdoutLine(context: CodexSessionContext, line: string): void {
+  private handleStdoutLine(context: CodexSessionContext, rawLine: string): void {
+    const line = normalizeCodexProcessLine(rawLine);
     if (isIgnorableCodexProcessLine(line)) {
       return;
     }
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(rawLine);
     } catch {
       // App-server stdout is JSONL, but Codex subprocesses and hooks can leak
       // arbitrary output onto the same pipe, including fragments that begin
       // like JSON-RPC. An unparseable line cannot be a usable protocol frame;
       // ignore it and let any affected request fail through its normal timeout.
-      logIgnoredCodexStdout(line, "invalid JSON fragment");
+      logIgnoredCodexStdout(rawLine, line, "invalid JSON fragment");
       return;
     }
 
@@ -2996,7 +2998,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!protocolEnvelope || !isCodexProtocolEnvelope(protocolEnvelope)) {
       // Command output can also be valid standalone JSON (`{}`, `[]`, strings,
       // numbers). Only JSON-RPC-shaped envelopes belong to app-server itself.
-      logIgnoredCodexStdout(line, "valid JSON without a JSON-RPC envelope");
+      logIgnoredCodexStdout(rawLine, line, "valid JSON without a JSON-RPC envelope");
       return;
     }
 

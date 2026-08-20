@@ -60,7 +60,7 @@ import {
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-  providerRuntimeEventBytes,
+  type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
@@ -917,14 +917,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const sessions = new Map<ThreadId, AntigravitySessionContext>();
     const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
 
-    const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
-      (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
+    const eventIngress = yield* makeBoundedCallbackIngress<SizedProviderRuntimeEvent, never, never>(
+      (item) => Queue.offer(eventQueue, item.event).pipe(Effect.asVoid),
       {
         capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
         maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
         terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
-        isTerminal: isTerminalProviderRuntimeEvent,
-        sizeOf: providerRuntimeEventBytes,
+        isTerminal: (item) => isTerminalProviderRuntimeEvent(item.event),
+        sizeOf: (item) => item.bytes,
       },
     );
 
