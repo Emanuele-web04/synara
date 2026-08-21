@@ -1,15 +1,21 @@
 /**
- * GrokAdapterLive - Grok Build CLI (`grok agent ... stdio`) via ACP.
+ * DevinAdapterLive — Devin CLI (`devin acp`) via ACP.
  *
- * @module GrokAdapterLive
+ * A thin adapter around `AcpSessionRuntime` that reuses the shared ACP
+ * lifecycle, permission, and event-stream plumbing.
+ *
+ * @module DevinAdapterLive
  */
 import {
   ApprovalRequestId,
-  type GrokModelOptions,
+  type ChatAttachment,
   EventId,
-  type ProviderComposerCapabilities,
+  MODEL_OPTIONS_BY_PROVIDER,
   type ProviderApprovalDecision,
+  type ProviderComposerCapabilities,
   type ProviderInteractionMode,
+  ProviderListCommandsInput,
+  type ProviderListCommandsResult,
   type ProviderListModelsResult,
   type ProviderModelDescriptor,
   type ProviderRuntimeEvent,
@@ -17,15 +23,11 @@ import {
   type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
-  type ThreadId,
+  ThreadId,
   TurnId,
+  type RuntimeMode,
 } from "@synara/contracts";
-import {
-  getDefaultEffort,
-  getModelCapabilities,
-  normalizeGrokModelOptions,
-} from "@synara/shared/model";
-import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
+import { getModelCapabilities, getProviderOptionDescriptors } from "@synara/shared/model";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
@@ -39,7 +41,7 @@ import {
   Option,
   PubSub,
   Random,
-  Schema,
+  Semaphore,
   Scope,
   Stream,
 } from "effect";
@@ -52,7 +54,6 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
@@ -65,9 +66,9 @@ import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
+  ProviderAdapterError,
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
-  ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
@@ -93,8 +94,6 @@ import {
   waitForAcpQueuedTurnEventsDrained,
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
-import { forkViaAcpRuntime } from "../acp/acpFork.ts";
-import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -105,285 +104,159 @@ import {
   makeAcpToolCallEvent,
   stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
-import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
-import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
+import {
+  type AcpPlanUpdate,
+  type AcpSessionMode,
+  type AcpSessionModeState,
+  type AcpToolCallState,
+  parsePermissionRequest,
+} from "../acp/AcpRuntimeModel.ts";
+import {
+  redactAcpLogSecrets,
+  makeAcpDebugLoggers,
+  makeAcpNativeLoggers,
+} from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
-  extractGrokUserInputQuestions,
-  extractGrokExitPlanMarkdown,
-  GROK_ASK_USER_QUESTION_METHODS,
-  GROK_EXIT_PLAN_MODE_METHODS,
-  GrokAskUserQuestionRequest,
-  GrokExitPlanModeRequest,
-  makeGrokExitPlanModeApprovedResponse,
-  makeGrokExitPlanModeCapturedResponse,
-  makeGrokQuestionResponse,
-} from "../acp/GrokAcpExtension.ts";
+  elicitationQuestionsFromRequest,
+  elicitationResponseFromAnswers,
+  isFormElicitationRequest,
+} from "../acp/AcpElicitationSupport.ts";
 import {
-  applyGrokAcpModelSelection,
-  getGrokApiKeyEnv,
-  makeGrokAcpRuntime,
-  runGrokAcpCompactionCommand,
-  type GrokAcpRuntimeSettings,
-} from "../acp/GrokAcpSupport.ts";
-import { GrokAdapter, type GrokAdapterShape } from "../Services/GrokAdapter.ts";
-import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+  getDevinApiKeyEnv,
+  hasDevinApiKeyEnv,
+  mapDevinAcpCommands,
+  makeDevinAcpRuntime,
+  resolveDevinBinaryPath,
+  runDevinAcpCompactionCommand,
+  type DevinAcpRuntimeSettings,
+} from "../acp/DevinAcpSupport.ts";
+import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { makeEventNdjsonLogger, type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  type ProviderThreadSnapshot,
+  type ProviderThreadTurnSnapshot,
+} from "../Services/ProviderAdapter.ts";
+import { DevinAdapter, type DevinAdapterShape } from "../Services/DevinAdapter.ts";
 
-const PROVIDER = "grok" as const;
+const PROVIDER = "devin" as const;
+const DEVIN_RESUME_VERSION = 1 as const;
 
-export const takeGrokSynaraHarnessPolicyTextPart = (
-  state: SynaraHarnessPolicyDeliveryState,
-  scopedGatewayConnectionAvailable: boolean,
-) =>
-  takeSynaraHarnessPolicyTextPartForProviderSession(state, {
-    provider: PROVIDER,
-    scopedGatewayConnectionAvailable,
-  });
-const GROK_RESUME_VERSION = 1 as const;
-const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
-// Forking a dead source session must first resume it, which replays history,
-// so the fork exchange shares the resume-replay budget.
-const GROK_ACP_FORK_TIMEOUT_MS = 30_000;
-const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
-const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
-const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
-const SYNARA_GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
-const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
-const GROK_RESUME_REPLAY_QUIET_MS = 200;
+const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
+  defaultMs: 10 * 60 * 1000,
+});
+const DEVIN_TURN_WATCHDOG_INTERVAL_MS = 5_000;
+const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+const DEVIN_COMMAND_DISCOVERY_TIMEOUT_MS = 15_000;
+const DEVIN_COMMAND_DISCOVERY_CACHE_MS = 5 * 60_000;
+const DEVIN_DISCOVERY_CACHE_MAX_ENTRIES = 16;
+const DEVIN_ACP_TRANSPORT_DEBUG_MARKER = "devin-acp-meta-stripper-v2";
+const DEVIN_ACP_LOG_PAYLOAD_LIMIT = 4_000;
+const DEVIN_ACP_DEBUG_ENV = "SYNARA_DEVIN_ACP_DEBUG";
+const SYNARA_DEVIN_ACP_DEBUG_ENV = "SYNARA_DEVIN_ACP_DEBUG";
+const LEGACY_DEVIN_ACP_DEBUG_ENV = "DP_DEVIN_ACP_DEBUG";
+// On session/load, Devin can replay old ACP updates after the session reports
+// ready; suppression stays active until that stream goes quiet.
+const DEVIN_RESUME_REPLAY_QUIET_MS = 200;
 // Longest that startSession blocks waiting for the resume replay to settle.
 // Suppression stays active past this point; only the startup path is unblocked.
-const GROK_RESUME_REPLAY_MAX_WAIT_MS = 1_500;
+const DEVIN_RESUME_REPLAY_MAX_WAIT_MS = 1_500;
 // Absolute cap on replay suppression. A replay still streaming after this long
 // is treated as pathological: give up, warn, and unblock turns rather than
 // gating the thread forever.
-const GROK_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
-// Backstop for an alive-but-silent grok child: if a turn produces no ACP
+const DEVIN_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
+// Backstop for an alive-but-silent devin child: if a turn produces no ACP
 // activity for this long, force-fail it instead of showing "Working" forever.
-// Generous by design so legitimate long, quiet tool runs are not killed;
-// override with SYNARA_GROK_TURN_IDLE_TIMEOUT_MS when a workload needs longer.
-const GROK_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
-  envVar: "SYNARA_GROK_TURN_IDLE_TIMEOUT_MS",
-  defaultMs: 600_000,
-});
-const GROK_TURN_WATCHDOG_INTERVAL_MS = 15_000;
-// Hard cap on a manual /compact prompt. compactingThread rejects every send
-// while set, so a Grok child that goes alive-but-silent mid-compaction would
-// otherwise wedge the thread indefinitely. Reuses the turn idle timeout value
-// as a generous ceiling (compactions stream activity well under it).
-const GROK_COMPACT_TIMEOUT_MS = GROK_TURN_IDLE_TIMEOUT_MS;
+const DEVIN_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
+const DEVIN_TURN_SETTLE_DRAIN_POLL_MS = 25;
+// Reuses the turn idle timeout value as a generous ceiling (compactions stream
+// activity well under it); override both with SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS.
+const DEVIN_COMPACT_TIMEOUT_MS = DEVIN_TURN_IDLE_TIMEOUT_MS;
 // After a timed-out /compact the cancel is only best-effort: the child may
-// still stream stale compaction updates for a moment. Hold new turns (and
-// drop compaction-shaped tool updates) for this long so those events cannot
-// be attributed to the next active turn.
-const GROK_COMPACT_ABANDON_QUIET_MS = 5_000;
+// still stream stale compaction updates for a moment. Hold new turns for this
+// long so those events cannot be attributed to the next active turn.
+const DEVIN_COMPACT_ABANDON_QUIET_MS = 5_000;
 // Bounded wait for the forked post-timeout cancel to be written before the
 // next prompt is dispatched. stdio delivers in order, so once the cancel is
 // on the wire it cannot cancel a prompt written after it; a fully wedged
 // child never confirms, hence the cap.
-const GROK_COMPACT_CANCEL_WAIT_MS = 10_000;
+const DEVIN_COMPACT_CANCEL_WAIT_MS = 10_000;
 // The compaction outcome (failed tool detail) is recorded by the notification
 // consumer, which can lag the /compact response; wait for inbound activity to
 // go quiet (bounded) before deciding success.
-const GROK_COMPACT_OUTCOME_QUIET_MS = 200;
-const GROK_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
-// A prompt response can resolve while session/update events received during
-// the turn still sit in the ACP event queue. The turn stays active (bounded)
-// until that backlog drains so late tool updates keep their turn attribution
-// instead of falling into the between-turn heuristics. Zero-cost when the
-// consumer is keeping up (the queue is already empty).
-const GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
-const GROK_TURN_SETTLE_DRAIN_POLL_MS = 25;
-const GROK_EXIT_PLAN_RESPONSE_GRACE_MS = 25;
-const XAI_API_BASE_URL = "https://api.x.ai/v1";
-const GROK_PLAN_MODE_PROMPT_PREFIX = [
-  "Synara requested Grok's native plan mode.",
+const DEVIN_COMPACT_OUTCOME_QUIET_MS = 200;
+const DEVIN_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
+
+const ACP_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
+const ACP_APPROVAL_MODE_ALIASES = ["ask", "approval", "confirm"] as const;
+const ACP_IMPLEMENT_MODE_ALIASES = [
+  "code",
+  "agent",
+  "implement",
+  "chat",
+  "work",
+  "default",
+] as const;
+
+const DEVIN_PLAN_MODE_PROMPT_PREFIX = [
+  "Devin plan mode is active.",
   "Do not implement or mutate files in this turn.",
   "Do not ask follow-up questions or wait for confirmation; if scope is ambiguous, choose a reasonable default and state the assumption in the plan.",
   "When ready, create the final implementation plan.",
 ].join("\n");
-const GROK_PLAN_READ_ONLY_TOOL_NAMES = new Set([
-  "ask_user_question",
-  "enter_plan_mode",
-  "exit_plan_mode",
-  "fetch_mcp_resource",
-  "get_command_or_subagent_output",
-  "get_task_output",
-  "get_terminal_command_output",
-  "grep",
-  "hashline_grep",
-  "hashline_read",
-  "list_dir",
-  "list_mcp_resources",
-  "lsp",
-  "memory_get",
-  "memory_search",
-  "read_file",
-  "scheduler_list",
-  "search_tool",
-  "skill",
-  "todo_write",
-  "update_goal",
-  "wait_tasks",
-  "web_fetch",
-  "web_search",
-]);
-const GROK_PLAN_GUARD_HOOK_CALLBACK_ID = "synara-plan-guard";
-const GROK_SESSION_META = {
-  "x.ai/hooks": {
-    PreToolUse: [
-      {
-        matcher: "*",
-        hookCallbackIds: [GROK_PLAN_GUARD_HOOK_CALLBACK_ID],
-      },
-    ],
-  },
-} satisfies Record<string, unknown>;
 
-export function buildGrokTurnPromptText(input: {
-  readonly text: string | undefined;
-  readonly interactionMode: ProviderInteractionMode;
-}): string | undefined {
-  if (input.interactionMode === "plan") {
-    return withAcpPlanModePrompt({
-      text: input.text ?? "",
-      interactionMode: "plan",
-      promptPrefix: GROK_PLAN_MODE_PROMPT_PREFIX,
-    });
-  }
-  return input.text;
-}
-
-export function buildGrokPromptMeta(interactionMode: ProviderInteractionMode): {
-  readonly mode: "plan" | "agent";
-} {
-  // Grok ACP reconciles its native Plan tracker from session/prompt `_meta.mode`.
-  // Unlike x.ai/toggle_plan_mode this is idempotent, so reconnects cannot invert
-  // the provider state when Synara sends the desired mode again.
-  return { mode: interactionMode === "plan" ? "plan" : "agent" };
-}
-
-export function extractGrokTerminalPlanMarkdown(input: {
-  readonly interactionMode: ProviderInteractionMode | undefined;
-  readonly capturedPlanFingerprint: string | undefined;
-  readonly assistantText: string;
-}): string | undefined {
-  if (input.interactionMode !== "plan" || input.capturedPlanFingerprint !== undefined) {
-    return undefined;
-  }
-  const planMarkdown = input.assistantText.trim();
-  return planMarkdown.length > 0 ? planMarkdown : undefined;
-}
-
-export function resolveGrokPlanHookResponse(
-  interactionMode: ProviderInteractionMode | undefined,
-  payload: unknown,
-): Record<string, never> | { readonly decision: "deny"; readonly systemMessage: string } {
-  if (interactionMode !== "plan" || !isRecord(payload)) {
-    return {};
-  }
-  if (payload.hookCallbackId !== GROK_PLAN_GUARD_HOOK_CALLBACK_ID) {
-    return {};
-  }
-  const hookEventName =
-    typeof payload.hookEventName === "string" ? payload.hookEventName.trim().toLowerCase() : "";
-  if (hookEventName !== "pre_tool_use") {
-    return {};
-  }
-  const toolName =
-    typeof payload.toolName === "string" ? payload.toolName.trim().toLowerCase() : "";
-  if (GROK_PLAN_READ_ONLY_TOOL_NAMES.has(toolName)) {
-    return {};
-  }
-  return {
-    decision: "deny",
-    systemMessage: `Synara Plan mode blocks the mutating or unknown Grok tool "${toolName || "unknown"}".`,
-  };
-}
-
-const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
-  Stream.runFold(
-    stream,
-    () => "",
-    (acc, chunk) => acc + new TextDecoder().decode(chunk),
-  );
-
-function isGrokAcpDebugEnabled(): boolean {
-  return (
-    process.env[GROK_ACP_DEBUG_ENV] === "1" ||
-    process.env[SYNARA_GROK_ACP_DEBUG_ENV] === "1" ||
-    process.env[LEGACY_GROK_ACP_DEBUG_ENV] === "1"
-  );
-}
-
-function mapGrokModelDiscoveryError(cause: unknown): ProviderAdapterRequestError {
-  if (cause instanceof ProviderAdapterRequestError) {
-    return cause;
-  }
-  return new ProviderAdapterRequestError({
-    provider: PROVIDER,
-    method: "model/list",
-    detail: cause instanceof Error ? cause.message : String(cause),
-    cause,
-  });
-}
-
-export interface GrokAdapterLiveOptions {
+interface DevinAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
 
 interface PendingApproval {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
-  readonly kind: string | "unknown";
+  readonly kind: string;
 }
 
 interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
-interface GrokSessionContext {
-  harnessPolicyDelivered?: boolean;
-  readonly gatewaySessionLease?: AgentGatewaySessionLease;
+interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   readonly threadId: ThreadId;
-  readonly lifecycleGeneration?: string;
+  readonly lifecycleGeneration: string | undefined;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
   notificationFiber: Fiber.Fiber<void, never> | undefined;
-  readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
-  readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
-  lastPlanFingerprint: string | undefined;
+  pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
+  pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
+  turns: Array<ProviderThreadTurnSnapshot>;
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
   activeTurnHadAssistantContent: boolean;
   readonly activeAssistantItemsWithContent: Set<string>;
-  activePlanResponseText: string;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
-  // Epoch-ms of the last inbound ACP activity for the active turn; drives the
-  // idle-progress watchdog that force-fails a silently hung turn.
+  lastPlanFingerprint: string | undefined;
   lastTurnActivityAt: number | undefined;
   // Provider tool-call ids seen during the most recent turn, mapped to that
   // turn. A backlogged consumer can process a queued ToolCallUpdated after the
   // prompt response cleared activeTurnId; this keeps the event attributed to
-  // its originating turn instead of the between-turn auto-compaction
-  // heuristic. Cleared when the next turn dispatches.
+  // its originating turn instead of being dropped as an orphan. Cleared when
+  // the next turn dispatches.
   readonly turnToolCallIds: Map<string, TurnId>;
-  // Count of ACP session/update events fully handled by the notification
-  // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
-  // events received before a prompt response have all been processed —
-  // in-flight handlers and stream chunk buffering included.
+  // Compared against acp.sessionUpdatesEnqueuedCount to detect when queued
+  // session updates have been fully handled by the notification consumer.
   sessionUpdatesProcessed: number;
   // Pending until startSession has completed its post-registration setup.
   // The session is registered first so replay keeps draining, which means
   // sendTurn/compactThread can route to it mid-startup; they await this gate
   // until the remaining startup work has settled. Resolved by
-  // stopSessionInternal too, like
-  // resumeReplayReady, so a failed startup never strands waiters.
+  // stopSessionInternal too, like resumeReplayReady, so a failed startup never
+  // strands waiters.
   sessionConfigReady: Deferred.Deferred<void> | undefined;
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
@@ -392,18 +265,16 @@ interface GrokSessionContext {
   // before ctx.activeTurnId is assigned.
   turnStarting: boolean;
   // Set by interruptTurn while a turn is still starting (no prompt fiber to
-  // interrupt yet, e.g. gated on resume replay); startGrokTurn re-checks it
+  // interrupt yet, e.g. gated on resume replay); startDevinTurn re-checks it
   // before dispatching so a cancelled turn is never prompted.
   pendingTurnInterrupted: boolean;
   compactingThread: boolean;
   // Failed compaction tool-call detail recorded while compactingThread is set;
-  // runGrokCompaction reads it so a failed compaction whose /compact prompt
-  // still resolves successfully is not persisted as compacted (mirrors how
-  // normal turns use activeTurnFailedToolDetail).
+  // runDevinCompaction reads it so a failed compaction tool call is not
+  // persisted as a completed one.
   compactionFailedToolDetail: string | undefined;
   // Epoch-ms until which an abandoned (timed-out) /compact may still stream
-  // stale updates; new turns wait it out and compaction-shaped tool updates
-  // are dropped so they cannot pollute the next turn.
+  // stale updates; new turns wait it out so they cannot pollute the next turn.
   compactionQuietUntil: number | undefined;
   // Forked best-effort cancel from a timed-out /compact. The next prompt
   // waits (bounded) for it so the cancel is on the wire first — stdio
@@ -411,294 +282,10 @@ interface GrokSessionContext {
   compactionCancelFiber: Fiber.Fiber<void> | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
+  gatewaySessionLease: AgentGatewaySessionLease | undefined;
 }
 
-export function isGrokContextCompactionToolCall(toolCall: AcpToolCallState): boolean {
-  const haystack = [toolCall.kind, toolCall.title, toolCall.detail]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .join(" ")
-    .toLowerCase();
-  return /\b(compact|summariz)/u.test(haystack);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function scopeGrokRuntimeItemIdForTurn(turnId: TurnId, itemId: string): string {
-  return scopeAcpRuntimeItemIdForTurn(PROVIDER, turnId, itemId);
-}
-
-// Grok can close a stale assistant segment before any visible text arrives.
-export function isRenderableGrokAssistantDelta(input: {
-  readonly streamKind?: string | undefined;
-  readonly text: string;
-}): boolean {
-  return input.streamKind !== "reasoning_text" && input.text.trim().length > 0;
-}
-
-// Grok may reuse ACP item ids across resumed history; DP runtime ids must stay turn-local.
-export function scopeGrokToolCallStateForTurn(
-  turnId: TurnId,
-  toolCall: AcpToolCallState,
-): AcpToolCallState {
-  return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
-}
-
-function parseGrokResume(raw: unknown): { sessionId: string } | undefined {
-  if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== GROK_RESUME_VERSION) return undefined;
-  if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
-}
-
-function formatGrokModelName(slug: string): string {
-  if (slug === "grok-build-0.1") {
-    return "Grok Build 0.1";
-  }
-  if (slug === "grok-build") {
-    return "Grok 4.3";
-  }
-  return slug.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function isGrokBuildApiModelSlug(slug: string): boolean {
-  return slug === "grok-build-0.1" || /^grok-code-fast(?:-\d+(?:-\d+)?)?$/u.test(slug);
-}
-
-function readXaiModelAliases(rawModel: Record<string, unknown>): string[] {
-  const aliases = rawModel.aliases;
-  if (!Array.isArray(aliases)) {
-    return [];
-  }
-  return aliases
-    .filter((alias): alias is string => typeof alias === "string")
-    .map((alias) => alias.trim())
-    .filter((alias) => alias.length > 0);
-}
-
-function parseGrokCliModelList(stdout: string): Array<{ slug: string; name: string }> {
-  const models: Array<{ slug: string; name: string; isDefault: boolean }> = [];
-  let inAvailableModels = false;
-  let fallbackDefaultModel: string | undefined;
-
-  for (const line of stdout.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      if (inAvailableModels && models.length > 0) {
-        break;
-      }
-      continue;
-    }
-    const defaultMatch = /^Default model:\s*(\S+)/iu.exec(trimmed);
-    if (defaultMatch?.[1]) {
-      fallbackDefaultModel = defaultMatch[1].trim();
-      continue;
-    }
-    if (/^Available models:/iu.test(trimmed)) {
-      inAvailableModels = true;
-      continue;
-    }
-    if (!inAvailableModels) {
-      continue;
-    }
-
-    const modelMatch = /^(?:[*-]\s*)?([A-Za-z0-9._/-]+)(?:\s+\(([^)]*)\))?/u.exec(trimmed);
-    if (!modelMatch?.[1]) {
-      continue;
-    }
-    const slug = modelMatch[1].trim();
-    if (!slug) {
-      continue;
-    }
-    models.push({
-      slug,
-      name: formatGrokModelName(slug),
-      isDefault: (modelMatch[2] ?? "").toLowerCase().includes("default"),
-    });
-  }
-
-  if (models.length === 0 && fallbackDefaultModel) {
-    models.push({
-      slug: fallbackDefaultModel,
-      name: formatGrokModelName(fallbackDefaultModel),
-      isDefault: true,
-    });
-  }
-
-  return models
-    .toSorted((left, right) => Number(right.isDefault) - Number(left.isDefault))
-    .map(({ slug, name }) => ({ slug, name }));
-}
-
-export function parseXaiLanguageModelDescriptors(
-  input: unknown,
-): Array<{ slug: string; name: string }> {
-  if (!isRecord(input)) return [];
-  const rawModels = Array.isArray(input.models)
-    ? input.models
-    : Array.isArray(input.data)
-      ? input.data
-      : [];
-  const models: Array<{ slug: string; name: string }> = [];
-  const seen = new Set<string>();
-
-  for (const rawModel of rawModels) {
-    if (!isRecord(rawModel) || typeof rawModel.id !== "string") {
-      continue;
-    }
-    const slug = rawModel.id.trim();
-    if (!slug) {
-      continue;
-    }
-    const aliases = readXaiModelAliases(rawModel);
-    const supportedSlugs = [slug, ...aliases].filter(isGrokBuildApiModelSlug);
-    for (const supportedSlug of supportedSlugs) {
-      const key = supportedSlug.toLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push({ slug: supportedSlug, name: formatGrokModelName(supportedSlug) });
-    }
-  }
-
-  return models;
-}
-
-export function selectGrokDiscoveredModelGroups(input: {
-  readonly cliModels: ReadonlyArray<{ slug: string; name: string }>;
-  readonly apiModels: ReadonlyArray<{ slug: string; name: string }>;
-}): ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>> {
-  // `grok models` is the picker source of truth. The xAI language-model API still
-  // advertises retired grok-build slugs that the current CLI no longer serves.
-  if (input.cliModels.length > 0) {
-    return [input.cliModels];
-  }
-  if (input.apiModels.length > 0) {
-    return [input.apiModels];
-  }
-  return [];
-}
-
-export function mergeGrokModelDescriptors(
-  groups: ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>>,
-): ProviderModelDescriptor[] {
-  const models: ProviderModelDescriptor[] = [];
-  const seen = new Set<string>();
-  for (const group of groups) {
-    for (const model of group) {
-      const slug = model.slug.trim();
-      const key = slug.toLowerCase();
-      if (!slug || seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      const capabilities = getModelCapabilities("grok", slug);
-      const defaultReasoningEffort = getDefaultEffort(capabilities);
-      models.push({
-        slug,
-        name: model.name.trim() || formatGrokModelName(slug),
-        supportedReasoningEfforts: capabilities.reasoningEffortLevels.map((level) => ({
-          value: level.value,
-          label: level.label,
-          ...(level.description ? { description: level.description } : {}),
-        })),
-        ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
-      });
-    }
-  }
-  return models;
-}
-
-function xaiApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return (env.XAI_API_BASE_URL?.trim() || XAI_API_BASE_URL).replace(/\/+$/u, "");
-}
-
-function fetchXaiLanguageModels(input: {
-  readonly apiKey: string;
-  readonly baseUrl?: string;
-}): Effect.Effect<Array<{ slug: string; name: string }>, ProviderAdapterRequestError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const baseUrl = input.baseUrl ?? XAI_API_BASE_URL;
-      const response = await outboundHttp.request({
-        url: `${baseUrl}/language-models`,
-        policy: {
-          service: "xai-model-discovery",
-          allowedOrigins: [new URL(baseUrl).origin],
-          timeoutMs: 10_000,
-          maxRequestBytes: 0,
-          maxResponseBytes: 1_000_000,
-          maxRedirects: 0,
-          maxConcurrent: 2,
-          maxQueued: 4,
-          requirePublicAddress: true,
-        },
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${input.apiKey}`,
-        },
-      });
-      if (response.status < 200 || response.status >= 300) {
-        const detail = decodeOutboundText(response);
-        throw new Error(
-          detail.trim() || `xAI language model discovery failed with HTTP ${response.status}.`,
-        );
-      }
-      return parseXaiLanguageModelDescriptors(
-        decodeOutboundJson(response, { maxDepth: 32, maxNodes: 20_000 }),
-      );
-    },
-    catch: (cause) =>
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "model/list",
-        detail: cause instanceof Error ? cause.message : String(cause),
-        cause,
-      }),
-  });
-}
-
-function applyRequestedModelSelection<E>(input: {
-  readonly runtime: AcpSessionRuntimeShape;
-  readonly modelSelection:
-    | {
-        readonly model: string;
-        readonly options?: GrokModelOptions | null | undefined;
-      }
-    | undefined;
-  readonly mapError: (context: {
-    readonly cause: import("../acp/AcpErrors.ts").AcpError;
-    readonly method: "session/set_config_option";
-  }) => E;
-}): Effect.Effect<void, E> {
-  if (!input.modelSelection) return Effect.void;
-  return applyGrokAcpModelSelection({
-    runtime: input.runtime,
-    model: input.modelSelection.model,
-    options: input.modelSelection.options,
-    mapError: ({ cause, method }) => input.mapError({ cause, method }),
-  });
-}
-
-export function resolveGrokRuntimeModelSettings(
-  modelSelection:
-    | {
-        readonly model: string;
-        readonly options?: GrokModelOptions | null | undefined;
-      }
-    | undefined,
-): GrokAcpRuntimeSettings {
-  if (!modelSelection) return {};
-  const options = normalizeGrokModelOptions(modelSelection.model, modelSelection.options);
-  return {
-    model: modelSelection.model,
-    ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
-  };
-}
-
-function resolveGrokSessionCwd(
+function resolveDevinSessionCwd(
   inputCwd: string | undefined,
   serverConfig: ServerConfigShape,
 ): string | undefined {
@@ -709,28 +296,680 @@ function resolveGrokSessionCwd(
   });
 }
 
-export function makeGrokAdapter(
-  grokSettings: GrokAcpRuntimeSettings,
-  options?: GrokAdapterLiveOptions,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readDevinProviderStartOptions(
+  providerOptions: unknown,
+): { readonly binaryPath?: string; readonly model?: string } | undefined {
+  if (!isRecord(providerOptions) || !isRecord(providerOptions.devin)) {
+    return undefined;
+  }
+  const binaryPath = providerOptions.devin.binaryPath;
+  const model = providerOptions.devin.model;
+  return {
+    ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+    ...(typeof model === "string" ? { model } : {}),
+  };
+}
+
+function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string } | undefined {
+  if (!isRecord(resumeCursor)) {
+    return undefined;
+  }
+  const schemaVersion = resumeCursor.schemaVersion;
+  const sessionId = resumeCursor.sessionId;
+  if (
+    schemaVersion !== DEVIN_RESUME_VERSION ||
+    typeof sessionId !== "string" ||
+    !sessionId.trim()
+  ) {
+    return undefined;
+  }
+  return { sessionId: sessionId.trim() };
+}
+
+function normalizeModeToken(value: string): string {
+  return value.toLowerCase().trim().replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function tokenizeMode(value: string): ReadonlyArray<string> {
+  const normalized = normalizeModeToken(value);
+  return normalized.length === 0 ? [] : normalized.split(" ");
+}
+
+function findModeByExactNormalizedAliases(
+  modes: ReadonlyArray<AcpSessionMode>,
+  aliases: ReadonlyArray<string>,
+): AcpSessionMode | undefined {
+  const normalizedAliases = aliases.map(normalizeModeToken);
+  return modes.find((mode) => {
+    const normalizedId = normalizeModeToken(mode.id);
+    const normalizedName = normalizeModeToken(mode.name);
+    return normalizedAliases.some((alias) => normalizedId === alias || normalizedName === alias);
+  });
+}
+
+function findModeByWholeTokenAliases(
+  modes: ReadonlyArray<AcpSessionMode>,
+  aliases: ReadonlyArray<string>,
+): AcpSessionMode | undefined {
+  const aliasTokens = aliases.flatMap(tokenizeMode);
+  return modes.find((mode) => {
+    const modeTokens = new Set([...tokenizeMode(mode.id), ...tokenizeMode(mode.name)]);
+    return aliasTokens.some((token) => modeTokens.has(token));
+  });
+}
+
+export function resolveRequestedModeId(input: {
+  readonly modeState: AcpSessionModeState | undefined;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+}): Effect.Effect<string | undefined, ProviderAdapterValidationError> {
+  return Effect.gen(function* () {
+    const { modeState, runtimeMode, interactionMode } = input;
+
+    if (interactionMode === "plan" && !modeState) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "resolveRequestedModeId",
+        issue: "Plan mode requires the ACP session to expose modes, but none were reported.",
+      });
+    }
+
+    if (!modeState) {
+      return undefined;
+    }
+
+    const aliases =
+      interactionMode === "plan"
+        ? ACP_PLAN_MODE_ALIASES
+        : runtimeMode === "approval-required"
+          ? ACP_APPROVAL_MODE_ALIASES
+          : ACP_IMPLEMENT_MODE_ALIASES;
+
+    // For plan mode, only an exact normalized id or name match is considered
+    // safe; whole-token matching is too permissive for a fail-closed gate.
+    const targetMode =
+      interactionMode === "plan"
+        ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
+        : (findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
+          findModeByWholeTokenAliases(modeState.availableModes, aliases));
+
+    if (!targetMode) {
+      const requiredBy =
+        interactionMode === "plan" ? "plan interaction mode" : `runtime mode "${runtimeMode}"`;
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "resolveRequestedModeId",
+        issue: `Requested ${requiredBy} does not match any available ACP mode. Available modes: ${modeState.availableModes
+          .map((mode) => `${mode.id} (${mode.name})`)
+          .join(", ")}`,
+      });
+    }
+
+    return targetMode.id === modeState.currentModeId ? undefined : targetMode.id;
+  });
+}
+
+export function applyDevinSessionConfiguration(input: {
+  readonly runtime: Pick<AcpSessionRuntimeShape, "getModeState" | "setMode">;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+}): Effect.Effect<void, ProviderAdapterError> {
+  return Effect.gen(function* () {
+    const modeState = yield* input.runtime.getModeState.pipe(
+      Effect.timeoutOption(5_000),
+      Effect.map(Option.getOrUndefined),
+      Effect.orElseSucceed(() => undefined),
+    );
+
+    const requestedModeId = yield* resolveRequestedModeId({
+      modeState,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+    });
+
+    if (requestedModeId) {
+      yield* input.runtime.setMode(requestedModeId).pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `setMode("${requestedModeId}") failed: ${error.message}`,
+            }),
+        ),
+      );
+
+      const modeStateAfter = yield* input.runtime.getModeState.pipe(
+        Effect.timeoutOption(5_000),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+      const stillRequired = yield* resolveRequestedModeId({
+        modeState: modeStateAfter,
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `setMode("${requestedModeId}") did not put the session into the requested mode: ${error.message}`,
+            }),
+        ),
+      );
+      if (stillRequired !== undefined) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "applyDevinSessionConfiguration",
+          issue: `setMode("${requestedModeId}") was not confirmed by the ACP agent. Current mode: ${modeStateAfter?.currentModeId ?? "undefined"}`,
+        });
+      }
+    }
+  });
+}
+
+export function scopeDevinRuntimeItemIdForTurn(turnId: TurnId, itemId: string): string {
+  return scopeAcpRuntimeItemIdForTurn(PROVIDER, turnId, itemId);
+}
+
+// Devin can close a stale assistant segment before any visible text arrives.
+export function isRenderableDevinAssistantDelta(input: {
+  readonly streamKind?: string | undefined;
+  readonly text: string;
+}): boolean {
+  return input.streamKind !== "reasoning_text" && input.text.trim().length > 0;
+}
+
+export function scopeDevinToolCallStateForTurn(
+  turnId: TurnId,
+  toolCall: AcpToolCallState,
+): AcpToolCallState {
+  return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
+}
+
+function setDevinDiscoveryCacheEntry(
+  cache: Map<string, { readonly expiresAt: number; readonly result: ProviderListCommandsResult }>,
+  key: string,
+  value: { readonly expiresAt: number; readonly result: ProviderListCommandsResult },
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > DEVIN_DISCOVERY_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+function collectStreamAsString<E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> {
+  return Stream.runFold(
+    stream,
+    () => "",
+    (acc, chunk) => acc + new TextDecoder().decode(chunk),
+  );
+}
+
+function isDevinAcpDebugEnabled(): boolean {
+  return (
+    process.env[DEVIN_ACP_DEBUG_ENV] === "1" ||
+    process.env[SYNARA_DEVIN_ACP_DEBUG_ENV] === "1" ||
+    process.env[LEGACY_DEVIN_ACP_DEBUG_ENV] === "1"
+  );
+}
+
+function formatDevinModelName(slug: string): string {
+  return slug.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+interface DevinModelDescriptorSeed {
+  readonly slug: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly variants?: ReadonlyArray<DevinModelVariantSeed>;
+}
+
+interface DevinModelVariantSeed {
+  readonly model: string;
+  readonly label?: string;
+  readonly maxContextTokens?: number;
+}
+
+function readDevinModelString(
+  model: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined {
+  for (const key of keys) {
+    const value = model[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readDevinModelNumber(
+  model: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): number | undefined {
+  for (const key of keys) {
+    const value = model[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value.trim());
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseDevinModelVariant(value: unknown): DevinModelVariantSeed | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const model = readDevinModelString(value, ["model_uid", "modelUid", "uid", "model", "id"]);
+  if (!model) {
+    return undefined;
+  }
+  const label = readDevinModelString(value, ["label", "name", "displayName", "title"]);
+  const maxContextTokens = readDevinModelNumber(value, [
+    "max_context_tokens",
+    "maxContextTokens",
+    "context_window_tokens",
+    "contextWindowTokens",
+  ]);
+  return {
+    model,
+    ...(label ? { label } : {}),
+    ...(maxContextTokens !== undefined ? { maxContextTokens } : {}),
+  };
+}
+
+function parseDevinModelFamily(
+  value: Record<string, unknown>,
+): DevinModelDescriptorSeed | undefined {
+  const hasVariantIdentity =
+    readDevinModelString(value, ["model_uid", "modelUid", "uid"]) !== undefined;
+  const slug = readDevinModelString(
+    value,
+    hasVariantIdentity
+      ? ["family_uid", "familyUid", "slug"]
+      : ["slug", "family_uid", "familyUid", "id", "model"],
+  );
+  if (!slug) {
+    return undefined;
+  }
+
+  const variants = Array.isArray(value.variants)
+    ? value.variants
+        .map(parseDevinModelVariant)
+        .filter((variant): variant is DevinModelVariantSeed => variant !== undefined)
+    : [];
+  const name = readDevinModelString(value, ["family_label", "name", "label", "displayName"]);
+  const description = readDevinModelString(value, ["description", "details"]);
+  return {
+    slug,
+    ...(name ? { name } : {}),
+    ...(description ? { description } : {}),
+    ...(variants.length > 0 ? { variants } : {}),
+  };
+}
+
+function collectDevinModelDescriptors(
+  value: unknown,
+  models: DevinModelDescriptorSeed[],
+  seen: Set<unknown>,
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDevinModelDescriptors(entry, models, seen);
+    }
+    return;
+  }
+  if (!isRecord(value) || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+
+  const family = parseDevinModelFamily(value);
+  if (family) {
+    models.push(family);
+    // A family owns its variants. Do not recurse into them as if they were
+    // independent model families; doing so loses the effort matrix.
+    for (const [key, nested] of Object.entries(value)) {
+      if (key === "variants") {
+        continue;
+      }
+      if (Array.isArray(nested) || isRecord(nested)) {
+        collectDevinModelDescriptors(nested, models, seen);
+      }
+    }
+    return;
+  }
+
+  // Tolerate older/alternate flat lists that contain concrete model UIDs but
+  // no family wrapper. They remain selectable even though no controls can be
+  // inferred for them.
+  const concreteModel = readDevinModelString(value, ["model_uid", "modelUid", "uid"]);
+  if (concreteModel) {
+    const name = readDevinModelString(value, ["label", "name", "displayName", "title"]);
+    models.push({ slug: concreteModel, ...(name ? { name } : {}) });
+  }
+
+  for (const nested of Object.values(value)) {
+    if (Array.isArray(nested) || isRecord(nested)) {
+      collectDevinModelDescriptors(nested, models, seen);
+    }
+  }
+}
+
+export function parseDevinCliModelList(stdout: string): DevinModelDescriptorSeed[] {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const candidates = new Set<string>([trimmed]);
+  const firstObject = trimmed.search(/[[{]/u);
+  const lastObject = Math.max(trimmed.lastIndexOf("}"), trimmed.lastIndexOf("]"));
+  if (firstObject >= 0 && lastObject > firstObject) {
+    candidates.add(trimmed.slice(firstObject, lastObject + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate.replace(/^\uFEFF/u, ""));
+      const models: DevinModelDescriptorSeed[] = [];
+      collectDevinModelDescriptors(parsed, models, new Set());
+      return models;
+    } catch {
+      // Try the next tolerant JSON boundary; CLI diagnostics are ignored.
+    }
+  }
+  return [];
+}
+
+function formatDevinContextWindow(value: number | undefined, model: string): string | undefined {
+  if (value !== undefined) {
+    if (value >= 1_000_000 && value % 1_000_000 === 0) {
+      return `${value / 1_000_000}m`;
+    }
+    if (value >= 1_000 && value % 1_000 === 0) {
+      return `${value / 1_000}k`;
+    }
+    return String(value);
+  }
+  const suffix = model.match(/(?:^|[-_])(\d+(?:\.\d+)?m)(?:$|[-_])/iu)?.[1];
+  return suffix?.toLowerCase();
+}
+
+function inferDevinReasoningEffort(variant: DevinModelVariantSeed): string | undefined {
+  const haystack = `${variant.model} ${variant.label ?? ""}`.toLowerCase().replace(/[_.-]+/gu, " ");
+  if (/\b(?:no thinking|none|off)\b/u.test(haystack)) return "none";
+  if (/\bminimal\b/u.test(haystack)) return "minimal";
+  if (/\blow\b/u.test(haystack)) return "low";
+  if (/\bmedium\b/u.test(haystack)) return "medium";
+  if (/\bxhigh\b|\bextra high\b/u.test(haystack)) return "xhigh";
+  if (/\bhigh\b/u.test(haystack)) return "high";
+  if (/\bmax\b/u.test(haystack)) return "max";
+  return undefined;
+}
+
+function isDevinFastVariant(variant: DevinModelVariantSeed): boolean {
+  const haystack = `${variant.model} ${variant.label ?? ""}`.toLowerCase();
+  return /\bfast\b/u.test(haystack) || /(?:^|[-_])priority(?:$|[-_])/u.test(variant.model);
+}
+
+function isDevinThinkingVariant(variant: DevinModelVariantSeed): boolean {
+  const haystack = `${variant.model} ${variant.label ?? ""}`.toLowerCase().replace(/[_.-]+/gu, " ");
+  return (
+    /\bthinking\b/u.test(haystack) &&
+    !/\bno thinking\b/u.test(haystack) &&
+    inferDevinReasoningEffort(variant) === undefined
+  );
+}
+
+const DEVIN_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+
+const DEVIN_EFFORT_ORDER: ReadonlyArray<string> = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function uniqueStrings(values: ReadonlyArray<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+export function mergeDevinModelDescriptors(
+  groups: ReadonlyArray<ReadonlyArray<DevinModelDescriptorSeed>>,
+): Array<ProviderModelDescriptor> {
+  const models: ProviderModelDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const model of group) {
+      const slug = model.slug.trim();
+      const key = slug.toLowerCase();
+      if (!slug || seen.has(key)) continue;
+      seen.add(key);
+      const name = model.name?.trim() || formatDevinModelName(slug);
+      const rawVariants = model.variants ?? [];
+      const effortValues = uniqueStrings(rawVariants.map(inferDevinReasoningEffort)).toSorted(
+        (left, right) => DEVIN_EFFORT_ORDER.indexOf(left) - DEVIN_EFFORT_ORDER.indexOf(right),
+      );
+      const rawContextValues = uniqueStrings(
+        rawVariants.map((variant) =>
+          formatDevinContextWindow(variant.maxContextTokens, variant.model),
+        ),
+      );
+      const contextWindowValues = rawContextValues.length > 1 ? rawContextValues : [];
+      const defaultContextWindow =
+        contextWindowValues.length > 0
+          ? (rawVariants
+              .map((variant) => formatDevinContextWindow(variant.maxContextTokens, variant.model))
+              .find((value) => value === undefined) ?? contextWindowValues[0])
+          : undefined;
+      const hasFastMode = rawVariants.some(isDevinFastVariant);
+      const hasThinkingVariant = rawVariants.some(isDevinThinkingVariant);
+      const hasPlainThinkingVariant = rawVariants.some(
+        (variant) =>
+          !isDevinThinkingVariant(variant) && inferDevinReasoningEffort(variant) === undefined,
+      );
+      const hasThinkingToggle = hasThinkingVariant && hasPlainThinkingVariant;
+      const modelVariants = rawVariants.map((variant) => {
+        const reasoningEffort = inferDevinReasoningEffort(variant);
+        const contextWindow = formatDevinContextWindow(variant.maxContextTokens, variant.model);
+        return {
+          model: variant.model,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(contextWindowValues.length > 0 && contextWindow ? { contextWindow } : {}),
+          ...(hasFastMode ? { fastMode: isDevinFastVariant(variant) } : {}),
+          ...(hasThinkingToggle ? { thinking: isDevinThinkingVariant(variant) } : {}),
+        };
+      });
+      const defaultVariant = rawVariants.find(
+        (variant) =>
+          !isDevinFastVariant(variant) &&
+          !isDevinThinkingVariant(variant) &&
+          (contextWindowValues.length === 0 ||
+            formatDevinContextWindow(variant.maxContextTokens, variant.model) ===
+              defaultContextWindow),
+      );
+      const defaultReasoningEffort =
+        inferDevinReasoningEffort(defaultVariant ?? rawVariants[0] ?? { model: "" }) ??
+        effortValues[0];
+      const contextWindowOptions = contextWindowValues.map((value) =>
+        value === defaultContextWindow
+          ? { value, label: value.toUpperCase(), isDefault: true as const }
+          : { value, label: value.toUpperCase() },
+      );
+      models.push({
+        slug,
+        name,
+        ...(model.description ? { description: model.description } : {}),
+        ...(effortValues.length > 0
+          ? {
+              supportedReasoningEfforts: effortValues.map((value) => ({
+                value,
+                label: DEVIN_EFFORT_LABELS[value] ?? formatDevinModelName(value),
+              })),
+              ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+            }
+          : {}),
+        ...(hasFastMode ? { supportsFastMode: true } : {}),
+        ...(hasThinkingToggle ? { supportsThinkingToggle: true } : {}),
+        ...(contextWindowOptions.length > 1
+          ? {
+              contextWindowOptions,
+              ...(defaultContextWindow ? { defaultContextWindow } : {}),
+            }
+          : {}),
+        ...(modelVariants.length > 0 ? { modelVariants } : {}),
+      });
+    }
+  }
+  return models;
+}
+
+export function buildDevinStaticModelDescriptors(): ReadonlyArray<ProviderModelDescriptor> {
+  return MODEL_OPTIONS_BY_PROVIDER.devin.map((modelDefinition) => {
+    const caps = getModelCapabilities(PROVIDER, modelDefinition.slug);
+    return {
+      slug: modelDefinition.slug,
+      name: modelDefinition.name,
+      optionDescriptors: getProviderOptionDescriptors({
+        provider: PROVIDER,
+        caps,
+      }),
+      supportsFastMode: caps.supportsFastMode,
+      supportsThinkingToggle: caps.supportsThinkingToggle,
+      contextWindowOptions: caps.contextWindowOptions,
+      supportedReasoningEfforts: caps.reasoningEffortLevels,
+      defaultReasoningEffort: caps.reasoningEffortLevels.find((o) => o.isDefault)?.value,
+    };
+  });
+}
+
+export function buildDevinPromptMeta(interactionMode: ProviderInteractionMode): {
+  readonly mode: "plan" | "agent";
+} {
+  // Devin ACP reconciles its native Plan tracker from session/prompt `_meta.mode`.
+  // This is idempotent, so reconnects cannot invert the provider state when
+  // Synara sends the desired mode again.
+  return { mode: interactionMode === "plan" ? "plan" : "agent" };
+}
+
+function redactDevinDiscoveryError(value: unknown): string {
+  const message = value instanceof Error ? value.message : String(value);
+  return String(redactAcpLogSecrets(message));
+}
+
+function acpToAdapterError(threadId: ThreadId) {
+  return (cause: { readonly message: string }) =>
+    new ProviderAdapterProcessError({
+      provider: PROVIDER,
+      threadId,
+      detail: cause.message,
+      cause,
+    });
+}
+
+function buildDevinPromptParts(input: {
+  readonly text: string | undefined;
+  readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
+  readonly attachmentsDir: string;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly fileSystem: FileSystem.FileSystem;
+}): Effect.Effect<Array<Acp.ContentBlock>, ProviderAdapterRequestError> {
+  return Effect.gen(function* () {
+    const promptText = appendFileAttachmentsPromptBlock({
+      text: input.text
+        ? withAcpPlanModePrompt({
+            text: input.text.trim(),
+            interactionMode: input.interactionMode,
+            promptPrefix: DEVIN_PLAN_MODE_PROMPT_PREFIX,
+          })
+        : undefined,
+      attachments: input.attachments,
+      attachmentsDir: input.attachmentsDir,
+      include: "all-files",
+    });
+
+    const promptParts: Array<Acp.ContentBlock> = [];
+    if (promptText?.trim()) {
+      promptParts.push({ type: "text", text: promptText });
+    }
+
+    const imageBlocks = yield* loadProviderPromptImageBlocks({
+      attachments: input.attachments,
+      attachmentsDir: input.attachmentsDir,
+      provider: PROVIDER,
+      method: "session/prompt",
+      readFile: input.fileSystem.readFile,
+    });
+
+    promptParts.push(...(imageBlocks as Array<Acp.ContentBlock>));
+    return promptParts;
+  });
+}
+
+export function makeDevinAdapter(
+  devinSettings: DevinAcpRuntimeSettings = {},
+  options?: DevinAdapterLiveOptions,
 ) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
-    // Optional so adapter tests can run without the gateway layer; when
-    // present, every session gets the synara_* MCP tools.
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
-    const nativeEventLogger =
-      options?.nativeEventLogger ??
-      (options?.nativeEventLogPath !== undefined
-        ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
-        : undefined);
-    const managedNativeEventLogger =
-      options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
-    const sessions = new Map<ThreadId, GrokSessionContext>();
+    let nativeEventLogger = options?.nativeEventLogger;
+    let managedNativeEventLogger: EventNdjsonLogger | undefined;
+    if (nativeEventLogger === undefined && options?.nativeEventLogPath !== undefined) {
+      managedNativeEventLogger = yield* makeEventNdjsonLogger(options.nativeEventLogPath, {
+        stream: "native",
+      });
+      nativeEventLogger = managedNativeEventLogger;
+    }
+
+    const sessions = new Map<ThreadId, DevinSessionContext>();
+    const commandDiscoveryCache = new Map<
+      string,
+      { readonly expiresAt: number; readonly result: ProviderListCommandsResult }
+    >();
+    const discoveryLock = yield* Semaphore.make(1);
     const withThreadLock = yield* makeAcpThreadLock();
     const runtimeEventPubSub = yield* PubSub.bounded<ProviderRuntimeEvent>(
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
@@ -739,6 +978,21 @@ export function makeGrokAdapter(
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+
+    const makeDevinDiscoveryRuntime = (input: {
+      readonly binaryPath?: string;
+      readonly cwd: string;
+    }) =>
+      makeDevinAcpRuntime({
+        devinSettings: {
+          ...(devinSettings.binaryPath ? { binaryPath: devinSettings.binaryPath } : {}),
+          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        },
+        childProcessSpawner,
+        cwd: input.cwd,
+        runtimeMode: "approval-required",
+        clientInfo: { name: "Synara Command Discovery", version: "0.0.0" },
+      });
 
     const offerRuntimeEvent = (
       lifecycleGeneration: string | undefined,
@@ -771,14 +1025,8 @@ export function makeGrokAdapter(
       });
 
     const emitPlanUpdate = (
-      ctx: GrokSessionContext,
-      payload: {
-        readonly explanation?: string | null;
-        readonly plan: ReadonlyArray<{
-          readonly step: string;
-          readonly status: "pending" | "inProgress" | "completed";
-        }>;
-      },
+      ctx: DevinSessionContext,
+      payload: AcpPlanUpdate,
       rawPayload: unknown,
     ) =>
       Effect.gen(function* () {
@@ -798,19 +1046,20 @@ export function makeGrokAdapter(
         );
       });
 
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<GrokSessionContext, ProviderAdapterSessionNotFoundError> => {
+    const requireSession = (threadId: ThreadId) => {
       const ctx = sessions.get(threadId);
       if (!ctx || ctx.stopped) {
         return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
+          new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId,
+          }),
         );
       }
       return Effect.succeed(ctx);
     };
 
-    const stopSessionInternal = (ctx: GrokSessionContext) =>
+    const stopSessionInternal = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
@@ -841,38 +1090,16 @@ export function makeGrokAdapter(
         });
       });
 
-    const completeGrokPlanTurn = (
-      ctx: GrokSessionContext,
-      turnId: TurnId,
-      activePromptFiber: Fiber.Fiber<void, never> | undefined,
-    ) =>
-      Effect.gen(function* () {
-        if (!clearAcpActiveTurn(ctx, turnId)) {
-          return;
-        }
-        const completedCost = finalizeAcpActiveTurnCost(ctx);
-        const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
-        ctx.session = {
-          ...sessionWithoutLastError,
-          status: "ready",
-          updatedAt: yield* nowIso,
-        };
-        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-          type: "turn.completed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          turnId,
-          payload: { state: "completed", stopReason: null, ...completedCost },
-        });
-        yield* Effect.ignore(ctx.acp.cancel);
-        if (activePromptFiber) {
-          yield* Fiber.interrupt(activePromptFiber);
-        }
+    const waitForDevinQueuedTurnEventsDrained = (ctx: DevinSessionContext) =>
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: ctx.acp.sessionUpdatesEnqueuedCount,
+        sessionUpdatesProcessed: () => ctx.sessionUpdatesProcessed,
+        maxWaitMs: DEVIN_TURN_SETTLE_DRAIN_MAX_WAIT_MS,
+        pollMs: DEVIN_TURN_SETTLE_DRAIN_POLL_MS,
       });
 
-    const noteSuppressedGrokRuntimeEvent = (
-      ctx: GrokSessionContext,
+    const noteSuppressedDevinRuntimeEvent = (
+      ctx: DevinSessionContext,
       eventTag: string,
       reason: "resume-replay" | "orphan-turn-event",
     ) =>
@@ -880,10 +1107,10 @@ export function makeGrokAdapter(
         if (reason === "resume-replay") {
           ctx.resumeReplayLastSuppressedAt = Date.now();
         }
-        if (!isGrokAcpDebugEnabled()) {
+        if (!isDevinAcpDebugEnabled()) {
           return;
         }
-        yield* Effect.logInfo("grok.acp.runtime_event_suppressed", {
+        yield* Effect.logInfo("devin.acp.runtime_event_suppressed", {
           threadId: ctx.threadId,
           turnId: ctx.activeTurnId,
           eventTag,
@@ -891,24 +1118,24 @@ export function makeGrokAdapter(
         });
       });
 
-    const activeTurnIdForGrokRuntimeEvent = (ctx: GrokSessionContext, eventTag: string) =>
+    const activeTurnIdForDevinRuntimeEvent = (ctx: DevinSessionContext, eventTag: string) =>
       Effect.gen(function* () {
         if (ctx.resumeReplayReady !== undefined) {
-          yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag, "resume-replay");
+          yield* noteSuppressedDevinRuntimeEvent(ctx, eventTag, "resume-replay");
           return undefined;
         }
         if (ctx.compactingThread) {
           return undefined;
         }
         if (ctx.activeTurnId === undefined) {
-          yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag, "orphan-turn-event");
+          yield* noteSuppressedDevinRuntimeEvent(ctx, eventTag, "orphan-turn-event");
           return undefined;
         }
         return ctx.activeTurnId;
       });
 
-    const emitGrokContextCompactionRuntimeEvent = (
-      ctx: GrokSessionContext,
+    const emitDevinContextCompactionRuntimeEvent = (
+      ctx: DevinSessionContext,
       input: {
         readonly lifecycle: "item.updated" | "item.completed";
         readonly status: "inProgress" | "completed" | "failed";
@@ -922,7 +1149,7 @@ export function makeGrokAdapter(
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          itemId: RuntimeItemId.makeUnsafe(`grok-compaction:${ctx.threadId}`),
+          itemId: RuntimeItemId.makeUnsafe(`devin-compaction:${ctx.threadId}`),
           payload: {
             itemType: "context_compaction",
             status: input.status,
@@ -932,25 +1159,17 @@ export function makeGrokAdapter(
         });
       });
 
-    const waitForGrokQueuedTurnEventsDrained = (ctx: GrokSessionContext) =>
-      waitForAcpQueuedTurnEventsDrained({
-        sessionUpdatesEnqueuedCount: ctx.acp.sessionUpdatesEnqueuedCount,
-        sessionUpdatesProcessed: () => ctx.sessionUpdatesProcessed,
-        maxWaitMs: GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS,
-        pollMs: GROK_TURN_SETTLE_DRAIN_POLL_MS,
-      });
-
     // Waits until the notification consumer has been quiet briefly so state it
     // records from queued events (e.g. compactionFailedToolDetail) is visible
     // before the compaction outcome is decided. Bounded — a chatty session
     // cannot hold the /compact RPC open past the cap.
-    const settleGrokCompactionOutcome = (ctx: GrokSessionContext) =>
+    const settleDevinCompactionOutcome = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         // First drain events that were already enqueued when the /compact
         // response resolved — a backlogged consumer may not have applied a
         // failed compaction tool update yet, and the quiet window below only
         // covers in-transit stragglers, not the existing backlog.
-        yield* waitForGrokQueuedTurnEventsDrained(ctx);
+        yield* waitForDevinQueuedTurnEventsDrained(ctx);
         const startedAt = Date.now();
         while (true) {
           const now = Date.now();
@@ -960,8 +1179,8 @@ export function makeGrokAdapter(
           // deciding the outcome.
           const lastActivityAt = Math.max(ctx.lastTurnActivityAt ?? 0, startedAt);
           if (
-            now - lastActivityAt >= GROK_COMPACT_OUTCOME_QUIET_MS ||
-            now - startedAt >= GROK_COMPACT_OUTCOME_MAX_WAIT_MS
+            now - lastActivityAt >= DEVIN_COMPACT_OUTCOME_QUIET_MS ||
+            now - startedAt >= DEVIN_COMPACT_OUTCOME_MAX_WAIT_MS
           ) {
             return;
           }
@@ -974,13 +1193,13 @@ export function makeGrokAdapter(
     // stale update stream has had its quiet window. stdio ordering then
     // guarantees the cancel cannot cancel the new prompt, and stragglers
     // cannot be attributed to the new turn.
-    const waitForAbandonedGrokCompaction = (ctx: GrokSessionContext) =>
+    const waitForAbandonedDevinCompaction = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         const cancelFiber = ctx.compactionCancelFiber;
         if (cancelFiber !== undefined) {
           yield* Fiber.join(cancelFiber).pipe(
             Effect.ignoreCause(),
-            Effect.timeoutOption(GROK_COMPACT_CANCEL_WAIT_MS),
+            Effect.timeoutOption(DEVIN_COMPACT_CANCEL_WAIT_MS),
           );
           ctx.compactionCancelFiber = undefined;
           // The cancel wait can outlive the quiet window armed at the original
@@ -989,7 +1208,7 @@ export function makeGrokAdapter(
           if (ctx.compactionQuietUntil !== undefined) {
             ctx.compactionQuietUntil = Math.max(
               ctx.compactionQuietUntil,
-              Date.now() + GROK_COMPACT_ABANDON_QUIET_MS,
+              Date.now() + DEVIN_COMPACT_ABANDON_QUIET_MS,
             );
           }
         }
@@ -1003,11 +1222,11 @@ export function makeGrokAdapter(
         }
       });
 
-    // On session/load, Grok can replay old ACP updates after the session is "ready".
+    // On session/load, Devin can replay old ACP updates after the session is "ready".
     // Keep suppression active until that stream actually goes quiet — clearing it
     // on a fixed timeout lets late historical deltas leak into the first turn as
     // its content. The hard cap only guards against a replay that never settles.
-    const settleGrokResumeReplayWhenQuiet = (ctx: GrokSessionContext) =>
+    const settleDevinResumeReplayWhenQuiet = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         const ready = ctx.resumeReplayReady;
         if (ready === undefined) {
@@ -1021,14 +1240,14 @@ export function makeGrokAdapter(
           const quietForMs = now - lastSuppressedAt;
           const elapsedMs = now - startedAt;
           if (
-            quietForMs >= GROK_RESUME_REPLAY_QUIET_MS ||
-            elapsedMs >= GROK_RESUME_REPLAY_HARD_TIMEOUT_MS
+            quietForMs >= DEVIN_RESUME_REPLAY_QUIET_MS ||
+            elapsedMs >= DEVIN_RESUME_REPLAY_HARD_TIMEOUT_MS
           ) {
-            const timedOut = elapsedMs >= GROK_RESUME_REPLAY_HARD_TIMEOUT_MS;
+            const timedOut = elapsedMs >= DEVIN_RESUME_REPLAY_HARD_TIMEOUT_MS;
             ctx.resumeReplayReady = undefined;
             ctx.resumeReplayLastSuppressedAt = undefined;
             if (timedOut) {
-              yield* Effect.logWarning("grok.acp.resume_replay_quiet_wait_timeout", {
+              yield* Effect.logWarning("devin.acp.resume_replay_quiet_wait_timeout", {
                 threadId: ctx.threadId,
                 elapsedMs,
               });
@@ -1036,12 +1255,12 @@ export function makeGrokAdapter(
             yield* Deferred.succeed(ready, undefined);
             return;
           }
-          yield* Effect.sleep(Math.min(GROK_RESUME_REPLAY_QUIET_MS - quietForMs, 50));
+          yield* Effect.sleep(Math.min(DEVIN_RESUME_REPLAY_QUIET_MS - quietForMs, 50));
         }
         yield* Deferred.succeed(ready, undefined);
       });
 
-    const startSession: GrokAdapterShape["startSession"] = (input) =>
+    const startSession: DevinAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -1052,7 +1271,8 @@ export function makeGrokAdapter(
               issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
             });
           }
-          const cwd = resolveGrokSessionCwd(input.cwd, serverConfig);
+
+          const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
           if (cwd === undefined) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
@@ -1061,8 +1281,9 @@ export function makeGrokAdapter(
             });
           }
 
-          const grokModelSelection =
+          const devinModelSelection =
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -1072,11 +1293,13 @@ export function makeGrokAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
+
           const gatewaySessionLease = acquireAgentGatewaySessionLease(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
           );
+
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
@@ -1085,9 +1308,9 @@ export function makeGrokAdapter(
               ? Effect.void
               : Effect.sync(gatewaySessionLease.release),
           );
-          let ctx!: GrokSessionContext;
 
-          const resumeSessionId = parseGrokResume(input.resumeCursor)?.sessionId;
+          let ctx!: DevinSessionContext;
+          const resumeSessionId = parseDevinResume(input.resumeCursor)?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -1095,48 +1318,61 @@ export function makeGrokAdapter(
           });
           const acpRuntimeLoggers = makeAcpDebugLoggers({
             base: acpNativeLoggers,
-            enabled: isGrokAcpDebugEnabled(),
+            enabled: isDevinAcpDebugEnabled(),
             provider: PROVIDER,
-            marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
-            payloadLimit: GROK_ACP_LOG_PAYLOAD_LIMIT,
-            shouldMirrorIncomingRaw: (payload) =>
-              payload.includes("grokShell") || payload.includes("x.ai/fs_notify"),
+            marker: DEVIN_ACP_TRANSPORT_DEBUG_MARKER,
+            payloadLimit: DEVIN_ACP_LOG_PAYLOAD_LIMIT,
+            shouldMirrorIncomingRaw: (payload) => payload.includes("devinShell"),
           });
-          const providerGrokOptions = input.providerOptions?.grok;
-          const runtimeGrokModelSettings = resolveGrokRuntimeModelSettings(grokModelSelection);
-          const effectiveGrokSettings: GrokAcpRuntimeSettings = {
-            ...(grokSettings.binaryPath !== undefined
-              ? { binaryPath: grokSettings.binaryPath }
+          const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
+          const effectiveDevinSettings: DevinAcpRuntimeSettings = {
+            ...(devinSettings.binaryPath !== undefined
+              ? { binaryPath: devinSettings.binaryPath }
               : {}),
-            ...(providerGrokOptions?.binaryPath !== undefined
-              ? { binaryPath: providerGrokOptions.binaryPath }
+            ...(devinSettings.model !== undefined ? { model: devinSettings.model } : {}),
+            ...(providerDevinOptions?.binaryPath !== undefined
+              ? { binaryPath: providerDevinOptions.binaryPath }
               : {}),
-            ...runtimeGrokModelSettings,
+            ...(providerDevinOptions?.model !== undefined
+              ? { model: providerDevinOptions.model }
+              : {}),
+            ...(devinModelSelection?.model ? { model: devinModelSelection.model } : {}),
+            // Devin's ACP process accepts a concrete model UID, not a separate
+            // effort/context flag. The web client resolves runtime selections
+            // to this variant before dispatch; keep the abstract effort as a
+            // compatibility fallback for older clients.
+            ...(devinModelSelection?.options?.modelVariant
+              ? { model: devinModelSelection.options.modelVariant }
+              : {}),
+            ...(!devinModelSelection?.options?.modelVariant &&
+            devinModelSelection?.options?.reasoningEffort
+              ? { model: devinModelSelection.options.reasoningEffort }
+              : {}),
           };
 
-          yield* Effect.logInfo("grok.acp.start", {
-            marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
-            debugEnv: GROK_ACP_DEBUG_ENV,
+          yield* Effect.logInfo("devin.acp.start", {
+            marker: DEVIN_ACP_TRANSPORT_DEBUG_MARKER,
+            debugEnv: DEVIN_ACP_DEBUG_ENV,
             threadId: input.threadId,
             cwd,
             resume: resumeSessionId !== undefined,
-            model: effectiveGrokSettings.model,
-            reasoningEffort: effectiveGrokSettings.reasoningEffort,
+            model: effectiveDevinSettings.model,
+            requestedModel: devinModelSelection?.model,
+            modelVariant: devinModelSelection?.options?.modelVariant,
+            reasoningEffort: devinModelSelection?.options?.reasoningEffort,
+            apiKeyConfigured: hasDevinApiKeyEnv() && getDevinApiKeyEnv() !== undefined,
             alwaysApprove: input.runtimeMode === "full-access",
-            binaryPath: effectiveGrokSettings.binaryPath ?? "grok",
+            binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
 
-          const acp = yield* makeGrokAcpRuntime({
-            grokSettings: effectiveGrokSettings,
+          const acp = yield* makeDevinAcpRuntime({
+            devinSettings: effectiveDevinSettings,
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
-            ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
-            // Grok registers client hooks from session setup metadata, not
-            // initialize.clientCapabilities. Re-send this on load/resume so a
-            // reconnected session keeps the Plan-mode write gate.
-            sessionMeta: GROK_SESSION_META,
+            clientCapabilities: { elicitation: { form: {} } },
+            ...(resumeSessionId ? { resumeSessionId } : {}),
             ...(agentGatewayCredentials
               ? {
                   buildMcpServers: (initializeResult) =>
@@ -1150,137 +1386,34 @@ export function makeGrokAdapter(
             ...acpRuntimeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
-            Effect.mapError((cause) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", cause),
-            ),
+            Effect.mapError(acpToAdapterError(input.threadId)),
           );
 
+          yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, acp.awaitExit);
+
           const started = yield* Effect.gen(function* () {
-            yield* acp.handleExtRequest("x.ai/hooks/run", Schema.Unknown, (params) =>
-              Effect.succeed(resolveGrokPlanHookResponse(ctx?.activeInteractionMode, params)),
-            );
-            for (const method of GROK_ASK_USER_QUESTION_METHODS) {
-              yield* acp.handleExtRequest(method, GrokAskUserQuestionRequest, (params) =>
-                Effect.gen(function* () {
-                  yield* logNative(input.threadId, method, params);
-                  const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
-                  const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
-                  const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-                  pendingUserInputs.set(requestId, { answers });
-                  yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                    type: "user-input.requested",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId: ctx?.activeTurnId,
-                    requestId: runtimeRequestId,
-                    payload: { questions: extractGrokUserInputQuestions(params) },
-                    raw: {
-                      source: "acp.jsonrpc",
-                      method,
-                      payload: params,
-                    },
-                  });
-                  const resolved = yield* Deferred.await(answers);
-                  pendingUserInputs.delete(requestId);
-                  yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                    type: "user-input.resolved",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId: ctx?.activeTurnId,
-                    requestId: runtimeRequestId,
-                    payload: { answers: resolved },
-                  });
-                  return makeGrokQuestionResponse(params, resolved);
-                }),
-              );
-            }
-            for (const method of GROK_EXIT_PLAN_MODE_METHODS) {
-              yield* acp.handleExtRequest(method, GrokExitPlanModeRequest, (params) =>
-                Effect.gen(function* () {
-                  yield* logNative(input.threadId, method, params);
-                  if (ctx?.activeInteractionMode === "default") {
-                    // A new Default turn is the user's approval to leave the
-                    // provider-native Plan gate and continue with implementation.
-                    return makeGrokExitPlanModeApprovedResponse();
-                  }
-                  const planMarkdown = extractGrokExitPlanMarkdown(params);
-                  const turnId = ctx?.activeTurnId;
-                  const activePromptFiber = ctx?.activePromptFiber;
-                  if (planMarkdown !== undefined) {
-                    yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                      type: "turn.proposed.completed",
-                      ...(yield* makeEventStamp()),
-                      provider: PROVIDER,
-                      threadId: input.threadId,
-                      ...(turnId !== undefined
-                        ? { turnId }
-                        : {
-                            itemId: RuntimeItemId.makeUnsafe(
-                              `grok-plan-approval:${params.toolCallId}`,
-                            ),
-                          }),
-                      payload: { planMarkdown },
-                      raw: {
-                        source: "acp.jsonrpc",
-                        method,
-                        payload: params,
-                      },
-                    });
-                    if (
-                      ctx !== undefined &&
-                      turnId !== undefined &&
-                      ctx.activeInteractionMode === "plan" &&
-                      ctx.lastPlanFingerprint !== planMarkdown
-                    ) {
-                      ctx.lastPlanFingerprint = planMarkdown;
-                      // The extension response must reach Grok before Synara cancels the
-                      // prompt fiber. Cancelling inline can tear down Grok's pending reverse
-                      // request and recreate its misleading "client disconnected" failure.
-                      yield* Effect.gen(function* () {
-                        yield* Effect.sleep(GROK_EXIT_PLAN_RESPONSE_GRACE_MS);
-                        yield* completeGrokPlanTurn(ctx, turnId, activePromptFiber);
-                      }).pipe(Effect.forkIn(ctx.scope));
-                    }
-                  }
-                  return makeGrokExitPlanModeCapturedResponse();
-                }),
-              );
-            }
             yield* acp.handleRequestPermission((params) =>
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
+
                 const policyOutcome = resolveAcpPermissionPolicy({
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
                 });
                 if (policyOutcome !== undefined) {
-                  if (policyOutcome.outcome === "selected") {
-                    if (isGrokAcpDebugEnabled()) {
-                      yield* Effect.logInfo("grok.acp.permission_policy_applied", {
-                        threadId: input.threadId,
-                        turnId: ctx?.activeTurnId,
-                        interactionMode: ctx?.activeInteractionMode,
-                        optionId: policyOutcome.optionId,
-                        options: params.options.map((option) => ({
-                          kind: option.kind,
-                          optionId: option.optionId,
-                        })),
-                        toolKind: params.toolCall.kind,
-                        toolTitle: params.toolCall.title,
-                      });
-                    }
-                    return { outcome: policyOutcome };
-                  }
                   return { outcome: policyOutcome };
                 }
+
                 const permissionRequest = parsePermissionRequest(params);
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
                 const decision = yield* Deferred.make<ProviderApprovalDecision>();
-                pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
+                pendingApprovals.set(requestId, {
+                  decision,
+                  kind: permissionRequest.kind,
+                });
+
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
                   makeAcpRequestOpenedEvent({
@@ -1297,8 +1430,10 @@ export function makeGrokAdapter(
                     rawPayload: params,
                   }),
                 );
+
                 const resolved = yield* Deferred.await(decision);
                 pendingApprovals.delete(requestId);
+
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
                   makeAcpRequestResolvedEvent({
@@ -1311,32 +1446,84 @@ export function makeGrokAdapter(
                     decision: resolved,
                   }),
                 );
-                return {
-                  outcome:
-                    resolved === "cancel"
-                      ? ({ outcome: "cancelled" } as const)
-                      : (() => {
-                          const selectedOptionId = selectAcpPermissionOptionId(
-                            resolved,
-                            params.options,
-                          );
-                          return selectedOptionId === undefined
-                            ? ({ outcome: "cancelled" } as const)
-                            : ({
-                                outcome: "selected" as const,
-                                optionId: selectedOptionId,
-                              } as const);
-                        })(),
-                };
+
+                if (resolved === "cancel") {
+                  return { outcome: { outcome: "cancelled" } as const };
+                }
+
+                const selectedOptionId = selectAcpPermissionOptionId(resolved, params.options);
+                return selectedOptionId === undefined
+                  ? { outcome: { outcome: "cancelled" } as const }
+                  : {
+                      outcome: {
+                        outcome: "selected" as const,
+                        optionId: selectedOptionId,
+                      },
+                    };
               }),
             );
-            return yield* acp.start();
-          }).pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
-            ),
-          );
-          yield* startAgentGatewaySessionLeaseExitWatcher(gatewaySessionLease, acp.awaitExit);
+
+            yield* acp.handleElicitation((params) =>
+              Effect.gen(function* () {
+                yield* logNative(input.threadId, "session/elicitation", params);
+
+                if (!isFormElicitationRequest(params)) {
+                  return {
+                    action: "decline",
+                  } satisfies Acp.CreateElicitationResponse;
+                }
+
+                const questions = elicitationQuestionsFromRequest(params);
+                const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+                const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+                const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+                pendingUserInputs.set(requestId, { answers });
+
+                yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                  type: "user-input.requested",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: ctx?.activeTurnId,
+                  requestId: runtimeRequestId,
+                  payload: { questions },
+                  raw: {
+                    source: "acp.jsonrpc",
+                    method: "session/elicitation",
+                    payload: params,
+                  },
+                });
+
+                const resolved = yield* Deferred.await(answers);
+                pendingUserInputs.delete(requestId);
+
+                yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                  type: "user-input.resolved",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: ctx?.activeTurnId,
+                  requestId: runtimeRequestId,
+                  payload: { answers: resolved },
+                  raw: {
+                    source: "acp.jsonrpc",
+                    method: "session/elicitation",
+                    payload: params,
+                  },
+                });
+
+                return elicitationResponseFromAnswers(params, resolved);
+              }).pipe(
+                Effect.catch(() =>
+                  Effect.succeed({
+                    action: "decline",
+                  } as Acp.CreateElicitationResponse),
+                ),
+              ),
+            );
+
+            return yield* acp.start().pipe(Effect.mapError(acpToAdapterError(input.threadId)));
+          });
 
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
@@ -1347,10 +1534,14 @@ export function makeGrokAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: grokModelSelection?.model,
+            // Keep the logical family slug in the session projection. The
+            // concrete variant is a process-start detail; reporting it here
+            // would make the reactor compare the family slug to the variant
+            // UID and restart Devin on every subsequent turn.
+            model: devinModelSelection?.model ?? effectiveDevinSettings.model,
             threadId: input.threadId,
             resumeCursor: {
-              schemaVersion: GROK_RESUME_VERSION,
+              schemaVersion: DEVIN_RESUME_VERSION,
               sessionId: started.sessionId,
             },
             createdAt: now,
@@ -1359,10 +1550,7 @@ export function makeGrokAdapter(
 
           ctx = {
             threadId: input.threadId,
-            ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
-            ...(input.lifecycleGeneration !== undefined
-              ? { lifecycleGeneration: input.lifecycleGeneration }
-              : {}),
+            lifecycleGeneration: input.lifecycleGeneration,
             session,
             scope: sessionScope,
             acp,
@@ -1370,14 +1558,13 @@ export function makeGrokAdapter(
             pendingApprovals,
             pendingUserInputs,
             turns: [],
-            lastPlanFingerprint: undefined,
             activeInteractionMode: undefined,
             activeTurnId: undefined,
             activeTurnHadAssistantContent: false,
             activeAssistantItemsWithContent: new Set(),
-            activePlanResponseText: "",
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            lastPlanFingerprint: undefined,
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
             sessionUpdatesProcessed: 0,
@@ -1392,9 +1579,10 @@ export function makeGrokAdapter(
             compactionCancelFiber: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
+            gatewaySessionLease,
           };
 
-          const notificationFiber = yield* Stream.runDrain(
+          const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
                 // Any inbound ACP event proves the child is alive and making
@@ -1403,28 +1591,30 @@ export function makeGrokAdapter(
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
+
                   case "AssistantItemStarted":
                     {
-                      const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
                       // Content deltas open the visible message; empty starts only add noise.
                     }
                     return;
+
                   case "AssistantItemCompleted":
                     {
-                      const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
-                      const scopedItemId = scopeGrokRuntimeItemIdForTurn(
+                      const scopedItemId = scopeDevinRuntimeItemIdForTurn(
                         activeTurnId,
                         event.itemId,
                       );
                       if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) {
-                        if (isGrokAcpDebugEnabled()) {
-                          yield* Effect.logInfo("grok.acp.empty_assistant_item_suppressed", {
+                        if (isDevinAcpDebugEnabled()) {
+                          yield* Effect.logInfo("devin.acp.empty_assistant_item_suppressed", {
                             threadId: ctx.threadId,
                             turnId: activeTurnId,
                             itemId: scopedItemId,
@@ -1446,9 +1636,10 @@ export function makeGrokAdapter(
                       );
                     }
                     return;
+
                   case "PlanUpdated":
                     {
-                      const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
@@ -1456,77 +1647,26 @@ export function makeGrokAdapter(
                       yield* emitPlanUpdate(ctx, event.payload, event.rawPayload);
                     }
                     return;
+
                   case "ToolCallUpdated":
                     {
-                      // Stale tool updates from an abandoned (timed-out) /compact
-                      // can arrive until the child processes the cancel; drop
-                      // them instead of attributing them anywhere.
-                      if (
-                        ctx.compactionQuietUntil !== undefined &&
-                        Date.now() < ctx.compactionQuietUntil &&
-                        isGrokContextCompactionToolCall(event.toolCall)
-                      ) {
+                      if (ctx.compactingThread) {
+                        const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
+                        if (failedToolDetail !== undefined) {
+                          ctx.compactionFailedToolDetail = failedToolDetail;
+                        }
                         return;
                       }
                       // A queued update for a tool call the just-settled turn
-                      // already rendered belongs to that turn, even if its
-                      // title mentions "compact"/"summarize" — a backlogged
-                      // consumer must not reclassify it as auto-compaction.
+                      // already rendered belongs to that turn; emit it with the
+                      // originating turn id so the existing tool row resolves in
+                      // place instead of being dropped as an orphan. Resume
+                      // replay stays suppressed like every other event.
                       const lateTurnId =
-                        ctx.resumeReplayReady === undefined &&
-                        ctx.activeTurnId === undefined &&
-                        !ctx.compactingThread
+                        ctx.resumeReplayReady === undefined && ctx.activeTurnId === undefined
                           ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
                           : undefined;
-                      // The title heuristic only applies between turns (grok-initiated
-                      // auto-compaction); a live turn's tool call may legitimately
-                      // mention "compact"/"summarize" and must render normally, and
-                      // resume replay stays suppressed like every other event.
-                      const treatAsCompaction =
-                        ctx.compactingThread ||
-                        (ctx.resumeReplayReady === undefined &&
-                          ctx.activeTurnId === undefined &&
-                          lateTurnId === undefined &&
-                          isGrokContextCompactionToolCall(event.toolCall));
-                      if (treatAsCompaction) {
-                        // During a manual /compact, compactThread emits the single
-                        // terminal row itself (and knows about cancellation), so
-                        // tool-call updates stay progress-only to avoid duplicate
-                        // "Context compacted" rows. Grok-initiated auto-compaction
-                        // has no other completion source and keeps its terminal row.
-                        const isTerminal =
-                          event.toolCall.status === "completed" ||
-                          event.toolCall.status === "failed";
-                        // Manual compaction downgrades terminal tool events to
-                        // progress rows, so remember a failure here for
-                        // runGrokCompaction to honor after the prompt resolves.
-                        if (ctx.compactingThread && event.toolCall.status === "failed") {
-                          ctx.compactionFailedToolDetail =
-                            readAcpFailedToolDetail(event.toolCall) ??
-                            event.toolCall.detail ??
-                            event.toolCall.title ??
-                            "Grok reported a failed compaction tool call.";
-                        }
-                        const emitTerminal = isTerminal && !ctx.compactingThread;
-                        const status = emitTerminal
-                          ? event.toolCall.status === "failed"
-                            ? "failed"
-                            : "completed"
-                          : "inProgress";
-                        yield* emitGrokContextCompactionRuntimeEvent(ctx, {
-                          lifecycle: emitTerminal ? "item.completed" : "item.updated",
-                          status,
-                          title:
-                            event.toolCall.title?.trim() ||
-                            (status === "completed" ? "Context compacted" : "Compacting context"),
-                          ...(event.toolCall.detail ? { detail: event.toolCall.detail } : {}),
-                        });
-                        return;
-                      }
                       if (lateTurnId !== undefined) {
-                        // Emit with the originating turn id so the existing tool
-                        // row resolves in place instead of being dropped as an
-                        // orphan (or worse, misfiled as thread compaction).
                         yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                         yield* offerRuntimeEvent(
                           input.lifecycleGeneration,
@@ -1535,13 +1675,13 @@ export function makeGrokAdapter(
                             provider: PROVIDER,
                             threadId: ctx.threadId,
                             turnId: lateTurnId,
-                            toolCall: scopeGrokToolCallStateForTurn(lateTurnId, event.toolCall),
+                            toolCall: scopeDevinToolCallStateForTurn(lateTurnId, event.toolCall),
                             rawPayload: event.rawPayload,
                           }),
                         );
                         return;
                       }
-                      const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
@@ -1558,27 +1698,25 @@ export function makeGrokAdapter(
                           provider: PROVIDER,
                           threadId: ctx.threadId,
                           turnId: activeTurnId,
-                          toolCall: scopeGrokToolCallStateForTurn(activeTurnId, event.toolCall),
+                          toolCall: scopeDevinToolCallStateForTurn(activeTurnId, event.toolCall),
                           rawPayload: event.rawPayload,
                         }),
                       );
                     }
                     return;
+
                   case "ContentDelta":
                     {
-                      const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       const scopedItemId = event.itemId
-                        ? scopeGrokRuntimeItemIdForTurn(activeTurnId, event.itemId)
+                        ? scopeDevinRuntimeItemIdForTurn(activeTurnId, event.itemId)
                         : undefined;
-                      if (isRenderableGrokAssistantDelta(event)) {
+                      if (isRenderableDevinAssistantDelta(event)) {
                         ctx.activeTurnHadAssistantContent = true;
-                        if (ctx.activeInteractionMode === "plan") {
-                          ctx.activePlanResponseText += event.text;
-                        }
                         if (scopedItemId !== undefined) {
                           ctx.activeAssistantItemsWithContent.add(scopedItemId);
                         }
@@ -1598,9 +1736,10 @@ export function makeGrokAdapter(
                       );
                     }
                     return;
+
                   case "UsageUpdated":
                     {
-                      const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
@@ -1614,6 +1753,7 @@ export function makeGrokAdapter(
                           threadId: ctx.threadId,
                           turnId: activeTurnId,
                           usage: event.usage,
+                          method: "session/update",
                           rawPayload: event.rawPayload,
                         }),
                       );
@@ -1622,7 +1762,7 @@ export function makeGrokAdapter(
                 }
               }).pipe(
                 // Bump the processed count only after the handler fully ran, so
-                // waitForGrokQueuedTurnEventsDrained cannot observe an event as
+                // waitForDevinQueuedTurnEventsDrained cannot observe an event as
                 // consumed while its state updates are still being applied.
                 Effect.ensuring(
                   Effect.sync(() => {
@@ -1636,7 +1776,7 @@ export function makeGrokAdapter(
             // fiber returns, silently dropping every session/update.
           ).pipe(Effect.forkIn(sessionScope));
 
-          ctx.notificationFiber = notificationFiber;
+          ctx.notificationFiber = nf;
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
@@ -1646,14 +1786,13 @@ export function makeGrokAdapter(
           // OR interruption of the remaining startup steps must tear the session
           // down explicitly instead of leaking a live child.
           yield* Effect.gen(function* () {
-            yield* applyRequestedModelSelection({
+            yield* applyDevinSessionConfiguration({
               runtime: acp,
-              modelSelection: grokModelSelection,
-              mapError: ({ cause, method }) =>
-                mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+              runtimeMode: input.runtimeMode,
+              interactionMode: undefined,
             });
             // Startup configuration has settled; turns gated on this deferred
-            // can now prompt. Grok model options are process-start settings.
+            // can now prompt. Devin model options are process-start settings.
             yield* Deferred.succeed(sessionConfigReady, undefined);
             ctx.sessionConfigReady = undefined;
 
@@ -1663,9 +1802,9 @@ export function makeGrokAdapter(
               // a long replay cannot hold session startup hostage. sendTurn and
               // compactThread await the deferred, so the first turn stays gated
               // until the replay has actually finished.
-              yield* settleGrokResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
+              yield* settleDevinResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
               yield* Deferred.await(resumeReplayReady).pipe(
-                Effect.timeoutOption(GROK_RESUME_REPLAY_MAX_WAIT_MS),
+                Effect.timeoutOption(DEVIN_RESUME_REPLAY_MAX_WAIT_MS),
               );
             }
 
@@ -1681,7 +1820,7 @@ export function makeGrokAdapter(
               ...(yield* makeEventStamp()),
               provider: PROVIDER,
               threadId: input.threadId,
-              payload: { state: "ready", reason: "Grok ACP session ready" },
+              payload: { state: "ready", reason: "Devin ACP session ready" },
             });
             yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "thread.started",
@@ -1700,11 +1839,11 @@ export function makeGrokAdapter(
         }).pipe(Effect.scoped),
       );
 
-    // Idle-progress watchdog escape hatch: force-fail a turn whose grok child
+    // Idle-progress watchdog escape hatch: force-fail a turn whose devin child
     // is alive but has gone completely silent. Mirrors the prompt-fiber
     // onFailure branch and stays idempotent via clearAcpActiveTurn, so it is a
     // no-op if the turn settled normally first (whichever fires first wins).
-    const failGrokTurnAsTimedOut = (ctx: GrokSessionContext, turnId: TurnId, idleMs: number) =>
+    const failDevinTurnAsTimedOut = (ctx: DevinSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
         if (ctx.activeTurnId !== turnId) {
@@ -1716,15 +1855,18 @@ export function makeGrokAdapter(
         }
         const completedCost = finalizeAcpActiveTurnCost(ctx);
         const idleSeconds = Math.round(idleMs / 1000);
-        const detail = `Grok stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
-        ctx.turns.push({ id: turnId, items: [{ prompt: turnId, timedOut: true, idleMs }] });
+        const detail = `Devin stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
+        ctx.turns.push({
+          id: turnId,
+          items: [{ prompt: turnId, timedOut: true, idleMs }],
+        });
         ctx.session = {
           ...ctx.session,
           status: "error",
           updatedAt: yield* nowIso,
           lastError: detail,
         };
-        yield* Effect.logWarning("grok.acp.turn_idle_timeout", {
+        yield* Effect.logWarning("devin.acp.turn_idle_timeout", {
           threadId: ctx.threadId,
           turnId,
           idleMs,
@@ -1753,21 +1895,21 @@ export function makeGrokAdapter(
         }
       });
 
-    const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: DevinAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         // compactThread holds the thread lock but sendTurn intentionally does not
         // (turns are long-running); reject instead of racing a second prompt whose
         // events the compaction suppression would silently drop. Setting
         // turnStarting in the same synchronous block as this check closes the
-        // reverse gap: startGrokTurn awaits config/attachment work before it
+        // reverse gap: startDevinTurn awaits config/attachment work before it
         // assigns ctx.activeTurnId, and compactThread checks turnStarting so a
         // compaction prompt cannot slip into that window.
         if (ctx.compactingThread) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "Cannot start a turn while Grok context compaction is in progress.",
+            issue: "Cannot start a turn while Devin context compaction is in progress.",
           });
         }
         // A second sendTurn entering while another turn is still starting would
@@ -1777,12 +1919,12 @@ export function makeGrokAdapter(
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "Another Grok turn is still starting for this thread.",
+            issue: "Another Devin turn is still starting for this thread.",
           });
         }
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
-        return yield* startGrokTurn(ctx, input).pipe(
+        return yield* startDevinTurn(ctx, input).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               ctx.turnStarting = false;
@@ -1791,9 +1933,9 @@ export function makeGrokAdapter(
         );
       });
 
-    const startGrokTurn = (
-      ctx: GrokSessionContext,
-      input: Parameters<GrokAdapterShape["sendTurn"]>[0],
+    const startDevinTurn = (
+      ctx: DevinSessionContext,
+      input: Parameters<DevinAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
         // Startup registers the session before post-registration setup settles;
@@ -1804,7 +1946,7 @@ export function makeGrokAdapter(
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
         }
-        yield* waitForAbandonedGrokCompaction(ctx);
+        yield* waitForAbandonedDevinCompaction(ctx);
         // The gates above are resolved by stopSessionInternal too (a failed or
         // stopped startup must not strand waiters); a turn that was blocked on
         // them must fail here instead of emitting lifecycle events for a dead
@@ -1816,47 +1958,24 @@ export function makeGrokAdapter(
           });
         }
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        const turnModelSelection =
-          input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
-        const model = turnModelSelection?.model ?? ctx.session.model;
+        const model =
+          input.modelSelection?.provider === PROVIDER ? input.modelSelection.model : undefined;
         const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
-        yield* applyRequestedModelSelection({
+        // Model selection rides the process-start `--model` flag; only the
+        // fail-closed mode gate applies per turn.
+        yield* applyDevinSessionConfiguration({
           runtime: ctx.acp,
-          modelSelection:
-            model === undefined
-              ? undefined
-              : {
-                  model,
-                  options: turnModelSelection?.options,
-                },
-          mapError: ({ cause, method }) =>
-            mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          runtimeMode: ctx.session.runtimeMode,
+          interactionMode,
         });
-        const promptParts: Array<Acp.ContentBlock> = [];
-        const promptText = appendFileAttachmentsPromptBlock({
-          text: buildGrokTurnPromptText({
-            text: input.input?.trim(),
-            interactionMode,
-          }),
+
+        const promptParts = yield* buildDevinPromptParts({
+          text: input.input,
           attachments: input.attachments,
           attachmentsDir: serverConfig.attachmentsDir,
-          include: "all-files",
+          interactionMode,
+          fileSystem,
         });
-        if (promptText) {
-          promptParts.push({
-            type: "text",
-            text: promptText,
-          });
-        }
-        promptParts.push(
-          ...(yield* loadProviderPromptImageBlocks({
-            attachments: input.attachments,
-            attachmentsDir: serverConfig.attachmentsDir,
-            provider: PROVIDER,
-            method: "session/prompt",
-            readFile: fileSystem.readFile,
-          })),
-        );
 
         if (promptParts.length === 0) {
           return yield* new ProviderAdapterValidationError({
@@ -1865,10 +1984,11 @@ export function makeGrokAdapter(
             issue: "Turn requires non-empty text or attachments.",
           });
         }
-        const harnessPolicy = takeGrokSynaraHarnessPolicyTextPart(
-          ctx,
-          agentGatewayCredentials !== undefined,
-        );
+
+        const harnessPolicy = takeSynaraHarnessPolicyTextPartForProviderSession(ctx, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: agentGatewayCredentials !== undefined,
+        });
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
         }
@@ -1883,13 +2003,12 @@ export function makeGrokAdapter(
           });
         }
         // Interrupts that landed during the pre-prompt waits (resume replay,
-        // model selection, attachment reads) are honored by the prompt fiber's
+        // mode configuration, attachment reads) are honored by the prompt fiber's
         // dispatch guard below, so the turn completes through the normal
         // cancelled path instead of surfacing as a provider turn-start failure.
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
-        ctx.activePlanResponseText = "";
         ctx.activeTurnFailedToolDetail = undefined;
         // Late-event attribution only matters between turns; once a new turn
         // dispatches, stragglers from older turns are stale enough to drop.
@@ -1897,12 +2016,14 @@ export function makeGrokAdapter(
         ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
+
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
         ctx.session = {
           ...sessionWithoutLastError,
           status: "running",
           activeTurnId: turnId,
           updatedAt: yield* nowIso,
+          ...(model ? { model } : {}),
         };
 
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
@@ -1911,21 +2032,22 @@ export function makeGrokAdapter(
           provider: PROVIDER,
           threadId: input.threadId,
           turnId,
-          payload: { ...(model ? { model } : {}) },
+          payload: model ? { model } : {},
         });
 
         const runPrompt = Effect.suspend(() =>
-          // interruptTurn during the pre-prompt waits (resume replay, model
-          // selection, attachment reads) or between turn.started publishing and this
-          // fiber being registered sets pendingTurnInterrupted; honor it (and a
-          // concurrent stop) here so a cancelled turn is never prompted.
-          // Self-interrupting routes through the onInterrupt branch below, which
-          // completes the turn as cancelled rather than as a provider failure.
+          // interruptTurn during the pre-prompt waits (resume replay, mode
+          // configuration, attachment reads) or between turn.started publishing
+          // and this fiber being registered sets pendingTurnInterrupted; honor
+          // it (and a concurrent stop) here so a cancelled turn is never
+          // prompted. Self-interrupting routes through the onInterrupt branch
+          // below, which completes the turn as cancelled rather than as a
+          // provider failure.
           ctx.pendingTurnInterrupted || ctx.stopped
             ? Effect.interrupt
             : ctx.acp.prompt({
                 prompt: promptParts,
-                _meta: buildGrokPromptMeta(interactionMode),
+                _meta: buildDevinPromptMeta(interactionMode),
               }),
         ).pipe(
           Effect.mapError((error) =>
@@ -1934,14 +2056,10 @@ export function makeGrokAdapter(
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
-                yield* waitForGrokQueuedTurnEventsDrained(ctx);
-                if (ctx.activeTurnId !== turnId) {
-                  return;
-                }
+                yield* waitForDevinQueuedTurnEventsDrained(ctx);
+                if (ctx.activeTurnId !== turnId) return;
                 yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-                if (!clearAcpActiveTurn(ctx, turnId)) {
-                  return;
-                }
+                if (!clearAcpActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
                 const detail = error.message;
@@ -1965,53 +2083,32 @@ export function makeGrokAdapter(
                     ...completedCost,
                   },
                 });
+                // Transport/prompt failures make the ACP child unusable. Remove
+                // it from routing immediately so ProviderService can recover on
+                // the next send instead of reusing a dead session forever.
+                yield* stopSessionInternal(ctx);
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
                 // Drain BEFORE snapshotting turn state: queued events may still
                 // set activeTurnFailedToolDetail or assistant-content flags.
-                yield* waitForGrokQueuedTurnEventsDrained(ctx);
-                if (ctx.activeTurnId !== turnId) {
-                  return;
-                }
+                yield* waitForDevinQueuedTurnEventsDrained(ctx);
+                if (ctx.activeTurnId !== turnId) return;
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-                const terminalPlanMarkdown = extractGrokTerminalPlanMarkdown({
-                  interactionMode: ctx.activeInteractionMode,
-                  capturedPlanFingerprint: ctx.lastPlanFingerprint,
-                  assistantText: ctx.activePlanResponseText,
-                });
-                if (terminalPlanMarkdown !== undefined) {
-                  ctx.lastPlanFingerprint = terminalPlanMarkdown;
-                  yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-                    type: "turn.proposed.completed",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId,
-                    payload: { planMarkdown: terminalPlanMarkdown },
-                    raw: {
-                      source: "acp.jsonrpc",
-                      method: "synara.grok.terminal-plan-response",
-                      payload: result,
-                    },
-                  });
-                }
-                if (!clearAcpActiveTurn(ctx, turnId)) {
-                  return;
-                }
+                if (!clearAcpActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
-                const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
+                const { lastError: _lastError2, ...sessionWithoutLastError2 } = ctx.session;
                 ctx.session = {
-                  ...sessionWithoutLastError,
+                  ...sessionWithoutLastError2,
                   status: "ready",
                   updatedAt: yield* nowIso,
                   ...(model ? { model } : {}),
                 };
                 if (!hadAssistantContent && result.stopReason !== "cancelled") {
-                  yield* Effect.logWarning("grok.acp.turn_completed_without_content", {
+                  yield* Effect.logWarning("devin.acp.turn_completed_without_content", {
                     threadId: input.threadId,
                     turnId,
                     stopReason: result.stopReason ?? null,
@@ -2022,12 +2119,6 @@ export function makeGrokAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
-                // ACP PromptResponse.usage is cumulative session spend, not the
-                // live context-window occupancy. Preserve it on turn.completed
-                // below, but do not synthesize a context-window update from it:
-                // doing so makes the meter grow across turns and stay full after
-                // compaction. A real usage_update notification remains the only
-                // trustworthy source for Grok's context meter.
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
@@ -2048,14 +2139,15 @@ export function makeGrokAdapter(
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              if (!clearAcpActiveTurn(ctx, turnId)) {
-                return;
-              }
+              if (!clearAcpActiveTurn(ctx, turnId)) return;
               const completedCost = finalizeAcpActiveTurnCost(ctx);
-              ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
-              const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
+              ctx.turns.push({
+                id: turnId,
+                items: [{ prompt: promptParts, interrupted: true }],
+              });
+              const { lastError: _lastError3, ...sessionWithoutLastError3 } = ctx.session;
               ctx.session = {
-                ...sessionWithoutLastError,
+                ...sessionWithoutLastError3,
                 status: "ready",
                 updatedAt: yield* nowIso,
                 ...(model ? { model } : {}),
@@ -2077,14 +2169,15 @@ export function makeGrokAdapter(
           Effect.ignoreCause({ log: true }),
           Effect.forkIn(ctx.scope),
         );
+
         ctx.activePromptFiber = yield* runPrompt;
 
         // Backstop the forked prompt: if the child goes silent, fail the turn
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
         yield* forkAcpTurnIdleWatchdog({
-          idleTimeoutMs: GROK_TURN_IDLE_TIMEOUT_MS,
-          checkIntervalMs: GROK_TURN_WATCHDOG_INTERVAL_MS,
+          idleTimeoutMs: DEVIN_TURN_IDLE_TIMEOUT_MS,
+          checkIntervalMs: DEVIN_TURN_WATCHDOG_INTERVAL_MS,
           scope: ctx.scope,
           isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
           isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
@@ -2092,7 +2185,7 @@ export function makeGrokAdapter(
           touchActivity: () => {
             ctx.lastTurnActivityAt = Date.now();
           },
-          onIdleTimeout: (idleMs) => failGrokTurnAsTimedOut(ctx, turnId, idleMs),
+          onIdleTimeout: (idleMs) => failDevinTurnAsTimedOut(ctx, turnId, idleMs),
         });
 
         return {
@@ -2102,11 +2195,11 @@ export function makeGrokAdapter(
         };
       });
 
-    const interruptTurn: GrokAdapterShape["interruptTurn"] = (threadId, turnId) =>
+    const interruptTurn: DevinAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (turnId !== undefined && turnId !== ctx.activeTurnId) {
-          yield* Effect.logWarning("grok.acp.stale_interrupt_ignored", {
+          yield* Effect.logWarning("devin.acp.stale_interrupt_ignored", {
             threadId,
             requestedTurnId: turnId,
             activeTurnId: ctx.activeTurnId,
@@ -2115,7 +2208,7 @@ export function makeGrokAdapter(
         }
         const activeTurnId = turnId ?? ctx.activeTurnId;
         // A turn that is still starting has no prompt fiber to interrupt yet
-        // (it may be gated on resume replay); flag it so startGrokTurn aborts
+        // (it may be gated on resume replay); flag it so startDevinTurn aborts
         // before prompting instead of running the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
@@ -2141,7 +2234,7 @@ export function makeGrokAdapter(
         );
       });
 
-    const respondToRequest: GrokAdapterShape["respondToRequest"] = (
+    const respondToRequest: DevinAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
       decision,
@@ -2159,7 +2252,7 @@ export function makeGrokAdapter(
         yield* Deferred.succeed(pending.decision, decision);
       });
 
-    const respondToUserInput: GrokAdapterShape["respondToUserInput"] = (
+    const respondToUserInput: DevinAdapterShape["respondToUserInput"] = (
       threadId,
       requestId,
       answers,
@@ -2170,35 +2263,34 @@ export function makeGrokAdapter(
         if (!pending) {
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
-            method: "x.ai/ask_user_question",
+            method: "session/elicitation",
             detail: `Unknown pending user-input request: ${requestId}`,
           });
         }
         yield* Deferred.succeed(pending.answers, answers);
       });
 
-    const readThread: GrokAdapterShape["readThread"] = (threadId) =>
+    const readThread: DevinAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        return { threadId, turns: ctx.turns };
+        return {
+          threadId,
+          turns: ctx.turns,
+          cwd: ctx.session.cwd ?? null,
+        } satisfies ProviderThreadSnapshot;
       });
 
-    const rollbackThread: GrokAdapterShape["rollbackThread"] = (threadId, numTurns) =>
+    const rollbackThread: DevinAdapterShape["rollbackThread"] = (threadId, _numTurns) =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
-        if (!Number.isInteger(numTurns) || numTurns < 1) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "rollbackThread",
-            issue: "numTurns must be an integer >= 1.",
-          });
-        }
-        const nextLength = Math.max(0, ctx.turns.length - numTurns);
-        ctx.turns.splice(nextLength);
-        return { threadId, turns: ctx.turns };
+        yield* requireSession(threadId);
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "rollbackThread",
+          issue: "Devin does not support conversation rollback.",
+        });
       });
 
-    const stopSession: GrokAdapterShape["stopSession"] = (threadId) =>
+    const stopSession: DevinAdapterShape["stopSession"] = (threadId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
@@ -2208,21 +2300,21 @@ export function makeGrokAdapter(
         }),
       );
 
-    const listSessions: GrokAdapterShape["listSessions"] = () =>
-      Effect.sync(() => Array.from(sessions.values(), (ctx) => ({ ...ctx.session })));
+    const listSessions: DevinAdapterShape["listSessions"] = () =>
+      Effect.sync(() => Array.from(sessions.values(), (c) => ({ ...c.session })));
 
-    const hasSession: GrokAdapterShape["hasSession"] = (threadId) =>
+    const hasSession: DevinAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => {
-        const ctx = sessions.get(threadId);
-        return ctx !== undefined && !ctx.stopped;
+        const c = sessions.get(threadId);
+        return c !== undefined && !c.stopped;
       });
 
-    const getComposerCapabilities: NonNullable<GrokAdapterShape["getComposerCapabilities"]> = () =>
+    const getComposerCapabilities: NonNullable<DevinAdapterShape["getComposerCapabilities"]> = () =>
       Effect.succeed({
         provider: PROVIDER,
         supportsSkillMentions: false,
         supportsSkillDiscovery: false,
-        supportsNativeSlashCommandDiscovery: false,
+        supportsNativeSlashCommandDiscovery: true,
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
         supportsRuntimeModelList: true,
@@ -2230,7 +2322,78 @@ export function makeGrokAdapter(
         supportsThreadImport: false,
       } satisfies ProviderComposerCapabilities);
 
-    const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (threadId) =>
+    const listCommands: NonNullable<DevinAdapterShape["listCommands"]> = (
+      input: ProviderListCommandsInput,
+    ) =>
+      discoveryLock.withPermits(1)(
+        Effect.gen(function* () {
+          const cwd = resolveDevinSessionCwd(input.cwd, serverConfig);
+          if (!cwd) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "listCommands",
+              issue: "cwd is required and no server cwd fallback is available.",
+            });
+          }
+          const binaryPath =
+            input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
+          const cacheKey = `${binaryPath}\u0000${cwd}`;
+          const cached = commandDiscoveryCache.get(cacheKey);
+          if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
+            return { ...cached.result, cached: true };
+          }
+
+          const runtime = yield* makeDevinDiscoveryRuntime({
+            ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            cwd,
+          });
+          yield* runtime.start();
+          let commands = yield* runtime.getAvailableCommands;
+          const startedAt = Date.now();
+          while (commands.length === 0 && Date.now() - startedAt < 500) {
+            yield* Effect.sleep(25);
+            commands = yield* runtime.getAvailableCommands;
+          }
+          const result = {
+            commands: mapDevinAcpCommands(commands),
+            source: "devin-acp",
+            cached: false,
+          } satisfies ProviderListCommandsResult;
+          setDevinDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
+            expiresAt: Date.now() + DEVIN_COMMAND_DISCOVERY_CACHE_MS,
+            result,
+          });
+          return result;
+        }).pipe(
+          Effect.scoped,
+          Effect.mapError((cause) =>
+            cause instanceof ProviderAdapterValidationError
+              ? cause
+              : mapAcpToAdapterError(
+                  PROVIDER,
+                  ThreadId.makeUnsafe("devin-command-discovery"),
+                  "command/list",
+                  cause,
+                ),
+          ),
+          Effect.timeoutOption(DEVIN_COMMAND_DISCOVERY_TIMEOUT_MS),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "command/list",
+                    detail: "Timed out while discovering Devin commands over ACP.",
+                  }),
+                ),
+              onSome: (result) => Effect.succeed(result),
+            }),
+          ),
+        ),
+      );
+
+    const compactThread: NonNullable<DevinAdapterShape["compactThread"]> = (threadId) =>
       Effect.gen(function* () {
         // Wait for a settling resume replay before taking the thread lock:
         // stopSession/startSession need that lock, and stopping the session is
@@ -2247,8 +2410,8 @@ export function makeGrokAdapter(
         // (potentially long) /compact prompt outside it: stopSession/restart
         // take the same lock, and a hung compaction must never block
         // stopSessionInternal from cancelling or killing the child.
-        const ctx = yield* withThreadLock(threadId, claimGrokCompactionSlot(threadId, preLockCtx));
-        return yield* runGrokCompaction(ctx).pipe(
+        const ctx = yield* withThreadLock(threadId, claimDevinCompactionSlot(threadId, preLockCtx));
+        return yield* runDevinCompaction(ctx).pipe(
           // compactingThread stays set until this clears it: sendTurn only
           // rejects while the flag is true, so clearing before the
           // completion/thread-state events publish would let a new turn start
@@ -2261,7 +2424,7 @@ export function makeGrokAdapter(
         );
       });
 
-    const claimGrokCompactionSlot = (threadId: ThreadId, preLockCtx: GrokSessionContext) =>
+    const claimDevinCompactionSlot = (threadId: ThreadId, preLockCtx: DevinSessionContext) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         // The pre-lock replay wait resolves early when the session is stopped;
@@ -2272,7 +2435,7 @@ export function makeGrokAdapter(
             provider: PROVIDER,
             operation: "compactThread",
             issue:
-              "The Grok session was restarted while waiting to compact; retry once it settles.",
+              "The Devin session was restarted while waiting to compact; retry once it settles.",
           });
         }
         if (ctx.resumeReplayReady !== undefined) {
@@ -2281,7 +2444,7 @@ export function makeGrokAdapter(
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "compactThread",
-            issue: "Cannot compact while the resumed Grok thread is still replaying history.",
+            issue: "Cannot compact while the resumed Devin thread is still replaying history.",
           });
         }
         // The prompt runs outside the thread lock, so a concurrent /compact can
@@ -2290,7 +2453,7 @@ export function makeGrokAdapter(
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "compactThread",
-            issue: "A Grok context compaction is already in progress.",
+            issue: "A Devin context compaction is already in progress.",
           });
         }
         // turnStarting covers a sendTurn that is past its compaction check but
@@ -2300,7 +2463,7 @@ export function makeGrokAdapter(
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "compactThread",
-            issue: "Cannot compact while a Grok turn is still active.",
+            issue: "Cannot compact while a Devin turn is still active.",
           });
         }
         ctx.compactingThread = true;
@@ -2308,22 +2471,22 @@ export function makeGrokAdapter(
         return ctx;
       });
 
-    const runGrokCompaction = (ctx: GrokSessionContext) =>
+    const runDevinCompaction = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
-        // A previous timed-out /compact may still be cancelling; same ordering
-        // requirement as new turns.
-        yield* waitForAbandonedGrokCompaction(ctx);
-        yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+        // A previous timed-out /compact may still be cancelling; preserve the
+        // same ordering requirement as new turns.
+        yield* waitForAbandonedDevinCompaction(ctx);
+        yield* emitDevinContextCompactionRuntimeEvent(ctx, {
           lifecycle: "item.updated",
           status: "inProgress",
           title: "Compacting context",
         });
 
-        const compactResult = yield* runGrokAcpCompactionCommand(ctx.acp).pipe(
+        const compactResult = yield* runDevinAcpCompactionCommand(ctx.acp).pipe(
           Effect.mapError((error) =>
             mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
           ),
-          Effect.timeoutOption(GROK_COMPACT_TIMEOUT_MS),
+          Effect.timeoutOption(DEVIN_COMPACT_TIMEOUT_MS),
           Effect.exit,
         );
 
@@ -2334,7 +2497,7 @@ export function makeGrokAdapter(
           }
           const squashed = Cause.squash(compactResult.cause);
           const detail = squashed instanceof Error ? squashed.message : String(squashed);
-          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
             lifecycle: "item.completed",
             status: "failed",
             title: "Context compaction failed",
@@ -2357,16 +2520,16 @@ export function makeGrokAdapter(
           // next turn cannot inherit stale compaction updates. The cancel is
           // forked, not awaited: the child just proved it can go silent, and a
           // hung session/cancel would keep compactingThread set forever.
-          ctx.compactionQuietUntil = Date.now() + GROK_COMPACT_ABANDON_QUIET_MS;
+          ctx.compactionQuietUntil = Date.now() + DEVIN_COMPACT_ABANDON_QUIET_MS;
           ctx.compactionCancelFiber = yield* Effect.ignore(ctx.acp.cancel).pipe(
             Effect.forkIn(ctx.scope),
           );
-          const detail = `Grok did not finish context compaction within ${Math.round(GROK_COMPACT_TIMEOUT_MS / 1000)}s; the compaction was abandoned.`;
-          yield* Effect.logWarning("grok.acp.compact_timeout", {
+          const detail = `Devin did not finish context compaction within ${Math.round(DEVIN_COMPACT_TIMEOUT_MS / 1000)}s; the compaction was abandoned.`;
+          yield* Effect.logWarning("devin.acp.compact_timeout", {
             threadId: ctx.threadId,
-            timeoutMs: GROK_COMPACT_TIMEOUT_MS,
+            timeoutMs: DEVIN_COMPACT_TIMEOUT_MS,
           });
-          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
             lifecycle: "item.completed",
             status: "failed",
             title: "Context compaction timed out",
@@ -2385,14 +2548,14 @@ export function makeGrokAdapter(
         // consumer, which can lag the prompt response (the update may still
         // sit in the event queue); wait for inbound activity to go quiet
         // before deciding the outcome.
-        yield* settleGrokCompactionOutcome(ctx);
+        yield* settleDevinCompactionOutcome(ctx);
 
         // ACP can answer a /compact prompt successfully with stopReason
         // "cancelled" (user interrupt via session/cancel); that is not a
         // completed compaction and must not be persisted as one.
         if (promptResponse.stopReason === "cancelled") {
-          const detail = "Grok context compaction was cancelled before it completed.";
-          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+          const detail = "Devin context compaction was cancelled before it completed.";
+          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
             lifecycle: "item.completed",
             status: "failed",
             title: "Context compaction cancelled",
@@ -2412,7 +2575,7 @@ export function makeGrokAdapter(
         // persisting the compaction as completed.
         const failedToolDetail = ctx.compactionFailedToolDetail;
         if (failedToolDetail !== undefined) {
-          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+          yield* emitDevinContextCompactionRuntimeEvent(ctx, {
             lifecycle: "item.completed",
             status: "failed",
             title: "Context compaction failed",
@@ -2442,14 +2605,25 @@ export function makeGrokAdapter(
         });
       });
 
-    const listModels: NonNullable<GrokAdapterShape["listModels"]> = (input) => {
-      const binaryPath = input.binaryPath?.trim() || grokSettings.binaryPath || "grok";
+    const listModels: NonNullable<DevinAdapterShape["listModels"]> = (input) => {
+      const binaryPath = resolveDevinBinaryPath(
+        input.binaryPath?.trim() || devinSettings.binaryPath,
+      );
+      const fallbackResult = {
+        models: buildDevinStaticModelDescriptors(),
+        source: "devin.static",
+        cached: false,
+      } satisfies ProviderListModelsResult;
+
       return Effect.gen(function* () {
-        let cliError: unknown;
-        let apiError: ProviderAdapterRequestError | undefined;
+        let discoveryError: string | undefined;
         const cliModels = yield* Effect.gen(function* () {
-          const childEnv = buildProviderChildEnvironment({ provider: "grok" });
-          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: childEnv });
+          const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
+          const prepared = prepareWindowsSafeProcess(
+            binaryPath,
+            ["models", "list", "--format", "json"],
+            { env: childEnv },
+          );
           const child = yield* childProcessSpawner.spawn(
             ChildProcess.make(prepared.command, prepared.args, {
               shell: prepared.shell,
@@ -2466,184 +2640,58 @@ export function makeGrokAdapter(
             { concurrency: "unbounded" },
           );
           if (exitCode !== 0) {
-            return yield* new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "model/list",
-              detail:
-                stderr.trim() ||
-                `Grok model discovery failed because '${binaryPath} models' exited with code ${exitCode}.`,
-            });
+            discoveryError = redactDevinDiscoveryError(
+              stderr.trim() ||
+                `Devin model discovery failed because '${binaryPath} models list' exited with code ${exitCode}.`,
+            );
+            return [];
           }
-          return parseGrokCliModelList(stdout);
+          return parseDevinCliModelList(stdout);
         }).pipe(
           Effect.catch((error) =>
             Effect.sync(() => {
-              cliError = error;
+              discoveryError = redactDevinDiscoveryError(error);
               return [];
             }),
           ),
         );
-        const apiKey = getGrokApiKeyEnv();
-        const apiModels = apiKey
-          ? yield* fetchXaiLanguageModels({ apiKey, baseUrl: xaiApiBaseUrl() }).pipe(
-              Effect.catch((error) =>
-                Effect.sync(() => {
-                  apiError = error;
-                  return [];
-                }),
-              ),
-            )
-          : [];
-        const models = mergeGrokModelDescriptors(
-          selectGrokDiscoveredModelGroups({ cliModels, apiModels }),
-        );
-        if (models.length === 0) {
-          if (cliError) {
-            return yield* mapGrokModelDiscoveryError(cliError);
-          }
-          if (apiError) {
-            return yield* apiError;
-          }
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "model/list",
-            detail: "Grok model discovery returned no models.",
-          });
+
+        if (cliModels.length === 0 && discoveryError === undefined) {
+          discoveryError = `'${binaryPath} models list' returned no models.`;
         }
+
+        const models =
+          cliModels.length > 0 ? mergeDevinModelDescriptors([cliModels]) : fallbackResult.models;
+
         return {
           models,
-          source: cliModels.length > 0 ? "grok-cli" : "grok-cli+xai-api",
+          source: cliModels.length > 0 ? "devin-cli" : fallbackResult.source,
           cached: false,
+          ...(discoveryError !== undefined ? { error: discoveryError } : {}),
         } satisfies ProviderListModelsResult;
       }).pipe(
         Effect.scoped,
-        Effect.mapError(mapGrokModelDiscoveryError),
-        Effect.timeoutOption(GROK_MODEL_DISCOVERY_TIMEOUT_MS),
+        Effect.timeoutOption(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS),
         Effect.flatMap(
           Option.match({
             onNone: () =>
-              Effect.fail(
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "model/list",
-                  detail: "Timed out while discovering Grok models via CLI.",
-                }),
-              ),
+              Effect.succeed({
+                ...fallbackResult,
+                error: `Timed out after ${Math.round(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS / 1000)}s while discovering Devin models via CLI.`,
+              } satisfies ProviderListModelsResult),
             onSome: (result) => Effect.succeed(result),
           }),
         ),
       );
     };
 
-    const grokForkTimeoutError = (method: string): ProviderAdapterRequestError =>
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method,
-        detail: `Grok ACP did not respond to ${method} within ${GROK_ACP_FORK_TIMEOUT_MS / 1000}s.`,
-      });
-
-    const forkThread: NonNullable<GrokAdapterShape["forkThread"]> = (input) =>
-      Effect.gen(function* () {
-        const sourceCwd = resolveGrokSessionCwd(input.sourceCwd ?? input.cwd, serverConfig);
-        const targetCwd = resolveGrokSessionCwd(input.cwd ?? input.sourceCwd, serverConfig);
-        if (!sourceCwd || !targetCwd) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "forkThread",
-            issue: "A source and target cwd are required to fork a Grok session.",
-          });
-        }
-
-        const forkRuntime = (runtime: AcpSessionRuntimeShape) =>
-          forkViaAcpRuntime({
-            provider: PROVIDER,
-            runtime,
-            targetCwd,
-            unsupportedIssue:
-              "This Grok ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
-            requestTimeoutMs: GROK_ACP_FORK_TIMEOUT_MS,
-            timeoutError: grokForkTimeoutError,
-          });
-
-        const activeSource = sessions.get(input.sourceThreadId);
-        // Forking mid-turn would branch from incomplete in-flight state, so
-        // let the retained-transcript fallback handle busy sources.
-        if (activeSource?.activeTurnId !== undefined) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "forkThread",
-            issue:
-              "The source Grok session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
-          });
-        }
-        const forked = activeSource
-          ? yield* forkRuntime(activeSource.acp)
-          : yield* Effect.gen(function* () {
-              const sourceSessionId = parseGrokResume(input.sourceResumeCursor)?.sessionId;
-              if (!sourceSessionId) {
-                return yield* new ProviderAdapterValidationError({
-                  provider: PROVIDER,
-                  operation: "forkThread",
-                  issue: "The source Grok session has no resumable native cursor.",
-                });
-              }
-              const providerGrokOptions = input.providerOptions?.grok;
-              const runtime = yield* makeGrokAcpRuntime({
-                grokSettings: {
-                  ...(grokSettings.binaryPath !== undefined
-                    ? { binaryPath: grokSettings.binaryPath }
-                    : {}),
-                  ...(providerGrokOptions?.binaryPath !== undefined
-                    ? { binaryPath: providerGrokOptions.binaryPath }
-                    : {}),
-                },
-                childProcessSpawner,
-                cwd: sourceCwd,
-                runtimeMode: input.runtimeMode,
-                resumeSessionId: sourceSessionId,
-                clientInfo: { name: "Synara Fork", version: "0.0.0" },
-                sessionMeta: GROK_SESSION_META,
-              });
-              yield* runtime.start().pipe(
-                Effect.timeoutOption(GROK_ACP_FORK_TIMEOUT_MS),
-                Effect.flatMap(
-                  Option.match({
-                    onNone: () => Effect.fail(grokForkTimeoutError("session/resume")),
-                    onSome: Effect.succeed,
-                  }),
-                ),
-              );
-              return yield* forkRuntime(runtime);
-            }).pipe(Effect.scoped);
-
-        // Return only the cursor: ProviderService registers the binding under
-        // a committed lifecycle lease and the target's first turn resumes it
-        // there. Starting the runtime here would capture an undefined
-        // lifecycle generation, orphaning the fork's approval requests.
-        return {
-          threadId: input.threadId,
-          resumeCursor: {
-            schemaVersion: GROK_RESUME_VERSION,
-            sessionId: forked.sessionId,
-          },
-        };
-      }).pipe(
-        Effect.mapError((cause) =>
-          cause instanceof ProviderAdapterRequestError ||
-          cause instanceof ProviderAdapterProcessError ||
-          cause instanceof ProviderAdapterSessionClosedError ||
-          cause instanceof ProviderAdapterSessionNotFoundError ||
-          cause instanceof ProviderAdapterValidationError
-            ? cause
-            : mapAcpToAdapterError(PROVIDER, input.sourceThreadId, "session/fork", cause),
-        ),
-      );
-
-    const stopAll: GrokAdapterShape["stopAll"] = () =>
+    const stopAll: DevinAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true }).pipe(
+      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {
+        discard: true,
+      }).pipe(
         Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
       ),
@@ -2655,32 +2703,34 @@ export function makeGrokAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "restart-session",
+        conversationRollback: "restart-session",
+        supportsRuntimeModelList: true,
       },
       startSession,
       sendTurn,
       interruptTurn,
       readThread,
       rollbackThread,
-      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,
       listSessions,
       getComposerCapabilities,
+      listCommands,
       compactThread,
       listModels,
       hasSession,
       stopAll,
       streamEvents,
-    } satisfies GrokAdapterShape;
+    } satisfies DevinAdapterShape;
   });
 }
 
-export const GrokAdapterLive = Layer.effect(GrokAdapter, makeGrokAdapter({}));
+export const DevinAdapterLive = Layer.effect(DevinAdapter, makeDevinAdapter());
 
-export function makeGrokAdapterLive(
-  grokSettings: GrokAcpRuntimeSettings = {},
-  options?: GrokAdapterLiveOptions,
+export function makeDevinAdapterLive(
+  devinSettings: DevinAcpRuntimeSettings = {},
+  options?: DevinAdapterLiveOptions,
 ) {
-  return Layer.effect(GrokAdapter, makeGrokAdapter(grokSettings, options));
+  return Layer.effect(DevinAdapter, makeDevinAdapter(devinSettings, options));
 }

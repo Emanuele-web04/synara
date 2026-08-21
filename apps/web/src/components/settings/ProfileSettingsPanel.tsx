@@ -335,6 +335,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Claude";
     case "cursor":
       return "Cursor";
+    case "devin":
+      return "Devin";
     case "antigravity":
       return "Antigravity";
     case "grok":
@@ -347,6 +349,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "OpenCode";
     case "pi":
       return "Pi";
+    case "devin":
+      return "Devin";
   }
 }
 

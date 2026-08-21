@@ -271,6 +271,7 @@ describe("resolveAppModelSelection", () => {
           codex: ["galapagos-alpha"],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -291,6 +292,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -311,6 +313,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -331,6 +334,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -351,6 +355,7 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
+          devin: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -519,6 +524,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        devinBinaryPath: "/usr/local/bin/devin",
       }),
     ).toEqual({
       claudeAgent: {
@@ -536,6 +542,9 @@ describe("getProviderStartOptions", () => {
       },
       grok: {
         binaryPath: "/usr/local/bin/grok",
+      },
+      devin: {
+        binaryPath: "/usr/local/bin/devin",
       },
     });
   });
@@ -558,6 +567,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        devinBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -572,6 +582,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
+        devinBinaryPath: "devin",
         droidBinaryPath: "droid",
         kiloBinaryPath: "kilo",
         kiloServerUrl: "",
@@ -593,6 +604,7 @@ describe("provider-indexed custom model settings", () => {
     customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
+    customDevinModels: ["devin/custom-model"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -603,6 +615,7 @@ describe("provider-indexed custom model settings", () => {
       "codex",
       "claudeAgent",
       "cursor",
+      "devin",
       "antigravity",
       "grok",
       "droid",
@@ -624,6 +637,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
+    expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
@@ -637,6 +651,7 @@ describe("provider-indexed custom model settings", () => {
       customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
       customGrokModels: ["grok/default-fast"],
       customDroidModels: ["droid/default-model"],
+      customDevinModels: ["adaptive"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
@@ -652,6 +667,7 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["adaptive"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
@@ -687,6 +703,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for devin", () => {
+    expect(patchCustomModels("devin", ["devin/custom-model"])).toEqual({
+      customDevinModels: ["devin/custom-model"],
+    });
+  });
+
   it("patches custom models for cursor", () => {
     expect(patchCustomModels("cursor", ["cursor/custom-model"])).toEqual({
       customCursorModels: ["cursor/custom-model"],
@@ -719,6 +741,7 @@ describe("provider-indexed custom model settings", () => {
       antigravity: ["Gemini 3.5 Flash (Experimental)"],
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
+      devin: ["devin/custom-model"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
@@ -746,6 +769,9 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
+      modelOptionsByProvider.devin.some((option) => option.slug === "devin/custom-model"),
+    ).toBe(true);
+    expect(
       modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
     ).toBe(true);
     expect(
@@ -768,6 +794,7 @@ describe("provider-indexed custom model settings", () => {
       ],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
+      customDevinModels: [" adaptive ", "devin/custom-model", "devin/custom-model"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
@@ -808,6 +835,9 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-4.6")).toBe(true);
     expect(
       modelOptionsByProvider.grok.filter((option) => option.slug === "grok-build"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.devin.filter((option) => option.slug === "devin/custom-model"),
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),

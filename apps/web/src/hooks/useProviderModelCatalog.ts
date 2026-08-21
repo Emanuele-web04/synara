@@ -45,6 +45,11 @@ export interface ProviderModelCatalog {
   selectedProviderModelsLoading: boolean;
   /** Whether the selected provider requires and is still waiting on runtime models. */
   selectedProviderRuntimeModelDiscoveryPending: boolean;
+  /**
+   * Discovery failure detail per provider (268 passthrough). Devin's static
+   * fallback is deliberately omitted: it is a resolved catalog, not an error.
+   */
+  discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>>;
 }
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
@@ -114,6 +119,7 @@ export function useProviderModelCatalog(input: {
   const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
+  const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
 
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
@@ -184,6 +190,14 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+    }),
+  );
+  const devinDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "devin",
+      binaryPath: settings.devinBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: devinModelDiscoveryEnabled,
     }),
   );
 
@@ -260,6 +274,17 @@ export function useProviderModelCatalog(input: {
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
+  const hasResolvedDevinModelDiscovery =
+    (devinDynamicModelsQuery.data?.source === "devin-cli" ||
+      // Static fallback descriptors are a valid resolved catalog: the adapter
+      // serves its built-in matrix when CLI discovery is unavailable, so the
+      // picker must render them instead of spinning (or banner-ing) forever.
+      devinDynamicModelsQuery.data?.source === "devin.static") &&
+    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const devinModelDiscoveryPending =
+    devinModelDiscoveryEnabled &&
+    !hasResolvedDevinModelDiscovery &&
+    isInitialModelDiscoveryPending(devinDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -295,6 +320,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.opencode,
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
+      devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
     };
     const result: Record<
       ProviderKind,
@@ -313,6 +339,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
+      devin: devinDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -324,6 +351,7 @@ export function useProviderModelCatalog(input: {
       "kilo",
       "opencode",
       "pi",
+      "devin",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
@@ -348,6 +376,7 @@ export function useProviderModelCatalog(input: {
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
+    devinDynamicModelsQuery.data,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -358,6 +387,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
+      devin: devinModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -366,6 +396,7 @@ export function useProviderModelCatalog(input: {
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
+      devinModelDiscoveryPending,
     ],
   );
 
@@ -382,6 +413,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
+      devin: devinDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -393,6 +425,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      devinDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -424,6 +457,41 @@ export function useProviderModelCatalog(input: {
     [selectedDynamicAgents],
   );
 
+  // Discovery failures per provider, surfaced as a subtle inline note by the
+  // model pickers. Devin's static fallback is a resolved catalog, not a
+  // failure: the adapter already substituted its built-in matrix, so its
+  // discovery detail is suppressed here and never rendered as an error.
+  const discoveryErrorsByProvider = useMemo<Partial<Record<ProviderKind, string | undefined>>>(
+    () => ({
+      claudeAgent: claudeDynamicModelsQuery.data?.error,
+      codex: codexDynamicModelsQuery.data?.error,
+      cursor: cursorDynamicModelsQuery.data?.error,
+      devin:
+        devinDynamicModelsQuery.data?.source === "devin.static"
+          ? undefined
+          : devinDynamicModelsQuery.data?.error,
+      antigravity: antigravityModelsQuery.data?.error,
+      grok: grokDynamicModelsQuery.data?.error,
+      droid: droidDynamicModelsQuery.data?.error,
+      kilo: kiloDynamicModelsQuery.data?.error,
+      opencode: openCodeDynamicModelsQuery.data?.error,
+      pi: piDynamicModelsQuery.data?.error,
+    }),
+    [
+      antigravityModelsQuery.data?.error,
+      claudeDynamicModelsQuery.data?.error,
+      codexDynamicModelsQuery.data?.error,
+      cursorDynamicModelsQuery.data?.error,
+      devinDynamicModelsQuery.data?.error,
+      devinDynamicModelsQuery.data?.source,
+      droidDynamicModelsQuery.data?.error,
+      grokDynamicModelsQuery.data?.error,
+      kiloDynamicModelsQuery.data?.error,
+      openCodeDynamicModelsQuery.data?.error,
+      piDynamicModelsQuery.data?.error,
+    ],
+  );
+
   const selectedProviderRuntimeModelDiscoveryPending =
     loadingModelProviders[selectedProvider] ?? false;
   const selectedProviderModelsQuery =
@@ -443,7 +511,9 @@ export function useProviderModelCatalog(input: {
                   ? kiloDynamicModelsQuery
                   : selectedProvider === "opencode"
                     ? openCodeDynamicModelsQuery
-                    : piDynamicModelsQuery;
+                    : selectedProvider === "pi"
+                      ? piDynamicModelsQuery
+                      : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&
@@ -461,9 +531,11 @@ export function useProviderModelCatalog(input: {
       selectedRuntimeAgents,
       selectedProviderModelsLoading,
       selectedProviderRuntimeModelDiscoveryPending,
+      discoveryErrorsByProvider,
     }),
     [
       customModelsByProvider,
+      discoveryErrorsByProvider,
       loadingModelProviders,
       modelOptionsByProvider,
       runtimeModelsByProvider,

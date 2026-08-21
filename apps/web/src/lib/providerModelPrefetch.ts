@@ -25,6 +25,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "claudeBinaryPath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
+  | "devinBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
@@ -32,6 +33,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
+  | "devinBinaryPath"
 >;
 
 /**
@@ -132,6 +134,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
       });
+    case "devin":
+      return providerModelsQueryOptions({
+        provider: "devin",
+        binaryPath: settings.devinBinaryPath || null,
+        cwd,
+      });
     case "antigravity":
       return providerModelsQueryOptions({
         provider: "antigravity",
@@ -166,6 +174,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "pi",
         binaryPath: settings.piBinaryPath || null,
         agentDir: settings.piAgentDir || null,
+        cwd,
+      });
+    case "devin":
+      return providerModelsQueryOptions({
+        provider: "devin",
+        binaryPath: settings.devinBinaryPath || null,
         cwd,
       });
   }

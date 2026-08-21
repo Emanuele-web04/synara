@@ -33,6 +33,7 @@ function makeSettings(
     claudeBinaryPath: "",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
+    devinBinaryPath: "",
     antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
@@ -201,6 +202,15 @@ describe("providerModelsPrefetchQueryOptions", () => {
         .queryKey,
     ).toEqual(
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
+    );
+
+    const devinOptions = providerModelsPrefetchQueryOptions({
+      provider: "devin",
+      settings: makeSettings({ devinBinaryPath: "/bin/devin" }),
+      cwd: "/tmp/project",
+    });
+    expect(devinOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("devin", "/bin/devin", null, null, "/tmp/project"),
     );
 
     expect(providerModelsPrefetchQueryOptions({ provider: "codex", settings }).queryKey).toEqual(
