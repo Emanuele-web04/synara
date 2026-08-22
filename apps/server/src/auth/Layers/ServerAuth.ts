@@ -13,6 +13,7 @@ import {
   BootstrapCredentialError,
   BootstrapCredentialService,
 } from "../Services/BootstrapCredentialService";
+import { OWNER_STARTUP_PAIRING_TTL } from "./BootstrapCredentialService";
 import { ServerAuthPolicy } from "../Services/ServerAuthPolicy";
 import {
   AuthError,
@@ -140,6 +141,15 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const peekBootstrapCredential: ServerAuthShape["peekBootstrapCredential"] = (credential) =>
+    bootstrapCredentials.peek(credential).pipe(
+      Effect.mapError(toBootstrapExchangeAuthError),
+      Effect.map((grant) => ({
+        role: grant.role,
+        subject: grant.subject,
+      })),
+    );
+
   const exchangeBootstrapCredential: ServerAuthShape["exchangeBootstrapCredential"] = (
     credential,
     requestMetadata,
@@ -226,6 +236,7 @@ export const makeServerAuth = Effect.gen(function* () {
         role: input?.role ?? "client",
         subject: input?.role === "owner" ? "owner-bootstrap" : "one-time-token",
         ...(input?.label ? { label: input.label } : {}),
+        ...(input?.ttl ? { ttl: input.ttl } : {}),
       })
       .pipe(
         Effect.mapError(
@@ -391,12 +402,14 @@ export const makeServerAuth = Effect.gen(function* () {
   };
 
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
-    issuePairingCredential({ role: "owner" }).pipe(
+    issuePairingCredential({ role: "owner", ttl: OWNER_STARTUP_PAIRING_TTL }).pipe(
       Effect.map((issued) => {
         const url = new URL(baseUrl);
-        url.pathname = "/pair";
-        url.searchParams.delete("token");
-        url.hash = new URLSearchParams([["token", issued.credential]]).toString();
+        // Path form survives chat/link previews that strip `?token=`; query still
+        // works as a fallback for older bookmarks.
+        url.pathname = `/pair/${encodeURIComponent(issued.credential)}`;
+        url.search = "";
+        url.hash = "";
         return url.toString();
       }),
     );
@@ -404,6 +417,7 @@ export const makeServerAuth = Effect.gen(function* () {
   return {
     getDescriptor: () => Effect.succeed(descriptor),
     getSessionState,
+    peekBootstrapCredential,
     exchangeBootstrapCredential,
     exchangeBootstrapCredentialForBearerSession,
     issuePairingCredential,

@@ -26,6 +26,7 @@ import {
   AUTH_JSON_BODY_MAX_BYTES,
   authEffectRouteLayer,
   binaryUploadEffectRouteLayer,
+  pairEffectRouteLayer,
 } from "./http";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 
@@ -72,6 +73,7 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         expiresAt,
         sessionToken: "bearer-token",
       }),
+    peekBootstrapCredential: () => Effect.succeed({ role: "owner" as const, subject: "owner-bootstrap" }),
     issuePairingCredential: () =>
       mutate({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),
@@ -109,6 +111,7 @@ async function withAuthEffectServer(
   run: (origin: string) => Promise<void>,
   routeLayer:
     | typeof authEffectRouteLayer
+    | typeof pairEffectRouteLayer
     | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
@@ -142,6 +145,8 @@ async function withAuthEffectServer(
           );
           if (routeLayer === authEffectRouteLayer) {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(authEffectRouteLayer));
+          } else if (routeLayer === pairEffectRouteLayer) {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(pairEffectRouteLayer));
           } else {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(binaryUploadEffectRouteLayer));
           }
@@ -185,6 +190,54 @@ function mutationRequest(input: {
 }
 
 describe("authEffectRouteLayer", () => {
+  it("exchanges owner pairing tokens on GET /pair before the SPA loads", async () => {
+    const sideEffects = { count: 0 };
+    const config = {
+      host: "127.0.0.1",
+      publicUrl: new URL("https://synara.example.test/"),
+      staticDir: undefined,
+    } as ServerConfigShape;
+    await withAuthEffectServer(
+      config,
+      makeServerAuth(sideEffects),
+      async (serverOrigin) => {
+        const response = await fetch(`${serverOrigin}/pair?token=PAIRINGTOKEN`, {
+          redirect: "manual",
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("set-cookie")).toBeNull();
+        const body = await response.text();
+        expect(body).toContain("Pair this browser");
+        expect(body).toContain("PAIRINGTOKEN");
+        expect(sideEffects.count).toBe(0);
+      },
+      pairEffectRouteLayer,
+    );
+  });
+
+  it("exchanges owner pairing tokens on GET /pair/:credential", async () => {
+    const sideEffects = { count: 0 };
+    const config = {
+      host: "127.0.0.1",
+      publicUrl: new URL("https://synara.example.test/"),
+      staticDir: undefined,
+    } as ServerConfigShape;
+    await withAuthEffectServer(
+      config,
+      makeServerAuth(sideEffects),
+      async (serverOrigin) => {
+        const response = await fetch(`${serverOrigin}/pair/PAIRINGTOKEN`, {
+          redirect: "manual",
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("set-cookie")).toBeNull();
+        expect(await response.text()).toContain("Pair this browser");
+        expect(sideEffects.count).toBe(0);
+      },
+      pairEffectRouteLayer,
+    );
+  });
+
   it("rejects declared and chunked oversized bootstrap JSON before auth exchange", async () => {
     const sideEffects = { count: 0 };
     const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;

@@ -6377,7 +6377,8 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
+    expect(harness.stopSession).not.toHaveBeenCalled();
 
     harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
@@ -9597,7 +9598,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("reacts to thread.session.stop by stopping provider session and clearing thread session state", async () => {
+  it("reacts to thread.session.stop by preserving provider resume state", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -9629,7 +9630,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(async () => {
-      if (harness.stopSession.mock.calls.length !== 1) return false;
+      if (harness.stopRuntimeSession.mock.calls.length !== 1) return false;
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       const thread = readModel.threads.find(
         (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
@@ -9642,6 +9643,10 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("stopped");
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
   });
 
   it("serializes archive cleanup through the durable provider intent source", async () => {
@@ -9675,7 +9680,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(async () => {
-      if (harness.stopSession.mock.calls.length !== 1) return false;
+      if (harness.stopRuntimeSession.mock.calls.length !== 1) return false;
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       const thread = readModel.threads.find(
         (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
@@ -9683,12 +9688,51 @@ describe("ProviderCommandReactor", () => {
       return thread?.archivedAt !== null && thread?.session?.status === "stopped";
     });
 
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("destructively removes provider state when a thread is deleted", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-for-delete"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.makeUnsafe("cmd-delete-active-provider-session"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+
     expect(harness.stopSession).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
   });
 
-  it("does not restore pending sidechat context after an explicit session stop", async () => {
+  it("does not duplicate pending sidechat context after an explicit session stop", async () => {
     const threadId = ThreadId.makeUnsafe("thread-stopped-droid-sidechat");
     const harness = await createHarness({
       forkThreadResult: {
@@ -9762,10 +9806,11 @@ describe("ProviderCommandReactor", () => {
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
-        harness.stopSession.mock.calls.length === 1 &&
+        harness.stopRuntimeSession.mock.calls.length === 1 &&
         readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "stopped"
       );
     });
+    expect(harness.stopSession).not.toHaveBeenCalled();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -9775,7 +9820,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("stopped-droid-sidechat-fresh-user"),
           role: "user",
-          text: "Start fresh after stop",
+          text: "Continue after stop",
           attachments: [],
         },
         runtimeMode: "approval-required",
@@ -9789,7 +9834,7 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).not.toContain("<sidechat_context>");
     expect(input?.input).not.toContain("<thread_context>");
     expect(input?.input).not.toContain("Context cleared by stop");
-    expect(input?.input).toContain("Start fresh after stop");
+    expect(input?.input).toContain("Continue after stop");
   });
 
   it("interrupts active subagent sessions without stopping the parent provider session", async () => {

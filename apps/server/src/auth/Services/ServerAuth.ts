@@ -12,7 +12,7 @@ import type {
   ServerAuthDescriptor,
   ServerAuthSessionMethod,
 } from "@synara/contracts";
-import { Data, DateTime, ServiceMap } from "effect";
+import { Data, DateTime, Duration, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { SessionRole } from "./SessionCredentialService";
@@ -58,9 +58,18 @@ export interface ServerAuthShape {
     credential: string,
     requestMetadata: AuthClientMetadata,
   ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
+  /** Validates a pairing credential without consuming one-time links. */
+  readonly peekBootstrapCredential: (credential: string) => Effect.Effect<
+    {
+      readonly role: "owner" | "client";
+      readonly subject: string;
+    },
+    AuthError
+  >;
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly role?: SessionRole;
+      readonly ttl?: Duration.Duration;
     },
   ) => Effect.Effect<AuthPairingCredentialResult, AuthError>;
   readonly listPairingLinks: () => Effect.Effect<ReadonlyArray<AuthPairingLink>, AuthError>;
