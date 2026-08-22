@@ -165,6 +165,7 @@ import {
   type ActiveTrailSnapshot,
   type MessageTrailAnchor,
 } from "./messageTrail.logic";
+import { threadFindMarkdownProps, type ThreadFindHighlight } from "./threadFind.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -223,7 +224,7 @@ function readLegendListState(
  * checklist can scroll the virtualized list to (and briefly flash) a specific message.
  */
 export interface MessagesTimelineController {
-  scrollToMessage: (messageId: MessageId) => void;
+  scrollToMessage: (messageId: MessageId, options?: { segmentIndex?: number }) => void;
   scrollToMarker: (marker: ThreadMarker) => void;
 }
 
@@ -511,6 +512,8 @@ interface MessagesTimelineProps {
   contentInsetBottomPx?: number | undefined;
   /** Measured distance from the composer's bottom edge to the top of its footer controls. */
   contentInsetBottomClearancePx?: number | undefined;
+  /** In-thread find highlight; matching itself lives on projected messages, not the DOM. */
+  findHighlight?: ThreadFindHighlight | null;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -575,6 +578,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetRightPx,
   contentInsetBottomPx,
   contentInsetBottomClearancePx,
+  findHighlight: findHighlightProp,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -589,6 +593,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
+  const findHighlight = findHighlightProp ?? null;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
   // The timeline remounts per thread (and when the agent-activity detail view
   // closes), but the anchor lives above it and survives those remounts. An
@@ -905,6 +910,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      findHighlight,
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
@@ -923,6 +929,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      findHighlight,
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
@@ -976,13 +983,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (!controllerRef) {
       return;
     }
-    const scrollToMessage = (messageId: MessageId) => {
-      const index = rowsRef.current.findIndex(
-        (row) => row.kind === "message" && row.message.id === messageId,
-      );
+    const scrollToMessage = (messageId: MessageId, segmentIndex?: number) => {
+      const rows = rowsRef.current;
+      let index = -1;
+      if (segmentIndex !== undefined) {
+        index = rows.findIndex(
+          (row) =>
+            row.kind === "message-segment" &&
+            row.message.id === messageId &&
+            row.segmentIndex === segmentIndex,
+        );
+      }
+      if (index < 0) {
+        index = rows.findIndex((row) => row.kind === "message" && row.message.id === messageId);
+      }
+      if (index < 0) {
+        index = rows.findIndex(
+          (row) =>
+            (row.kind === "message" || row.kind === "message-segment") &&
+            row.message.id === messageId,
+        );
+      }
       if (index < 0) {
         return false;
       }
+      setExpandedUserMessagesById((previous) =>
+        previous[messageId] === true ? previous : { ...previous, [messageId]: true },
+      );
       scrollLegendListToIndex(resolvedListRef, {
         index,
         animated: true,
@@ -1027,10 +1054,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
     };
     const controller: MessagesTimelineController = {
-      scrollToMessage: (messageId) => {
+      scrollToMessage: (messageId, options) => {
         cancelPendingMarkerFineScroll();
         clearActiveMarkerDecoration();
-        if (!scrollToMessage(messageId)) {
+        if (!scrollToMessage(messageId, options?.segmentIndex)) {
           return;
         }
         setHighlightedMessageId(messageId);
@@ -1321,7 +1348,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ? "pb-2"
             : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
-        row.kind === "message" && row.message.id === highlightedMessageId
+        (row.kind === "message" || row.kind === "message-segment") &&
+          row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
           : null,
         enteringMessageRowIds.has(row.id) ? "chat-message-send-enter" : null,
@@ -1457,6 +1485,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  {...threadFindMarkdownProps(findHighlight, row.message.id, row.segmentIndex)}
                 />
               </div>
             </div>
@@ -1661,6 +1690,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           chatTypographyStyle={userMessageTypographyStyle}
                           resolvedTheme={resolvedTheme}
                           markdownCwd={markdownCwd}
+                          {...threadFindMarkdownProps(findHighlight, row.message.id)}
                         />
                       </UserMessageCollapsibleText>
                     </div>
@@ -2025,6 +2055,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
                   knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                  {...threadFindMarkdownProps(findHighlight, item.message.id)}
                 />
               </div>
             );
@@ -2136,6 +2167,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       onImageExpand={onImageExpand}
                       markers={messageMarkers}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
                 ) : null}
@@ -3300,6 +3332,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   chatTypographyStyle: CSSProperties;
   resolvedTheme: "light" | "dark";
   markdownCwd: string | undefined;
+  findQuery?: string;
+  findActiveRange?: { startOffset: number; endOffset: number } | null;
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -3322,6 +3356,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         terminalContexts={props.terminalContexts}
         className="font-system-ui wrap-break-word"
         style={props.chatTypographyStyle}
+        findQuery={props.findQuery}
+        findActiveRange={props.findActiveRange}
       />
     );
   }
@@ -3361,6 +3397,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       mentionReferences={props.mentionReferences}
       className="font-system-ui"
       style={props.chatTypographyStyle}
+      findQuery={props.findQuery}
+      findActiveRange={props.findActiveRange}
     />
   );
 });
