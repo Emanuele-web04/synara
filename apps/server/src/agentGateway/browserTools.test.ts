@@ -263,6 +263,8 @@ describe("agent gateway browser tools", () => {
       "browser_reload",
       "browser_resize",
       "browser_snapshot",
+      "browser_webmcp_tools",
+      "browser_webmcp_call",
       "browser_screenshot",
       "browser_logs",
       "browser_click",

@@ -48,7 +48,7 @@ The tools surrounding an agent session remain available from the same task surfa
 | ------------------ | -------------------------------------------------------- |
 | **Changes**        | Inspect diffs, changed files, and review state.          |
 | **Terminal**       | Run commands in the project environment.                 |
-| **Browser**        | Keep local previews and browser work next to the thread. |
+| **Browser**        | Keep local previews next to the thread and let agents use semantic or page-declared WebMCP tools. |
 | **Files / Editor** | Browse, inspect, and edit project files in context.      |
 | **Git**            | Work with branches, commits, pushes, and pull requests.  |
 
