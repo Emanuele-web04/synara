@@ -243,7 +243,16 @@ describe("agent gateway browser tools", () => {
         result: { content: "é".repeat(30_000) },
         finalUrl: "https://example.test/results",
         navigated: false,
-        redirects: [],
+        redirects: Array.from(
+          { length: 20 },
+          (_, index) => `https://redirect.example/${"r".repeat(7_900)}?step=${index}`,
+        ),
+        dialogs: Array.from({ length: 20 }, (_, index) => ({
+          kind: "alert",
+          message: `Dialog ${index} ${"d".repeat(4_000)}`,
+          action: "accepted",
+          openedAt: "2026-08-26T10:00:00.000Z",
+        })),
       }),
     );
     const tools = makeAgentGatewayBrowserTools({ available: true, execute });
@@ -258,6 +267,8 @@ describe("agent gateway browser tools", () => {
     expect(text).toContain("contentTrust=untrusted-web-page");
     expect(text).toContain("resultPreview=");
     expect(text).toContain("webMcpResultTruncated=true");
+    expect(text).toContain('"redirectCount":20');
+    expect(text).toContain('"dialogCount":20');
     expect(text).not.toContain('"result":{"content"');
     expect(text).not.toContain("�");
   });

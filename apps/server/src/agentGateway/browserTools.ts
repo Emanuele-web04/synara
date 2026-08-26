@@ -364,7 +364,43 @@ function browserResultText(name: BrowserToolName, value: unknown): string {
     const record = asRecord(value);
     if (name === "browser_webmcp_call" && record && hasOwn(record, "result")) {
       const { result, ...metadata } = record;
-      const prefix = `${trustPreamble}\n${JSON.stringify(metadata)}\nresultPreview=`;
+      const redirects = Array.isArray(metadata.redirects) ? metadata.redirects : [];
+      const dialogs = Array.isArray(metadata.dialogs) ? metadata.dialogs : [];
+      const compactMetadata = {
+        tabId: metadata.tabId,
+        discoveryId: metadata.discoveryId,
+        toolId: metadata.toolId,
+        toolName: metadata.toolName,
+        contentTrust: metadata.contentTrust,
+        status: metadata.status,
+        error: metadata.error,
+        finalUrl: metadata.finalUrl,
+        navigated: metadata.navigated,
+        redirects: redirects.slice(0, 1),
+        redirectCount: redirects.length,
+        redirectsTruncated: redirects.length > 1,
+        loadState: metadata.loadState,
+        openedTabId: metadata.openedTabId,
+        humanActionRequired: metadata.humanActionRequired,
+        dialogs: dialogs.slice(0, 2).flatMap((rawDialog) => {
+          const dialog = asRecord(rawDialog);
+          if (!dialog) return [];
+          return [
+            {
+              kind: dialog.kind,
+              message:
+                typeof dialog.message === "string"
+                  ? truncateUtf8(dialog.message, 1_024)
+                  : dialog.message,
+              action: dialog.action,
+              openedAt: dialog.openedAt,
+            },
+          ];
+        }),
+        dialogCount: dialogs.length,
+        dialogsTruncated: dialogs.length > 2,
+      };
+      const prefix = `${trustPreamble}\n${JSON.stringify(compactMetadata)}\nresultPreview=`;
       const marker = "\nwebMcpResultTruncated=true";
       const previewBudget = Math.max(
         0,
