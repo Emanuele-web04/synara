@@ -231,6 +231,35 @@ describe("agent gateway browser tools", () => {
     expect(text).not.toContain("�");
   });
 
+  it("keeps untrusted WebMCP results from flooding model context", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({
+        tabId: TAB_ID,
+        discoveryId: SNAPSHOT_ID,
+        toolId: "w1",
+        toolName: "search",
+        contentTrust: "untrusted-web-page",
+        status: "completed",
+        result: { content: "é".repeat(30_000) },
+        finalUrl: "https://example.test/results",
+        navigated: false,
+        redirects: [],
+      }),
+    );
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
+    const call = tools.find((tool) => tool.definition.name === "browser_webmcp_call")!;
+
+    const result = await Effect.runPromise(
+      call.handler({ discoveryId: SNAPSHOT_ID, toolId: "w1" }, context),
+    );
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(text).toContain("contentTrust=untrusted-web-page");
+    expect(text).toContain("webMcpTextTruncated=true");
+    expect(text).not.toContain("�");
+  });
+
   it("leaves ambiguous aliases invalid instead of guessing", async () => {
     const execute = vi.fn();
     const tools = makeAgentGatewayBrowserTools({ available: true, execute: execute as never });

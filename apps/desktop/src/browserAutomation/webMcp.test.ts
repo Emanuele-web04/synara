@@ -80,6 +80,28 @@ describe("WebMCP browser bridge", () => {
     expect(discovery.handle?.entries.get("w1" as never)?.index).toBe(1);
   });
 
+  it("returns at most eight tools by default", async () => {
+    cdp.callFunctionOn.mockResolvedValue({
+      value: {
+        available: true,
+        implementation: "compatibility",
+        skippedToolCount: 0,
+        tools: Array.from({ length: 10 }, (_, index) =>
+          bridgeTool({
+            index,
+            name: `tool_${index}`,
+            description: `Page tool ${index}.`,
+          }),
+        ),
+      },
+    });
+
+    const discovery = await discoverWebMcpTools(runtime, {}, 1, new AbortController().signal);
+
+    expect(discovery.output.tools).toHaveLength(8);
+    expect(discovery.output.truncated).toBe(true);
+  });
+
   it("invokes only the exact tool definition from the discovery", async () => {
     cdp.callFunctionOn
       .mockResolvedValueOnce({

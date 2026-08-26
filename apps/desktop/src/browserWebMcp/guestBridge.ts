@@ -34,7 +34,9 @@ export function installWebMcpBridgeInMainWorld(): void {
   const MAX_TITLE_BYTES = 1_024;
   const MAX_DESCRIPTION_BYTES = 4_096;
   const MAX_SCHEMA_BYTES = 65_536;
-  const MAX_RESULT_BYTES = 262_144;
+  // Tool output is fed back to a model. Keep this materially below the generic
+  // browser JSON ceiling so a page cannot flood the turn context.
+  const MAX_RESULT_BYTES = 65_536;
   const encoder = new TextEncoder();
   const byteLength = (value: string): number => encoder.encode(value).byteLength;
   const jsonDepth = (value: unknown, depth = 0): number => {
@@ -78,14 +80,44 @@ export function installWebMcpBridgeInMainWorld(): void {
     }
   };
   const safeError = (error: unknown): { readonly name: string; readonly message: string } => {
-    const rawName = error instanceof Error ? error.name : "WebMcpToolError";
-    const rawMessage = error instanceof Error ? error.message : String(error);
+    let rawName = "WebMcpToolError";
+    let rawMessage = "The page-declared WebMCP tool failed.";
+    try {
+      if (error instanceof Error) {
+        rawName = error.name;
+        rawMessage = error.message;
+      } else {
+        rawMessage = String(error);
+      }
+    } catch {
+      // A page may reject with an object whose coercion itself throws. Never
+      // let that hostile error value escape Synara's bounded error envelope.
+    }
     return {
       name: normalizedText(rawName, MAX_NAME_BYTES) ?? "WebMcpToolError",
       message:
         normalizedText(rawMessage, MAX_DESCRIPTION_BYTES) ??
         "The page-declared WebMCP tool failed.",
     };
+  };
+
+  const awaitWithAbort = async <T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> => {
+    if (!signal) return await operation;
+    if (signal.aborted) throw signal.reason;
+    return await new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      operation.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+      );
+    });
   };
 
   const declarativeForm = Symbol("synara.webmcp.declarative-form");
@@ -242,7 +274,10 @@ export function installWebMcpBridgeInMainWorld(): void {
     (modelContext as EventTarget).dispatchEvent(activated);
   };
 
-  const submitDeclarativeForm = async (form: HTMLFormElement): Promise<unknown> => {
+  const submitDeclarativeForm = async (
+    form: HTMLFormElement,
+    signal?: AbortSignal,
+  ): Promise<unknown> => {
     if (!form.hasAttribute("toolautosubmit")) {
       return "The page form was filled and is awaiting user submission.";
     }
@@ -269,7 +304,7 @@ export function installWebMcpBridgeInMainWorld(): void {
       },
     });
     const shouldSubmit = form.dispatchEvent(event);
-    if (response) return await response;
+    if (response) return await awaitWithAbort(response, signal);
     if (shouldSubmit) HTMLFormElement.prototype.submit.call(form);
     return null;
   };
@@ -342,8 +377,9 @@ export function installWebMcpBridgeInMainWorld(): void {
         if (!form.isConnected) {
           throw new DOMException("The WebMCP form is stale", "InvalidStateError");
         }
+        if (options.signal?.aborted) throw options.signal.reason;
         fillDeclarativeForm(form, inputObject);
-        result = await submitDeclarativeForm(form);
+        result = await submitDeclarativeForm(form, options.signal);
       } else {
         const registered = this.#tools.get(tool.name);
         if (!registered?.execute) {
@@ -490,7 +526,7 @@ export function installWebMcpBridgeInMainWorld(): void {
             status: "failed",
             error: {
               name: "WebMcpResultTooLarge",
-              message: "The page-declared WebMCP tool returned more than 256 KiB of JSON.",
+              message: "The page-declared WebMCP tool returned more than 64 KiB of JSON.",
             },
           };
         }

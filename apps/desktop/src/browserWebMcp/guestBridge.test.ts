@@ -43,6 +43,17 @@ it("provides a document.modelContext compatibility bridge before native WebMCP e
     annotations: { readOnlyHint: false },
     execute: async (input: { readonly text: string }) => ({ created: input.text }),
   });
+  await modelContext.registerTool({
+    name: "hostileError",
+    description: "Reject with an error value that cannot be coerced safely.",
+    execute: async () => {
+      throw {
+        toString() {
+          throw new Error("hostile coercion");
+        },
+      };
+    },
+  });
   const registeredTools = await modelContext.getTools();
   await expect(
     modelContext.executeTool(registeredTools[0]!, { text: "Spec-compatible" }),
@@ -78,17 +89,23 @@ it("provides a document.modelContext compatibility bridge before native WebMCP e
   ).__synaraWebMcpBridgeV1;
   const listed = await bridge.list();
 
-  expect(listed).toMatchObject({
-    implementation: "compatibility",
-    tools: [
-      {
-        index: 0,
-        name: "addTodo",
-        annotations: { untrustedContentHint: true },
-      },
-    ],
+  expect(listed.implementation).toBe("compatibility");
+  expect(listed.tools[0]).toMatchObject({
+    index: 0,
+    name: "addTodo",
+    annotations: { untrustedContentHint: true },
   });
   await expect(
     bridge.invoke(0, listed.tools[0]!.signature, JSON.stringify({ text: "Ship WebMCP" }), "i1"),
   ).resolves.toEqual({ status: "completed", result: { created: "Ship WebMCP" } });
+  const hostileTool = listed.tools.find((tool) => tool.name === "hostileError")!;
+  await expect(
+    bridge.invoke(hostileTool.index, hostileTool.signature, JSON.stringify({}), "i2"),
+  ).resolves.toEqual({
+    status: "failed",
+    error: {
+      name: "WebMcpToolError",
+      message: "The page-declared WebMCP tool failed.",
+    },
+  });
 });

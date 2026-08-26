@@ -201,9 +201,9 @@ export const BrowserWebMcpToolsInput = closedStruct({
   limit: optionalDefault(
     described(
       boundedInt(1, 32),
-      "Maximum page-declared WebMCP tools to return after ranking; defaults to 12.",
+      "Maximum page-declared WebMCP tools to return after ranking; defaults to 8.",
     ),
-    () => 12,
+    () => 8,
   ),
 });
 export const BrowserWebMcpCallInput = closedStruct({

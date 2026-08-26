@@ -318,7 +318,7 @@ describe("browser automation tool schemas", () => {
   });
 
   it("keeps WebMCP discovery compact and binds calls to opaque ids", () => {
-    expect(Schema.decodeUnknownSync(BrowserWebMcpToolsInput)({})).toMatchObject({ limit: 12 });
+    expect(Schema.decodeUnknownSync(BrowserWebMcpToolsInput)({})).toMatchObject({ limit: 8 });
     expect(Schema.is(BrowserWebMcpToolsInput)({ query: "checkout", limit: 32 })).toBe(true);
     expect(Schema.is(BrowserWebMcpToolsInput)({ limit: 33 })).toBe(false);
     expect(

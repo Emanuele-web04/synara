@@ -19,7 +19,10 @@ import { callFunctionOn, evaluateInContext, observePage, throwIfAborted } from "
 const WEB_MCP_BRIDGE_EXPRESSION = "globalThis.__synaraWebMcpBridgeV1";
 const MAX_DISCOVERED_TOOLS = 128;
 const MAX_BRIDGE_SIGNATURE_BYTES = 80 * 1024;
-const MAX_DISCOVERY_CONTENT_BYTES = 96 * 1024;
+// Discovery is model context, not a bulk transport. Keep enough room for
+// several useful schemas without allowing one page to consume a large part of
+// the turn context merely by advertising tools.
+const MAX_DISCOVERY_CONTENT_BYTES = 32 * 1024;
 
 interface BridgeTool {
   readonly index: number;
@@ -193,7 +196,7 @@ export async function discoverWebMcpTools(
   const tools: BrowserWebMcpToolsOutput["tools"][number][] = [];
   let contentBytes = 0;
   for (const { tool } of ranked) {
-    if (tools.length >= (input.limit ?? 12)) break;
+    if (tools.length >= (input.limit ?? 8)) break;
     const exposedTool = {
       toolId: `w${tools.length + 1}` as BrowserWebMcpToolId,
       name: tool.name,
