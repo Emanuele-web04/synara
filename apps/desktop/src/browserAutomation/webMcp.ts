@@ -22,7 +22,7 @@ const MAX_BRIDGE_SIGNATURE_BYTES = 80 * 1024;
 // Discovery is model context, not a bulk transport. Keep enough room for
 // several useful schemas without allowing one page to consume a large part of
 // the turn context merely by advertising tools.
-const MAX_DISCOVERY_CONTENT_BYTES = 32 * 1024;
+const MAX_DISCOVERY_CONTENT_BYTES = 20 * 1024;
 
 interface BridgeTool {
   readonly index: number;

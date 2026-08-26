@@ -102,6 +102,34 @@ describe("WebMCP browser bridge", () => {
     expect(discovery.output.truncated).toBe(true);
   });
 
+  it("reserves model-context room for the discovery envelope", async () => {
+    cdp.callFunctionOn.mockResolvedValue({
+      value: {
+        available: true,
+        implementation: "compatibility",
+        skippedToolCount: 0,
+        tools: Array.from({ length: 2 }, (_, index) => ({
+          ...bridgeTool({
+            index,
+            name: `large_tool_${index}`,
+            description: `Large page tool ${index}.`,
+          }),
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "s".repeat(12_000) },
+            },
+          },
+        })),
+      },
+    });
+
+    const discovery = await discoverWebMcpTools(runtime, {}, 1, new AbortController().signal);
+
+    expect(discovery.output.tools).toHaveLength(1);
+    expect(discovery.output.truncated).toBe(true);
+  });
+
   it("invokes only the exact tool definition from the discovery", async () => {
     cdp.callFunctionOn
       .mockResolvedValueOnce({

@@ -256,8 +256,50 @@ describe("agent gateway browser tools", () => {
 
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
     expect(text).toContain("contentTrust=untrusted-web-page");
-    expect(text).toContain("webMcpTextTruncated=true");
+    expect(text).toContain("resultPreview=");
+    expect(text).toContain("webMcpResultTruncated=true");
+    expect(text).not.toContain('"result":{"content"');
     expect(text).not.toContain("�");
+  });
+
+  it("keeps a full bounded WebMCP discovery intact in model context", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({
+        tabId: TAB_ID,
+        url: `https://example.test/${"u".repeat(7_000)}`,
+        contentTrust: "untrusted-web-page",
+        available: true,
+        implementation: "compatibility",
+        discoveryId: SNAPSHOT_ID,
+        tools: [
+          {
+            toolId: "w1",
+            name: "search",
+            description: "Search the catalogue.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string", description: "s".repeat(15_000) },
+              },
+            },
+            origin: "https://example.test",
+            annotations: { readOnlyHint: true, untrustedContentHint: true },
+          },
+        ],
+        totalToolCount: 1,
+        skippedToolCount: 0,
+        truncated: false,
+      }),
+    );
+    const tools = makeAgentGatewayBrowserTools({ available: true, execute });
+    const discovery = tools.find((tool) => tool.definition.name === "browser_webmcp_tools")!;
+
+    const result = await Effect.runPromise(discovery.handler({}, context));
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(text).not.toContain("webMcpTextTruncated=true");
+    expect(() => JSON.parse(text.split("\n").slice(2).join("\n"))).not.toThrow();
   });
 
   it("leaves ambiguous aliases invalid instead of guessing", async () => {
