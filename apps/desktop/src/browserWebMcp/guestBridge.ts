@@ -40,9 +40,7 @@ export function installWebMcpBridgeInMainWorld(): void {
   const jsonDepth = (value: unknown, depth = 0): number => {
     if (value === null || typeof value !== "object") return depth;
     if (depth > 20) return depth;
-    const children = Array.isArray(value)
-      ? value
-      : Object.values(value as Record<string, unknown>);
+    const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
     return children.reduce(
       (maximum, child) => Math.max(maximum, jsonDepth(child, depth + 1)),
       depth,
@@ -68,7 +66,8 @@ export function installWebMcpBridgeInMainWorld(): void {
       }
     }
     if (candidate === undefined) candidate = { type: "object", properties: {} };
-    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate))
+      return null;
     try {
       const serialized = JSON.stringify(candidate);
       const cloned = JSON.parse(serialized) as JsonObject;
@@ -284,7 +283,8 @@ export function installWebMcpBridgeInMainWorld(): void {
     ): Promise<void> {
       const name = normalizedToolName(tool?.name);
       const description = normalizedText(tool?.description, MAX_DESCRIPTION_BYTES);
-      const title = tool?.title === undefined ? undefined : normalizedText(tool.title, MAX_TITLE_BYTES);
+      const title =
+        tool?.title === undefined ? undefined : normalizedText(tool.title, MAX_TITLE_BYTES);
       const inputSchema = normalizedSchema(tool?.inputSchema);
       if (!name || !description || tool?.execute instanceof Function === false || !inputSchema) {
         throw new TypeError("Invalid WebMCP tool definition");
@@ -368,7 +368,12 @@ export function installWebMcpBridgeInMainWorld(): void {
 
   const documentRecord = document as Document & { modelContext?: unknown };
   const navigatorRecord = navigator as Navigator & { modelContext?: unknown };
-  let modelContext = documentRecord.modelContext ?? navigatorRecord.modelContext;
+  const documentModelContext = documentRecord.modelContext;
+  const navigatorModelContext = navigatorRecord.modelContext;
+  let modelContext = documentModelContext ?? navigatorModelContext;
+  // The current draft moved ModelContext to Document and accepts an object.
+  // Chromium's earlier navigator API accepted stringified JSON instead.
+  const nativeInputFormat = documentModelContext ? "object" : "json-string";
   let implementation: "native" | "compatibility" = "native";
   if (!modelContext) {
     modelContext = new CompatibilityModelContext();
@@ -385,7 +390,7 @@ export function installWebMcpBridgeInMainWorld(): void {
     readonly getTools: () => Promise<RegisteredPageTool[]>;
     readonly executeTool: (
       tool: RegisteredPageTool,
-      input: JsonObject,
+      input: JsonObject | string,
       options?: { readonly signal?: AbortSignal },
     ) => Promise<unknown>;
   };
@@ -393,24 +398,23 @@ export function installWebMcpBridgeInMainWorld(): void {
   const normalizeTool = (
     tool: RegisteredPageTool,
     index: number,
-  ):
-    | {
-        readonly index: number;
-        readonly signature: string;
-        readonly name: string;
-        readonly title?: string;
-        readonly description: string;
-        readonly inputSchema: JsonObject;
-        readonly origin: string;
-        readonly annotations: {
-          readonly readOnlyHint: boolean;
-          readonly untrustedContentHint: boolean;
-        };
-      }
-    | null => {
+  ): {
+    readonly index: number;
+    readonly signature: string;
+    readonly name: string;
+    readonly title?: string;
+    readonly description: string;
+    readonly inputSchema: JsonObject;
+    readonly origin: string;
+    readonly annotations: {
+      readonly readOnlyHint: boolean;
+      readonly untrustedContentHint: boolean;
+    };
+  } | null => {
     const name = normalizedToolName(tool?.name);
     const description = normalizedText(tool?.description, MAX_DESCRIPTION_BYTES);
-    const title = tool?.title === undefined ? undefined : normalizedText(tool.title, MAX_TITLE_BYTES);
+    const title =
+      tool?.title === undefined ? undefined : normalizedText(tool.title, MAX_TITLE_BYTES);
     const inputSchema = normalizedSchema(tool?.inputSchema);
     const origin = normalizedText(tool?.origin ?? globalThis.location.origin, 8_192);
     if (!name || !description || !inputSchema || !origin) return null;
@@ -467,7 +471,11 @@ export function installWebMcpBridgeInMainWorld(): void {
       const controller = new AbortController();
       pending.set(invocationId, controller);
       try {
-        const rawResult = await context.executeTool(tool, parsed as JsonObject, {
+        const executionInput =
+          implementation === "native" && nativeInputFormat === "json-string"
+            ? inputJson
+            : (parsed as JsonObject);
+        const rawResult = await context.executeTool(tool, executionInput, {
           signal: controller.signal,
         });
         // The current draft returns stringified JSON. Accept an object as well

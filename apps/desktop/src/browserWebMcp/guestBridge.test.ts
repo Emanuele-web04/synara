@@ -20,16 +20,18 @@ it("provides a document.modelContext compatibility bridge before native WebMCP e
 
   installWebMcpBridgeInMainWorld();
 
-  const modelContext = (fakeDocument as typeof fakeDocument & {
-    readonly modelContext: {
-      readonly registerTool: (tool: Record<string, unknown>) => Promise<void>;
-      readonly getTools: () => Promise<ReadonlyArray<Record<string, unknown>>>;
-      readonly executeTool: (
-        tool: Record<string, unknown>,
-        input: Record<string, unknown>,
-      ) => Promise<string>;
-    };
-  }).modelContext;
+  const modelContext = (
+    fakeDocument as typeof fakeDocument & {
+      readonly modelContext: {
+        readonly registerTool: (tool: Record<string, unknown>) => Promise<void>;
+        readonly getTools: () => Promise<ReadonlyArray<Record<string, unknown>>>;
+        readonly executeTool: (
+          tool: Record<string, unknown>,
+          input: Record<string, unknown>,
+        ) => Promise<string>;
+      };
+    }
+  ).modelContext;
   await modelContext.registerTool({
     name: "addTodo",
     description: "Add one todo item.",
@@ -53,25 +55,27 @@ it("provides a document.modelContext compatibility bridge before native WebMCP e
     }),
   ).rejects.toMatchObject({ name: "InvalidStateError" });
 
-  const bridge = (globalThis as typeof globalThis & {
-    readonly __synaraWebMcpBridgeV1: {
-      readonly list: () => Promise<{
-        readonly implementation: string;
-        readonly tools: ReadonlyArray<{
-          readonly index: number;
-          readonly signature: string;
-          readonly name: string;
-          readonly annotations: { readonly untrustedContentHint: boolean };
+  const bridge = (
+    globalThis as typeof globalThis & {
+      readonly __synaraWebMcpBridgeV1: {
+        readonly list: () => Promise<{
+          readonly implementation: string;
+          readonly tools: ReadonlyArray<{
+            readonly index: number;
+            readonly signature: string;
+            readonly name: string;
+            readonly annotations: { readonly untrustedContentHint: boolean };
+          }>;
         }>;
-      }>;
-      readonly invoke: (
-        index: number,
-        signature: string,
-        inputJson: string,
-        invocationId: string,
-      ) => Promise<unknown>;
-    };
-  }).__synaraWebMcpBridgeV1;
+        readonly invoke: (
+          index: number,
+          signature: string,
+          inputJson: string,
+          invocationId: string,
+        ) => Promise<unknown>;
+      };
+    }
+  ).__synaraWebMcpBridgeV1;
   const listed = await bridge.list();
 
   expect(listed).toMatchObject({

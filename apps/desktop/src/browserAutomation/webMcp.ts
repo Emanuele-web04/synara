@@ -159,11 +159,16 @@ export async function discoverWebMcpTools(
   let rawList: unknown;
   try {
     rawList = (
-      await callFunctionOn<unknown>(runtime, contextObjectId, "async function() { return await this.list(); }", {
-        effectMayHaveCommitted: false,
-        returnByValue: true,
-        signal,
-      })
+      await callFunctionOn<unknown>(
+        runtime,
+        contextObjectId,
+        "async function() { return await this.list(); }",
+        {
+          effectMayHaveCommitted: false,
+          returnByValue: true,
+          signal,
+        },
+      )
     ).value;
   } catch (error) {
     if (error instanceof BrowserAutomationHostError) throw error;
@@ -177,7 +182,8 @@ export async function discoverWebMcpTools(
   const skippedToolCount =
     (typeof list.skippedToolCount === "number" && Number.isSafeInteger(list.skippedToolCount)
       ? Math.max(0, list.skippedToolCount)
-      : 0) + (list.tools.length - bridgeTools.length);
+      : 0) +
+    (list.tools.length - bridgeTools.length);
   const query = input.query ?? "";
   const ranked = bridgeTools
     .map((tool, order) => ({ tool, order, score: toolRelevance(tool, query) }))

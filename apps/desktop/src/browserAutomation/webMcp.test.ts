@@ -12,7 +12,6 @@ const cdp = vi.hoisted(() => ({
 vi.mock("./cdpRuntime", () => cdp);
 
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
-import { BrowserAutomationHostError } from "./hostErrors";
 import { discoverWebMcpTools, invokeWebMcpTool } from "./webMcp";
 
 const TAB_ID = "11111111-1111-4111-8111-111111111111";
@@ -88,9 +87,7 @@ describe("WebMCP browser bridge", () => {
           available: true,
           implementation: "native",
           skippedToolCount: 0,
-          tools: [
-            bridgeTool({ index: 0, name: "checkout", description: "Complete checkout." }),
-          ],
+          tools: [bridgeTool({ index: 0, name: "checkout", description: "Complete checkout." })],
         },
       })
       .mockResolvedValueOnce({ value: { status: "completed", result: { orderId: "order-1" } } });
@@ -148,7 +145,7 @@ describe("WebMCP browser bridge", () => {
         handle,
         signal,
       ),
-    ).rejects.toMatchObject<BrowserAutomationHostError>({
+    ).rejects.toMatchObject({
       browserError: { code: "BrowserWebMcpDiscoveryStale" },
     });
   });
