@@ -362,7 +362,8 @@ function browserResultText(name: BrowserToolName, value: unknown): string {
     const serialized = `${trustPreamble}\n${JSON.stringify(value) ?? "null"}`;
     if (Buffer.byteLength(serialized, "utf8") <= MAX_WEB_MCP_TEXT_BYTES) return serialized;
     const record = asRecord(value);
-    if (name === "browser_webmcp_call" && record && hasOwn(record, "result")) {
+    if (name === "browser_webmcp_call" && record) {
+      const hasResult = hasOwn(record, "result");
       const { result, ...metadata } = record;
       const redirects = Array.isArray(metadata.redirects) ? metadata.redirects : [];
       const dialogs = Array.isArray(metadata.dialogs) ? metadata.dialogs : [];
@@ -400,7 +401,9 @@ function browserResultText(name: BrowserToolName, value: unknown): string {
         dialogCount: dialogs.length,
         dialogsTruncated: dialogs.length > 2,
       };
-      const prefix = `${trustPreamble}\n${JSON.stringify(compactMetadata)}\nresultPreview=`;
+      const compactMetadataText = `${trustPreamble}\n${JSON.stringify(compactMetadata)}`;
+      if (!hasResult) return `${compactMetadataText}\nwebMcpCallProjectionCompacted=true`;
+      const prefix = `${compactMetadataText}\nresultPreview=`;
       const marker = "\nwebMcpResultTruncated=true";
       const previewBudget = Math.max(
         0,

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  type BrowserAutomationError,
   type BrowserBoundedJson,
   type BrowserBoundedJsonObject,
   type BrowserTabId,
@@ -368,14 +367,4 @@ export async function invokeWebMcpTool(
     effectMayHaveCommitted: true,
     tabId: runtime.tabId as BrowserTabId,
   });
-}
-
-export function isNavigationRecoveryError(error: unknown): error is BrowserAutomationHostError & {
-  readonly browserError: BrowserAutomationError;
-} {
-  return (
-    error instanceof BrowserAutomationHostError &&
-    (error.browserError.code === "BrowserAmbiguousResult" ||
-      error.browserError.code === "BrowserRuntimeDisconnected")
-  );
 }

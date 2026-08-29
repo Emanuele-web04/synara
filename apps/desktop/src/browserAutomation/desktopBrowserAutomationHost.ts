@@ -69,7 +69,6 @@ import {
 import {
   discoverWebMcpTools,
   invokeWebMcpTool,
-  isNavigationRecoveryError,
   type WebMcpDiscoveryHandle,
   type WebMcpInvocationResult,
 } from "./webMcp";
@@ -1214,14 +1213,22 @@ export class DesktopBrowserAutomationHost {
         case "browser_webmcp_call": {
           const callInput = input as BrowserWebMcpCallInput;
           const discovery = this.webMcpDiscoveryBySession.get(request.sessionId);
-          const entry = discovery?.entries.get(callInput.toolId);
+          if (!discovery) {
+            browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
+          }
           if (
-            !discovery ||
-            !entry ||
             discovery.humanControlEpoch !==
-              this.browserManager.getAutomationHumanControlEpoch(affinity.threadId)
+            this.browserManager.getAutomationHumanControlEpoch(affinity.threadId)
           ) {
             this.discardWebMcpDiscovery(request.sessionId);
+            browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
+          }
+          const entry = discovery.entries.get(callInput.toolId);
+          if (
+            !entry ||
+            discovery.discoveryId !== callInput.discoveryId ||
+            discovery.tabId !== runtime.tabId
+          ) {
             browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
           }
           const navigationTracker = await getBrowserNavigationTracker(runtime, signal);
@@ -1236,13 +1243,7 @@ export class DesktopBrowserAutomationHost {
             ) {
               this.discardWebMcpDiscovery(request.sessionId);
             }
-            if (
-              !navigationTracker.hasNavigationStartedSince(navigationMark) ||
-              !isNavigationRecoveryError(error)
-            ) {
-              throw error;
-            }
-            invocation = { status: "completed" as const, result: null };
+            throw error;
           }
           const windowOpenResult = await this.reconcileWindowOpen(
             windowOpen!,
