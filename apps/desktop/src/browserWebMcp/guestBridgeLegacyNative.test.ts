@@ -20,7 +20,14 @@ it("uses stringified arguments with the legacy navigator WebMCP API", async () =
     getTools: async () => [tool],
     executeTool,
   };
-  vi.stubGlobal("document", Object.assign(new EventTarget(), { querySelectorAll: () => [] }));
+  vi.stubGlobal(
+    "document",
+    Object.assign(new EventTarget(), {
+      permissionsPolicy: { allowsFeature: () => true },
+      querySelectorAll: () => [],
+    }),
+  );
+  vi.stubGlobal("isSecureContext", true);
   vi.stubGlobal("navigator", { modelContext });
   vi.stubGlobal("window", globalThis);
   vi.stubGlobal("location", { origin: "https://legacy.example" });

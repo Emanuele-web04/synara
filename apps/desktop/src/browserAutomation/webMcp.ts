@@ -18,7 +18,7 @@ import { callFunctionOn, evaluateInContext, observePage, throwIfAborted } from "
 
 const WEB_MCP_BRIDGE_EXPRESSION = "globalThis.__synaraWebMcpBridgeV1";
 const MAX_DISCOVERED_TOOLS = 128;
-const MAX_BRIDGE_SIGNATURE_BYTES = 80 * 1024;
+const WEB_MCP_SIGNATURE_PATTERN = /^[0-9a-f]{64}$/u;
 // Discovery is model context, not a bulk transport. Keep enough room for
 // several useful schemas without allowing one page to consume a large part of
 // the turn context merely by advertising tools.
@@ -51,6 +51,8 @@ export interface WebMcpDiscoveryHandle {
   readonly contextObjectId: string;
   readonly humanControlEpoch: number;
   readonly entries: ReadonlyMap<BrowserWebMcpToolId, WebMcpDiscoveryEntry>;
+  readonly onInvalidated: (listener: () => void) => () => void;
+  readonly release: () => Promise<void>;
 }
 
 interface WebMcpDiscovery {
@@ -81,7 +83,7 @@ function isBridgeTool(value: unknown): value is BridgeTool {
     (tool.index as number) >= 0 &&
     (tool.index as number) < MAX_DISCOVERED_TOOLS &&
     typeof tool.signature === "string" &&
-    Buffer.byteLength(tool.signature, "utf8") <= MAX_BRIDGE_SIGNATURE_BYTES &&
+    WEB_MCP_SIGNATURE_PATTERN.test(tool.signature) &&
     typeof tool.name === "string" &&
     typeof tool.description === "string" &&
     (tool.title === undefined || typeof tool.title === "string") &&
@@ -135,6 +137,59 @@ function unavailableOutput(
   };
 }
 
+function createRemoteObjectRelease(
+  runtime: BrowserAutomationVisibleRuntime,
+  objectId: string,
+): Pick<WebMcpDiscoveryHandle, "onInvalidated" | "release"> {
+  let released = false;
+  let releasePromise: Promise<void> | null = null;
+  const invalidationListeners = new Set<() => void>();
+  const debuggerInstance = runtime.webContents.debugger;
+  const onDebuggerMessage = (_event: unknown, method: string, rawParams: unknown) => {
+    const params = asRecord(rawParams);
+    const frame = asRecord(params?.frame);
+    const mainFrameNavigated = method === "Page.frameNavigated" && frame && !frame.parentId;
+    if (method === "Runtime.executionContextsCleared" || mainFrameNavigated) void release();
+  };
+  const onDebuggerDetach = () => void release();
+  const onWebContentsDestroyed = () => void release();
+  const detachLifecycleListeners = () => {
+    debuggerInstance.removeListener("message", onDebuggerMessage);
+    debuggerInstance.removeListener("detach", onDebuggerDetach);
+    runtime.webContents.removeListener("destroyed", onWebContentsDestroyed);
+  };
+  const release = (): Promise<void> => {
+    if (releasePromise) return releasePromise;
+    if (released) return Promise.resolve();
+    released = true;
+    detachLifecycleListeners();
+    for (const listener of invalidationListeners) listener();
+    invalidationListeners.clear();
+    releasePromise =
+      runtime.webContents.isDestroyed() || !debuggerInstance.isAttached()
+        ? Promise.resolve()
+        : debuggerInstance.sendCommand("Runtime.releaseObject", { objectId }).then(
+            () => undefined,
+            () => undefined,
+          );
+    return releasePromise;
+  };
+  debuggerInstance.on("message", onDebuggerMessage);
+  debuggerInstance.on("detach", onDebuggerDetach);
+  runtime.webContents.once("destroyed", onWebContentsDestroyed);
+  return {
+    release,
+    onInvalidated: (listener) => {
+      if (released) {
+        listener();
+        return () => undefined;
+      }
+      invalidationListeners.add(listener);
+      return () => invalidationListeners.delete(listener);
+    },
+  };
+}
+
 export async function discoverWebMcpTools(
   runtime: BrowserAutomationVisibleRuntime,
   input: BrowserWebMcpToolsInput,
@@ -158,6 +213,7 @@ export async function discoverWebMcpTools(
   if (!contextObjectId) {
     return { output: unavailableOutput(runtime, page.url), handle: null };
   }
+  const lease = createRemoteObjectRelease(runtime, contextObjectId);
 
   let rawList: unknown;
   try {
@@ -174,11 +230,13 @@ export async function discoverWebMcpTools(
       )
     ).value;
   } catch (error) {
+    await lease.release();
     if (error instanceof BrowserAutomationHostError) throw error;
     return { output: unavailableOutput(runtime, page.url), handle: null };
   }
   const list = asRecord(rawList);
   if (!list || list.available !== true || !Array.isArray(list.tools)) {
+    await lease.release();
     return { output: unavailableOutput(runtime, page.url), handle: null };
   }
   const bridgeTools = list.tools.slice(0, MAX_DISCOVERED_TOOLS).filter(isBridgeTool);
@@ -238,6 +296,7 @@ export async function discoverWebMcpTools(
       contextObjectId,
       humanControlEpoch,
       entries,
+      ...lease,
     },
   };
 }

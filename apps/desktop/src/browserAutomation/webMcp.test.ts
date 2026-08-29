@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 
 const cdp = vi.hoisted(() => ({
   callFunctionOn: vi.fn(),
@@ -15,15 +16,17 @@ import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { discoverWebMcpTools, invokeWebMcpTool } from "./webMcp";
 
 const TAB_ID = "11111111-1111-4111-8111-111111111111";
+const debuggerEvents = new EventEmitter();
+const webContentsEvents = new EventEmitter();
 const runtime = {
   tabId: TAB_ID,
-  webContents: {
+  webContents: Object.assign(webContentsEvents, {
     isDestroyed: () => false,
-    debugger: {
+    debugger: Object.assign(debuggerEvents, {
       isAttached: () => true,
       sendCommand: vi.fn(() => Promise.resolve()),
-    },
-  },
+    }),
+  }),
 } as unknown as BrowserAutomationVisibleRuntime;
 
 const bridgeTool = (input: {
@@ -32,7 +35,7 @@ const bridgeTool = (input: {
   readonly description: string;
 }) => ({
   ...input,
-  signature: JSON.stringify(input),
+  signature: "a".repeat(64),
   inputSchema: { type: "object", properties: {} },
   origin: "https://shop.example",
   annotations: { readOnlyHint: false, untrustedContentHint: true },
@@ -41,6 +44,8 @@ const bridgeTool = (input: {
 describe("WebMCP browser bridge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    debuggerEvents.removeAllListeners();
+    webContentsEvents.removeAllListeners();
     cdp.observePage.mockResolvedValue({ url: "https://shop.example", title: "Shop" });
     cdp.evaluateInContext.mockResolvedValue({ objectId: "bridge-object" });
   });
@@ -197,6 +202,63 @@ describe("WebMCP browser bridge", () => {
       ),
     ).rejects.toMatchObject({
       browserError: { code: "BrowserWebMcpDiscoveryStale" },
+    });
+  });
+
+  it("releases the retained bridge object exactly once", async () => {
+    cdp.callFunctionOn.mockResolvedValue({
+      value: {
+        available: true,
+        implementation: "compatibility",
+        skippedToolCount: 0,
+        tools: [bridgeTool({ index: 0, name: "search", description: "Search." })],
+      },
+    });
+    const discovery = await discoverWebMcpTools(runtime, {}, 1, new AbortController().signal);
+
+    await discovery.handle!.release();
+    await discovery.handle!.release();
+
+    expect(runtime.webContents.debugger.sendCommand).toHaveBeenCalledTimes(1);
+    expect(runtime.webContents.debugger.sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "bridge-object",
+    });
+  });
+
+  it("invalidates and releases a discovery on spontaneous main-frame navigation", async () => {
+    cdp.callFunctionOn.mockResolvedValue({
+      value: {
+        available: true,
+        implementation: "compatibility",
+        skippedToolCount: 0,
+        tools: [bridgeTool({ index: 0, name: "search", description: "Search." })],
+      },
+    });
+    const discovery = await discoverWebMcpTools(runtime, {}, 1, new AbortController().signal);
+    const invalidated = vi.fn();
+    discovery.handle!.onInvalidated(invalidated);
+
+    debuggerEvents.emit("message", {}, "Page.frameNavigated", {
+      frame: { id: "main-frame", url: "https://shop.example/next" },
+    });
+    await discovery.handle!.release();
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(runtime.webContents.debugger.sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "bridge-object",
+    });
+  });
+
+  it("releases the bridge object when discovery is unavailable", async () => {
+    cdp.callFunctionOn.mockResolvedValue({
+      value: { available: false, implementation: "unavailable", tools: [] },
+    });
+
+    const discovery = await discoverWebMcpTools(runtime, {}, 1, new AbortController().signal);
+
+    expect(discovery.handle).toBeNull();
+    expect(runtime.webContents.debugger.sendCommand).toHaveBeenCalledWith("Runtime.releaseObject", {
+      objectId: "bridge-object",
     });
   });
 });

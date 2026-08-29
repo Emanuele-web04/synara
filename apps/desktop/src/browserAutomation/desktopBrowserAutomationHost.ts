@@ -322,8 +322,11 @@ export class DesktopBrowserAutomationHost {
   private readonly lockTails = new Map<string, Promise<void>>();
   private readonly snapshotBySession = new Map<string, BrowserSnapshotHandle>();
   private readonly webMcpDiscoveryBySession = new Map<string, WebMcpDiscoveryHandle>();
+  private readonly activeOperations = new Set<Promise<unknown>>();
   private readonly diagnostics = new BrowserDiagnosticsStore();
   private readonly requestOpenPanel: ((threadId: ThreadId) => void | Promise<void>) | undefined;
+  private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   constructor(
     private readonly browserManager: DesktopBrowserManager,
@@ -332,7 +335,64 @@ export class DesktopBrowserAutomationHost {
     this.requestOpenPanel = options.requestOpenPanel;
   }
 
+  private discardWebMcpDiscovery(sessionId: string): void {
+    const discovery = this.webMcpDiscoveryBySession.get(sessionId);
+    if (!discovery) return;
+    this.webMcpDiscoveryBySession.delete(sessionId);
+    void discovery.release();
+  }
+
+  private discardWebMcpDiscoveriesForTab(threadId: ThreadId, tabId: string): void {
+    for (const [sessionId, discovery] of this.webMcpDiscoveryBySession) {
+      if (discovery.tabId !== tabId || this.affinities.get(sessionId)?.threadId !== threadId) {
+        continue;
+      }
+      this.discardWebMcpDiscovery(sessionId);
+    }
+  }
+
+  private storeWebMcpDiscovery(sessionId: string, discovery: WebMcpDiscoveryHandle): void {
+    if (this.disposed) {
+      void discovery.release();
+      return;
+    }
+    this.discardWebMcpDiscovery(sessionId);
+    this.webMcpDiscoveryBySession.set(sessionId, discovery);
+    discovery.onInvalidated(() => {
+      if (this.webMcpDiscoveryBySession.get(sessionId) === discovery) {
+        this.webMcpDiscoveryBySession.delete(sessionId);
+      }
+    });
+    while (this.webMcpDiscoveryBySession.size > MAX_SESSION_WEB_MCP_DISCOVERIES) {
+      const oldestSessionId = this.webMcpDiscoveryBySession.keys().next().value as
+        | string
+        | undefined;
+      if (!oldestSessionId) break;
+      this.discardWebMcpDiscovery(oldestSessionId);
+    }
+  }
+
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    this.disposed = true;
+    this.disposal = (async () => {
+      await Promise.allSettled([...this.activeOperations]);
+      const discoveries = [...this.webMcpDiscoveryBySession.values()];
+      this.webMcpDiscoveryBySession.clear();
+      await Promise.all(discoveries.map((discovery) => discovery.release()));
+    })();
+    return this.disposal;
+  }
+
   async executeTool(request: BrowserAutomationToolRequest): Promise<unknown> {
+    if (this.disposed) {
+      browserHostError({
+        code: "BrowserHostUnavailable",
+        retryable: true,
+        phase: "routing",
+        effectMayHaveCommitted: false,
+      });
+    }
     if (!isToolName(request.name)) {
       browserHostError({
         code: "BrowserInputUnsupported",
@@ -412,32 +472,40 @@ export class DesktopBrowserAutomationHost {
             );
           });
 
-    const run = async (): Promise<unknown> => {
-      try {
-        return await this.withLock(
-          `session:${request.sessionId}`,
-          () =>
-            this.dispatch(
-              request,
-              input,
-              affinity,
-              controller.signal,
-              runtimeTimeoutError,
-              interruptByHuman,
-              () => (actionStarted = true),
-            ),
-          controller.signal,
-          queuedTimeoutError,
-        );
-      } catch (error) {
-        if (error instanceof BrowserAutomationHostError) throw error;
-        throw new BrowserAutomationHostError({
-          code: "BrowserMalformedResponse",
-          retryable: false,
-          phase: "runtime",
-          effectMayHaveCommitted: !definition.annotations.readOnlyHint,
-        });
-      }
+    const run = (): Promise<unknown> => {
+      const operation = (async () => {
+        try {
+          return await this.withLock(
+            `session:${request.sessionId}`,
+            () =>
+              this.dispatch(
+                request,
+                input,
+                affinity,
+                controller.signal,
+                runtimeTimeoutError,
+                interruptByHuman,
+                () => (actionStarted = true),
+              ),
+            controller.signal,
+            queuedTimeoutError,
+          );
+        } catch (error) {
+          if (error instanceof BrowserAutomationHostError) throw error;
+          throw new BrowserAutomationHostError({
+            code: "BrowserMalformedResponse",
+            retryable: false,
+            phase: "runtime",
+            effectMayHaveCommitted: !definition.annotations.readOnlyHint,
+          });
+        }
+      })();
+      this.activeOperations.add(operation);
+      void operation.then(
+        () => this.activeOperations.delete(operation),
+        () => this.activeOperations.delete(operation),
+      );
+      return operation;
     };
     const idempotencyKey = typeof input.idempotencyKey === "string" ? input.idempotencyKey : null;
     const intentionArguments = { ...input };
@@ -906,7 +974,7 @@ export class DesktopBrowserAutomationHost {
         return this.tabs(affinity);
       case "browser_open":
         this.snapshotBySession.delete(request.sessionId);
-        this.webMcpDiscoveryBySession.delete(request.sessionId);
+        this.discardWebMcpDiscovery(request.sessionId);
         return this.open(
           affinity,
           input as BrowserToolOpenInput,
@@ -977,7 +1045,7 @@ export class DesktopBrowserAutomationHost {
     throwIfAborted(signal);
     if (request.name === "browser_close") {
       this.snapshotBySession.delete(request.sessionId);
-      this.webMcpDiscoveryBySession.delete(request.sessionId);
+      this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
       return uncorrelatedExecution(this.close(affinity, targetTabId));
     }
 
@@ -1019,7 +1087,7 @@ export class DesktopBrowserAutomationHost {
       }
       const url = validateWebUrl(resolvedUrl);
       this.snapshotBySession.delete(request.sessionId);
-      this.webMcpDiscoveryBySession.delete(request.sessionId);
+      this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
       this.browserManager.prepareAutomationNavigation({
         threadId: affinity.threadId,
         tabId: targetTabId,
@@ -1042,7 +1110,7 @@ export class DesktopBrowserAutomationHost {
     const historyDirection = browserHistoryDirection(request.name);
     if (historyDirection) {
       this.snapshotBySession.delete(request.sessionId);
-      this.webMcpDiscoveryBySession.delete(request.sessionId);
+      this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
       const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, true);
       return uncorrelatedExecution(
         await this.withDialogs(runtime, signal, () =>
@@ -1137,14 +1205,9 @@ export class DesktopBrowserAutomationHost {
             signal,
           );
           if (discovery.handle) {
-            boundedMapSet(
-              this.webMcpDiscoveryBySession,
-              request.sessionId,
-              discovery.handle,
-              MAX_SESSION_WEB_MCP_DISCOVERIES,
-            );
+            this.storeWebMcpDiscovery(request.sessionId, discovery.handle);
           } else {
-            this.webMcpDiscoveryBySession.delete(request.sessionId);
+            this.discardWebMcpDiscovery(request.sessionId);
           }
           return discovery.output;
         }
@@ -1158,6 +1221,7 @@ export class DesktopBrowserAutomationHost {
             discovery.humanControlEpoch !==
               this.browserManager.getAutomationHumanControlEpoch(affinity.threadId)
           ) {
+            this.discardWebMcpDiscovery(request.sessionId);
             browserHostError({ code: "BrowserWebMcpDiscoveryStale" });
           }
           const navigationTracker = await getBrowserNavigationTracker(runtime, signal);
@@ -1166,6 +1230,12 @@ export class DesktopBrowserAutomationHost {
           try {
             invocation = await invokeWebMcpTool(runtime, callInput, discovery, signal);
           } catch (error) {
+            if (
+              error instanceof BrowserAutomationHostError &&
+              error.browserError.code === "BrowserWebMcpDiscoveryStale"
+            ) {
+              this.discardWebMcpDiscovery(request.sessionId);
+            }
             if (
               !navigationTracker.hasNavigationStartedSince(navigationMark) ||
               !isNavigationRecoveryError(error)
@@ -1201,7 +1271,7 @@ export class DesktopBrowserAutomationHost {
               .map((redirect) => validateWebUrl(redirect, true))
               .slice(0, 20);
             loadState = navigation.state;
-            this.webMcpDiscoveryBySession.delete(request.sessionId);
+            this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
             this.snapshotBySession.delete(request.sessionId);
           }
           return {
@@ -1251,6 +1321,7 @@ export class DesktopBrowserAutomationHost {
             (input.timeoutMs as number | undefined) ?? 15_000,
             signal,
           );
+          this.discardWebMcpDiscoveriesForTab(affinity.threadId, targetTabId);
           return {
             ...clicked,
             finalUrl: validateWebUrl(navigation.url, true),
@@ -1346,7 +1417,7 @@ export class DesktopBrowserAutomationHost {
     // it after the human guard has successfully reconciled.
     affinity.tabId = openedTabId;
     this.snapshotBySession.delete(request.sessionId);
-    this.webMcpDiscoveryBySession.delete(request.sessionId);
+    this.discardWebMcpDiscovery(request.sessionId);
     return reconciledResult && typeof reconciledResult === "object"
       ? { ...reconciledResult, openedTabId: openedTabId as BrowserTabId }
       : reconciledResult;

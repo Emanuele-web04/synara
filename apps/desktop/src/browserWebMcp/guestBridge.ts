@@ -1,11 +1,13 @@
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
+
+import { BROWSER_IPC_CHANNELS } from "../ipcChannels";
 
 /**
  * Install the page-facing WebMCP compatibility API and Synara's private bridge
  * in the main world before application scripts run. This function is
  * serialized by Electron, so every helper intentionally lives inside it.
  */
-export function installWebMcpBridgeInMainWorld(): void {
+export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false): void {
   type JsonObject = Record<string, unknown>;
   type PageTool = {
     readonly name: string;
@@ -29,11 +31,39 @@ export function installWebMcpBridgeInMainWorld(): void {
   const root = globalThis as typeof globalThis & Record<string, unknown>;
   if (root[BRIDGE_PROPERTY] !== undefined) return;
 
+  const documentRecord = document as Document & { modelContext?: unknown };
+  const navigatorRecord = navigator as Navigator & { modelContext?: unknown };
+  const documentModelContext = documentRecord.modelContext;
+  const navigatorModelContext = navigatorRecord.modelContext;
+  const nativeModelContext = documentModelContext ?? navigatorModelContext;
+  const documentPolicy = document as Document & {
+    readonly permissionsPolicy?: {
+      readonly allowsFeature?: (feature: string) => boolean;
+      readonly features?: () => readonly string[];
+    };
+    readonly featurePolicy?: {
+      readonly allowsFeature?: (feature: string) => boolean;
+      readonly features?: () => readonly string[];
+    };
+  };
+  const permissionsPolicy = documentPolicy.permissionsPolicy ?? documentPolicy.featurePolicy;
+  if (globalThis.isSecureContext !== true) return;
+  const supportsToolsPolicy = permissionsPolicy?.features?.().includes("tools") === true;
+  const toolsPolicyAllowed =
+    supportsToolsPolicy && permissionsPolicy?.allowsFeature?.("tools") === true;
+  // Native WebMCP owns its own Permissions-Policy enforcement. The compatibility
+  // API must fail closed unless Chromium can positively identify and allow the
+  // draft's `tools` feature; treating an unknown feature as allowed would ignore
+  // a page's policy on Electron versions that predate WebMCP.
+  if (!nativeModelContext && !toolsPolicyAllowed && !hostAllowsCompatibility) return;
+  if (supportsToolsPolicy && !toolsPolicyAllowed) return;
+
   const MAX_TOOLS = 128;
   const MAX_NAME_BYTES = 128;
   const MAX_TITLE_BYTES = 1_024;
   const MAX_DESCRIPTION_BYTES = 4_096;
-  const MAX_SCHEMA_BYTES = 65_536;
+  const MAX_SCHEMA_BYTES = 16_384;
+  const MAX_BRIDGE_LIST_BYTES = 24 * 1_024;
   // Tool output is fed back to a model. Keep this materially below the generic
   // browser JSON ceiling so a page cannot flood the turn context.
   const MAX_RESULT_BYTES = 65_536;
@@ -56,6 +86,12 @@ export function installWebMcpBridgeInMainWorld(): void {
   const normalizedToolName = (value: unknown): string | null => {
     const name = normalizedText(value, MAX_NAME_BYTES);
     return name && /^[A-Za-z0-9_.-]+$/u.test(name) ? name : null;
+  };
+  const descriptorSignature = async (descriptor: string): Promise<string> => {
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", encoder.encode(descriptor));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
   };
   const normalizedSchema = (value: unknown): JsonObject | null => {
     let candidate = value;
@@ -122,6 +158,7 @@ export function installWebMcpBridgeInMainWorld(): void {
 
   const declarativeForm = Symbol("synara.webmcp.declarative-form");
   type DeclarativeTool = RegisteredPageTool & { readonly [declarativeForm]: HTMLFormElement };
+  let ensureDeclarativeObservation = (): void => undefined;
 
   const controlDescription = (control: Element): string | undefined => {
     const explicit = normalizedText(control.getAttribute("toolparamdescription"), 1_024);
@@ -311,6 +348,29 @@ export function installWebMcpBridgeInMainWorld(): void {
 
   class CompatibilityModelContext extends EventTarget {
     readonly #tools = new Map<string, PageTool>();
+    #toolChangeHandler: EventListener | null = null;
+
+    get ontoolchange(): EventListener | null {
+      return this.#toolChangeHandler;
+    }
+
+    set ontoolchange(handler: EventListener | null) {
+      if (this.#toolChangeHandler) this.removeEventListener("toolchange", this.#toolChangeHandler);
+      this.#toolChangeHandler = typeof handler === "function" ? handler : null;
+      if (this.#toolChangeHandler) {
+        ensureDeclarativeObservation();
+        this.addEventListener("toolchange", this.#toolChangeHandler);
+      }
+    }
+
+    override addEventListener(
+      type: string,
+      callback: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions,
+    ): void {
+      if (type === "toolchange") ensureDeclarativeObservation();
+      super.addEventListener(type, callback, options);
+    }
 
     async registerTool(
       tool: PageTool,
@@ -352,12 +412,14 @@ export function installWebMcpBridgeInMainWorld(): void {
     }
 
     async getTools(): Promise<RegisteredPageTool[]> {
+      ensureDeclarativeObservation();
       const imperative = [...this.#tools.values()].map((tool) => ({
         ...tool,
         origin: globalThis.location.origin,
         window: globalThis.window,
       }));
-      return [...imperative, ...declarativeTools()]
+      const declarative = declarativeTools();
+      return [...imperative, ...declarative]
         .sort((left, right) => left.name.localeCompare(right.name))
         .slice(0, MAX_TOOLS);
     }
@@ -402,11 +464,7 @@ export function installWebMcpBridgeInMainWorld(): void {
     }
   }
 
-  const documentRecord = document as Document & { modelContext?: unknown };
-  const navigatorRecord = navigator as Navigator & { modelContext?: unknown };
-  const documentModelContext = documentRecord.modelContext;
-  const navigatorModelContext = navigatorRecord.modelContext;
-  let modelContext = documentModelContext ?? navigatorModelContext;
+  let modelContext = nativeModelContext;
   // The current draft moved ModelContext to Document and accepts an object.
   // Chromium's earlier navigator API accepted stringified JSON instead.
   const nativeInputFormat = documentModelContext ? "object" : "json-string";
@@ -431,10 +489,10 @@ export function installWebMcpBridgeInMainWorld(): void {
     ) => Promise<unknown>;
   };
   const pending = new Map<string, AbortController>();
-  const normalizeTool = (
+  const normalizeTool = async (
     tool: RegisteredPageTool,
     index: number,
-  ): {
+  ): Promise<{
     readonly index: number;
     readonly signature: string;
     readonly name: string;
@@ -446,7 +504,7 @@ export function installWebMcpBridgeInMainWorld(): void {
       readonly readOnlyHint: boolean;
       readonly untrustedContentHint: boolean;
     };
-  } | null => {
+  } | null> => {
     const name = normalizedToolName(tool?.name);
     const description = normalizedText(tool?.description, MAX_DESCRIPTION_BYTES);
     const title =
@@ -467,7 +525,11 @@ export function installWebMcpBridgeInMainWorld(): void {
         untrustedContentHint: true,
       },
     };
-    return { index, signature: JSON.stringify(descriptor), ...descriptor };
+    return {
+      index,
+      signature: await descriptorSignature(JSON.stringify(descriptor)),
+      ...descriptor,
+    };
   };
 
   const bridge = Object.freeze({
@@ -479,23 +541,36 @@ export function installWebMcpBridgeInMainWorld(): void {
       }
       const rawTools = await context.getTools();
       const bounded = Array.isArray(rawTools) ? rawTools.slice(0, MAX_TOOLS) : [];
-      const tools = bounded.flatMap((tool, index) => {
-        const normalized = normalizeTool(tool, index);
-        return normalized ? [normalized] : [];
-      });
+      const tools: Array<NonNullable<Awaited<ReturnType<typeof normalizeTool>>>> = [];
+      let contentBytes = 0;
+      let skippedForBounds = 0;
+      for (const [index, tool] of bounded.entries()) {
+        const normalized = await normalizeTool(tool, index);
+        if (!normalized) {
+          skippedForBounds += 1;
+          continue;
+        }
+        const toolBytes = byteLength(JSON.stringify(normalized));
+        if (contentBytes + toolBytes > MAX_BRIDGE_LIST_BYTES) {
+          skippedForBounds += 1;
+          continue;
+        }
+        contentBytes += toolBytes;
+        tools.push(normalized);
+      }
       return {
         available: true,
         implementation,
         tools,
         skippedToolCount:
           Math.max(0, (Array.isArray(rawTools) ? rawTools.length : 0) - bounded.length) +
-          (bounded.length - tools.length),
+          skippedForBounds,
       };
     },
     async invoke(index: number, signature: string, inputJson: string, invocationId: string) {
       const rawTools = await context.getTools();
       const tool = Array.isArray(rawTools) ? rawTools[index] : undefined;
-      const normalized = tool ? normalizeTool(tool, index) : null;
+      const normalized = tool ? await normalizeTool(tool, index) : null;
       if (!tool || !normalized || normalized.signature !== signature) return { status: "stale" };
       const parsed = JSON.parse(inputJson) as unknown;
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -559,6 +634,7 @@ export function installWebMcpBridgeInMainWorld(): void {
   });
 
   if (implementation === "compatibility") {
+    let observer: MutationObserver | null = null;
     let queued = false;
     const notifyToolChange = () => {
       if (queued) return;
@@ -568,26 +644,73 @@ export function installWebMcpBridgeInMainWorld(): void {
         (modelContext as EventTarget).dispatchEvent(new Event("toolchange"));
       });
     };
-    new MutationObserver(notifyToolChange).observe(document, {
-      attributes: true,
-      attributeFilter: [
-        "disabled",
-        "name",
-        "required",
-        "toolautosubmit",
-        "tooldescription",
-        "toolname",
-        "toolparamdescription",
-        "type",
-      ],
-      childList: true,
-      subtree: true,
-    });
+    const isInsideToolForm = (value: unknown): boolean => {
+      if (value === null || typeof value !== "object") return false;
+      const element = value as {
+        readonly matches?: (selector: string) => boolean;
+        readonly closest?: (selector: string) => unknown;
+      };
+      return (
+        element.matches?.("form[toolname][tooldescription]") === true ||
+        Boolean(element.closest?.("form[toolname][tooldescription]"))
+      );
+    };
+    const containsToolForm = (value: unknown): boolean => {
+      if (isInsideToolForm(value)) return true;
+      if (value === null || typeof value !== "object") return false;
+      return Boolean(
+        (value as { readonly querySelector?: (selector: string) => unknown }).querySelector?.(
+          "form[toolname][tooldescription]",
+        ),
+      );
+    };
+    const mutationAffectsTools = (mutation: MutationRecord): boolean => {
+      if (mutation.type === "attributes") {
+        const target = mutation.target as Element;
+        if (
+          (mutation.attributeName === "toolname" || mutation.attributeName === "tooldescription") &&
+          target.matches?.("form")
+        ) {
+          return true;
+        }
+        return isInsideToolForm(target);
+      }
+      return (
+        isInsideToolForm(mutation.target) ||
+        [...mutation.addedNodes, ...mutation.removedNodes].some(containsToolForm)
+      );
+    };
+    ensureDeclarativeObservation = () => {
+      if (observer) return;
+      observer = new MutationObserver((mutations) => {
+        if (mutations.some(mutationAffectsTools)) notifyToolChange();
+      });
+      observer.observe(document.documentElement ?? document, {
+        attributes: true,
+        attributeFilter: [
+          "disabled",
+          "name",
+          "required",
+          "toolautosubmit",
+          "tooldescription",
+          "toolname",
+          "toolparamdescription",
+          "type",
+        ],
+        childList: true,
+        subtree: true,
+      });
+    };
   }
 }
 
 try {
-  contextBridge.executeInMainWorld({ func: installWebMcpBridgeInMainWorld });
+  const hostAllowsCompatibility =
+    ipcRenderer.sendSync(BROWSER_IPC_CHANNELS.webMcpCompatibilityPolicy) === true;
+  contextBridge.executeInMainWorld({
+    func: installWebMcpBridgeInMainWorld,
+    args: [hostAllowsCompatibility],
+  });
 } catch {
   // The browser remains usable through DOM automation if the host Chromium
   // cannot install the compatibility bridge.
