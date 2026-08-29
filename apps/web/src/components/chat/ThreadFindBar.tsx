@@ -8,7 +8,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEv
 
 import { IconButton } from "~/components/ui/icon-button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
-import { ChevronDownIcon, ChevronUpIcon, SearchIcon, XIcon } from "~/lib/icons";
+import { ArrowDownIcon, ArrowUpIcon, SearchIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { type TimelineEntry } from "../../session-logic";
@@ -163,14 +163,19 @@ export function ThreadFindBar({
     }
   };
 
+  // The results row only exists while a query is typed, so the empty field is a
+  // clean pill; visibility keys off the synchronous query so the row expands on
+  // the first keystroke rather than after the deferred match pass.
+  const resultsRowVisible = query.trim().length > 0;
+
   return (
     <div
       role="search"
       data-testid="thread-find-bar"
       data-thread-find-layout="panel"
-      className="flex w-72 max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-border bg-[var(--color-background-elevated-primary-opaque)] shadow-md"
+      className="flex w-80 max-w-[calc(100vw-2rem)] flex-col rounded-3xl border border-border/60 bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
     >
-      <div className="flex items-center gap-2 border-b border-border px-2.5">
+      <div className="flex items-center gap-2.5 px-4">
         <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input
           ref={inputRef}
@@ -178,13 +183,13 @@ export function ThreadFindBar({
           value={query}
           onChange={(event) => handleQueryChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Find in thread"
+          placeholder="Search chat..."
           aria-label="Find in thread"
           autoComplete="off"
           spellCheck={false}
-          className="h-9 min-w-0 flex-1 bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="h-11 min-w-0 flex-1 bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
-        <div aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
+        <div aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
         <IconButton
           onClick={onClose}
           className={FIND_STEP_BUTTON_CLASS_NAME}
@@ -193,39 +198,41 @@ export function ThreadFindBar({
           <XIcon className="size-4" />
         </IconButton>
       </div>
-      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-        <div className="flex shrink-0 items-center gap-0.5">
-          <IconButton
-            onClick={() => handleStep("previous")}
-            disabled={matchCount === 0}
-            className={FIND_STEP_BUTTON_CLASS_NAME}
-            label="Previous match (Shift+Enter)"
+      <DisclosureRegion open={resultsRowVisible}>
+        <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2">
+          <div className="flex shrink-0 items-center gap-1">
+            <IconButton
+              onClick={() => handleStep("previous")}
+              disabled={matchCount === 0}
+              className={FIND_STEP_BUTTON_CLASS_NAME}
+              label="Previous match (Shift+Enter)"
+            >
+              <ArrowUpIcon className="size-4" />
+            </IconButton>
+            <IconButton
+              onClick={() => handleStep("next")}
+              disabled={matchCount === 0}
+              className={FIND_STEP_BUTTON_CLASS_NAME}
+              label="Next match (Enter)"
+            >
+              <ArrowDownIcon className="size-4" />
+            </IconButton>
+          </div>
+          <span
+            className={cn(
+              "min-w-0 truncate pr-1 text-right text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums",
+              MUTED_LABEL_TEXT_CLASS_NAME,
+            )}
+            aria-live="polite"
           >
-            <ChevronUpIcon className="size-4" />
-          </IconButton>
-          <IconButton
-            onClick={() => handleStep("next")}
-            disabled={matchCount === 0}
-            className={FIND_STEP_BUTTON_CLASS_NAME}
-            label="Next match (Enter)"
-          >
-            <ChevronDownIcon className="size-4" />
-          </IconButton>
+            {hasQuery
+              ? matchCount === 0
+                ? "No results"
+                : `${safeIndex + 1} / ${matchCount} results`
+              : ""}
+          </span>
         </div>
-        <span
-          className={cn(
-            "min-w-0 truncate pr-1 text-right text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums",
-            MUTED_LABEL_TEXT_CLASS_NAME,
-          )}
-          aria-live="polite"
-        >
-          {hasQuery
-            ? matchCount === 0
-              ? "No results"
-              : `${safeIndex + 1} / ${matchCount} results`
-            : ""}
-        </span>
-      </div>
+      </DisclosureRegion>
     </div>
   );
 }
@@ -235,19 +242,24 @@ export function ChatThreadFindHost({
   focusNonce,
   timelineEntries,
   threadId,
+  className,
   onClose,
   onJump,
   onHighlightChange,
   onActiveMatchChange,
 }: ThreadFindBarProps & {
   threadId: string;
+  className?: string;
 }) {
   return (
-    // z-30 stacks the panel above the docked Environment overlay (z-20) so find
-    // stays pinned to the chat column's top-right corner.
-    <div data-thread-find-host="true" className="pointer-events-none absolute right-0 top-0 z-30">
+    // Mounted at the chat pane root so the panel overlays the header and the
+    // docked Environment overlay (z-20) alike, pinned to the top-right corner.
+    <div
+      data-thread-find-host="true"
+      className={cn("pointer-events-none absolute right-0 top-0 z-40", className)}
+    >
       {/* Content padding keeps the panel shadow inside the disclosure clip box
-          and keeps the card off the column borders. */}
+          and keeps the card off the pane borders. */}
       <DisclosureRegion open={open} contentClassName="pointer-events-auto p-3">
         <ThreadFindBar
           key={threadId}

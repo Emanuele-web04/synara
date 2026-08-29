@@ -23,10 +23,13 @@ describe("ThreadFindBar", () => {
     expect(markup).toContain('data-testid="thread-find-bar"');
     expect(markup).toContain('data-thread-find-layout="panel"');
     expect(markup).toContain("Find in thread");
+    expect(markup).toContain("Search chat...");
     expect(markup).toContain("Previous match (Shift+Enter)");
     expect(markup).toContain("Next match (Enter)");
     expect(markup).toContain("Close find (Esc)");
-    expect(markup).toContain("w-72");
+    expect(markup).toContain("w-80");
+    // The results row is a collapsed disclosure until a query is typed.
+    expect(markup).toContain("grid-rows-[0fr]");
   });
 });
 
@@ -50,8 +53,9 @@ describe("ChatThreadFindHost", () => {
     expect(markup).toContain('data-thread-find-host="true"');
     expect(markup).toContain("Find in thread");
     expect(markup).toContain("absolute right-0 top-0");
-    // Above the docked Environment overlay (z-20) so find never slides with it.
-    expect(markup).toContain("z-30");
+    // Above the header and the docked Environment overlay (z-20) so find never
+    // slides with either.
+    expect(markup).toContain("z-40");
     expect(markup).toContain("grid-rows-[1fr]");
   });
 

@@ -12102,6 +12102,22 @@ export default function ChatView({
         />
       </header>
 
+      {/* Floating find panel — a root-level overlay so it sits on top of the
+          header and the docked Environment panel at the pane's top-right. */}
+      {shouldRenderChatPaneContent ? (
+        <ChatThreadFindHost
+          open={threadFindOpen}
+          focusNonce={threadFindFocusNonce}
+          timelineEntries={timelineEntries}
+          threadId={threadId}
+          {...(terminalWorkspaceTerminalTabActive ? { className: "invisible" } : {})}
+          onClose={() => setThreadFindOpen(false)}
+          onJump={handleThreadFindJump}
+          onHighlightChange={threadFindHighlightStore.set}
+          onActiveMatchChange={handleThreadFindActiveMatchChange}
+        />
+      ) : null}
+
       <RenameThreadDialog
         open={renameDialogOpen}
         currentTitle={activeThread.title}
@@ -12155,18 +12171,6 @@ export default function ChatView({
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
           >
-            {shouldRenderChatPaneContent ? (
-              <ChatThreadFindHost
-                open={threadFindOpen}
-                focusNonce={threadFindFocusNonce}
-                timelineEntries={timelineEntries}
-                threadId={threadId}
-                onClose={() => setThreadFindOpen(false)}
-                onJump={handleThreadFindJump}
-                onHighlightChange={threadFindHighlightStore.set}
-                onActiveMatchChange={handleThreadFindActiveMatchChange}
-              />
-            ) : null}
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
               <div
                 className={cn(
