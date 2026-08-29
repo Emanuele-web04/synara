@@ -144,7 +144,10 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
 });
 
 describe("queued composer drain watcher", () => {
-  const dispatch = vi.fn(async () => true);
+  type DrainDispatch = NonNullable<
+    NonNullable<Parameters<typeof startQueuedComposerDrainWatcher>[0]>["dispatch"]
+  >;
+  const dispatch = vi.fn<DrainDispatch>(async () => true);
 
   beforeEach(() => {
     resetQueuedComposerDrainForTests();
