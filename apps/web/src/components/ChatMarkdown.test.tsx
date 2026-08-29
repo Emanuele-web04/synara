@@ -195,6 +195,8 @@ describe("ChatMarkdown", () => {
       />,
     );
     expect(markup).toContain('data-chat-find-match="true"');
+    expect(markup).toContain('data-chat-find-match="active"');
+    expect(markup).toContain("chat-find-match-active");
     expect(markup).toContain('data-chat-find-start="0"');
     expect(markup).toContain('data-chat-find-start="32"');
   });
@@ -211,6 +213,25 @@ describe("ChatMarkdown", () => {
     );
     expect(markup).toContain("chat-find-match");
     expect(markup).toContain("Error");
+  });
+
+  it("keeps active find offsets aligned inside inline file chips", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const text = "See `/tmp/error.ts` for details.";
+    const startOffset = text.indexOf("error");
+    const markup = renderToStaticMarkup(
+      <ChatMarkdown
+        text={text}
+        cwd={undefined}
+        isStreaming={false}
+        findQuery="error"
+        findActiveRange={{ startOffset, endOffset: startOffset + "error".length }}
+      />,
+    );
+
+    expect(markup).toContain('data-chat-find-match="active"');
+    expect(markup).toContain(`data-chat-find-start="${String(startOffset)}"`);
+    expect(markup).toContain(">error</span>");
   });
 
   it("renders exact thread marker ranges without changing markdown structure", async () => {

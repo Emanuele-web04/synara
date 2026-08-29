@@ -4,7 +4,7 @@
 // Layer: Chat transcript presentation
 // Depends on: projected-message matching in threadFind.logic (not the DOM list).
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "~/components/ui/icon-button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -14,6 +14,7 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { type TimelineEntry } from "../../session-logic";
 import {
   collectThreadFindDocuments,
+  createThreadFindDocumentTextCache,
   findThreadMatches,
   normalizeFindQuery,
   resolveThreadFindJump,
@@ -29,6 +30,7 @@ interface ThreadFindBarProps {
   onClose: () => void;
   onJump: (match: ThreadFindMatch) => void;
   onHighlightChange: (highlight: ThreadFindHighlight | null) => void;
+  onActiveMatchChange: (match: ThreadFindMatch | null) => void;
 }
 
 const FIND_QUERY_MAX_LENGTH = 200;
@@ -43,24 +45,33 @@ export function ThreadFindBar({
   onClose,
   onJump,
   onHighlightChange,
+  onActiveMatchChange,
 }: ThreadFindBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const matchesRef = useRef<ThreadFindMatch[]>([]);
+  const activeIndexRef = useRef(0);
   const onJumpRef = useRef(onJump);
   const onHighlightChangeRef = useRef(onHighlightChange);
+  const onActiveMatchChangeRef = useRef(onActiveMatchChange);
   onJumpRef.current = onJump;
   onHighlightChangeRef.current = onHighlightChange;
+  onActiveMatchChangeRef.current = onActiveMatchChange;
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [documentTextCache] = useState(createThreadFindDocumentTextCache);
   const documents = useMemo(
-    () => (open ? collectThreadFindDocuments(timelineEntries) : []),
-    [open, timelineEntries],
+    () => (open ? collectThreadFindDocuments(timelineEntries, documentTextCache) : []),
+    [documentTextCache, open, timelineEntries],
   );
-  const matches = useMemo(() => findThreadMatches(documents, query), [documents, query]);
+  const matches = useMemo(
+    () => findThreadMatches(documents, deferredQuery),
+    [deferredQuery, documents],
+  );
   matchesRef.current = matches;
   const matchCount = matches.length;
   const safeIndex = matchCount === 0 ? -1 : Math.min(Math.max(activeIndex, 0), matchCount - 1);
-  const hasQuery = normalizeFindQuery(query).length > 0;
+  const hasQuery = normalizeFindQuery(deferredQuery).length > 0;
 
   useEffect(() => {
     if (!open) {
@@ -72,23 +83,31 @@ export function ThreadFindBar({
     if (!open) {
       return;
     }
+    const currentIndex =
+      matches.length === 0 ? -1 : Math.min(Math.max(activeIndexRef.current, 0), matches.length - 1);
     onHighlightChangeRef.current({
-      query,
-      activeMatch: resolveThreadFindJump(matches, safeIndex),
+      query: deferredQuery,
+      activeMatch: resolveThreadFindJump(matches, currentIndex),
     });
-  }, [matches, open, query, safeIndex]);
+  }, [deferredQuery, matches, open]);
 
-  // Jump only when the user changes the query or steps matches — not on every
-  // streaming transcript rewrite, which would yank the viewport mid-read.
+  // Query changes jump after their deferred match pass. Streaming transcript
+  // rewrites only refresh matches and never yank the viewport mid-read.
   useEffect(() => {
-    if (!open || safeIndex < 0) {
+    if (!open) {
       return;
     }
-    const match = matchesRef.current[safeIndex];
+    const currentMatches = matchesRef.current;
+    const currentIndex =
+      currentMatches.length === 0
+        ? -1
+        : Math.min(Math.max(activeIndexRef.current, 0), currentMatches.length - 1);
+    const match = currentMatches[currentIndex];
+    onActiveMatchChangeRef.current(match ?? null);
     if (match) {
       onJumpRef.current(match);
     }
-  }, [open, query, safeIndex]);
+  }, [deferredQuery, open]);
 
   useEffect(() => {
     if (!open) {
@@ -102,6 +121,7 @@ export function ThreadFindBar({
       const selected = window.getSelection()?.toString().trim() ?? "";
       if (selected.length > 0) {
         setQuery(selected.slice(0, FIND_QUERY_MAX_LENGTH));
+        activeIndexRef.current = 0;
         setActiveIndex(0);
       }
     }
@@ -111,14 +131,22 @@ export function ThreadFindBar({
 
   const handleQueryChange = (nextQuery: string) => {
     setQuery(nextQuery);
+    activeIndexRef.current = 0;
     setActiveIndex(0);
   };
 
   const handleStep = (direction: "next" | "previous") => {
-    if (matchCount === 0) {
+    if (deferredQuery !== query || matchCount === 0) {
       return;
     }
-    setActiveIndex((current) => stepThreadFindIndex(matchCount, current, direction));
+    const nextIndex = stepThreadFindIndex(matchCount, safeIndex, direction);
+    const match = resolveThreadFindJump(matches, nextIndex);
+    activeIndexRef.current = nextIndex;
+    setActiveIndex(nextIndex);
+    onActiveMatchChangeRef.current(match);
+    if (match) {
+      onJumpRef.current(match);
+    }
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -210,6 +238,7 @@ export function ChatThreadFindHost({
   onClose,
   onJump,
   onHighlightChange,
+  onActiveMatchChange,
 }: ThreadFindBarProps & {
   threadId: string;
 }) {
@@ -228,6 +257,7 @@ export function ChatThreadFindHost({
           onClose={onClose}
           onJump={onJump}
           onHighlightChange={onHighlightChange}
+          onActiveMatchChange={onActiveMatchChange}
         />
       </DisclosureRegion>
     </div>

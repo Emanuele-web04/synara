@@ -164,10 +164,12 @@ import {
   type MessageTrailAnchor,
 } from "./messageTrail.logic";
 import {
+  applyActiveChatFindMatch,
   collectCaseInsensitiveSubstringRanges,
   splitTextWithFindMatches,
   threadFindMarkdownProps,
   type ThreadFindHighlight,
+  type ThreadFindMatch,
 } from "./threadFind.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
@@ -232,6 +234,7 @@ export interface MessagesTimelineController {
     options?: { segmentIndex?: number; fineScrollFind?: boolean },
   ) => void;
   scrollToMarker: (marker: ThreadMarker) => void;
+  setActiveFindMatch: (match: ThreadFindMatch | null) => void;
 }
 
 // Keeps the origin/steer marker visually attached to the whole sent-message stack.
@@ -754,6 +757,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
+  const activeFindMatchRef = useRef<ThreadFindMatch | null>(null);
+  useLayoutEffect(() => {
+    activeFindMatchRef.current = findHighlight?.activeMatch ?? null;
+  }, [findHighlight]);
   const observeTimelineRow = useTimelineRowOverlapGuard();
   useTailAnchorScroll({
     listRef: resolvedListRef,
@@ -1038,6 +1045,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         markerFineScrollFrameRef.current = null;
       }
     };
+    const applyActiveFindMatch = () => {
+      const root = timelineRootRef.current;
+      const match = activeFindMatchRef.current;
+      applyActiveChatFindMatch(root, null);
+      if (!root || match === null) {
+        return;
+      }
+      const segmentSelector =
+        match.segmentIndex === undefined
+          ? ":not([data-chat-find-segment-index])"
+          : `[data-chat-find-segment-index="${String(match.segmentIndex)}"]`;
+      const scope = root.querySelector(
+        `[data-chat-find-document-id="${cssAttributeSelectorValue(match.messageId)}"]${segmentSelector}`,
+      );
+      applyActiveChatFindMatch(scope, match);
+    };
     const scheduleFindMatchFineScroll = (
       target: NonNullable<ReturnType<typeof resolveThreadFindJumpTarget>>,
     ) => {
@@ -1050,6 +1073,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         if (!root) {
           return;
         }
+        applyActiveFindMatch();
         const narrationId = target.collapsedNarrationMessageId;
         const scope =
           narrationId === undefined
@@ -1121,6 +1145,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         setHighlightedMessageId(target.visibleMessageId);
         clearJumpHighlightAfterDelay();
         scheduleMarkerFineScroll(marker);
+      },
+      setActiveFindMatch: (match) => {
+        activeFindMatchRef.current = match;
+        applyActiveFindMatch();
       },
     };
     controllerRef.current = controller;
@@ -1537,7 +1565,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
+            <div
+              className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]"
+              data-chat-find-document-id={row.message.id}
+              data-chat-find-segment-index={row.segmentIndex}
+            >
               <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
                 <ChatMarkdown
                   text={segmentText}
@@ -1731,6 +1763,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           ? "py-0.5 px-3"
                           : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                       )}
+                      data-chat-find-document-id={row.message.id}
                     >
                       <UserMessageCollapsibleText
                         text={userMessageText}
@@ -2108,6 +2141,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
                 className={MUTED_LABEL_TEXT_CLASS_NAME}
                 data-chat-find-narration-id={item.message.id}
+                data-chat-find-document-id={item.message.id}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -2219,7 +2253,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div className="group min-w-0 py-0.5">
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
                 {messageText !== null ? (
-                  <div data-assistant-message-id={row.message.id}>
+                  <div
+                    data-assistant-message-id={row.message.id}
+                    data-chat-find-document-id={row.message.id}
+                  >
                     <ChatMarkdown
                       text={messageText}
                       cwd={markdownCwd}

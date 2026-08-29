@@ -16,6 +16,7 @@ describe("ThreadFindBar", () => {
         onClose: () => {},
         onJump: () => {},
         onHighlightChange: () => {},
+        onActiveMatchChange: () => {},
       }),
     );
 
@@ -40,6 +41,7 @@ describe("ChatThreadFindHost", () => {
         onClose: () => {},
         onJump: () => {},
         onHighlightChange: () => {},
+        onActiveMatchChange: () => {},
       }),
     );
 
@@ -63,6 +65,7 @@ describe("ChatThreadFindHost", () => {
         onClose: () => {},
         onJump: () => {},
         onHighlightChange: () => {},
+        onActiveMatchChange: () => {},
       }),
     );
 

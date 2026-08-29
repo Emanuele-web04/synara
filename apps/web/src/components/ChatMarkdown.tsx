@@ -73,14 +73,13 @@ import {
   parseComposerChipSegment,
 } from "../lib/remarkComposerChips";
 import { IconButton } from "./ui/icon-button";
+import { applyActiveChatFindMatch, type ThreadFindRange } from "./chat/threadFind.logic";
 import {
-  applyActiveChatFindMatch,
-  collectCaseInsensitiveSubstringRanges,
-  normalizeFindQuery,
-  splitTextWithFindMatches,
-  wrapFindQueryInHtml,
-  type ThreadFindRange,
-} from "./chat/threadFind.logic";
+  ChatFindRenderProvider,
+  FindAwareCodeFallback,
+  FindAwareMarkdownText,
+  FindAwareShikiHtml,
+} from "./ChatMarkdownFind";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -182,6 +181,26 @@ type MarkdownRemarkPlugins = NonNullable<
 type MarkdownRehypePlugins = NonNullable<
   React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]
 >;
+interface ParsedMarkdownProps {
+  text: string;
+  remarkPlugins: MarkdownRemarkPlugins;
+  rehypePlugins: MarkdownRehypePlugins;
+  components: Components;
+}
+
+const ParsedMarkdown = memo(function ParsedMarkdown(props: ParsedMarkdownProps) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={props.remarkPlugins}
+      rehypePlugins={props.rehypePlugins}
+      components={props.components}
+      urlTransform={markdownUrlTransform}
+    >
+      {props.text}
+    </ReactMarkdown>
+  );
+});
+
 const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
@@ -252,6 +271,8 @@ type MarkdownParentNode = {
   children?: MarkdownNode[];
 };
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
+const CHAT_FIND_TEXT_TAG_NAME = "chat-find-text";
+const CHAT_FIND_TEXT_START_ATTRIBUTE = "data-chat-find-text-start";
 type TextRangeFragmentContinuity = {
   readonly continuesBefore: boolean;
   readonly continuesAfter: boolean;
@@ -344,32 +365,6 @@ function threadMarkerDecorations(input: {
   }));
 }
 
-function findHighlightDecorations(input: {
-  text: string;
-  query: string | undefined;
-}): MarkdownRangeDecoration[] {
-  const query = normalizeFindQuery(input.query ?? "");
-  if (query.length === 0) {
-    return [];
-  }
-  return collectCaseInsensitiveSubstringRanges(input.text, query).map((range) => ({
-    startOffset: range.startOffset,
-    endOffset: range.endOffset,
-    nodeType: "chatFindMatch",
-    classNameFor: (continuity) =>
-      rangeFragmentClassName(
-        "chat-find-match",
-        continuity,
-        "chat-find-match-continues-before",
-        "chat-find-match-continues-after",
-      ),
-    properties: {
-      "data-chat-find-match": "true",
-      "data-chat-find-start": String(range.startOffset),
-    },
-  }));
-}
-
 function collapseOverlappingDecorations(
   decorations: readonly MarkdownRangeDecoration[],
 ): MarkdownRangeDecoration[] {
@@ -393,10 +388,39 @@ function collapseOverlappingDecorations(
 function createTextRangeRemarkPlugin(decorations: readonly MarkdownRangeDecoration[]) {
   const usable = collapseOverlappingDecorations(decorations);
   return () => (tree: MarkdownNode) => {
-    if (usable.length === 0) {
-      return;
+    if (usable.length > 0) {
+      applyRangeDecorationsToNode(tree, usable);
     }
-    applyRangeDecorationsToNode(tree, usable);
+    wrapFindableTextNodes(tree);
+  };
+}
+
+function wrapFindableTextNodes(node: MarkdownNode): void {
+  if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
+    return;
+  }
+  const parent = node as MarkdownParentNode;
+  parent.children = (parent.children ?? []).map((child) => {
+    if (child && typeof child === "object" && "type" in child && child.type === "text") {
+      return wrapFindableTextNode(child as MarkdownTextNode);
+    }
+    wrapFindableTextNodes(child);
+    return child;
+  });
+}
+
+function wrapFindableTextNode(node: MarkdownTextNode): MarkdownNode {
+  const startOffset = node.position?.start?.offset;
+  if (startOffset === undefined || node.value.length === 0) {
+    return node;
+  }
+  return {
+    type: "chatFindText",
+    data: {
+      hName: CHAT_FIND_TEXT_TAG_NAME,
+      hProperties: { [CHAT_FIND_TEXT_START_ATTRIBUTE]: String(startOffset) },
+    },
+    children: [node],
   };
 }
 
@@ -453,7 +477,13 @@ function splitTextNodeWithRangeDecorations(
     const absoluteFragmentStart = startOffset + rangeStart;
     const absoluteFragmentEnd = startOffset + rangeEnd;
     if (rangeStart > cursor) {
-      nodes.push({ type: "text", value: node.value.slice(cursor, rangeStart) });
+      nodes.push(
+        createPositionedTextNode(
+          node.value.slice(cursor, rangeStart),
+          startOffset + cursor,
+          absoluteFragmentStart,
+        ),
+      );
     }
     nodes.push({
       type: decoration.nodeType,
@@ -467,14 +497,35 @@ function splitTextNodeWithRangeDecorations(
           ...decoration.properties,
         },
       },
-      children: [{ type: "text", value: node.value.slice(rangeStart, rangeEnd) }],
+      children: [
+        createPositionedTextNode(
+          node.value.slice(rangeStart, rangeEnd),
+          absoluteFragmentStart,
+          absoluteFragmentEnd,
+        ),
+      ],
     });
     cursor = rangeEnd;
   }
   if (cursor < node.value.length) {
-    nodes.push({ type: "text", value: node.value.slice(cursor) });
+    nodes.push(createPositionedTextNode(node.value.slice(cursor), startOffset + cursor, endOffset));
   }
   return nodes.length > 0 ? nodes : [node];
+}
+
+function createPositionedTextNode(
+  value: string,
+  startOffset: number,
+  endOffset: number,
+): MarkdownTextNode {
+  return {
+    type: "text",
+    value,
+    position: {
+      start: { offset: startOffset },
+      end: { offset: endOffset },
+    },
+  };
 }
 const INLINE_MATH_HINT_REGEX = /[\\^_=+\-*/<>()[\]{}]/;
 const ALL_CAPS_DOLLAR_IDENTIFIER_REGEX = /^[A-Z][A-Z0-9_]{1,31}$/;
@@ -904,45 +955,6 @@ function VerifiedWorkspaceFileChip(props: {
 // meta/ctrl-click — or a surface without a viewer — opens the preferred
 // external editor. `targetPath` may carry a `:line` suffix (used to open); the
 // chip icon and title use the position-free path.
-function renderFindWrappedText(
-  text: string,
-  query: string,
-  activeRange: ThreadFindRange | null,
-  sourceOffset: number,
-): ReactNode {
-  const parts = splitTextWithFindMatches(text, query, activeRange, sourceOffset);
-  if (parts.length === 1 && !parts[0]!.match) {
-    return text;
-  }
-  return parts.map((part, index) =>
-    part.match ? (
-      <span
-        key={`${part.startOffset ?? index}:${index}`}
-        className={part.active ? "chat-find-match chat-find-match-active" : "chat-find-match"}
-        data-chat-find-match={part.active ? "active" : "true"}
-        data-chat-find-start={part.startOffset}
-      >
-        {part.text}
-      </span>
-    ) : (
-      <span key={`text:${index}`}>{part.text}</span>
-    ),
-  );
-}
-
-function ShikiHtml(props: {
-  html: string;
-  findQuery: string;
-  sourceOffset: number;
-  activeRange: ThreadFindRange | null;
-}) {
-  const html =
-    normalizeFindQuery(props.findQuery).length > 0
-      ? wrapFindQueryInHtml(props.html, props.findQuery, props.sourceOffset, props.activeRange)
-      : props.html;
-  return <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
 function OpenableFileChip(props: {
   targetPath: string;
   theme: "light" | "dark";
@@ -1113,9 +1125,7 @@ interface SuspenseShikiCodeBlockProps {
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
-  findQuery: string;
   sourceOffset: number;
-  findActiveRange: ThreadFindRange | null;
 }
 
 type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
@@ -1160,9 +1170,7 @@ function SuspenseShikiCodeBlock({
   code: liveCode,
   themeName,
   isStreaming,
-  findQuery,
   sourceOffset,
-  findActiveRange,
 }: SuspenseShikiCodeBlockProps) {
   const code = useThrottledStreamingValue(
     liveCode,
@@ -1177,9 +1185,7 @@ function SuspenseShikiCodeBlock({
       code={code}
       themeName={themeName}
       isStreaming={isStreaming}
-      findQuery={findQuery}
       sourceOffset={sourceOffset}
-      findActiveRange={findActiveRange}
     />
   );
 }
@@ -1190,9 +1196,7 @@ function LoadedShikiCodeBlock({
   code,
   themeName,
   isStreaming,
-  findQuery,
   sourceOffset,
-  findActiveRange,
 }: SuspenseShikiCodeBlockProps & { syntaxHighlighting: SyntaxHighlightingModule }) {
   const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
   const cachedHighlightedHtml = !isStreaming
@@ -1200,14 +1204,7 @@ function LoadedShikiCodeBlock({
     : null;
 
   if (cachedHighlightedHtml != null) {
-    return (
-      <ShikiHtml
-        html={cachedHighlightedHtml}
-        findQuery={findQuery}
-        sourceOffset={sourceOffset}
-        activeRange={findActiveRange}
-      />
-    );
+    return <FindAwareShikiHtml html={cachedHighlightedHtml} sourceOffset={sourceOffset} />;
   }
 
   // The uncached path lives in its own component: an early return above must
@@ -1220,9 +1217,7 @@ function LoadedShikiCodeBlock({
       code={code}
       themeName={themeName}
       isStreaming={isStreaming}
-      findQuery={findQuery}
       sourceOffset={sourceOffset}
-      findActiveRange={findActiveRange}
     />
   );
 }
@@ -1234,9 +1229,7 @@ function UncachedShikiCodeBlock({
   code,
   themeName,
   isStreaming,
-  findQuery,
   sourceOffset,
-  findActiveRange,
 }: SuspenseShikiCodeBlockProps & {
   syntaxHighlighting: SyntaxHighlightingModule;
   cacheKey: string;
@@ -1255,14 +1248,7 @@ function UncachedShikiCodeBlock({
     }
   }, [cacheKey, code, highlightedHtml, isStreaming, syntaxHighlighting]);
 
-  return (
-    <ShikiHtml
-      html={highlightedHtml}
-      findQuery={findQuery}
-      sourceOffset={sourceOffset}
-      activeRange={findActiveRange}
-    />
-  );
+  return <FindAwareShikiHtml html={highlightedHtml} sourceOffset={sourceOffset} />;
 }
 
 function ChatMarkdown({
@@ -1324,24 +1310,17 @@ function ChatMarkdown({
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  const sourceText = useMemo(
+    () => (isUserVariant ? text : repairMarkdownTableDelimiters(text)),
+    [isUserVariant, text],
+  );
   // Marker offsets are applied against mdast positions, which come from the
   // repaired text — validate them against the same string. A marker recorded
   // after a repaired delimiter row fails its `selectedText` check and is
   // dropped instead of highlighting a shifted range.
   const rangeDecorationRemarkPlugin = useMemo(() => {
-    const sourceText = isUserVariant ? text : repairMarkdownTableDelimiters(text);
-    const decorations = [
-      ...findHighlightDecorations({
-        text: sourceText,
-        query: findQuery,
-      }),
-      ...threadMarkerDecorations({ text: sourceText, markers }),
-    ];
-    if (decorations.length === 0) {
-      return null;
-    }
-    return createTextRangeRemarkPlugin(decorations);
-  }, [findQuery, isUserVariant, markers, text]);
+    return createTextRangeRemarkPlugin(threadMarkerDecorations({ text: sourceText, markers }));
+  }, [markers, sourceText]);
   const composerChipsRemarkPlugin = useMemo(
     () =>
       isUserVariant
@@ -1357,13 +1336,13 @@ function ChatMarkdown({
   );
   const remarkPlugins = useMemo<MarkdownRemarkPlugins>(() => {
     if (composerChipsRemarkPlugin) {
-      return rangeDecorationRemarkPlugin
-        ? [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]
-        : [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin];
+      return [
+        ...USER_MARKDOWN_REMARK_PLUGINS,
+        composerChipsRemarkPlugin,
+        rangeDecorationRemarkPlugin,
+      ];
     }
-    return rangeDecorationRemarkPlugin
-      ? [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin]
-      : MARKDOWN_REMARK_PLUGINS;
+    return [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin];
   }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1429,18 +1408,16 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
-        const sourceText = isUserVariant ? text : repairMarkdownTableDelimiters(text);
         const blockStart = node?.position?.start?.offset ?? 0;
         const codeOffsetInSource = sourceText.indexOf(code, blockStart);
         const sourceOffset = codeOffsetInSource < 0 ? blockStart : codeOffsetInSource;
-        const highlightedFallback =
-          normalizeFindQuery(findQuery).length > 0 ? (
-            <pre {...props}>
-              <code>{renderFindWrappedText(code, findQuery, findActiveRange, sourceOffset)}</code>
-            </pre>
-          ) : (
-            <pre {...props}>{children}</pre>
-          );
+        const highlightedFallback = (
+          <pre {...props}>
+            <FindAwareCodeFallback code={code} sourceOffset={sourceOffset}>
+              {children}
+            </FindAwareCodeFallback>
+          </pre>
+        );
 
         return (
           <MarkdownCodeBlock code={code} fence={fence}>
@@ -1451,9 +1428,7 @@ function ChatMarkdown({
                   code={code}
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
-                  findQuery={findQuery}
                   sourceOffset={sourceOffset}
-                  findActiveRange={findActiveRange}
                 />
               </Suspense>
             </CodeHighlightErrorBoundary>
@@ -1468,18 +1443,12 @@ function ChatMarkdown({
         if (!className) {
           const filePath = inlineCodeFilePath(nodeToPlainText(children));
           if (filePath) {
-            const sourceOffset = node?.position?.start?.offset ?? 0;
-            const findLabelProps =
-              normalizeFindQuery(findQuery).length > 0
-                ? {
-                    label: renderFindWrappedText(
-                      filePath,
-                      findQuery,
-                      findActiveRange,
-                      sourceOffset,
-                    ),
-                  }
-                : {};
+            const nodeStart = node?.position?.start?.offset ?? 0;
+            const filePathOffset = sourceText.indexOf(filePath, nodeStart);
+            const sourceOffset = filePathOffset < 0 ? nodeStart : filePathOffset;
+            const findLabelProps = {
+              label: <FindAwareMarkdownText text={filePath} sourceOffset={sourceOffset} />,
+            };
             const knownTarget = resolveChatFileChipTarget(
               filePath,
               undefined,
@@ -1579,14 +1548,25 @@ function ChatMarkdown({
             context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
           return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
         },
+        [CHAT_FIND_TEXT_TAG_NAME]: (props: {
+          children?: ReactNode;
+          [CHAT_FIND_TEXT_START_ATTRIBUTE]?: string | undefined;
+        }) => {
+          const rawSourceOffset = props[CHAT_FIND_TEXT_START_ATTRIBUTE];
+          const sourceOffset =
+            rawSourceOffset === undefined ? Number.NaN : Number.parseInt(rawSourceOffset, 10);
+          const text = nodeToPlainText(props.children);
+          if (!Number.isFinite(sourceOffset) || text.length === 0) {
+            return <>{props.children}</>;
+          }
+          return <FindAwareMarkdownText text={text} sourceOffset={sourceOffset} />;
+        },
       } as unknown as Components),
     }),
     [
       cwd,
       knownAbsoluteFilePaths,
       diffThemeName,
-      findActiveRange,
-      findQuery,
       isStreaming,
       isUserVariant,
       mentionReferences,
@@ -1595,6 +1575,7 @@ function ChatMarkdown({
       resolvedTheme,
       terminalContexts,
       text,
+      sourceText,
     ],
   );
 
@@ -1604,14 +1585,18 @@ function ChatMarkdown({
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
     >
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={markdownComponents}
-        urlTransform={markdownUrlTransform}
+      <ChatFindRenderProvider
+        query={findQuery}
+        sourceText={sourceText}
+        activeRange={findActiveRange}
       >
-        {renderedText}
-      </ReactMarkdown>
+        <ParsedMarkdown
+          text={renderedText}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={markdownComponents}
+        />
+      </ChatFindRenderProvider>
     </div>
   );
 }

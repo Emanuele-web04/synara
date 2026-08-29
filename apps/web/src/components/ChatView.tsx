@@ -1586,6 +1586,10 @@ export default function ChatView({
       fineScrollFind: true,
     });
   };
+  const handleThreadFindActiveMatchChange = (match: ThreadFindMatch | null) => {
+    threadFindHighlightStore.setActiveMatch(match);
+    timelineControllerRef.current?.setActiveFindMatch(match);
+  };
   const isAtEndRef = useRef(true);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
@@ -12160,6 +12164,7 @@ export default function ChatView({
                 onClose={() => setThreadFindOpen(false)}
                 onJump={handleThreadFindJump}
                 onHighlightChange={threadFindHighlightStore.set}
+                onActiveMatchChange={handleThreadFindActiveMatchChange}
               />
             ) : null}
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (

@@ -117,13 +117,62 @@ export function resolveThreadFindDocumentText(message: ChatMessage, text = messa
   return repairMarkdownTableDelimiters(text);
 }
 
+type ThreadFindDocumentTextResolver = (message: ChatMessage, text: string) => string;
+
+interface CachedThreadFindDocumentText {
+  sourceText: string;
+  documentText: string;
+}
+
+interface CachedThreadFindMessageText {
+  message?: CachedThreadFindDocumentText;
+  segments: Map<number, CachedThreadFindDocumentText>;
+}
+
+export interface ThreadFindDocumentTextCache {
+  resolve: (message: ChatMessage, text: string, segmentIndex?: number) => string;
+}
+
+export function createThreadFindDocumentTextCache(
+  resolveText: ThreadFindDocumentTextResolver = resolveThreadFindDocumentText,
+): ThreadFindDocumentTextCache {
+  const messages = new WeakMap<ChatMessage, CachedThreadFindMessageText>();
+  return {
+    resolve: (message, text, segmentIndex) => {
+      let cachedMessage = messages.get(message);
+      if (!cachedMessage) {
+        cachedMessage = { segments: new Map() };
+        messages.set(message, cachedMessage);
+      }
+      const cached =
+        segmentIndex === undefined
+          ? cachedMessage.message
+          : cachedMessage.segments.get(segmentIndex);
+      if (cached?.sourceText === text) {
+        return cached.documentText;
+      }
+      const documentText = resolveText(message, text);
+      const next = { sourceText: text, documentText };
+      if (segmentIndex === undefined) {
+        cachedMessage.message = next;
+      } else {
+        cachedMessage.segments.set(segmentIndex, next);
+      }
+      return documentText;
+    },
+  };
+}
+
+const defaultThreadFindDocumentTextCache = createThreadFindDocumentTextCache();
+
 export function collectThreadFindDocuments(
   timelineEntries: readonly TimelineEntry[],
+  textCache: ThreadFindDocumentTextCache = defaultThreadFindDocumentTextCache,
 ): ThreadFindDocument[] {
   const documents: ThreadFindDocument[] = [];
   for (const entry of timelineEntries) {
     if (entry.kind === "message") {
-      const text = resolveThreadFindDocumentText(entry.message);
+      const text = textCache.resolve(entry.message, entry.message.text);
       if (text.length === 0) {
         continue;
       }
@@ -137,7 +186,7 @@ export function collectThreadFindDocuments(
       continue;
     }
     const segmentText = entry.message.textSegments?.[entry.segmentIndex]?.text ?? "";
-    const text = resolveThreadFindDocumentText(entry.message, segmentText);
+    const text = textCache.resolve(entry.message, segmentText, entry.segmentIndex);
     if (text.length === 0) {
       continue;
     }
@@ -229,31 +278,55 @@ export function splitTextWithFindMatches(
   activeRange: ThreadFindRange | null,
   sourceOffset = 0,
 ): FindTextPart[] {
-  const ranges = collectCaseInsensitiveSubstringRanges(text, query);
+  const ranges = collectCaseInsensitiveSubstringRanges(text, query).map((range) => ({
+    startOffset: sourceOffset + range.startOffset,
+    endOffset: sourceOffset + range.endOffset,
+  }));
+  return splitTextWithFindRanges(text, ranges, activeRange, sourceOffset);
+}
+
+export function splitTextWithFindRanges(
+  text: string,
+  ranges: readonly ThreadFindRange[],
+  activeRange: ThreadFindRange | null,
+  sourceOffset = 0,
+): FindTextPart[] {
   if (ranges.length === 0) {
     return [{ text, match: false, active: false }];
   }
   const parts: FindTextPart[] = [];
   let cursor = 0;
+  const sourceEnd = sourceOffset + text.length;
   for (const range of ranges) {
-    if (range.startOffset > cursor) {
+    const overlapStart = Math.max(range.startOffset, sourceOffset);
+    const overlapEnd = Math.min(range.endOffset, sourceEnd);
+    if (overlapStart >= overlapEnd) {
+      continue;
+    }
+    const localStart = overlapStart - sourceOffset;
+    const localEnd = overlapEnd - sourceOffset;
+    if (localStart > cursor) {
       parts.push({
-        text: text.slice(cursor, range.startOffset),
+        text: text.slice(cursor, localStart),
         match: false,
         active: false,
       });
     }
-    const startOffset = sourceOffset + range.startOffset;
     parts.push({
-      text: text.slice(range.startOffset, range.endOffset),
+      text: text.slice(localStart, localEnd),
       match: true,
       active:
         activeRange !== null &&
-        activeRange.startOffset === startOffset &&
-        activeRange.endOffset === sourceOffset + range.endOffset,
-      startOffset,
+        activeRange.startOffset === range.startOffset &&
+        activeRange.endOffset === range.endOffset,
+      startOffset: range.startOffset,
+      continuesBefore: overlapStart > range.startOffset,
+      continuesAfter: overlapEnd < range.endOffset,
     });
-    cursor = range.endOffset;
+    cursor = localEnd;
+  }
+  if (parts.length === 0) {
+    return [{ text, match: false, active: false }];
   }
   if (cursor < text.length) {
     parts.push({ text: text.slice(cursor), match: false, active: false });
@@ -402,11 +475,19 @@ export function wrapFindQueryInHtml(
     }
   }
 
-  let next = html;
-  for (const insertion of insertions.toSorted((left, right) => right.htmlStart - left.htmlStart)) {
-    next = `${next.slice(0, insertion.htmlStart)}${insertion.open}${next.slice(insertion.htmlStart, insertion.htmlEnd)}</span>${next.slice(insertion.htmlEnd)}`;
+  const segments: string[] = [];
+  let cursor = 0;
+  for (const insertion of insertions.toSorted((left, right) => left.htmlStart - right.htmlStart)) {
+    segments.push(
+      html.slice(cursor, insertion.htmlStart),
+      insertion.open,
+      html.slice(insertion.htmlStart, insertion.htmlEnd),
+      "</span>",
+    );
+    cursor = insertion.htmlEnd;
   }
-  return next;
+  segments.push(html.slice(cursor));
+  return segments.join("");
 }
 
 export function eventTargetsInAppBrowser(target: EventTarget | null): boolean {
@@ -439,6 +520,7 @@ export function shouldCaptureChatFindShortcut(input: {
 export interface ThreadFindHighlightStore {
   get: () => ThreadFindHighlight | null;
   set: (value: ThreadFindHighlight | null) => void;
+  setActiveMatch: (value: ThreadFindMatch | null) => void;
   subscribe: (listener: () => void) => () => void;
 }
 
@@ -454,6 +536,11 @@ export function createThreadFindHighlightStore(): ThreadFindHighlightStore {
       current = value;
       for (const listener of listeners) {
         listener();
+      }
+    },
+    setActiveMatch: (value) => {
+      if (current !== null) {
+        current.activeMatch = value;
       }
     },
     subscribe: (listener) => {

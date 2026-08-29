@@ -2,16 +2,18 @@
 // Purpose: Matching, next/prev wrap, and jump-to-message selection for in-thread find.
 
 import { MessageId, ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "../../lib/composerPastedText";
 import {
   appendTerminalContextsToPrompt,
   type TerminalContextDraft,
 } from "../../lib/terminalContext";
 import type { TimelineEntry } from "../../session-logic";
+import type { ChatMessage } from "../../types";
 import {
   collectCaseInsensitiveSubstringRanges,
   collectThreadFindDocuments,
+  createThreadFindDocumentTextCache,
   createThreadFindHighlightStore,
   eventTargetsInAppBrowser,
   findThreadMatches,
@@ -203,6 +205,56 @@ describe("collectThreadFindDocuments", () => {
       },
     ]);
   });
+
+  it("reuses projected text for unchanged message objects", () => {
+    const stableMessage = {
+      id: messageId("assistant-stable"),
+      role: "assistant" as const,
+      text: "stable text",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      streaming: false,
+    };
+    const streamingMessage = {
+      id: messageId("assistant-streaming"),
+      role: "assistant" as const,
+      text: "first token",
+      createdAt: "2026-01-01T00:00:01.000Z",
+      streaming: true,
+    };
+    const resolveText = vi.fn((_message: ChatMessage, text: string) => text.toUpperCase());
+    const cache = createThreadFindDocumentTextCache(resolveText);
+    const entries: TimelineEntry[] = [stableMessage, streamingMessage].map((message) => ({
+      id: message.id,
+      kind: "message" as const,
+      createdAt: message.createdAt,
+      message,
+    }));
+
+    expect(collectThreadFindDocuments(entries, cache).map((entry) => entry.text)).toEqual([
+      "STABLE TEXT",
+      "FIRST TOKEN",
+    ]);
+    expect(collectThreadFindDocuments(entries, cache).map((entry) => entry.text)).toEqual([
+      "STABLE TEXT",
+      "FIRST TOKEN",
+    ]);
+
+    const nextStreamingMessage = { ...streamingMessage, text: "second token" };
+    const nextEntries: TimelineEntry[] = [
+      entries[0]!,
+      {
+        id: nextStreamingMessage.id,
+        kind: "message",
+        createdAt: nextStreamingMessage.createdAt,
+        message: nextStreamingMessage,
+      },
+    ];
+    expect(collectThreadFindDocuments(nextEntries, cache).map((entry) => entry.text)).toEqual([
+      "STABLE TEXT",
+      "SECOND TOKEN",
+    ]);
+    expect(resolveText).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("wrapFindQueryInHtml", () => {
@@ -214,6 +266,18 @@ describe("wrapFindQueryInHtml", () => {
     expect(wrapped).toContain(">Error</span>");
     expect(wrapped).toContain('class="shiki"');
     expect(wrapped).toContain("failed");
+  });
+
+  it("matches the previous splice output across tags, entities, and adjacent hits", () => {
+    const html = '<pre><code><span class="line">Error &amp; error</span> errorerror</code></pre>';
+    const wrapped = wrapFindQueryInHtml(html, "error", 7, {
+      startOffset: 15,
+      endOffset: 20,
+    });
+
+    expect(wrapped).toBe(
+      '<pre><code><span class="line"><span class="chat-find-match" data-chat-find-match="true" data-chat-find-start="7">Error</span> &amp; <span class="chat-find-match chat-find-match-active" data-chat-find-match="active" data-chat-find-start="15">error</span></span> <span class="chat-find-match" data-chat-find-match="true" data-chat-find-start="21">error</span><span class="chat-find-match" data-chat-find-match="true" data-chat-find-start="26">error</span></code></pre>',
+    );
   });
 });
 
@@ -364,5 +428,26 @@ describe("createThreadFindHighlightStore", () => {
 
     expect(seen).toEqual(["error", "error", null]);
     expect(store.get()).toEqual({ query: "later", activeMatch: null });
+  });
+
+  it("updates the active match without notifying query subscribers", () => {
+    const store = createThreadFindHighlightStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.set({ query: "error", activeMatch: null });
+    listener.mockClear();
+
+    store.setActiveMatch({
+      messageId: messageId("assistant-1"),
+      startOffset: 12,
+      endOffset: 17,
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(store.get()?.activeMatch).toEqual({
+      messageId: messageId("assistant-1"),
+      startOffset: 12,
+      endOffset: 17,
+    });
   });
 });
