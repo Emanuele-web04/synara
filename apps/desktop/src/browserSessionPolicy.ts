@@ -129,10 +129,15 @@ export class BrowserSessionPolicy {
         callback({ requestHeaders });
       });
       partitionSession.webRequest.onHeadersReceived((details, callback) => {
-        if (details.resourceType === "mainFrame" && details.webContentsId >= 0) {
-          this.webMcpCompatibilityAllowedByWebContentsId.delete(details.webContentsId);
+        const webContentsId = details.webContentsId;
+        if (
+          details.resourceType === "mainFrame" &&
+          typeof webContentsId === "number" &&
+          webContentsId >= 0
+        ) {
+          this.webMcpCompatibilityAllowedByWebContentsId.delete(webContentsId);
           this.webMcpCompatibilityAllowedByWebContentsId.set(
-            details.webContentsId,
+            webContentsId,
             isWebMcpCompatibilityAllowedByHeaders(details.url, details.responseHeaders),
           );
           while (this.webMcpCompatibilityAllowedByWebContentsId.size > MAX_WEB_MCP_POLICY_ENTRIES) {

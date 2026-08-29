@@ -677,7 +677,8 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
       }
       return (
         isInsideToolForm(mutation.target) ||
-        [...mutation.addedNodes, ...mutation.removedNodes].some(containsToolForm)
+        Array.from(mutation.addedNodes).some(containsToolForm) ||
+        Array.from(mutation.removedNodes).some(containsToolForm)
       );
     };
     ensureDeclarativeObservation = () => {

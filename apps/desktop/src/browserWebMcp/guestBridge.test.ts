@@ -180,7 +180,7 @@ it("provides a document.modelContext compatibility bridge before native WebMCP e
         target: unrelatedTarget,
         addedNodes: [] as unknown as NodeList,
         removedNodes: [] as unknown as NodeList,
-      } as MutationRecord,
+      } as unknown as MutationRecord,
     ],
     {} as MutationObserver,
   );
@@ -198,7 +198,7 @@ it("provides a document.modelContext compatibility bridge before native WebMCP e
         target: unrelatedTarget,
         addedNodes: [toolForm] as unknown as NodeList,
         removedNodes: [] as unknown as NodeList,
-      } as MutationRecord,
+      } as unknown as MutationRecord,
     ],
     {} as MutationObserver,
   );
