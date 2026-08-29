@@ -253,7 +253,10 @@ function haveQueuedTurnsChanged(
   current: ReturnType<typeof useComposerDraftStore.getState>["draftsByThreadId"],
   previous: ReturnType<typeof useComposerDraftStore.getState>["draftsByThreadId"],
 ): boolean {
-  const threadIds = new Set([...Object.keys(current), ...Object.keys(previous)]);
+  const threadIds = new Set<ThreadId>([
+    ...(Object.keys(current) as ThreadId[]),
+    ...(Object.keys(previous) as ThreadId[]),
+  ]);
   for (const threadId of threadIds) {
     if (current[threadId]?.queuedTurns !== previous[threadId]?.queuedTurns) {
       return true;
