@@ -1,5 +1,5 @@
 // FILE: ThreadFindBar.test.tsx
-// Purpose: The in-thread find surface is a dedicated bar, not a corner overlay.
+// Purpose: The in-thread find surface is a compact floating top-right panel.
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { ChatThreadFindHost, ThreadFindBar } from "./ThreadFindBar";
 
 describe("ThreadFindBar", () => {
-  it("renders a dedicated full-width find bar with count and navigation chrome", () => {
+  it("renders a compact find panel with field, navigation, and close chrome", () => {
     const markup = renderToStaticMarkup(
       createElement(ThreadFindBar, {
         open: true,
@@ -20,18 +20,17 @@ describe("ThreadFindBar", () => {
     );
 
     expect(markup).toContain('data-testid="thread-find-bar"');
-    expect(markup).toContain('data-thread-find-layout="bar"');
+    expect(markup).toContain('data-thread-find-layout="panel"');
     expect(markup).toContain("Find in thread");
     expect(markup).toContain("Previous match (Shift+Enter)");
     expect(markup).toContain("Next match (Enter)");
     expect(markup).toContain("Close find (Esc)");
-    expect(markup).toContain("flex-1");
-    expect(markup).not.toContain("w-36");
+    expect(markup).toContain("w-72");
   });
 });
 
 describe("ChatThreadFindHost", () => {
-  it("opens a dedicated find bar on an empty thread (centered landing)", () => {
+  it("floats the find panel at the top-right without displacing the transcript", () => {
     const markup = renderToStaticMarkup(
       createElement(ChatThreadFindHost, {
         open: true,
@@ -45,13 +44,13 @@ describe("ChatThreadFindHost", () => {
     );
 
     expect(markup).toContain('data-testid="thread-find-bar"');
-    expect(markup).toContain('data-thread-find-layout="bar"');
+    expect(markup).toContain('data-thread-find-layout="panel"');
     expect(markup).toContain('data-thread-find-host="true"');
     expect(markup).toContain("Find in thread");
+    expect(markup).toContain("absolute right-0 top-0");
+    // Above the docked Environment overlay (z-20) so find never slides with it.
+    expect(markup).toContain("z-30");
     expect(markup).toContain("grid-rows-[1fr]");
-    expect(markup).toContain("w-full");
-    expect(markup).not.toContain("absolute right-2 top-2");
-    expect(markup).not.toContain("w-36");
   });
 
   it("collapses with shared disclosure motion when closed", () => {
@@ -69,6 +68,5 @@ describe("ChatThreadFindHost", () => {
 
     expect(markup).toContain('data-testid="thread-find-bar"');
     expect(markup).toContain("grid-rows-[0fr]");
-    expect(markup).not.toContain("absolute right-2 top-2");
   });
 });

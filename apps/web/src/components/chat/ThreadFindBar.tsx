@@ -1,5 +1,6 @@
 // FILE: ThreadFindBar.tsx
-// Purpose: Dedicated in-thread find bar — match count, prev/next, and Esc to close.
+// Purpose: Compact in-thread find panel floating at the top-right of the chat
+//   column — field + close on top, prev/next + match count below.
 // Layer: Chat transcript presentation
 // Depends on: projected-message matching in threadFind.logic (not the DOM list).
 
@@ -11,10 +12,6 @@ import { ChevronDownIcon, ChevronUpIcon, SearchIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { type TimelineEntry } from "../../session-logic";
-import {
-  CHAT_COLUMN_GUTTER_CLASS_NAME,
-  ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-} from "./composerPickerStyles";
 import {
   collectThreadFindDocuments,
   findThreadMatches,
@@ -35,6 +32,9 @@ interface ThreadFindBarProps {
 }
 
 const FIND_QUERY_MAX_LENGTH = 200;
+
+const FIND_STEP_BUTTON_CLASS_NAME =
+  "size-6 rounded-md border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/15 hover:text-foreground sm:size-6";
 
 export function ThreadFindBar({
   open,
@@ -139,55 +139,64 @@ export function ThreadFindBar({
     <div
       role="search"
       data-testid="thread-find-bar"
-      data-thread-find-layout="bar"
-      className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border bg-[var(--color-background-elevated-primary-opaque)] px-2.5 py-1.5 shadow-sm"
+      data-thread-find-layout="panel"
+      className="flex w-72 max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-border bg-[var(--color-background-elevated-primary-opaque)] shadow-md"
     >
-      <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <input
-        ref={inputRef}
-        type="text"
-        value={query}
-        onChange={(event) => handleQueryChange(event.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Find in thread"
-        aria-label="Find in thread"
-        autoComplete="off"
-        spellCheck={false}
-        className="h-8 min-w-0 flex-1 bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
-      />
-      <span
-        className={cn(
-          "min-w-16 shrink-0 text-right text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums",
-          MUTED_LABEL_TEXT_CLASS_NAME,
-        )}
-        aria-live="polite"
-      >
-        {hasQuery ? (matchCount === 0 ? "No results" : `${safeIndex + 1} / ${matchCount}`) : ""}
-      </span>
-      <div className="flex shrink-0 items-center gap-0.5">
-        <IconButton
-          onClick={() => handleStep("previous")}
-          disabled={matchCount === 0}
-          className="size-7 rounded-md border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/15 hover:text-foreground sm:size-7"
-          label="Previous match (Shift+Enter)"
-        >
-          <ChevronUpIcon className="size-4" />
-        </IconButton>
-        <IconButton
-          onClick={() => handleStep("next")}
-          disabled={matchCount === 0}
-          className="size-7 rounded-md border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/15 hover:text-foreground sm:size-7"
-          label="Next match (Enter)"
-        >
-          <ChevronDownIcon className="size-4" />
-        </IconButton>
+      <div className="flex items-center gap-2 border-b border-border px-2.5">
+        <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(event) => handleQueryChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Find in thread"
+          aria-label="Find in thread"
+          autoComplete="off"
+          spellCheck={false}
+          className="h-9 min-w-0 flex-1 bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
+        />
+        <div aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
         <IconButton
           onClick={onClose}
-          className="size-7 rounded-md border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/15 hover:text-foreground sm:size-7"
+          className={FIND_STEP_BUTTON_CLASS_NAME}
           label="Close find (Esc)"
         >
           <XIcon className="size-4" />
         </IconButton>
+      </div>
+      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton
+            onClick={() => handleStep("previous")}
+            disabled={matchCount === 0}
+            className={FIND_STEP_BUTTON_CLASS_NAME}
+            label="Previous match (Shift+Enter)"
+          >
+            <ChevronUpIcon className="size-4" />
+          </IconButton>
+          <IconButton
+            onClick={() => handleStep("next")}
+            disabled={matchCount === 0}
+            className={FIND_STEP_BUTTON_CLASS_NAME}
+            label="Next match (Enter)"
+          >
+            <ChevronDownIcon className="size-4" />
+          </IconButton>
+        </div>
+        <span
+          className={cn(
+            "min-w-0 truncate pr-1 text-right text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums",
+            MUTED_LABEL_TEXT_CLASS_NAME,
+          )}
+          aria-live="polite"
+        >
+          {hasQuery
+            ? matchCount === 0
+              ? "No results"
+              : `${safeIndex + 1} / ${matchCount} results`
+            : ""}
+        </span>
       </div>
     </div>
   );
@@ -198,37 +207,29 @@ export function ChatThreadFindHost({
   focusNonce,
   timelineEntries,
   threadId,
-  contentInsetRightPx,
   onClose,
   onJump,
   onHighlightChange,
 }: ThreadFindBarProps & {
   threadId: string;
-  contentInsetRightPx?: number;
 }) {
   return (
-    <DisclosureRegion open={open} className="shrink-0">
-      <div
-        data-thread-find-host="true"
-        className={cn(
-          "border-b border-border bg-[var(--color-background-elevated-primary-opaque)]",
-          CHAT_COLUMN_GUTTER_CLASS_NAME,
-          ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-        )}
-        style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
-      >
-        <div className="w-full min-w-0 py-2">
-          <ThreadFindBar
-            key={threadId}
-            open={open}
-            focusNonce={focusNonce}
-            timelineEntries={timelineEntries}
-            onClose={onClose}
-            onJump={onJump}
-            onHighlightChange={onHighlightChange}
-          />
-        </div>
-      </div>
-    </DisclosureRegion>
+    // z-30 stacks the panel above the docked Environment overlay (z-20) so find
+    // stays pinned to the chat column's top-right corner.
+    <div data-thread-find-host="true" className="pointer-events-none absolute right-0 top-0 z-30">
+      {/* Content padding keeps the panel shadow inside the disclosure clip box
+          and keeps the card off the column borders. */}
+      <DisclosureRegion open={open} contentClassName="pointer-events-auto p-3">
+        <ThreadFindBar
+          key={threadId}
+          open={open}
+          focusNonce={focusNonce}
+          timelineEntries={timelineEntries}
+          onClose={onClose}
+          onJump={onJump}
+          onHighlightChange={onHighlightChange}
+        />
+      </DisclosureRegion>
+    </div>
   );
 }

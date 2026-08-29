@@ -820,16 +820,20 @@ label:has(> select#reasoning-effort) select {
   padding: 0.02em 0.12em;
 }
 
+/* Find hits: yellow for every match, orange for the active one — dark text on
+   both so highlights stay readable over prose and syntax-colored code. */
 .chat-markdown .chat-find-match {
-  border-radius: 0.16em;
-  padding: 0.02em 0.08em;
+  border-radius: 0.45em;
+  padding: 0.06em 0.2em;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
-  background-color: color-mix(in srgb, var(--color-text-accent) 22%, transparent);
+  background-color: color-mix(in srgb, var(--color-amber-400) 55%, transparent);
+  color: var(--color-stone-900);
 }
 
 .chat-markdown .chat-find-match-active {
-  background-color: color-mix(in srgb, var(--color-text-accent) 46%, transparent);
+  background-color: color-mix(in srgb, var(--color-orange-500) 68%, transparent);
+  color: var(--color-stone-950);
 }
 
 .chat-markdown .chat-find-match-continues-before {

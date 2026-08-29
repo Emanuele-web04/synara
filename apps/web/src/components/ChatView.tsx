@@ -12157,9 +12157,6 @@ export default function ChatView({
                 focusNonce={threadFindFocusNonce}
                 timelineEntries={timelineEntries}
                 threadId={threadId}
-                {...(environmentAppliesContentInset
-                  ? { contentInsetRightPx: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
-                  : {})}
                 onClose={() => setThreadFindOpen(false)}
                 onJump={handleThreadFindJump}
                 onHighlightChange={threadFindHighlightStore.set}
