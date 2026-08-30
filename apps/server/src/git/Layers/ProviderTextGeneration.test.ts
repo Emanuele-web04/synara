@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
@@ -90,7 +91,9 @@ function createTextGenerationDouble(label: string) {
   };
 }
 
-function makeProviderTextGenerationTestLayer() {
+function makeProviderTextGenerationTestLayer(
+  settingsOverrides: Parameters<typeof ServerSettingsService.layerTest>[0] = {},
+) {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
   const kilo = createTextGenerationDouble("kilo");
@@ -100,12 +103,70 @@ function makeProviderTextGenerationTestLayer() {
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
     Layer.provide(Layer.succeed(KiloTextGeneration, kilo.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
+    Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
   );
 
   return { layer, codex, cursor, kilo, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {
+  it("blocks generation when the selected provider is disabled", async () => {
+    const { layer, codex, cursor, kilo, opencode } = makeProviderTextGenerationTestLayer({
+      providers: {
+        codex: { enabled: false },
+        cursor: { enabled: false },
+        kilo: { enabled: false },
+        opencode: { enabled: false },
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+          return yield* textGeneration.generateDiffSummary({
+            cwd: "/repo",
+            patch: "diff --git a/file.ts b/file.ts",
+            modelSelection: { provider: "codex", model: "gpt-5.5" },
+          });
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "TextGenerationError",
+      detail: "Codex is disabled in Settings > Providers.",
+    });
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
+    expect(kilo.generateDiffSummary).not.toHaveBeenCalled();
+    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
+  it("routes unsupported selections through the configured supported fallback", async () => {
+    const { layer, codex, cursor } = makeProviderTextGenerationTestLayer({
+      textGenerationModelSelection: { provider: "cursor", model: "composer-2" },
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          model: "claude-opus-4-8",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "composer-2",
+        modelSelection: { provider: "cursor", model: "composer-2" },
+      }),
+    );
+  });
+
   it("routes standard git-writing models to Codex", async () => {
     const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 

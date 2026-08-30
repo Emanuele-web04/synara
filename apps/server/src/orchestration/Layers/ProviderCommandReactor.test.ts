@@ -14,6 +14,7 @@ import type {
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSession,
+  ServerSettings,
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
@@ -29,6 +30,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { PROVIDER_DELIVERY_BLOCK_SUMMARY } from "@synara/shared/providerDeliveryBlock";
+import type { DeepPartial } from "@synara/shared/Struct";
 import {
   Duration,
   Effect,
@@ -211,6 +213,7 @@ describe("ProviderCommandReactor", () => {
     readonly gatewayOperationId?: string;
     readonly gitWritingModelSelection?: ModelSelection;
     readonly omitStopRuntimeSession?: boolean;
+    readonly serverSettings?: DeepPartial<ServerSettings>;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -529,11 +532,12 @@ describe("ProviderCommandReactor", () => {
         } as unknown as TextGenerationShape),
       ),
       Layer.provideMerge(
-        ServerSettingsService.layerTest(
-          input?.gitWritingModelSelection
+        ServerSettingsService.layerTest({
+          ...input?.serverSettings,
+          ...(input?.gitWritingModelSelection
             ? { textGenerationModelSelection: input.gitWritingModelSelection }
-            : {},
-        ),
+            : {}),
+        }),
       ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -562,6 +566,7 @@ describe("ProviderCommandReactor", () => {
         interceptor(command) ?? passthroughDispatch(command, context);
     };
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const serverSettings = await runtime.runPromise(Effect.service(ServerSettingsService));
     const deliveryRepository = await runtime.runPromise(
       Effect.service(OrchestrationEventDeliveryRepository),
     );
@@ -627,6 +632,7 @@ describe("ProviderCommandReactor", () => {
     return {
       engine,
       reactor,
+      serverSettings,
       startSession,
       listSessions,
       sendTurn,
@@ -4150,6 +4156,67 @@ describe("ProviderCommandReactor", () => {
     expect(harness.listSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves existing threads while a provider is disabled and resumes after re-enabling", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      serverSettings: { providers: { opencode: { enabled: false } } },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-disabled"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-opencode-disabled"),
+          role: "user",
+          text: "try while disabled",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    const disabledThread = await readHarnessThread(harness);
+    expect(disabledThread).toBeDefined();
+    expect(disabledThread?.session?.lastError).toContain(
+      "OpenCode is disabled in Settings > Providers",
+    );
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({ providers: { opencode: { enabled: true } } }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-reenabled"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-opencode-reenabled"),
+          role: "user",
+          text: "continue after re-enable",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("continue after re-enable");
+  });
+
   it("routes subagent-thread turn starts to the parent session as steers", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -5504,6 +5571,14 @@ describe("ProviderCommandReactor", () => {
       gitWritingModelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-8",
+      },
+      serverSettings: {
+        providers: {
+          codex: { enabled: false },
+          cursor: { enabled: false },
+          kilo: { enabled: false },
+          opencode: { enabled: false },
+        },
       },
     });
     const now = new Date().toISOString();

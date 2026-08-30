@@ -5411,6 +5411,90 @@ validation.layer("ProviderServiceLive validation", (it) => {
   );
 });
 
+const disabledProviderStart = makeProviderServiceLayer({
+  providerIsEnabled: (provider) => Effect.succeed(provider !== "codex"),
+});
+disabledProviderStart.layer("ProviderServiceLive enablement", (it) => {
+  it.effect("rejects session starts for disabled providers before reaching the adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const failure = yield* Effect.result(
+        provider.startSession(asThreadId("thread-disabled-provider"), {
+          provider: "codex",
+          threadId: asThreadId("thread-disabled-provider"),
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") return;
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      assert.equal(failure.failure.message.includes("disabled"), true);
+      assert.equal(disabledProviderStart.codex.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("rejects recovery-triggered provider starts while disabled", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-disabled-provider-recovery");
+      disabledProviderStart.codex.startSession.mockClear();
+      disabledProviderStart.codex.compactThread.mockClear();
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        status: "stopped",
+        resumeCursor: { opaque: "resume-disabled-provider" },
+        runtimeMode: "full-access",
+      });
+
+      const failure = yield* Effect.result(provider.compactThread({ threadId }));
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") return;
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      assert.equal(failure.failure.message.includes("disabled"), true);
+      assert.equal(disabledProviderStart.codex.startSession.mock.calls.length, 0);
+      assert.equal(disabledProviderStart.codex.compactThread.mock.calls.length, 0);
+    }),
+  );
+});
+
+let providerEnabledDuringStart = true;
+const providerDisabledAfterInitialCheck = makeProviderServiceLayer({
+  providerIsEnabled: () =>
+    Effect.sync(() => {
+      const enabled = providerEnabledDuringStart;
+      providerEnabledDuringStart = false;
+      return enabled;
+    }),
+});
+providerDisabledAfterInitialCheck.layer("ProviderServiceLive enablement race", (it) => {
+  it.effect("rechecks provider enablement immediately before adapter startup", () =>
+    Effect.gen(function* () {
+      providerEnabledDuringStart = true;
+      providerDisabledAfterInitialCheck.codex.startSession.mockClear();
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-disabled-during-start");
+
+      const failure = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") return;
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      assert.equal(failure.failure.message.includes("disabled"), true);
+      assert.equal(providerDisabledAfterInitialCheck.codex.startSession.mock.calls.length, 0);
+    }),
+  );
+});
+
 const boundedFanout = makeProviderServiceLayer({ runtimeEventBufferCapacity: 1 });
 it.effect("ProviderServiceLive starts independent provider teardown concurrently", () =>
   Effect.gen(function* () {

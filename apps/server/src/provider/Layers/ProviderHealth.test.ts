@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Duration, Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -49,10 +49,13 @@ import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance
 
 const encoder = new TextEncoder();
 
-function mockHandle(result: { stdout: string; stderr: string; code: number }) {
+function mockHandle(
+  result: { stdout: string; stderr: string; code: number },
+  options?: { readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode> },
+) {
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
+    exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
     stdin: Sink.drain,
@@ -117,6 +120,7 @@ function failingSpawnerLayer(description: string) {
 
 function hangingSpawnerLayer(input: {
   readonly onKill: () => void;
+  readonly onHang?: () => void;
   readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
 }) {
   const handle = ChildProcessSpawner.makeHandle({
@@ -138,9 +142,11 @@ function hangingSpawnerLayer(input: {
         command: string;
         args: ReadonlyArray<string>;
       };
-      return input.shouldHang(cmd.args, cmd.command)
-        ? Effect.succeed(handle)
-        : Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
+      if (!input.shouldHang(cmd.args, cmd.command)) {
+        return Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
+      }
+      input.onHang?.();
+      return Effect.succeed(handle);
     }),
   );
 }
@@ -396,6 +402,84 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         );
       }),
     );
+
+    it.effect("stops a running provider update when the provider is disabled", () =>
+      Effect.gen(function* () {
+        let killed = false;
+        let markStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+          markStarted = resolve;
+        });
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-update-disable-",
+        });
+        yield* writeProviderStatusCache({
+          filePath: resolveProviderStatusCachePath({
+            stateDir: path.join(baseDir, "userdata"),
+            provider: "kilo",
+          }),
+          provider: {
+            provider: "kilo",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: "2026-07-15T12:00:00.000Z",
+            message: "Kilo CLI is installed and authenticated.",
+            version: "7.3.46",
+          },
+        });
+        const settings = {
+          ...allProvidersDisabledServerSettings,
+          providers: {
+            ...allProvidersDisabledServerSettings.providers,
+            kilo: {
+              ...DEFAULT_SERVER_SETTINGS.providers.kilo,
+              enabled: true,
+              binaryPath:
+                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+            },
+          },
+        } satisfies typeof DEFAULT_SERVER_SETTINGS;
+        const serverSettingsLayer = ServerSettingsService.layerTest(settings);
+        const layer = makeProviderHealthLive({ providerUpdateTimeoutMs: 10_000 }).pipe(
+          Layer.provideMerge(serverSettingsLayer),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            hangingSpawnerLayer({
+              onKill: () => (killed = true),
+              onHang: markStarted,
+              shouldHang: (args, command) =>
+                command === "npm" &&
+                args.join(" ") ===
+                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
+            }),
+          ),
+        );
+
+        const result = yield* TestClock.withLive(
+          Effect.gen(function* () {
+            const providerHealth = yield* ProviderHealth;
+            const serverSettings = yield* ServerSettingsService;
+            const updateFiber = yield* providerHealth
+              .updateProvider({ provider: "kilo" })
+              .pipe(Effect.forkChild);
+            yield* Effect.promise(() => started);
+            yield* serverSettings.updateSettings({ providers: { kilo: { enabled: false } } });
+            return yield* Fiber.join(updateFiber);
+          }).pipe(Effect.provide(layer)),
+        );
+        const kilo = result.providers.find((provider) => provider.provider === "kilo");
+
+        assert.strictEqual(killed, true);
+        assert.strictEqual(kilo?.updateState?.status, "failed");
+        assert.strictEqual(
+          kilo?.updateState?.message,
+          "Update stopped because the provider was disabled.",
+        );
+      }),
+    );
   });
 
   describe("disabled provider handling", () => {
@@ -562,6 +646,114 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(status.versionAdvisory?.updateCommand, null);
         }
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+
+    it.effect("queues another bounded refresh when the follow-up also becomes stale", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-enable-race-",
+        });
+        const commands: string[] = [];
+        const makeProbeGate = () => {
+          let release!: () => void;
+          let markStarted!: () => void;
+          const released = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const started = new Promise<void>((resolve) => {
+            markStarted = resolve;
+          });
+          return { release, released, markStarted, started };
+        };
+        const probeGates = Array.from({ length: 5 }, makeProbeGate);
+        let codexVersionAttempts = 0;
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) => {
+            const input = command as unknown as {
+              readonly command: string;
+              readonly args: ReadonlyArray<string>;
+            };
+            commands.push(input.command);
+            const result = input.args.includes("--version")
+              ? { stdout: `${input.command} 1.0.0\n`, stderr: "", code: 0 }
+              : { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            if (input.command !== "codex" || !input.args.includes("--version")) {
+              return Effect.succeed(mockHandle(result));
+            }
+            const attemptIndex = codexVersionAttempts;
+            codexVersionAttempts += 1;
+            const gate = probeGates[attemptIndex];
+            gate?.markStarted();
+            if (!gate || attemptIndex >= 4) {
+              return Effect.succeed(mockHandle(result));
+            }
+            return Effect.succeed(
+              mockHandle(result, {
+                exitCode: Effect.promise(() => gate.released).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(0)),
+                ),
+              }),
+            );
+          }),
+        );
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              ...allProvidersDisabledSettings,
+              providers: {
+                ...allProvidersDisabledSettings.providers,
+                codex: { enabled: true },
+              },
+            }),
+          ),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(spawnerLayer),
+        );
+
+        yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          const serverSettings = yield* ServerSettingsService;
+          const firstRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
+          yield* Effect.promise(() => probeGates[0]!.started);
+          yield* serverSettings.updateSettings({ providers: { opencode: { enabled: true } } });
+          const joinedRefresh = yield* providerHealth.refresh.pipe(Effect.forkChild);
+          probeGates[0]!.release();
+          yield* Effect.promise(() => probeGates[1]!.started);
+          yield* serverSettings.updateSettings({ providers: { pi: { enabled: true } } });
+          probeGates[1]!.release();
+          yield* Effect.promise(() => probeGates[2]!.started);
+          yield* serverSettings.updateSettings({ providers: { grok: { enabled: true } } });
+          probeGates[2]!.release();
+          yield* Effect.promise(() => probeGates[3]!.started);
+          yield* serverSettings.updateSettings({ providers: { droid: { enabled: true } } });
+          probeGates[3]!.release();
+          yield* Fiber.join(joinedRefresh);
+          yield* Fiber.join(firstRefresh);
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust(Duration.millis(100));
+          yield* Effect.promise(() => probeGates[4]!.started);
+          const statuses = yield* providerHealth.refresh;
+
+          assert.ok(commands.some((command) => command.includes("opencode")));
+          assert.ok(commands.some((command) => command.includes("pi")));
+          assert.ok(commands.some((command) => command.includes("grok")));
+          assert.ok(commands.some((command) => command.includes("droid")));
+          assert.notStrictEqual(
+            statuses.find((status) => status.provider === "opencode")?.message,
+            "Provider is disabled in Synara settings.",
+          );
+          assert.notStrictEqual(
+            statuses.find((status) => status.provider === "pi")?.message,
+            "Provider is disabled in Synara settings.",
+          );
+          assert.notStrictEqual(
+            statuses.find((status) => status.provider === "droid")?.message,
+            "Provider is disabled in Synara settings.",
+          );
+        }).pipe(Effect.provide(layer));
+      }),
     );
 
     it.effect("rejects one-click updates for disabled providers", () =>

@@ -100,6 +100,7 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
@@ -607,6 +608,7 @@ const makeWsRpcHandlersLayer = () =>
         projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
+        serverSettings,
       });
 
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
@@ -1737,12 +1739,30 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
-            providerAdapterRegistry
-              .getByProvider(input.provider)
-              .pipe(
+            getEnabledProviderAdapter(input.provider, serverSettings, providerAdapterRegistry).pipe(
+              Effect.flatMap((adapter) =>
+                adapter.prewarmVoice
+                  ? adapter.prewarmVoice(input)
+                  : Effect.fail(
+                      new Error(
+                        `Voice transcription is unavailable for provider '${input.provider}'.`,
+                      ),
+                    ),
+              ),
+            ),
+            "Voice transcription prewarm failed",
+          ),
+        [WS_METHODS.serverTranscribeVoice]: (input) =>
+          rpcEffect(
+            voiceUploadAdmissionGate.run(
+              getEnabledProviderAdapter(
+                input.provider,
+                serverSettings,
+                providerAdapterRegistry,
+              ).pipe(
                 Effect.flatMap((adapter) =>
-                  adapter.prewarmVoice
-                    ? adapter.prewarmVoice(input)
+                  adapter.transcribeVoice
+                    ? adapter.transcribeVoice(input)
                     : Effect.fail(
                         new Error(
                           `Voice transcription is unavailable for provider '${input.provider}'.`,
@@ -1750,24 +1770,6 @@ const makeWsRpcHandlersLayer = () =>
                       ),
                 ),
               ),
-            "Voice transcription prewarm failed",
-          ),
-        [WS_METHODS.serverTranscribeVoice]: (input) =>
-          rpcEffect(
-            voiceUploadAdmissionGate.run(
-              providerAdapterRegistry
-                .getByProvider(input.provider)
-                .pipe(
-                  Effect.flatMap((adapter) =>
-                    adapter.transcribeVoice
-                      ? adapter.transcribeVoice(input)
-                      : Effect.fail(
-                          new Error(
-                            `Voice transcription is unavailable for provider '${input.provider}'.`,
-                          ),
-                        ),
-                  ),
-                ),
             ),
             "Voice transcription failed",
           ),

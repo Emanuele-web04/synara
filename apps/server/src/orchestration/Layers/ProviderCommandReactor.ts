@@ -96,6 +96,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -1184,17 +1185,15 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const settingsSnapshot = yield* serverSettings.getSnapshot;
-    if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
+    const settings = yield* serverSettings.getSettings;
+    if (!settings.providers[preferredProvider].enabled) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
-        issue: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
+        issue: `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`,
       });
     }
-    const resolvedProviderOptions = providerStartOptionsFromServerSettings(
-      settingsSnapshot.settings,
-    );
+    const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
