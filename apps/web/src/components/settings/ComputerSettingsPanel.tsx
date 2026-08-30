@@ -31,6 +31,7 @@ import {
 
 const BACKEND_DISPLAY_NAMES: Record<string, string> = {
   kwin: "KWin plugin (KDE)",
+  "nested-kwin": "Isolated agent desktop (nested KWin)",
   fake: "Test backend",
 };
 
@@ -97,7 +98,9 @@ export function ComputerSettingsPanel({
     status?.availability.kind === "available" ? (status.availability.backend ?? null) : null;
   const health = status?.health;
   // The emergency release is a shortcut the KWin plugin registers with the
-  // compositor, so only a visible plugin-backed desktop may promise it.
+  // compositor. No other backend binds it, and a nested offscreen session never
+  // hears the human's keys, so only a visible plugin-backed desktop may promise
+  // it.
   const dedicatedSeatDescription =
     backend !== null &&
     COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
@@ -105,7 +108,7 @@ export function ComputerSettingsPanel({
       ? `The agent drives its own seat, so your cursor and focus stay untouched. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
       : "The agent drives its own seat, so your cursor and focus stay untouched.";
   const setupNote = setupMutation.isPending
-    ? "Setting up computer control. The plugin may take a few minutes to compile from source."
+    ? "Setting up the agent's desktop. This may open your system's authorization dialog to install packages, and can take a few minutes if the plugin compiles from source."
     : setupMutation.isError
       ? `Setting up failed. ${
           setupMutation.error instanceof Error && setupMutation.error.message
@@ -146,7 +149,9 @@ export function ComputerSettingsPanel({
         action={
           <div className="flex items-center gap-2">
             {/* Offered whenever the desktop is not ready. Setting up installs
-                the Synara KWin plugin into the user's home. */}
+                whatever this backend still needs — distribution packages
+                through the system's own authorization dialog, Synara's KWin
+                plugin into the user's home — and boots the agent's desktop. */}
             {needsSetup && !statusQuery.isError ? (
               <Button
                 size="xs"

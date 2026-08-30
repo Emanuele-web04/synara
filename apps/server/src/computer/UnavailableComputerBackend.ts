@@ -2,8 +2,8 @@
  * A backend that exists only to carry the reason there is no backend.
  *
  * Backend selection can fail in ways that happen before any display server is
- * contacted: an operator override naming a backend Synara does not have. The
- * service still needs a `ComputerBackend`
+ * contacted: a nested compositor that did not boot, an operator override naming
+ * a backend Synara does not have. The service still needs a `ComputerBackend`
  * to hand the manager, and the alternative — leaving it undefined and
  * special-casing every reader — loses the one thing worth keeping, which is the
  * sentence explaining what went wrong.

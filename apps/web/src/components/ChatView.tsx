@@ -1314,7 +1314,7 @@ export default function ChatView({
   });
   const computerControlDisabledReason = computerThreadState
     ? computerThreadState.availability.kind === "unsupported-platform"
-      ? `Computer control needs a Wayland KDE desktop with Synara's KWin plugin. This server is ${computerThreadState.availability.platform}.`
+      ? `Computer control needs a Wayland desktop on Linux (KWin or Synara's own nested desktop). This server is ${computerThreadState.availability.platform}.`
       : computerThreadState.availability.kind === "backend-unavailable"
         ? computerThreadState.availability.message
         : undefined
