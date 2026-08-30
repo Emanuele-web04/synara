@@ -23,6 +23,7 @@ import {
   ProjectScript,
   ProjectId,
   ProjectKind,
+  ProjectSource,
   SpaceId,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   ThreadId,
@@ -102,6 +103,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    sources: Schema.fromJsonString(Schema.Array(ProjectSource)),
     isPinned: Schema.Number,
   }),
 );
@@ -464,6 +466,8 @@ function toProjectedProject(row: ProjectionProjectDbRow): OrchestrationProject {
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
     spaceId: row.spaceId,
+    sources: row.sources,
+    primarySourceId: row.primarySourceId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -653,6 +657,8 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
     spaceId: row.spaceId,
+    sources: row.sources,
+    primarySourceId: row.primarySourceId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -883,6 +889,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          sources_json AS "sources",
+          primary_source_id AS "primarySourceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1498,6 +1506,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          sources_json AS "sources",
+          primary_source_id AS "primarySourceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1558,6 +1568,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          sources_json AS "sources",
+          primary_source_id AS "primarySourceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

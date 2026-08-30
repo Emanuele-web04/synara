@@ -49,6 +49,8 @@ export type ProjectNormalizationInput = Pick<
   | "scripts"
   | "isPinned"
   | "spaceId"
+  | "sources"
+  | "primarySourceId"
   | "createdAt"
   | "updatedAt"
 >;
@@ -392,6 +394,9 @@ export function normalizeProject(
   // legacy shape (expandedProjectCwds with no projectOrderCwds). It flips off for
   // good once modern order state is remembered, and is what lets an empty legacy
   // list mean "all collapsed" instead of "no preference, default expanded".
+  const sources = previous?.sources && deepEqualJson(previous.sources, incoming.sources)
+    ? previous.sources
+    : [...incoming.sources];
   const expanded =
     (previous && projectCwdKey(previous.cwd) === workspaceRootKey
       ? previous.expanded
@@ -415,7 +420,9 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.sources === sources &&
+    previous.primarySourceId === incoming.primarySourceId
   ) {
     return previous;
   }
@@ -435,7 +442,9 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
-  };
+    sources,
+    primarySourceId: incoming.primarySourceId,
+  } satisfies Project;
 }
 
 export function normalizeSpace(
