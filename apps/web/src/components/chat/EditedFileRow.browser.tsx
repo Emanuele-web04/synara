@@ -123,17 +123,16 @@ afterEach(() => {
 });
 
 describe("EditedFileRow", () => {
-  it("defers editor preference listeners until its launcher menu is opened", async () => {
-    const addEventListener = vi.spyOn(window, "addEventListener");
+  it("opens the file in the preferred editor from the always-visible primary action", async () => {
+    const openInEditor = mockOpenInEditor();
     await render(editedFileRow({ openFile: () => true, workspaceRoot: WORKSPACE_ROOT }));
-    const preferenceListenerCalls = () =>
-      addEventListener.mock.calls.filter(
-        ([eventName]) => eventName === "storage" || eventName === "synara:local_storage_change",
-      );
 
-    expect(preferenceListenerCalls()).toHaveLength(0);
-    await openFileOptions();
-    await vi.waitFor(() => expect(preferenceListenerCalls()).toHaveLength(2));
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    // With no stored preference the first catalog editor available wins (Cursor).
+    expect(openInEditor).toHaveBeenCalledWith(
+      "/workspace/synara/apps/web/src/components/chat/EditedFileRow.tsx",
+      "cursor",
+    );
   });
 
   it("keeps row review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
@@ -155,13 +154,10 @@ describe("EditedFileRow", () => {
     await pathButton.click();
     expect(onReview).toHaveBeenCalledTimes(1);
 
-    // Hover-revealed actions still exist in the tree at rest, so they stay
-    // clickable and keyboard-reachable without the hover.
-    await pathButton.hover();
     await openButton.click();
-    expect(openFile).toHaveBeenCalledOnce();
-    expect(openFile).toHaveBeenCalledWith(FILE_PATH);
-    expect(openInEditor).not.toHaveBeenCalled();
+    // The primary action opens the preferred editor, never the in-app viewer.
+    expect(openInEditor).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
     expect(onReview).toHaveBeenCalledTimes(1);
 
     pathButton.element().focus();
@@ -235,16 +231,6 @@ describe("EditedFileRow", () => {
     await page.getByText("Copy relative path", { exact: true }).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(FILE_PATH));
     expect(openFile).not.toHaveBeenCalled();
-    expect(openInEditor).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back externally when the in-app opener reports a missing file", async () => {
-    const openFile = vi.fn(() => false);
-    const openInEditor = mockOpenInEditor();
-    await render(editedFileRow({ openFile, workspaceRoot: WORKSPACE_ROOT }));
-
-    await page.getByRole("button", { name: "Open", exact: true }).click();
-    expect(openFile).toHaveBeenCalledWith(FILE_PATH);
     expect(openInEditor).not.toHaveBeenCalled();
   });
 
