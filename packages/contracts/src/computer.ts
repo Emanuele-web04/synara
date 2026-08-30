@@ -9,6 +9,10 @@ export const COMPUTER_WS_METHODS = {
   // such as the settings screen. Everything else on this surface either acts on
   // the desktop or answers for one thread.
   getStatus: "computer.getStatus",
+  // Installs or compiles whatever this desktop is missing, on the user's
+  // explicit request from the settings panel. Separate from `getStatus`
+  // because reading status must never be the thing that compiles a helper.
+  provision: "computer.provision",
   listWindows: "computer.listWindows",
   getState: "computer.getState",
   getScreenSize: "computer.getScreenSize",
@@ -79,6 +83,29 @@ export const COMPUTER_OCCLUDERS_MAX_LENGTH = 32;
  * app keys its actionable "enable computer control" chat card off this kind.
  */
 export const COMPUTER_CONTROL_DENIED_ACTIVITY_KIND = "computer.control-denied";
+
+/**
+ * The backend name reported in `ComputerAvailability.backend` by the KWin
+ * plugin backend. Shared because the hotkey below exists only there, so every
+ * surface that advertises it has to recognise that one backend by name.
+ */
+export const COMPUTER_KWIN_BACKEND = "kwin";
+
+/**
+ * The human's emergency release: it takes the desktop back from the agent and
+ * latches until it is pressed again, which hands control back.
+ *
+ * Must match `releaseShortcut()` in the KWin plugin
+ * (`apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp`), which
+ * registers it with KGlobalAccel. It is a compositor shortcut and exists only
+ * where the KWin plugin binds it: no surface may advertise it unless
+ * `ComputerAvailability.backend` is a backend in
+ * `COMPUTER_RELEASE_HOTKEY_BACKENDS`.
+ */
+export const COMPUTER_RELEASE_CONTROL_HOTKEY = "Meta+Shift+Esc";
+
+/** The backends whose compositor plugin binds the release hotkey above. */
+export const COMPUTER_RELEASE_HOTKEY_BACKENDS: readonly string[] = [COMPUTER_KWIN_BACKEND];
 
 export const ComputerId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(COMPUTER_ID_MAX_LENGTH),
@@ -154,9 +181,10 @@ export type ComputerHealth = typeof ComputerHealth.Type;
  * What this desktop backend can actually do, as opposed to what the tool
  * surface describes in general.
  *
- * The backends differ in kind, not only in quality: one backend may enumerate
- * windows with geometry, stack them, and draw a ghost cursor, while another may
- * have none of that. A caller that cannot tell those apart lies to the model — "no windows"
+ * The backends differ in kind, not only in quality: a compositor plugin owning
+ * a dedicated seat can enumerate windows with geometry, stack them, and draw a
+ * ghost cursor, while a backend still being provisioned may have none of that
+ * yet. A caller that cannot tell those apart lies to the model — "no windows"
  * when the truth is "no window enumeration exists here" — so the answer travels
  * with the state instead of being inferred from the backend's name.
  */
@@ -216,9 +244,10 @@ export const ComputerWindow = Schema.Struct({
   pid: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   /**
    * Absent when the backend exposes no window geometry — a client under
-   * Some display servers cannot expose client geometry. Callers must treat an
-   * absent rect as unknown rather than as the origin, and
-   * `ComputerCapabilities.windowBounds` says up front which case this is.
+   * Wayland cannot ask where a window is, so only an in-compositor plugin can
+   * answer. Callers must treat an absent rect as unknown rather than as the
+   * origin, and `ComputerCapabilities.windowBounds` says up front which case
+   * this is.
    */
   bounds: Schema.optional(ComputerRect),
   focused: Schema.Boolean,
@@ -369,6 +398,20 @@ export const ComputerStatusResult = Schema.Struct({
   capabilities: ComputerCapabilities,
 });
 export type ComputerStatusResult = typeof ComputerStatusResult.Type;
+
+export const ComputerProvisionInput = Schema.Struct({});
+export type ComputerProvisionInput = typeof ComputerProvisionInput.Type;
+
+/**
+ * The refreshed status travels with the summary so the panel repaints from one
+ * round trip: provisioning is the one action whose whole point is that the
+ * card it was pressed from is now wrong.
+ */
+export const ComputerProvisionResult = Schema.Struct({
+  summary: TrimmedNonEmptyString,
+  status: ComputerStatusResult,
+});
+export type ComputerProvisionResult = typeof ComputerProvisionResult.Type;
 
 export const ComputerListWindowsInput = Schema.Struct({});
 export type ComputerListWindowsInput = typeof ComputerListWindowsInput.Type;

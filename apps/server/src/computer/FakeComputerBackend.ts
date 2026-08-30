@@ -219,7 +219,7 @@ export class FakeComputerBackend implements ComputerBackend {
   async focusWindow(windowId: string): Promise<void> {
     this.record("focusWindow", windowId);
     this.throwIfFailed("focusWindow");
-    // The pinned target is the only window that
+    // Mirror the KWin plugin: the pinned target is the only window that
     // reports focused, so clearing and re-pinning behave like the real seat.
     this.currentWindows = this.currentWindows.map((item) => ({
       ...item,
@@ -230,7 +230,7 @@ export class FakeComputerBackend implements ComputerBackend {
   async clearFocusWindow(): Promise<void> {
     this.record("clearFocusWindow");
     this.throwIfFailed("clearFocusWindow");
-    // No pinned target means no window reports
+    // Mirror the KWin plugin: no pinned target means no window reports
     // focused — the blind spot behind the untargeted-scroll regression.
     this.currentWindows = this.currentWindows.map((item) => ({ ...item, focused: false }));
   }
@@ -376,7 +376,7 @@ export class FakeComputerBackend implements ComputerBackend {
     this.emit({ type: "windows-changed", windows: this.currentWindows });
   }
 
-  /** Drives a supervision transition for tests. */
+  /** Drives a supervision transition the way the KWin reconnect path does. */
   emitHealthChanged(health: ComputerHealth): void {
     this.currentHealth = health;
     this.emit({ type: "health-changed", health });

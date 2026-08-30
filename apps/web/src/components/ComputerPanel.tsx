@@ -14,6 +14,7 @@ import {
   computerContainRect,
   computerCursorPosition,
   computerKeyCommand,
+  computerReleaseControlHint,
   computerStreamRegion,
   computerViewportPointToDesktop,
   computerWheelScrollDelta,
@@ -102,6 +103,14 @@ export default function ComputerPanel(props: {
     screenSize,
     containRect,
   });
+  // The emergency release is a KWin compositor shortcut, so this is null on
+  // every other backend rather than an unbound key the human would trust.
+  const releaseControlHint = computerReleaseControlHint({
+    availability: threadState?.availability,
+    visibleDesktop: threadState?.capabilities.visibleDesktop ?? false,
+    agentActive: threadState?.agentActive ?? false,
+  });
+
   // ── User input ─────────────────────────────────────────────────────
   //
   // Input is opt-in: a pane that forwarded clicks while it was merely being
@@ -379,6 +388,11 @@ export default function ComputerPanel(props: {
               onBlur={() => setInputFocused(false)}
             />
             <div className="pointer-events-none absolute inset-x-0 bottom-3 flex flex-col items-center gap-0.5 px-4 text-center text-[10px] text-white/70">
+              {releaseControlHint ? (
+                <p className={disclosureFadeClassName(releaseControlHint.visible)}>
+                  {releaseControlHint.text}
+                </p>
+              ) : null}
               <p className={disclosureFadeClassName(interactive && !inputFocused)}>
                 Click the desktop to send keystrokes
               </p>
@@ -389,8 +403,10 @@ export default function ComputerPanel(props: {
               </div>
             ) : null}
             {cursorPosition ? (
-              // The violet halo distinguishes the agent cursor from the
-              // pointer used to interact with the pane.
+              // The same look as the on-desktop ghost cursor the KWin plugin
+              // draws: an ordinary pointer glyph whose violet halo is what says
+              // it is the agent's. The path tip sits at the SVG origin, so the
+              // element is positioned by the hotspot with no centering shift.
               <svg
                 aria-label="Agent cursor"
                 viewBox="0 0 14 16"

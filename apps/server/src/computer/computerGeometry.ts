@@ -9,7 +9,8 @@
  *
  * The payload helpers live here because `parseWindows` is the reason they
  * exist: window JSON arrives either as a plain string or wrapped in a D-Bus
- * variant, depending on which transport carried it. The variant unwrapping
+ * variant, depending on which transport carried it, and the KWin plugin emits
+ * the document. The variant unwrapping
  * itself is `dbusPlumbing.ts`, shared with the callers that never touch
  * geometry, and re-exported here because this is the import every parser
  * already reaches for.
@@ -96,10 +97,10 @@ export function parseComputerPoint(value: unknown): ComputerPoint | null {
 /**
  * Occluder ids from a source that reports them. Both the field and its
  * individual entries degrade to absent rather than failing the whole window
- * list, because stacking metadata is an optional hint and a backend may omit
- * it entirely. An empty list is dropped: "nothing above this
+ * list, because stacking metadata is an optional hint and an older loaded
+ * plugin omits it entirely. An empty list is dropped: "nothing above this
  * window" is what an absent field already means. The list is clamped well
- * below the contract's ceiling because an occluder enumeration can be
+ * below the contract's ceiling because the plugin's occluder enumeration is
  * N² in the worst case, and no caller can use hundreds of entries.
  */
 function asWindowIds(value: unknown): readonly ComputerWindow["id"][] | undefined {
@@ -112,7 +113,8 @@ function asWindowIds(value: unknown): readonly ComputerWindow["id"][] | undefine
 }
 
 /**
- * The window list emitted by a backend enumerator.
+ * The window list emitted by the KWin compositor-side enumerator. The plugin
+ * produces this document so this stays one parser.
  *
  * An entry without an id or without a parseable rect is dropped rather than
  * reported bounds-less. `ComputerWindow.bounds` being optional describes a
@@ -279,8 +281,9 @@ export function workspaceRectFromWindows(
 /**
  * A window's rect, or a refusal that names why there is none.
  *
- * Absent bounds are a property of the backend, not of the window. Every caller
- * here needs a rect to do arithmetic on, and the alternatives are both
+ * Absent bounds are a property of the backend, not of the window: a Wayland
+ * client cannot ask where a window is, only an in-compositor plugin can. Every
+ * caller here needs a rect to do arithmetic on, and the alternatives are both
  * lies — treating the origin as the window's position puts a click on the wrong
  * monitor, and returning an empty capture tells a model the window is blank. So
  * the geometry-dependent paths refuse, and say which capability is missing so

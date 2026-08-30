@@ -35,7 +35,7 @@ export const DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION = 2_048;
  * the identical `region`/`scale` mapping.
  */
 export const COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION = 1_536;
-/** Native per-side image limit enforced by a backend. */
+/** Native per-side image limit enforced by the KWin capture path. */
 export const MAX_COMPUTER_CAPTURE_MAX_DIMENSION = 16_384;
 /**
  * Largest clipboard payload a backend moves in either direction. Clipboards
@@ -148,9 +148,9 @@ export interface ComputerBackend {
    * to use the desktop anyway.
    *
    * Optimism is the intended failure mode. A probe that says "available" and
-   * then fails at first use costs the caller one actionable error card; a probe
-   * that says "unavailable" because it refused to look costs the user the
-   * feature.
+   * then cannot provision costs the caller one actionable error card at first
+   * use; a probe that says "unavailable" because it refused to look costs the
+   * user the feature.
    */
   probeAvailability(): Promise<ComputerAvailability>;
   /**
@@ -160,6 +160,14 @@ export interface ComputerBackend {
    */
   availability(): Promise<ComputerAvailability>;
 
+  /**
+   * Install or compile whatever this backend needs, on explicit request.
+   *
+   * Optional because not every backend has anything to provision: the fake and
+   * the unavailable backends have nothing. A backend that implements it returns one sentence
+   * describing what it did, for the settings card that asked.
+   */
+  provision?(): Promise<string>;
   /**
    * Live supervision health. Synchronous and side-effect free on purpose: it
    * reports what the connect and reconnect paths already know, so reading it
@@ -191,7 +199,7 @@ export interface ComputerBackend {
    * `region` + `scale` mapping so pixels still convert to desktop coordinates.
    */
   captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot>;
-  /** Pin or release the target window when supported. */
+  /** Pin or release the plugin's per-seat target window when supported. */
   focusWindow?(windowId: string): Promise<void>;
   /**
    * Restack a window above the ones covering it, without moving the user's
@@ -271,7 +279,7 @@ export function intersectComputerRects(
 /**
  * Message text that satisfies the contract's bound on availability and health
  * strings. Both are built from error text the backend does not control — a
- * D-Bus payload, a backend diagnostic — so an empty or oversized message must
+ * D-Bus payload, a plugin diagnostic — so an empty or oversized message must
  * degrade here rather than fail the state payload carrying it.
  */
 export function clampComputerMessage(text: string, fallback: string): string {

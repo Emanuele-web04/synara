@@ -12,6 +12,7 @@ import {
   type ComputerScreenshot,
   type ComputerGetScreenSizeResult,
   type ComputerListWindowsResult,
+  type ComputerProvisionResult,
   type ComputerLaunchAppResult,
   type ComputerState,
   type ComputerStatusResult,
@@ -63,8 +64,8 @@ export const COMPUTER_FRAME_SOCKET_BUDGET_BYTES = 2 * 1024 * 1024;
  * died without a terminal event — and so is deliberately long: a model can
  * think for minutes between two tool calls, and expiring under a live turn is
  * the failure this whole mechanism exists to prevent. Five minutes matches the
- * backend session idle timeout, the point past which the desktop session is
- * being torn down anyway.
+ * KWin plugin's own session idle timeout, the point past which the desktop
+ * session is being torn down anyway.
  */
 export const COMPUTER_LEASE_IDLE_MS = 300_000;
 
@@ -255,18 +256,20 @@ export class ComputerManager {
   /**
    * Whether anything has yet asked this backend for the desktop itself.
    *
-   * Until something has, the manager must not establish the backend. That is
-   * the right ordering for an agent's first tool call, a pane the user opened,
-   * or input they sent; it is the wrong price for rendering a chat, which is
-   * what seeds thread state. So state publishes read the passive probe until a
-   * real use flips this, and behave exactly as they always did after.
+   * Until something has, the manager must not: on KWin, the first backend call
+   * connects to the compositor, installs the plugin — building it from source
+   * on a machine that has never had it — and loads it into the running session.
+   * That is the right price for an agent's first tool call, a pane the user
+   * opened, or input they sent; it is the wrong price for rendering a chat,
+   * which is what seeds thread state. So state publishes read the passive probe
+   * until a real use flips this, and behave exactly as they always did after.
    */
   private backendEngaged = false;
 
   /**
    * Read live rather than cached at construction: a backend that re-probes or
    * provisions may upgrade a capability when its missing piece appears (a
-   * backend state changes), and the call is
+   * helper installed, a plugin built, an extension enabled), and the call is
    * synchronous and cheap by the backend contract, so freshness costs a state
    * publish nothing. A backend that changes its set announces it as
    * `capabilities-changed`, which is what republishes the thread states that
@@ -384,6 +387,23 @@ export class ComputerManager {
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
     };
+  }
+
+  /**
+   * Set this desktop up, then answer with what it looks like now.
+   *
+   * Engages the backend first: the user pressing "Set up" is exactly the real
+   * reason `engageBackend` exists to wait for, and the establishing reads that
+   * follow have to see an engaged backend or they will answer from the passive
+   * probe the button was pressed to get past.
+   */
+  async provision(): Promise<ComputerProvisionResult> {
+    this.engageBackend();
+    if (!this.backend.provision) {
+      throw new Error("This desktop backend has nothing to install.");
+    }
+    const summary = await this.backend.provision();
+    return { summary, status: await this.getStatus() };
   }
 
   async listWindows(): Promise<ComputerListWindowsResult> {
@@ -732,9 +752,9 @@ export class ComputerManager {
   /**
    * Scroll, then check what the window did with it — the agent's path.
    *
-   * A scroll request is in logical pixels, but no desktop client is obliged to
-   * treat it that way: some toolkits honor pixel deltas exactly while others
-   * convert them to their own scroll units and travel several times as
+   * A scroll request is in logical pixels, but no Wayland client is obliged to
+   * treat it that way: Qt honors the pixel deltas exactly while GTK-hosted
+   * browsers convert them to their own scroll units and travel several times as
    * far. Nothing reports that conversion, so the distance is measured from
    * before/after captures of the affected window, returned to the caller as
    * `scroll.traveledY`, and remembered per window so the next request to it is
@@ -1876,7 +1896,7 @@ export class ComputerManager {
   private correctedAvailability(availability: ComputerAvailability): ComputerAvailability {
     // A backend nobody has asked to connect is not disconnected, it is idle, and
     // health says "unavailable" for both. Correcting against it before the first
-    // real use would report every desktop as broken until someone clicked
+    // real use would report every KDE desktop as broken until someone clicked
     // something — the exact opposite of what the probe is there to say.
     if (!this.backendEngaged) return availability;
     if (this.backendHealth.status === "connected" || availability.kind !== "available") {

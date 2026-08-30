@@ -2,11 +2,13 @@
  * Closed-loop scrolling: measure how far a window's content actually moved,
  * and learn what a pixel of scroll request is worth to it.
  *
- * Desktop clients do not share one pixel-true scroll unit. A backend may
- * deliver pixel or notch events, and clients can move several times the
- * requested distance. Nothing in the protocol reports that conversion, so the
- * only way to know the distance is to look at the window before and after and
- * correlate the two pictures.
+ * Wayland has no cross-toolkit pixel-true scroll unit. The stack injects
+ * wheel-source events whose pixel half Qt clients honor exactly, while
+ * browsers act on the notch half and travel several times the request (and
+ * the finger-source alternative is worse: Gecko ignores it outright — see
+ * SynaraComputerUsePlugin::axis()). Nothing in the protocol reports a
+ * client's conversion back, so the only way to know the distance is to look
+ * at the window before and after and correlate the two pictures.
  *
  * Everything here is pure: PNG in, numbers out. The manager owns the captures
  * and the injection; this module owns the arithmetic.
@@ -28,7 +30,7 @@ export interface LumaImage {
 
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
 
-/** Color types a backend image encoder can produce, and their sample counts. */
+/** Color types the plugin's QImage encoder can produce, and their sample counts. */
 const CHANNELS_BY_COLOR_TYPE = new Map<number, number>([
   [0, 1],
   [2, 3],
@@ -39,7 +41,7 @@ const CHANNELS_BY_COLOR_TYPE = new Map<number, number>([
  * Decodes a captured PNG down to luma.
  *
  * Deliberately minimal — 8-bit, non-interlaced, gray/RGB/RGBA, which is what
- * the backend image encoder emits — and deliberately total: it returns
+ * the KWin plugin's QImage encoder emits — and deliberately total: it returns
  * undefined for anything it does not understand or cannot parse, and never
  * throws. Measurement is optional perception taken after the scroll has
  * already been delivered, so a decode surprise must degrade to "distance

@@ -1,4 +1,6 @@
 import {
+  COMPUTER_RELEASE_CONTROL_HOTKEY,
+  COMPUTER_RELEASE_HOTKEY_BACKENDS,
   type ComputerAvailability,
   type ComputerFrameHeader,
   type ComputerHealth,
@@ -81,7 +83,7 @@ export function resolveComputerAvailabilityView(
     return {
       kind: "checking",
       title: "Checking computer availability",
-      description: "Waiting for the computer backend.",
+      description: "Waiting for the Linux desktop capture service.",
     };
   }
   if (availability.kind === "available") {
@@ -95,7 +97,7 @@ export function resolveComputerAvailabilityView(
     return {
       kind: "blocked",
       title: "Computer control is unavailable",
-      description: "No computer backend is available on this server.",
+      description: `This server is running on ${availability.platform}. Linux computer control needs a Wayland KDE desktop with Synara's KWin plugin.`,
     };
   }
   return {
@@ -152,6 +154,38 @@ function computerHealthDetail(health: ComputerHealth): string {
   }
   if (health.reconnects > 0) parts.push(`Reconnects since startup: ${health.reconnects}.`);
   return parts.join(" ");
+}
+
+/**
+ * The emergency-release hint for the viewport, or null where it would be a lie.
+ *
+ * The hotkey is a compositor shortcut the KWin plugin registers, so it exists
+ * only on that backend and while the agent is acting.
+ */
+export interface ComputerReleaseControlHint {
+  readonly text: string;
+  /** Whether it is worth the pixels right now; the text stays put so it can fade. */
+  readonly visible: boolean;
+}
+
+export function computerReleaseControlHint(input: {
+  readonly availability: ComputerAvailability | undefined;
+  readonly visibleDesktop: boolean;
+  readonly agentActive: boolean;
+}): ComputerReleaseControlHint | null {
+  const availability = input.availability;
+  if (
+    availability?.kind !== "available" ||
+    availability.backend === undefined ||
+    !COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(availability.backend) ||
+    !input.visibleDesktop
+  ) {
+    return null;
+  }
+  return {
+    text: `Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} to stop the agent at any time.`,
+    visible: input.agentActive,
+  };
 }
 
 export function shouldSubscribeToComputerStream(input: {
@@ -316,7 +350,7 @@ export interface ComputerKeyCommand {
 
 /**
  * DOM key names the seat can synthesize, lowercased. This mirrors the server's
- * server key name table rather than replacing it: the server stays the authority and
+ * evdev name table rather than replacing it: the server stays the authority and
  * rejects anything else, but the pane must know what it may swallow, since a
  * key it forwards is a key the browser never sees.
  */
