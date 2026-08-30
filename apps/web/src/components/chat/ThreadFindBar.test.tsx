@@ -41,6 +41,7 @@ describe("ChatThreadFindHost", () => {
         focusNonce: 1,
         timelineEntries: [],
         threadId: "thread-1",
+        className: "pr-[138px]!",
         onClose: () => {},
         onJump: () => {},
         onHighlightChange: () => {},
@@ -53,6 +54,7 @@ describe("ChatThreadFindHost", () => {
     expect(markup).toContain('data-thread-find-host="true"');
     expect(markup).toContain("Find in thread");
     expect(markup).toContain("absolute right-0 top-0");
+    expect(markup).toContain("pr-[138px]!");
     // Above the header and the docked Environment overlay (z-20) so find never
     // slides with either.
     expect(markup).toContain("z-40");

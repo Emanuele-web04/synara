@@ -430,24 +430,28 @@ describe("createThreadFindHighlightStore", () => {
     expect(store.get()).toEqual({ query: "later", activeMatch: null });
   });
 
-  it("updates the active match without notifying query subscribers", () => {
+  it("publishes an immutable snapshot when the active match changes", () => {
     const store = createThreadFindHighlightStore();
     const listener = vi.fn();
     store.subscribe(listener);
     store.set({ query: "error", activeMatch: null });
+    const previousSnapshot = store.get();
     listener.mockClear();
 
-    store.setActiveMatch({
+    const activeMatch = {
       messageId: messageId("assistant-1"),
       startOffset: 12,
       endOffset: 17,
-    });
+    };
+    store.setActiveMatch(activeMatch);
 
+    expect(listener).toHaveBeenCalledOnce();
+    expect(store.get()).not.toBe(previousSnapshot);
+    expect(previousSnapshot?.activeMatch).toBeNull();
+    expect(store.get()?.activeMatch).toEqual(activeMatch);
+
+    listener.mockClear();
+    store.setActiveMatch(activeMatch);
     expect(listener).not.toHaveBeenCalled();
-    expect(store.get()?.activeMatch).toEqual({
-      messageId: messageId("assistant-1"),
-      startOffset: 12,
-      endOffset: 17,
-    });
   });
 });

@@ -539,8 +539,12 @@ export function createThreadFindHighlightStore(): ThreadFindHighlightStore {
       }
     },
     setActiveMatch: (value) => {
-      if (current !== null) {
-        current.activeMatch = value;
+      if (current === null || Object.is(current.activeMatch, value)) {
+        return;
+      }
+      current = { ...current, activeMatch: value };
+      for (const listener of listeners) {
+        listener();
       }
     },
     subscribe: (listener) => {

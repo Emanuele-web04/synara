@@ -187,9 +187,9 @@ export function ThreadFindBar({
           aria-label="Find in thread"
           autoComplete="off"
           spellCheck={false}
-          // font-sans overrides the global `input { font-family: mono }` reset —
-          // find is a UI field, not a code field.
-          className="h-11 min-w-0 flex-1 bg-transparent font-sans text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
+          // The unlayered utility overrides the global `input { font-family: mono }`
+          // reset — find is a UI field, not a code field.
+          className="font-system-ui h-11 min-w-0 flex-1 bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         <div aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
         <IconButton

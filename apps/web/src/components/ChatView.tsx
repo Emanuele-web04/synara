@@ -12110,7 +12110,10 @@ export default function ChatView({
           focusNonce={threadFindFocusNonce}
           timelineEntries={timelineEntries}
           threadId={threadId}
-          {...(terminalWorkspaceTerminalTabActive ? { className: "invisible" } : {})}
+          className={cn(
+            terminalWorkspaceTerminalTabActive && "invisible",
+            !isEditorRail && desktopTopBarWindowControlsGutterClassName,
+          )}
           onClose={() => setThreadFindOpen(false)}
           onJump={handleThreadFindJump}
           onHighlightChange={threadFindHighlightStore.set}
