@@ -57,6 +57,7 @@ import {
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1875,11 +1876,10 @@ export function makeCursorAdapter(
         ),
       );
 
-    const stopAll: CursorAdapterShape["stopAll"] = () =>
-      Effect.forEach(sessions.values(), stopSessionInternal, { discard: true });
+    const stopAll = () => settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(sessions.values(), stopSessionInternal, { discard: true }).pipe(
+      stopAll().pipe(
         Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
       ),
