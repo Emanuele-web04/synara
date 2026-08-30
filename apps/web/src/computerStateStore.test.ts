@@ -57,7 +57,7 @@ describe("computerStateStore", () => {
         status: "reconnecting",
         consecutiveFailures: 1,
         reconnects: 0,
-        lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+        lastFailure: { message: "KWin vanished", at: "2026-08-16T10:00:00.000Z" },
         captureAvailable: false,
       },
     };

@@ -132,7 +132,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       status: "reconnecting",
       consecutiveFailures: 1,
       reconnects: 0,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: { message: "KWin vanished", at: "2026-08-16T10:00:00.000Z" },
       captureAvailable: false,
     });
 
@@ -148,7 +148,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       "backend-unavailable",
     ]);
     expect(degraded[0]?.availability).toMatchObject({
-      message: expect.stringContaining("The backend vanished"),
+      message: expect.stringContaining("KWin vanished"),
     });
     // Panels drop stale snapshots by version, so a live change must move it.
     expect(degraded[0]?.version).toBeGreaterThan(seeded[0]!.version);
@@ -157,7 +157,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       status: "connected",
       consecutiveFailures: 0,
       reconnects: 1,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: { message: "KWin vanished", at: "2026-08-16T10:00:00.000Z" },
       captureAvailable: true,
     });
 
@@ -177,9 +177,11 @@ describe("ComputerManager and FakeComputerBackend", () => {
     expect(status.availability).toEqual({ kind: "available", backend: "fake" });
     expect(status.health.status).toBe("connected");
     expect(status.capabilities.input).toBe(true);
+    // The fake has nothing to install, so the settings card must not offer to.
+    expect(status.provisionable).toBe(false);
     // No thread state was created as a side effect of asking, and merely
     // opening settings must not be the thing that establishes (and on a cold
-    // backend: pre-engagement it is the probe.
+    // KDE machine, provisions) the backend: pre-engagement it is the probe.
     expect(backend.calls.map((call) => call.method)).not.toContain("getState");
     expect(backend.calls.map((call) => call.method)).toContain("probeAvailability");
     expect(backend.calls.map((call) => call.method)).not.toContain("availability");
@@ -192,16 +194,39 @@ describe("ComputerManager and FakeComputerBackend", () => {
       status: "reconnecting",
       consecutiveFailures: 2,
       reconnects: 1,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: { message: "KWin vanished", at: "2026-08-16T10:00:00.000Z" },
       captureAvailable: false,
     });
     const degraded = await manager.getStatus();
     expect(degraded.health.status).toBe("reconnecting");
     expect(degraded.availability).toMatchObject({
       kind: "backend-unavailable",
-      message: expect.stringContaining("The backend vanished"),
+      message: expect.stringContaining("KWin vanished"),
     });
 
+    await manager.dispose();
+  });
+
+  it("provisions through the backend and answers with the engaged status", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      provision: async () => "Installed the helper.",
+    });
+    const manager = new ComputerManager({ backend });
+
+    expect((await manager.getStatus()).provisionable).toBe(true);
+    const result = await manager.provision();
+    expect(result.summary).toBe("Installed the helper.");
+    expect(result.status.provisionable).toBe(true);
+    // Pressing "Set up" is the engagement: the status that comes back is the
+    // establishing read, not the passive probe the button exists to get past.
+    expect(backend.calls.map((call) => call.method)).toContain("availability");
+
+    await manager.dispose();
+  });
+
+  it("refuses to provision a backend with nothing to install", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    await expect(manager.provision()).rejects.toThrow("nothing to install");
     await manager.dispose();
   });
 
@@ -436,7 +461,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // and told what to change; the compositor only names the call it declined.
     backend.failNext(
       "click",
-      new ComputerBackendError("The computer backend rejected pressButton.", {
+      new ComputerBackendError("Synara KWin plugin rejected pressButton.", {
         retryable: true,
         rejectedOperation: "pressButton",
       }),
@@ -449,12 +474,12 @@ describe("ComputerManager and FakeComputerBackend", () => {
     // An unscoped action has no window to blame, so its error is left alone.
     backend.failNext(
       "click",
-      new ComputerBackendError("The computer backend rejected pressButton.", {
+      new ComputerBackendError("Synara KWin plugin rejected pressButton.", {
         rejectedOperation: "pressButton",
       }),
     );
     await expect(manager.click("thread-1", { x: 1_100, y: 200 })).rejects.toThrow(
-      /computer backend rejected pressButton/,
+      /plugin rejected pressButton/,
     );
 
     // A fault is not a refusal: rewriting it would claim an injection never
@@ -1347,7 +1372,8 @@ describe("ComputerManager and FakeComputerBackend", () => {
   });
 
   /**
-   * The first backend call establishes the backend.
+   * On KWin the first backend call installs a compositor plugin — compiling it
+   * on a machine that has never had one — and loads it into the live session.
    * Panels are seeded for every chat the web app renders, so the seeding path
    * must stay passive, and the first real use is what pays.
    */

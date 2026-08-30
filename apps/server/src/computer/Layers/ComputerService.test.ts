@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
@@ -22,8 +22,8 @@ async function withComputerService(
 
 describe("ComputerServiceLive", () => {
   /**
-   * The regression this pins is a backend being established by the act of
-   * starting the server. Boot decides availability
+   * The regression this pins is a cold KDE machine having its compositor
+   * provisioned by the act of starting the server. Boot decides availability
    * from the passive probe, and seeding a thread's panel — which the web
    * composer does for every ordinary chat — must not upgrade that to the
    * establishing read either.
@@ -58,7 +58,7 @@ describe("ComputerServiceLive", () => {
     const backend = new FakeComputerBackend();
     backend.setAvailability({
       kind: "backend-unavailable",
-      message: "The backend is not available yet.",
+      message: "The compositor plugin is not built yet.",
     });
 
     await withComputerService(backend, async (service) => {
@@ -106,22 +106,5 @@ describe("ComputerServiceLive", () => {
         }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "darwin" }))),
       ),
     );
-  });
-
-  it("selects the fake backend only when explicitly requested", async () => {
-    vi.stubEnv("SYNARA_COMPUTER_BACKEND", "fake");
-    try {
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const service = yield* ComputerService;
-            expect(service.supported).toBe(true);
-            expect(service.availability).toEqual({ kind: "available", backend: "fake" });
-          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "darwin" }))),
-        ),
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 });

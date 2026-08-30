@@ -81,6 +81,8 @@ import {
   ComputerLaunchAppInput,
   ComputerLaunchAppResult,
   ComputerListWindowsInput,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
   ComputerListWindowsResult,
   ComputerMoveCursorInput,
   ComputerPerformActionInput,
@@ -726,6 +728,12 @@ export const WsComputerGetStatusRpc = Rpc.make(COMPUTER_WS_METHODS.getStatus, {
   error: WsRpcError,
 });
 
+export const WsComputerProvisionRpc = Rpc.make(COMPUTER_WS_METHODS.provision, {
+  payload: ComputerProvisionInput,
+  success: ComputerProvisionResult,
+  error: WsRpcError,
+});
+
 export const WsComputerListWindowsRpc = Rpc.make(COMPUTER_WS_METHODS.listWindows, {
   payload: ComputerListWindowsInput,
   success: ComputerListWindowsResult,
@@ -850,6 +858,7 @@ export const WsSubscribeComputerEventsRpc = Rpc.make(COMPUTER_WS_METHODS.subscri
 /** Linux computer control and perception surface. */
 export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerGetStatusRpc,
+  WsComputerProvisionRpc,
   WsComputerListWindowsRpc,
   WsComputerGetStateRpc,
   WsComputerGetScreenSizeRpc,

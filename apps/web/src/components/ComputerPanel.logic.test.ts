@@ -11,6 +11,7 @@ import {
   computerContainRect,
   computerCursorPosition,
   computerKeyCommand,
+  computerReleaseControlHint,
   computerStreamRegion,
   computerViewportPointToDesktop,
   computerWheelScrollDelta,
@@ -115,8 +116,8 @@ describe("computer panel state helpers", () => {
     expect(resolveComputerAvailabilityView(undefined).kind).toBe("checking");
     expect(resolveComputerAvailabilityView({ kind: "available" }).kind).toBe("ready");
     expect(
-      resolveComputerAvailabilityView({ kind: "backend-unavailable", message: "Backend is off" }),
-    ).toMatchObject({ kind: "blocked", description: "Backend is off" });
+      resolveComputerAvailabilityView({ kind: "backend-unavailable", message: "KWin is off" }),
+    ).toMatchObject({ kind: "blocked", description: "KWin is off" });
   });
 
   it("shows a reconnecting backend as checking rather than blocked", () => {
@@ -143,14 +144,14 @@ describe("computer panel state helpers", () => {
       consecutiveFailures: 3,
       reconnects: 1,
       captureAvailable: false,
-      lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
+      lastFailure: { message: "KWin vanished", at: "2026-08-16T10:00:00.000Z" },
     });
     expect(reconnecting).toMatchObject({
       label: "Reconnecting to desktop",
       tone: "warning",
       pulse: true,
     });
-    expect(reconnecting?.title).toContain("The backend vanished");
+    expect(reconnecting?.title).toContain("KWin vanished");
     expect(reconnecting?.title).toContain("3");
     expect(reconnecting?.title).toContain("Reconnects since startup: 1.");
 
@@ -190,6 +191,46 @@ describe("computer panel state helpers", () => {
         threadState: state({ availability: { kind: "backend-unavailable", message: "off" } }),
       }),
     ).toBe(false);
+  });
+
+  it("offers the release hotkey only on the KWin backend driving a visible desktop", () => {
+    expect(
+      computerReleaseControlHint({
+        availability: { kind: "available", backend: "kwin" },
+        visibleDesktop: true,
+        agentActive: true,
+      }),
+    ).toEqual({ text: "Press Meta+Shift+Esc to stop the agent at any time.", visible: true });
+    expect(
+      computerReleaseControlHint({
+        availability: { kind: "available", backend: "kwin" },
+        visibleDesktop: true,
+        agentActive: false,
+      })?.visible,
+    ).toBe(false);
+    // An offscreen backend does not expose the release shortcut in the human's
+    // desktop.
+    expect(
+      computerReleaseControlHint({
+        availability: { kind: "available", backend: "kwin" },
+        visibleDesktop: false,
+        agentActive: true,
+      }),
+    ).toBeNull();
+    expect(
+      computerReleaseControlHint({
+        availability: { kind: "backend-unavailable", message: "off" },
+        visibleDesktop: true,
+        agentActive: true,
+      }),
+    ).toBeNull();
+    expect(
+      computerReleaseControlHint({
+        availability: undefined,
+        visibleDesktop: true,
+        agentActive: true,
+      }),
+    ).toBeNull();
   });
 
   it("contains a multi-monitor desktop and maps the agent cursor", () => {

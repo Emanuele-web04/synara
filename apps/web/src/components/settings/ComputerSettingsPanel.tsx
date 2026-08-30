@@ -3,8 +3,12 @@
 // Layer: Settings UI components
 // Exports: ComputerSettingsPanel
 
-import type { ComputerCapabilities } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
+import {
+  COMPUTER_RELEASE_CONTROL_HOTKEY,
+  COMPUTER_RELEASE_HOTKEY_BACKENDS,
+  type ComputerCapabilities,
+} from "@synara/contracts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { resolveComputerAvailabilityView } from "~/components/ComputerPanel.logic";
@@ -13,6 +17,8 @@ import { Switch } from "~/components/ui/switch";
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
   computerStatusQueryOptions,
+  provisionComputer,
+  serverQueryKeys,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { SettingResetButton } from "./SettingControls";
@@ -24,6 +30,7 @@ import {
 } from "./SettingsPanelPrimitives";
 
 const BACKEND_DISPLAY_NAMES: Record<string, string> = {
+  kwin: "KWin plugin (KDE)",
   fake: "Test backend",
 };
 
@@ -62,6 +69,17 @@ export function ComputerSettingsPanel({
     refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
   });
 
+  const queryClient = useQueryClient();
+  const setupMutation = useMutation({
+    mutationFn: provisionComputer,
+    onSuccess: (result) => {
+      // The call already returns the refreshed status, so the card repaints
+      // from the same round trip rather than racing a refetch against a
+      // backend that has only just rebuilt its providers.
+      queryClient.setQueryData(serverQueryKeys.computerStatus(), result.status);
+    },
+  });
+
   if (!active) return null;
 
   const status = statusQuery.data;
@@ -78,6 +96,37 @@ export function ComputerSettingsPanel({
   const backend =
     status?.availability.kind === "available" ? (status.availability.backend ?? null) : null;
   const health = status?.health;
+  // The emergency release is a shortcut the KWin plugin registers with the
+  // compositor, so only a visible plugin-backed desktop may promise it.
+  const dedicatedSeatDescription =
+    backend !== null &&
+    COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
+    status?.capabilities.visibleDesktop === true
+      ? `The agent drives its own seat, so your cursor and focus stay untouched. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
+      : "The agent drives its own seat, so your cursor and focus stay untouched.";
+  const setupNote = setupMutation.isPending
+    ? "Setting up computer control. The plugin may take a few minutes to compile from source."
+    : setupMutation.isError
+      ? `Setting up failed. ${
+          setupMutation.error instanceof Error && setupMutation.error.message
+            ? setupMutation.error.message
+            : "The server gave no reason."
+        }`
+      : setupMutation.isSuccess
+        ? setupMutation.data.summary
+        : undefined;
+  /**
+   * Whether this desktop still needs something installed.
+   *
+   * Offered when the backend has something to install and is not connected.
+   * Neither the availability kind nor the capabilities can carry this: on a
+   * machine that has never provisioned, the passive probe answers "available"
+   * as long as a helper *could* be built, and a backend that installs its own
+   * helper advertises the full capability set before the helper exists, while
+   * the unsupported backend advertises none and has nothing to set up.
+   */
+  const needsSetup =
+    status !== undefined && status.provisionable && status.health.status !== "connected";
   const healthNotes = [
     ...(health && health.reconnects > 0
       ? [
@@ -95,10 +144,22 @@ export function ComputerSettingsPanel({
         title="Desktop backend"
         action={
           <div className="flex items-center gap-2">
+            {/* Offered whenever the desktop is not ready. Setting up installs
+                the Synara KWin plugin into the user's home. */}
+            {needsSetup && !statusQuery.isError ? (
+              <Button
+                size="xs"
+                variant="default"
+                disabled={setupMutation.isPending}
+                onClick={() => setupMutation.mutate()}
+              >
+                {setupMutation.isPending ? "Setting up…" : "Set up"}
+              </Button>
+            ) : null}
             <Button
               size="xs"
               variant="outline"
-              disabled={statusQuery.isFetching}
+              disabled={statusQuery.isFetching || setupMutation.isPending}
               onClick={() => void statusQuery.refetch()}
             >
               {statusQuery.isFetching ? "Checking…" : "Refresh"}
@@ -125,12 +186,12 @@ export function ComputerSettingsPanel({
               </span>
             }
             description={availabilityView.description}
-            status={healthNotes.filter(Boolean).join(" ") || undefined}
+            status={[setupNote, ...healthNotes].filter(Boolean).join(" ") || undefined}
           />
           {backend ? (
             <SettingsRow
               title="Backend"
-              description="Which computer backend serves perception and input."
+              description="Which desktop integration serves perception and input."
               control={
                 <span className="text-sm text-muted-foreground">
                   {BACKEND_DISPLAY_NAMES[backend] ?? backend}
@@ -141,7 +202,7 @@ export function ComputerSettingsPanel({
           {status && availabilityView.kind === "ready" ? (
             <SettingsRow
               title="Capabilities"
-              description="The capabilities exposed by this computer backend."
+              description={dedicatedSeatDescription}
               status={capabilitySummary(status.capabilities)}
             />
           ) : null}

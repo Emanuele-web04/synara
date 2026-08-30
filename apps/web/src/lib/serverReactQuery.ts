@@ -68,6 +68,20 @@ export function computerStatusQueryOptions() {
   });
 }
 
+/**
+ * Installs or compiles whatever this desktop is missing.
+ *
+ * Not a query: it is the one computer call that changes the machine, and it
+ * only ever runs because a user pressed the button that does it.
+ */
+export async function provisionComputer() {
+  const api = ensureNativeApi();
+  if (!api.computer?.provision) {
+    throw new Error("This app build cannot set up computer control.");
+  }
+  return api.computer.provision({});
+}
+
 interface ProviderStatusSnapshot {
   readonly revision: number;
   readonly providers: readonly ServerProviderStatus[];

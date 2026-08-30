@@ -179,6 +179,8 @@ import type {
   ComputerInputKeyInput,
   ComputerInputScrollInput,
   ComputerListWindowsInput,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
   ComputerListWindowsResult,
   ComputerStatusResult,
   ComputerThreadInput,
@@ -965,6 +967,8 @@ export interface NativeApi {
   computer: {
     /** Thread-independent backend status for surfaces outside any conversation. */
     getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
+    /** Install or compile whatever this desktop is missing, on user request. */
+    provision: (input: ComputerProvisionInput) => Promise<ComputerProvisionResult>;
     getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
     listWindows: (input: ComputerListWindowsInput) => Promise<ComputerListWindowsResult>;
     getScreenSize: (input: ComputerGetScreenSizeInput) => Promise<ComputerGetScreenSizeResult>;
