@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect";
 import type { ComputerAvailability } from "@synara/contracts";
 
 import { ComputerManager } from "../ComputerManager.ts";
+import { HyprlandComputerBackend } from "../HyprlandComputerBackend.ts";
 import { KWinComputerBackend } from "../KWinComputerBackend.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
 import {
@@ -109,6 +110,10 @@ async function makeLinuxBackend(): Promise<LinuxBackend> {
   switch (selection.choice) {
     case "kwin":
       return { backend: new KWinComputerBackend() };
+    case "hyprland":
+      // The same real-desktop tier as KWin, on a Hyprland session: the plugin
+      // loads live through hyprctl, so construction touches nothing.
+      return { backend: new HyprlandComputerBackend() };
     case "nested":
     case "nested-window": {
       // Constructed, not booted: the nested compositor is expensive and — in

@@ -102,20 +102,32 @@ export const COMPUTER_KWIN_BACKEND = "kwin";
 export const COMPUTER_NESTED_KWIN_BACKEND = "nested-kwin";
 
 /**
+ * The backend name reported by the Hyprland plugin backend: the KWin plugin's
+ * twin, driving the human's real desktop on a Hyprland session with the same
+ * dedicated agent seat, ghost cursor, and release hotkey.
+ */
+export const COMPUTER_HYPRLAND_BACKEND = "hyprland";
+
+/**
  * The human's emergency release: it takes the desktop back from the agent and
  * latches until it is pressed again, which hands control back.
  *
  * Must match `releaseShortcut()` in the KWin plugin
  * (`apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp`), which
- * registers it with KGlobalAccel. It is a compositor shortcut and exists only
- * where the KWin plugin binds it: no surface may advertise it unless
+ * registers it with KGlobalAccel, and the same chord the Hyprland plugin
+ * (`apps/server/native/computer-use-hyprland/synarahyprlandplugin.cpp`) binds
+ * through its keybind hook. It is a compositor shortcut and exists only where
+ * a plugin binds it: no surface may advertise it unless
  * `ComputerAvailability.backend` is a backend in
  * `COMPUTER_RELEASE_HOTKEY_BACKENDS`.
  */
 export const COMPUTER_RELEASE_CONTROL_HOTKEY = "Meta+Shift+Esc";
 
 /** The backends whose compositor plugin binds the release hotkey above. */
-export const COMPUTER_RELEASE_HOTKEY_BACKENDS: readonly string[] = [COMPUTER_KWIN_BACKEND];
+export const COMPUTER_RELEASE_HOTKEY_BACKENDS: readonly string[] = [
+  COMPUTER_KWIN_BACKEND,
+  COMPUTER_HYPRLAND_BACKEND,
+];
 
 export const ComputerId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(COMPUTER_ID_MAX_LENGTH),
