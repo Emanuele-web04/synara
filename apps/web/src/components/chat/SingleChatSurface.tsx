@@ -26,6 +26,7 @@ import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktop
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useDevicePaneOpenRequests } from "../../hooks/useDeviceEventBridge";
+import { useComputerPaneOpenRequests } from "../../hooks/useComputerEventBridge";
 import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
@@ -88,6 +89,7 @@ import {
   ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
+  LazyComputerPanel,
   LazyDevicePanel,
   LazyDiffPanel,
   noopChatSurfaceAction,
@@ -739,6 +741,18 @@ export function SingleChatSurface(props: {
           }
         : null,
   });
+  useComputerPaneOpenRequests({
+    onOpenPaneRequested: appSettings.autoOpenComputerPane
+      ? (event) => {
+          routeSingleDockPaneOpenRequest({
+            currentThreadId: props.threadId,
+            requestedThreadId: event.threadId,
+            requestImmediateHydration: () => requestImmediateDockHydration("computer"),
+            openPane: (threadId) => openPane(threadId, { kind: "computer" }),
+          });
+        }
+      : null,
+  });
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 
@@ -916,6 +930,19 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
             <LazyDevicePanel
+              mode="sidebar"
+              threadId={props.threadId}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              isVisible={context.isVisible}
+              onRequestLive={requestActiveDockPaneLive}
+            />
+          </Suspense>
+        );
+      case "computer":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading computer...</PanelStateMessage>}>
+            <LazyComputerPanel
               mode="sidebar"
               threadId={props.threadId}
               onClosePanel={() => closePane(props.threadId, pane.id)}

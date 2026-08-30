@@ -83,7 +83,7 @@ const approvalParams = (persist: ReadonlyArray<string> = ["session"]) => ({
   _meta: {
     codex_approval_kind: "mcp_tool_call",
     persist,
-    tool_name: "mcp_tool",
+    tool_name: "computer_launch_app",
     tool_params: { app: "kcalc" },
     tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
   },
@@ -3482,7 +3482,7 @@ describe("respondToRequest", () => {
         _meta: {
           codex_approval_kind: "mcp_tool_call",
           persist: ["session"],
-          tool_name: "mcp_tool",
+          tool_name: "computer_launch_app",
           tool_params_display: [{ name: "app", value: "kcalc" }],
         },
       },
@@ -3564,7 +3564,7 @@ describe("MCP tool call elicitation approvals", () => {
         requestKind: "tool",
         payload: expect.objectContaining({
           _meta: expect.objectContaining({
-            tool_name: "mcp_tool",
+            tool_name: "computer_launch_app",
             tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
           }),
         }),
