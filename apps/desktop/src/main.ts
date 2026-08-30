@@ -54,7 +54,9 @@ import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
+  SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
@@ -258,6 +260,14 @@ import {
   sendAppSnapState,
 } from "./appSnapIpc";
 
+const requestedSourceBuildMarker = process.env.SYNARA_SOURCE_DESKTOP_BUILD_MARKER;
+if (
+  requestedSourceBuildMarker !== undefined &&
+  requestedSourceBuildMarker !== SYNARA_SOURCE_DESKTOP_BUILD_MARKER
+) {
+  throw new Error("The source desktop launcher and built main are incompatible. Rebuild Synara.");
+}
+
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
 // baseline, so a replacement during startup cannot silently become "normal."
@@ -282,6 +292,7 @@ const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+  allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const BASE_DIR =
@@ -1904,6 +1915,10 @@ function resolveUserDataPath(): string {
   return resolveDesktopUserDataPath({
     appDataBase,
     userDataDirectoryName: desktopIdentity.userDataDirectoryName,
+    testOverridePath:
+      requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER
+        ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
+        : undefined,
   });
 }
 
