@@ -97,7 +97,7 @@ export function resolveComputerAvailabilityView(
     return {
       kind: "blocked",
       title: "Computer control is unavailable",
-      description: `This server is running on ${availability.platform}. Linux computer control needs a Wayland KDE desktop with Synara's KWin plugin.`,
+      description: `This server is running on ${availability.platform}. Linux computer control needs a Wayland compositor with Synara's KWin plugin, or its own nested desktop.`,
     };
   }
   return {
@@ -160,7 +160,10 @@ function computerHealthDetail(health: ComputerHealth): string {
  * The emergency-release hint for the viewport, or null where it would be a lie.
  *
  * The hotkey is a compositor shortcut the KWin plugin registers, so it exists
- * only on that backend and while the agent is acting.
+ * only on that backend. It also has to be the human's own
+ * compositor: a nested, offscreen KWin session registers the
+ * same shortcut, but the host desktop the human is typing at never routes keys
+ * into it. The hint is also only worth the pixels while the agent is acting.
  */
 export interface ComputerReleaseControlHint {
   readonly text: string;

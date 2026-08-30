@@ -92,6 +92,16 @@ export const COMPUTER_CONTROL_DENIED_ACTIVITY_KIND = "computer.control-denied";
 export const COMPUTER_KWIN_BACKEND = "kwin";
 
 /**
+ * The backend name reported by the nested-KWin backend: the same plugin and
+ * capability set as `COMPUTER_KWIN_BACKEND`, but loaded into a private
+ * compositor this server owns rather than the desktop the human is sitting at.
+ * Its own name because the release hotkey above does not apply — the nested
+ * compositor never hears the human's keys — and because the settings panel
+ * names the two integrations differently.
+ */
+export const COMPUTER_NESTED_KWIN_BACKEND = "nested-kwin";
+
+/**
  * The human's emergency release: it takes the desktop back from the agent and
  * latches until it is pressed again, which hands control back.
  *
@@ -205,10 +215,10 @@ export const ComputerCapabilities = Schema.Struct({
   /**
    * The driven desktop is the display the human is already looking at, so every
    * action is visible without a preview. Auto-opening the Computer pane keys
-   * off this being false: on an offscreen desktop the pane is the only window
-   * onto the agent's work, while mirroring the human's own screen back at them
-   * is noise. The agent still drives that visible desktop through a seat of its
-   * own — never the human's.
+   * off this being false: on a nested or offscreen desktop the pane is the only
+   * window onto the agent's work, while mirroring the human's own screen back
+   * at them is noise. The agent still drives that visible desktop through a
+   * seat of its own — never the human's.
    */
   visibleDesktop: Schema.Boolean,
 });

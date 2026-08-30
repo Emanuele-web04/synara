@@ -279,7 +279,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "computer",
     title: "Desktop backend",
     keywords:
-      "Whether agents can see and control this computer's desktop right now. beta availability health kwin wayland linux computer use control status set up install plugin repair",
+      "Whether agents can see and control this computer's desktop right now. beta availability health kwin nested wayland linux computer use control status set up install plugin repair",
     // The status row's title is dynamic (Ready / Reconnecting / Unavailable), so
     // link to the section rather than an anchored row.
     target: null,

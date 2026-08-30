@@ -208,12 +208,19 @@ describe("computer panel state helpers", () => {
         agentActive: false,
       })?.visible,
     ).toBe(false);
-    // An offscreen backend does not expose the release shortcut in the human's
-    // desktop.
+    // A nested, offscreen KWin session registers the shortcut too, but the host
+    // desktop the human types at never routes keys into it.
     expect(
       computerReleaseControlHint({
         availability: { kind: "available", backend: "kwin" },
         visibleDesktop: false,
+        agentActive: true,
+      }),
+    ).toBeNull();
+    expect(
+      computerReleaseControlHint({
+        availability: { kind: "available", backend: "nested-kwin" },
+        visibleDesktop: true,
         agentActive: true,
       }),
     ).toBeNull();

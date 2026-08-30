@@ -90,6 +90,15 @@ export type ComputerBackendEventListener = (event: ComputerBackendEvent) => void
 export class ComputerBackendError extends Error {
   readonly retryable: boolean;
   /**
+   * The failure is a decision, not a fault: the backend's desktop is
+   * deliberately not running right now, and only a real use may start it.
+   * Automatic supervision that sees this must report the message and stand
+   * down, because retrying cannot conjure a desktop the backend refused to
+   * boot — and on a backend that boots on demand, a retry that did boot would
+   * respawn a window the human just closed.
+   */
+  readonly dormant: boolean;
+  /**
    * The call the desktop declined, when the failure was a refusal rather than a
    * fault. A refusal means nothing was injected, which is what lets a caller
    * explain the miss instead of reporting a generic failure.
@@ -100,6 +109,7 @@ export class ComputerBackendError extends Error {
     message: string,
     options: {
       readonly retryable?: boolean;
+      readonly dormant?: boolean;
       readonly cause?: unknown;
       readonly rejectedOperation?: string;
     } = {},
@@ -107,6 +117,7 @@ export class ComputerBackendError extends Error {
     super(message, options);
     this.name = "ComputerBackendError";
     this.retryable = options.retryable ?? false;
+    this.dormant = options.dormant ?? false;
     this.rejectedOperation = options.rejectedOperation;
   }
 }
@@ -164,7 +175,8 @@ export interface ComputerBackend {
    * Install or compile whatever this backend needs, on explicit request.
    *
    * Optional because not every backend has anything to provision: the fake and
-   * the unavailable backends have nothing. A backend that implements it returns one sentence
+   * the unavailable backends have nothing, and a nested session's compositor
+   * arrived with its own. A backend that implements it returns one sentence
    * describing what it did, for the settings card that asked.
    */
   provision?(): Promise<string>;
