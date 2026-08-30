@@ -136,7 +136,7 @@ describe("EditedFileRow", () => {
     await vi.waitFor(() => expect(preferenceListenerCalls()).toHaveLength(2));
   });
 
-  it("keeps row review, Review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
+  it("keeps row review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
     const onReview = vi.fn();
     const openFile = vi.fn(() => true);
     const openInEditor = mockOpenInEditor();
@@ -145,7 +145,6 @@ describe("EditedFileRow", () => {
       editedFileRow({ openFile, onReview, workspaceRoot: WORKSPACE_ROOT }),
     );
     const pathButton = page.getByRole("button", { name: `Review changes to ${FILE_PATH}` });
-    const reviewButton = page.getByRole("button", { name: "Review", exact: true });
     const openButton = page.getByRole("button", { name: "Open", exact: true });
     const menuButton = page.getByRole("button", {
       name: `Open ${FILE_PATH} options`,
@@ -154,18 +153,18 @@ describe("EditedFileRow", () => {
 
     expect(screen.container.querySelector("button button")).toBeNull();
     await pathButton.click();
-    await reviewButton.click();
-    expect(onReview).toHaveBeenCalledTimes(2);
+    expect(onReview).toHaveBeenCalledTimes(1);
 
+    // Hover-revealed actions still exist in the tree at rest, so they stay
+    // clickable and keyboard-reachable without the hover.
+    await pathButton.hover();
     await openButton.click();
     expect(openFile).toHaveBeenCalledOnce();
     expect(openFile).toHaveBeenCalledWith(FILE_PATH);
     expect(openInEditor).not.toHaveBeenCalled();
-    expect(onReview).toHaveBeenCalledTimes(2);
+    expect(onReview).toHaveBeenCalledTimes(1);
 
     pathButton.element().focus();
-    await userEvent.keyboard("{Tab}");
-    expect(document.activeElement).toBe(reviewButton.element());
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(openButton.element());
     await userEvent.keyboard("{Tab}");
@@ -270,7 +269,9 @@ describe("EditedFileRow", () => {
       const row = screen.container.querySelector<HTMLElement>("[data-edited-file-row='true']");
       expect(row).not.toBeNull();
       expect(row!.scrollWidth).toBeLessThanOrEqual(row!.clientWidth);
-      expect(page.getByRole("button", { name: "Review", exact: true }).element()).toBeVisible();
+      expect(
+        page.getByRole("button", { name: `Review changes to ${ROOTLESS_FILE_PATH}` }).element(),
+      ).toBeVisible();
 
       await openFileOptions(ROOTLESS_FILE_PATH);
       expect(fileManagerMenuItem().element()).toBeDisabled();

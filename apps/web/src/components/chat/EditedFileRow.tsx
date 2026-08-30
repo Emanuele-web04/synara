@@ -1,5 +1,6 @@
 // FILE: EditedFileRow.tsx
-// Purpose: Render one changed-file row with sibling review and open actions.
+// Purpose: Render one changed-file row; the row itself opens the review and
+// compact open-in actions reveal on hover/focus.
 // Layer: Chat changed-files UI
 
 import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
@@ -14,7 +15,6 @@ import { MenuItem } from "../ui/menu";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { OpenInPicker } from "./OpenInPicker";
-import { ReviewChangesButton } from "./ReviewChangesButton";
 import { resolveEditedFilePathTargets } from "./editedFilePathActions";
 
 interface EditedFileRowProps {
@@ -59,7 +59,7 @@ export function EditedFileRow(props: EditedFileRowProps) {
     <div
       data-edited-file-row="true"
       className={cn(
-        "@container/header-actions flex w-full min-w-0 items-center gap-1.5 overflow-hidden border-t border-[color:var(--color-border-light)] bg-transparent py-1.5 pr-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
+        "group/edited-file-row flex w-full min-w-0 items-center gap-1.5 overflow-hidden border-t border-[color:var(--color-border-light)] bg-transparent py-1.5 pr-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
         props.withFirstReset && "first:border-t-0",
       )}
     >
@@ -93,49 +93,49 @@ export function EditedFileRow(props: EditedFileRowProps) {
         ) : null}
       </button>
 
-      <ReviewChangesButton
-        className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        style={{ fontSize: props.fontSize }}
-        onClick={props.onReview}
-      />
-
-      <OpenInPicker
-        {...(props.keybindings ? { keybindings: props.keybindings } : {})}
-        {...(props.availableEditors ? { availableEditors: props.availableEditors } : {})}
-        openInTarget={launcherTarget}
-        menuEditorOrder={EDITED_FILE_EDITOR_ORDER}
-        groupLabel={`Open ${props.filePath}`}
-        menuLabel={`Open ${props.filePath} options`}
-        primaryAction={{
-          disabled: !canOpenInApp,
-          icon: <EyeOpenIcon aria-hidden="true" className="size-3.5" />,
-          onClick: () => {
-            workspaceFileOpener?.openFile(props.filePath);
-          },
-        }}
-        additionalMenuItems={
-          <>
-            <MenuItem
-              disabled={absolutePath === null}
-              onClick={() => {
-                if (absolutePath) copyPathToClipboard(absolutePath);
-              }}
-            >
-              <CopyIcon className={MENU_ICON_CLASS_NAME} />
-              <span>Copy absolute path</span>
-            </MenuItem>
-            <MenuItem
-              disabled={relativePath === null}
-              onClick={() => {
-                if (relativePath) copyPathToClipboard(relativePath);
-              }}
-            >
-              <CopyIcon className={MENU_ICON_CLASS_NAME} />
-              <span>Copy relative path</span>
-            </MenuItem>
-          </>
-        }
-      />
+      {/* Per-row actions stay quiet until the row is hovered/focused (or the menu is
+          open) so a long file list reads as filenames + diff stats, not button chrome.
+          The whole row already opens the review, so no per-row Review button. */}
+      <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/edited-file-row:opacity-100 group-focus-within/edited-file-row:opacity-100 group-has-[[data-popup-open]]/edited-file-row:opacity-100 motion-reduce:transition-none">
+        <OpenInPicker
+          variant="compact"
+          {...(props.keybindings ? { keybindings: props.keybindings } : {})}
+          {...(props.availableEditors ? { availableEditors: props.availableEditors } : {})}
+          openInTarget={launcherTarget}
+          menuEditorOrder={EDITED_FILE_EDITOR_ORDER}
+          groupLabel={`Open ${props.filePath}`}
+          menuLabel={`Open ${props.filePath} options`}
+          primaryAction={{
+            disabled: !canOpenInApp,
+            icon: <EyeOpenIcon aria-hidden="true" className="size-3.5" />,
+            onClick: () => {
+              workspaceFileOpener?.openFile(props.filePath);
+            },
+          }}
+          additionalMenuItems={
+            <>
+              <MenuItem
+                disabled={absolutePath === null}
+                onClick={() => {
+                  if (absolutePath) copyPathToClipboard(absolutePath);
+                }}
+              >
+                <CopyIcon className={MENU_ICON_CLASS_NAME} />
+                <span>Copy absolute path</span>
+              </MenuItem>
+              <MenuItem
+                disabled={relativePath === null}
+                onClick={() => {
+                  if (relativePath) copyPathToClipboard(relativePath);
+                }}
+              >
+                <CopyIcon className={MENU_ICON_CLASS_NAME} />
+                <span>Copy relative path</span>
+              </MenuItem>
+            </>
+          }
+        />
+      </div>
     </div>
   );
 }
