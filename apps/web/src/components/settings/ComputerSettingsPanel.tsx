@@ -31,6 +31,7 @@ import {
 
 const BACKEND_DISPLAY_NAMES: Record<string, string> = {
   kwin: "KWin plugin (KDE)",
+  hyprland: "Hyprland plugin",
   "nested-kwin": "Isolated agent desktop (nested KWin)",
   fake: "Test backend",
 };
@@ -97,10 +98,10 @@ export function ComputerSettingsPanel({
   const backend =
     status?.availability.kind === "available" ? (status.availability.backend ?? null) : null;
   const health = status?.health;
-  // The emergency release is a shortcut the KWin plugin registers with the
-  // compositor. No other backend binds it, and a nested offscreen session never
-  // hears the human's keys, so only a visible plugin-backed desktop may promise
-  // it.
+  // The emergency release is a shortcut the compositor plugin (KWin or
+  // Hyprland) registers with the compositor. No other backend binds it, and a
+  // nested offscreen session never hears the human's keys, so only a visible
+  // plugin-backed desktop may promise it.
   const dedicatedSeatDescription =
     backend !== null &&
     COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
