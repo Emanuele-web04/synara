@@ -36,7 +36,7 @@ describe("routeSingleDockPaneOpenRequest with the browser panel's remember polic
   });
 });
 
-describe("routeSingleDockPaneOpenRequest with the device navigate policy", () => {
+describe("routeSingleDockPaneOpenRequest with the device/computer navigate policy", () => {
   it("opens the current thread pane immediately without navigating", () => {
     const calls: string[] = [];
     const navigateToThread = vi.fn();
@@ -92,8 +92,9 @@ describe("routeSingleDockPaneOpenRequest with the device navigate policy", () =>
 describe("cross-thread policy divergence", () => {
   // The browser panel remembers cross-thread opens instead of following them:
   // its native runtime stays on the requested thread, so returning to that chat
-  // restores the panel, but the user's current chat is never stolen. The device
-  // pane has no such runtime, so it follows the request.
+  // restores the panel, but the user's current chat is never stolen. Device and
+  // computer panes have no such runtime, so they follow the request. Both
+  // halves are behaviour, not an oversight.
   it("remembers quietly for a background thread while navigate seeds and routes", () => {
     const rememberCalls: string[] = [];
     const navigateCalls: string[] = [];

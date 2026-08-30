@@ -439,7 +439,12 @@ For element actions, keep the \`snapshotId\` returned by the fresh snapshot and 
 
 Do not search or filter \`ALL_TOOLS\` to discover these methods. When several browser steps are deterministic, run their awaited MCP calls sequentially in one \`functions.exec\` invocation, inspect each result there, and stop as soon as the requested result is verified. Take a fresh semantic snapshot before element actions and after navigation or human interaction.
 
-Do not use a generic browser-control skill or tool when the in-app browser can handle the request.`;
+Use \`Computer Use\` only when at least one of these is true:
+- the user explicitly asks to use \`Computer Use\`
+- the task is outside the in-app browser (desktop apps, OS settings, system UI, other app windows)
+- the in-app browser cannot complete the task and a broader desktop fallback is required
+
+Do not choose \`Computer Use\` first for ordinary browser inspection, browser screenshots, or browser navigation when the in-app browser can handle the request.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
@@ -1891,7 +1896,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
+      // A fork carries the same computer-control fact a start does, so the
+      // forked runtime leases like-for-like capabilities instead of dropping
+      // `computer:control` at the fork boundary.
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId, {
+        enableComputerControl: input.enableComputerControl === true,
+      });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,

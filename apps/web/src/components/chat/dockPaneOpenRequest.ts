@@ -14,8 +14,8 @@ import type { ThreadId } from "@synara/contracts";
  *   requested thread, so returning to that chat should restore the panel, but
  *   there is nothing to gain by stealing the user's current chat merely to make
  *   the browser visible. No hydration, no navigation.
- * - `navigate`: seed the requested thread's dock and route there. The device
- *   pane uses this — the event carries its own thread, so an agent
+ * - `navigate`: seed the requested thread's dock and route there. The device and
+ *   computer panes use this — the event carries its own thread, so an agent
  *   driving a desktop from a background thread lands the user on the thread that
  *   is actually doing the work rather than showing nothing at all.
  */

@@ -40,6 +40,7 @@ import {
   editAndResendDispatchFields,
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
+  resolveEffectiveComputerControl,
   resolveQueuedTurnDispatchSettings,
   threadSettingsDispatchFields,
   turnStartDispatchFields,
@@ -2985,6 +2986,7 @@ describe("turn dispatch settings", () => {
   const LIVE_SETTINGS: TurnDispatchSettings = {
     modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
     providerOptions: { codex: { binaryPath: "/live/codex" } },
+    enableComputerControl: true,
     assistantDeliveryMode: "streaming",
     runtimeMode: "auto",
     interactionMode: "plan",
@@ -3011,6 +3013,7 @@ describe("turn dispatch settings", () => {
     selectedPromptEffort: null,
     modelSelection: { provider: "claudeAgent", model: "opus-4.8" },
     providerOptionsForDispatch: { codex: { binaryPath: "/queued/codex" } },
+    enableComputerControl: false,
     runtimeMode: "approval-required",
     interactionMode: "default",
     envMode: "local",
@@ -3024,6 +3027,7 @@ describe("turn dispatch settings", () => {
     expect(Object.keys(fields)).toEqual([
       "modelSelection",
       "providerOptions",
+      "enableComputerControl",
       "assistantDeliveryMode",
       "dispatchMode",
       "runtimeMode",
@@ -3032,6 +3036,7 @@ describe("turn dispatch settings", () => {
     expect(fields).toEqual({
       modelSelection: LIVE_SETTINGS.modelSelection,
       providerOptions: LIVE_SETTINGS.providerOptions,
+      enableComputerControl: true,
       assistantDeliveryMode: "streaming",
       dispatchMode: "steer",
       runtimeMode: "auto",
@@ -3044,6 +3049,7 @@ describe("turn dispatch settings", () => {
     expect(Object.keys(fields)).toEqual([
       "modelSelection",
       "providerOptions",
+      "enableComputerControl",
       "assistantDeliveryMode",
       "runtimeMode",
       "interactionMode",
@@ -3058,6 +3064,7 @@ describe("turn dispatch settings", () => {
     expect(Object.keys(withPlan)).toEqual([
       "modelSelection",
       "providerOptionsForDispatch",
+      "enableComputerControl",
       "sourceProposedPlan",
       "runtimeMode",
       "interactionMode",
@@ -3069,6 +3076,7 @@ describe("turn dispatch settings", () => {
     expect(Object.keys(withoutPlan)).toEqual([
       "modelSelection",
       "providerOptionsForDispatch",
+      "enableComputerControl",
       "runtimeMode",
       "interactionMode",
       "envMode",
@@ -3080,6 +3088,7 @@ describe("turn dispatch settings", () => {
     expect(Object.keys(queuedPlanFollowUpDispatchFields(LIVE_SETTINGS))).toEqual([
       "modelSelection",
       "providerOptionsForDispatch",
+      "enableComputerControl",
       "runtimeMode",
     ]);
   });
@@ -3108,6 +3117,7 @@ describe("turn dispatch settings", () => {
     expect(resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, QUEUED_CHAT_TURN)).toEqual({
       modelSelection: QUEUED_CHAT_TURN.modelSelection,
       providerOptions: QUEUED_CHAT_TURN.providerOptionsForDispatch,
+      enableComputerControl: false,
       // Not carried by a queued turn: it follows the live app setting.
       assistantDeliveryMode: "streaming",
       runtimeMode: "approval-required",
@@ -3122,9 +3132,14 @@ describe("turn dispatch settings", () => {
   });
 
   it("falls back to live settings for fields a persisted queued turn never stored", () => {
-    const { providerOptionsForDispatch: _options, ...legacyTurn } = QUEUED_CHAT_TURN;
+    const {
+      providerOptionsForDispatch: _options,
+      enableComputerControl: _control,
+      ...legacyTurn
+    } = QUEUED_CHAT_TURN;
     const resolved = resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, legacyTurn);
     expect(resolved.providerOptions).toEqual(LIVE_SETTINGS.providerOptions);
+    expect(resolved.enableComputerControl).toBe(true);
   });
 
   it("leaves the environment alone for a queued plan follow-up", () => {
@@ -3143,5 +3158,71 @@ describe("turn dispatch settings", () => {
     });
     expect(resolved.envMode).toBe("worktree");
     expect(resolved.runtimeMode).toBe("approval-required");
+    expect(resolved.enableComputerControl).toBe(true);
+  });
+});
+
+describe("resolveEffectiveComputerControl", () => {
+  it("defaults on for a new chat when the backend is available", () => {
+    expect(
+      resolveEffectiveComputerControl({
+        draftOverride: undefined,
+        backendAvailable: true,
+        allowInNewChats: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays off when the backend is unavailable, whatever the machine default", () => {
+    expect(
+      resolveEffectiveComputerControl({
+        draftOverride: undefined,
+        backendAvailable: false,
+        allowInNewChats: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("honors the machine-wide opt-out for an untouched chat", () => {
+    expect(
+      resolveEffectiveComputerControl({
+        draftOverride: undefined,
+        backendAvailable: true,
+        allowInNewChats: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets a per-chat override win in both directions, even against the default", () => {
+    // Override on while the machine opted out.
+    expect(
+      resolveEffectiveComputerControl({
+        draftOverride: true,
+        backendAvailable: true,
+        allowInNewChats: false,
+      }),
+    ).toBe(true);
+    // Override off while the machine (and availability) would default it on.
+    expect(
+      resolveEffectiveComputerControl({
+        draftOverride: false,
+        backendAvailable: true,
+        allowInNewChats: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns an explicit override verbatim, per the draft ?? (available ? default : false) rule", () => {
+    // Only the default branch is availability-gated. An explicit override is the
+    // draft's own choice and is returned as-is; the composer toggle that sets it
+    // is hidden when the backend is unavailable, so this branch is not reachable
+    // through the UI in that state.
+    expect(
+      resolveEffectiveComputerControl({
+        draftOverride: true,
+        backendAvailable: false,
+        allowInNewChats: false,
+      }),
+    ).toBe(true);
   });
 });
