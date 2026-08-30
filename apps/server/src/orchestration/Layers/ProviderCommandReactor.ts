@@ -477,6 +477,25 @@ function isStaleClaudeResumeError(error: unknown): boolean {
   return String(error).toLowerCase().includes("no conversation found with session id");
 }
 
+function isOpenCodeCompatibleResumeError(error: unknown): boolean {
+  if (
+    !Schema.is(ProviderAdapterRequestError)(error) ||
+    (error.provider !== "opencode" && error.provider !== "kilo") ||
+    error.method !== "session.update"
+  ) {
+    return false;
+  }
+  const detail = error.detail.toLowerCase();
+  return (
+    /\bstatus(?:code)?[=: ]+404\b/u.test(detail) ||
+    ((detail.includes("session") || detail.includes("conversation")) &&
+      (detail.includes("not found") ||
+        detail.includes("unknown session") ||
+        detail.includes("does not exist") ||
+        detail.includes("invalid session")))
+  );
+}
+
 function isRollbackStillInProgressError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -674,7 +693,9 @@ const make = Effect.gen(function* () {
     turnId?: TurnId;
     terminalEvent?: ProviderQueueDrainEvent;
     readonly clearSidechat: boolean;
-    readonly clearPriorTranscript: boolean;
+    readonly clearFreshSessionTranscript: boolean;
+    readonly clearRollbackTranscript: boolean;
+    readonly completeDurablePriorTranscript: boolean;
   };
   const pendingContextBootstrapAttempts = new Map<string, PendingContextBootstrapAttempt>();
   // Explicit stop resets context once: the next successful session start must
@@ -687,28 +708,59 @@ const make = Effect.gen(function* () {
     pendingContextBootstrapAttempts.delete(threadId);
   };
 
-  const completePendingContextBootstrapAttempt = (
-    threadId: string,
+  const persistPriorTranscriptBootstrapCompletion = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    provider: ProviderKind,
+  ) {
+    if (!providerService.completePriorTranscriptBootstrap) {
+      return false;
+    }
+    return yield* providerService.completePriorTranscriptBootstrap({ threadId }).pipe(
+      Effect.as(true),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor could not mark transcript bootstrap complete", {
+          threadId,
+          provider,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(false)),
+      ),
+    );
+  });
+
+  const completePendingContextBootstrapAttempt = Effect.fnUntraced(function* (
+    threadId: ThreadId,
     attempt: PendingContextBootstrapAttempt,
     event: ProviderQueueDrainEvent,
-  ) => {
+  ) {
     // Keep bootstrap flags after cancellation or failure even though Droid may
     // already have received the prompt. A bounded duplicate on retry is safer
     // than dropping the only model-visible copy of the retained transcript.
     if (event.type !== "turn.completed" || event.payload.state !== "completed") {
       return;
     }
+    if (
+      attempt.completeDurablePriorTranscript &&
+      providerService.completePriorTranscriptBootstrap
+    ) {
+      const completed = yield* persistPriorTranscriptBootstrapCompletion(threadId, event.provider);
+      if (!completed) {
+        return;
+      }
+    }
     if (attempt.clearSidechat) {
       sidechatContextBootstrapThreadIds.delete(threadId);
     }
-    if (attempt.clearPriorTranscript) {
+    if (attempt.clearFreshSessionTranscript) {
       freshSessionContextBootstrapThreadIds.delete(threadId);
-      rollbackContextBootstrapThreadIds.delete(threadId);
-      sidechatContextBootstrapThreadIds.delete(threadId);
     }
-  };
+    if (attempt.clearRollbackTranscript) {
+      rollbackContextBootstrapThreadIds.delete(threadId);
+    }
+  });
 
-  const observePendingContextBootstrapTerminalEvent = (event: ProviderQueueDrainEvent) => {
+  const observePendingContextBootstrapTerminalEvent = Effect.fnUntraced(function* (
+    event: ProviderQueueDrainEvent,
+  ) {
     const attempt = pendingContextBootstrapAttempts.get(event.threadId);
     if (!attempt) {
       return;
@@ -721,8 +773,8 @@ const make = Effect.gen(function* () {
       return;
     }
     pendingContextBootstrapAttempts.delete(event.threadId);
-    completePendingContextBootstrapAttempt(event.threadId, attempt, event);
-  };
+    yield* completePendingContextBootstrapAttempt(event.threadId, attempt, event);
+  });
 
   const resolveConfiguredTextGenerationInput = Effect.fnUntraced(function* () {
     const settings = yield* serverSettings.getSettings;
@@ -980,16 +1032,12 @@ const make = Effect.gen(function* () {
     readonly preserveActiveRuntime?: boolean;
   }) {
     if (providerService.clearSessionResumeCursor) {
-      yield* providerService
-        .clearSessionResumeCursor({
-          threadId: input.threadId,
-          ...(input.preserveActiveRuntime === true ? { preserveActiveRuntime: true } : {}),
-        })
-        .pipe(Effect.catch(() => Effect.void));
+      yield* providerService.clearSessionResumeCursor({
+        threadId: input.threadId,
+        ...(input.preserveActiveRuntime === true ? { preserveActiveRuntime: true } : {}),
+      });
     } else if (input.preserveActiveRuntime !== true) {
-      yield* providerService
-        .stopSession({ threadId: input.threadId })
-        .pipe(Effect.catch(() => Effect.void));
+      yield* providerService.stopSession({ threadId: input.threadId });
     }
     yield* Effect.logWarning("provider command reactor cleared stale provider resume state", {
       threadId: input.threadId,
@@ -1153,6 +1201,7 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly providerOptions?: ProviderStartOptions;
       readonly runtimeMode?: RuntimeMode;
+      readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -1162,7 +1211,6 @@ const make = Effect.gen(function* () {
       );
     }
     const shouldRegisterContextBootstrap =
-      thread.session?.status !== "stopped" &&
       !suppressContextBootstrapOnNextStartThreadIds.has(threadId);
 
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
@@ -1219,12 +1267,32 @@ const make = Effect.gen(function* () {
         .listSessions()
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
 
+    const providerSessionStartInput = (resumeCursor?: unknown) => ({
+      ...providerSessionOptions,
+      ...(preferredProvider ? { provider: preferredProvider } : {}),
+      ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+    });
+
+    const startProviderSessionWithOutcome = (
+      resumeCursor?: unknown,
+      registerPriorTranscriptBootstrapOnFreshStart = false,
+    ) => {
+      const startInput = providerSessionStartInput(resumeCursor);
+      return providerService.startSessionWithOutcome
+        ? providerService.startSessionWithOutcome(threadId, startInput, {
+            registerPriorTranscriptBootstrapOnFreshStart,
+          })
+        : providerService.startSession(threadId, startInput).pipe(
+            Effect.map((session) => ({
+              session,
+              nativeResumeSucceeded: resumeCursor !== undefined && resumeCursor !== null,
+              priorTranscriptBootstrapPending: registerPriorTranscriptBootstrapOnFreshStart,
+            })),
+          );
+    };
+
     const startProviderSession = (resumeCursor?: unknown) =>
-      providerService.startSession(threadId, {
-        ...providerSessionOptions,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        ...(resumeCursor !== undefined ? { resumeCursor } : {}),
-      });
+      startProviderSessionWithOutcome(resumeCursor).pipe(Effect.map(({ session }) => session));
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -1292,6 +1360,7 @@ const make = Effect.gen(function* () {
         return {
           activeSessionBeforeEnsure,
           activeSession: reusableSession,
+          nativeResumeSucceeded: false,
         };
       }
 
@@ -1335,6 +1404,7 @@ const make = Effect.gen(function* () {
       return {
         activeSessionBeforeEnsure,
         activeSession: restartedSession,
+        nativeResumeSucceeded: false,
       };
     }
 
@@ -1372,6 +1442,7 @@ const make = Effect.gen(function* () {
         return {
           activeSessionBeforeEnsure,
           activeSession: forkedSession,
+          nativeResumeSucceeded: false,
         };
       }
       if (shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId) {
@@ -1387,16 +1458,67 @@ const make = Effect.gen(function* () {
       sidechatContextBootstrapThreadIds.add(threadId);
     }
 
-    const startedSession = yield* startProviderSession();
+    const registerPriorTranscriptBootstrapOnFreshStart =
+      shouldRegisterContextBootstrap &&
+      options?.registerPriorTranscriptBootstrapOnFreshStart === true;
+    const startOutcome = yield* startProviderSessionWithOutcome(
+      undefined,
+      registerPriorTranscriptBootstrapOnFreshStart,
+    ).pipe(
+      Effect.catch((error) => {
+        if (!isOpenCodeCompatibleResumeError(error)) {
+          return Effect.fail(error);
+        }
+        return Effect.gen(function* () {
+          yield* clearStaleProviderResumeState({
+            threadId,
+            cause: error,
+          });
+          yield* Effect.logWarning(
+            "provider command reactor retrying OpenCode-compatible session without stale resume",
+            {
+              threadId,
+              provider: preferredProvider,
+            },
+          );
+          return yield* startProviderSessionWithOutcome(
+            undefined,
+            registerPriorTranscriptBootstrapOnFreshStart,
+          );
+        });
+      }),
+    );
+    let retainContextBootstrapSuppression = false;
+    if (startOutcome.priorTranscriptBootstrapPending) {
+      if (shouldRegisterContextBootstrap) {
+        freshSessionContextBootstrapThreadIds.add(threadId);
+      } else if (
+        (preferredProvider === "opencode" || preferredProvider === "kilo") &&
+        providerService.completePriorTranscriptBootstrap
+      ) {
+        // An explicit stop intentionally discards pending synthetic context.
+        // If its best-effort persistence cleanup was interrupted, finish that
+        // cleanup before starting the fresh session instead of resurrecting it.
+        const completed = yield* persistPriorTranscriptBootstrapCompletion(
+          threadId,
+          preferredProvider,
+        );
+        retainContextBootstrapSuppression = !completed;
+      }
+    }
+    const startedSession = startOutcome.session;
     // Record the exact selection the session was spawned with so later
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
     yield* bindSessionToThread(startedSession);
-    suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+    if (!retainContextBootstrapSuppression) {
+      suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+    }
     return {
       activeSessionBeforeEnsure,
       activeSession: startedSession,
+      nativeResumeSucceeded: startOutcome.nativeResumeSucceeded,
     };
   });
 
@@ -1520,15 +1642,25 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const { activeSessionBeforeEnsure, activeSession } = yield* ensureSessionForThread(
-      input.threadId,
-      input.createdAt,
-      {
+    const transcriptBoundaryMessageId =
+      input.turnKind === "goal-continuation" ? undefined : input.messageId;
+    const selectedProvider =
+      input.modelSelection?.provider ??
+      threadSessionModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
+    const registerPriorTranscriptBootstrapOnFreshStart =
+      (selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
+    const { activeSessionBeforeEnsure, activeSession, nativeResumeSucceeded } =
+      yield* ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
-      },
-    );
+        ...(registerPriorTranscriptBootstrapOnFreshStart
+          ? { registerPriorTranscriptBootstrapOnFreshStart: true }
+          : {}),
+      });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
     }
@@ -1544,8 +1676,6 @@ const make = Effect.gen(function* () {
       ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
       : input.messageText;
     const bootstrapBudgetMessageText = `${boundaryMessageText}${mentionContextSuffix}`;
-    const transcriptBoundaryMessageId =
-      input.turnKind === "goal-continuation" ? undefined : input.messageId;
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
       !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId);
@@ -1559,11 +1689,6 @@ const make = Effect.gen(function* () {
       shouldBootstrapHandoff && handoffBootstrapAvailableChars > 0
         ? buildHandoffBootstrapText(thread, handoffBootstrapAvailableChars)
         : null;
-    const selectedProvider =
-      input.modelSelection?.provider ??
-      threadSessionModelSelections.get(input.threadId)?.provider ??
-      thread.session?.providerName ??
-      thread.modelSelection.provider;
     if (
       providerPromptOverheadChars > 0 &&
       withProviderThreadStatePrompts({
@@ -1578,15 +1703,23 @@ const make = Effect.gen(function* () {
         issue: providerPromptOverflowIssue(goalPromptOverheadChars),
       });
     }
+    const hasPendingFreshSessionTranscriptBootstrap = freshSessionContextBootstrapThreadIds.has(
+      input.threadId,
+    );
+    const hasPendingRollbackTranscriptBootstrap = rollbackContextBootstrapThreadIds.has(
+      input.threadId,
+    );
     const hasPendingPriorTranscriptBootstrap =
-      freshSessionContextBootstrapThreadIds.has(input.threadId) ||
-      rollbackContextBootstrapThreadIds.has(input.threadId);
+      hasPendingFreshSessionTranscriptBootstrap || hasPendingRollbackTranscriptBootstrap;
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
       !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId) &&
       !shouldBootstrapHandoff &&
-      !hasPendingPriorTranscriptBootstrap;
+      !hasPendingRollbackTranscriptBootstrap &&
+      (!hasPendingFreshSessionTranscriptBootstrap ||
+        selectedProvider === "opencode" ||
+        selectedProvider === "kilo");
     const sidechatBootstrapAvailableChars = availableProviderContextChars({
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
@@ -1613,7 +1746,8 @@ const make = Effect.gen(function* () {
     }
     const shouldBootstrapPriorTranscriptContext =
       (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
-        activeSessionBeforeEnsure === undefined) ||
+        activeSessionBeforeEnsure === undefined &&
+        !nativeResumeSucceeded) ||
         hasPendingPriorTranscriptBootstrap) &&
       !shouldBootstrapHandoff &&
       !shouldBootstrapSidechatContext;
@@ -1801,6 +1935,11 @@ const make = Effect.gen(function* () {
     const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
       input.threadId,
     );
+    const priorTranscriptBootstrapRetiresOnAcceptedTurn =
+      shouldBootstrapPriorTranscriptContext &&
+      (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent);
+    const specializedBootstrapCompletesFreshSessionContext =
+      handoffBootstrapText !== null || sidechatBootstrapText !== null;
     let pendingContextBootstrapAttempt: PendingContextBootstrapAttempt | undefined;
     let startedTurn: ProviderTurnStartResult | undefined;
 
@@ -1819,12 +1958,26 @@ const make = Effect.gen(function* () {
       });
     } else {
       yield* capturePreTurnBaselines;
-      pendingContextBootstrapAttempt =
+      const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&
-        (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null)
+        (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
+      const tracksDurableTranscriptAcceptance =
+        (selectedProvider === "opencode" || selectedProvider === "kilo") &&
+        hasPendingFreshSessionTranscriptBootstrap &&
+        (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
+          specializedBootstrapCompletesFreshSessionContext);
+      pendingContextBootstrapAttempt =
+        tracksDroidContextAcceptance || tracksDurableTranscriptAcceptance
           ? {
-              clearSidechat: sidechatBootstrapText !== null,
-              clearPriorTranscript: priorTranscriptBootstrapText !== null,
+              clearSidechat:
+                sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null,
+              clearFreshSessionTranscript:
+                priorTranscriptBootstrapText !== null || tracksDurableTranscriptAcceptance,
+              clearRollbackTranscript:
+                priorTranscriptBootstrapText !== null ||
+                (tracksDurableTranscriptAcceptance &&
+                  priorTranscriptBootstrapRetiresOnAcceptedTurn),
+              completeDurablePriorTranscript: tracksDurableTranscriptAcceptance,
             }
           : undefined;
       if (pendingContextBootstrapAttempt) {
@@ -1948,7 +2101,7 @@ const make = Effect.gen(function* () {
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
         if (terminalEvent?.turnId === sentTurn.turnId) {
           pendingContextBootstrapAttempts.delete(input.threadId);
-          completePendingContextBootstrapAttempt(
+          yield* completePendingContextBootstrapAttempt(
             input.threadId,
             pendingContextBootstrapAttempt,
             terminalEvent,
@@ -1975,15 +2128,33 @@ const make = Effect.gen(function* () {
     ) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
-    if (
-      shouldBootstrapPriorTranscriptContext &&
+    const retiresPriorTranscriptBootstrap =
+      priorTranscriptBootstrapRetiresOnAcceptedTurn &&
       input.reviewTarget === undefined &&
-      pendingContextBootstrapAttempt === undefined &&
-      (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent)
-    ) {
-      freshSessionContextBootstrapThreadIds.delete(input.threadId);
-      rollbackContextBootstrapThreadIds.delete(input.threadId);
-      sidechatContextBootstrapThreadIds.delete(input.threadId);
+      pendingContextBootstrapAttempt === undefined;
+    const completesSpecializedBootstrapImmediately =
+      specializedBootstrapCompletesFreshSessionContext &&
+      input.reviewTarget === undefined &&
+      pendingContextBootstrapAttempt === undefined;
+    if (retiresPriorTranscriptBootstrap || completesSpecializedBootstrapImmediately) {
+      let durableCompletionSucceeded = true;
+      if (
+        hasPendingFreshSessionTranscriptBootstrap &&
+        (selectedProvider === "opencode" || selectedProvider === "kilo") &&
+        providerService.completePriorTranscriptBootstrap
+      ) {
+        durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
+          input.threadId,
+          selectedProvider,
+        );
+      }
+      if (durableCompletionSucceeded) {
+        freshSessionContextBootstrapThreadIds.delete(input.threadId);
+        if (retiresPriorTranscriptBootstrap) {
+          rollbackContextBootstrapThreadIds.delete(input.threadId);
+        }
+        sidechatContextBootstrapThreadIds.delete(input.threadId);
+      }
     }
     return startedTurn;
   });
@@ -2886,7 +3057,7 @@ const make = Effect.gen(function* () {
     );
 
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
-    observePendingContextBootstrapTerminalEvent(event);
+    yield* observePendingContextBootstrapTerminalEvent(event);
     const sessionThreadId =
       (yield* resolveProviderSessionThread(event.threadId))?.id ?? event.threadId;
     const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
@@ -3593,6 +3764,26 @@ const make = Effect.gen(function* () {
     }
     clearPendingContextBootstraps(thread.id);
     suppressContextBootstrapOnNextStartThreadIds.add(thread.id);
+    const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
+      ? thread.session.providerName
+      : thread.modelSelection.provider;
+    if (
+      (stoppedProvider === "opencode" || stoppedProvider === "kilo") &&
+      providerService.completePriorTranscriptBootstrap
+    ) {
+      yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "provider command reactor could not discard transcript bootstrap during session stop",
+            {
+              threadId: thread.id,
+              provider: stoppedProvider,
+              cause: Cause.pretty(cause),
+            },
+          ),
+        ),
+      );
+    }
 
     const providerThreadId =
       providerThread !== null

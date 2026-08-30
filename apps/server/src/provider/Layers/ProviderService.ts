@@ -166,6 +166,10 @@ const ClearSessionResumeCursorInput = Schema.Struct({
   preserveActiveRuntime: Schema.optional(Schema.Boolean),
 });
 
+const CompletePriorTranscriptBootstrapInput = Schema.Struct({
+  threadId: ThreadId,
+});
+
 type StopRuntimeSession = NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
 type StopRuntimeSessionInput = Parameters<StopRuntimeSession>[0];
 type StopRuntimeSessionEffect = ReturnType<StopRuntimeSession>;
@@ -190,6 +194,7 @@ type InteractionResponse =
  */
 const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
 const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
+const PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING = "priorTranscriptBootstrapPending";
 
 function toValidationError(
   operation: string,
@@ -730,6 +735,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly providerOptions?: unknown;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
+        readonly runtimePayload?: Record<string, unknown>;
       },
     ) =>
       directory.upsert({
@@ -741,7 +747,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ? { lifecycleGeneration: extra.lifecycleGeneration }
           : {}),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, extra),
+        runtimePayload: {
+          ...toRuntimePayloadFromSession(session, extra),
+          ...extra?.runtimePayload,
+        },
       });
 
     const markThreadStopped = (
@@ -1661,7 +1670,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         } as const;
       });
 
-    const startSession: ProviderServiceShape["startSession"] = (threadId, rawInput) =>
+    const startSessionWithOutcome: NonNullable<ProviderServiceShape["startSessionWithOutcome"]> = (
+      threadId,
+      rawInput,
+      outcomeOptions,
+    ) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
           operation: "ProviderService.startSession",
@@ -1697,6 +1710,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   (persistedBinding?.provider === input.provider
                     ? persistedBinding.resumeCursor
                     : undefined));
+            const persistedPriorTranscriptBootstrapPending =
+              persistedBinding?.provider === input.provider &&
+              runtimePayloadRecord(persistedBinding.runtimePayload)[
+                PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING
+              ] === true;
             const adapterStartInput = { ...input };
             delete adapterStartInput.resumeCursor;
             const effectiveProviderOptions =
@@ -1708,21 +1726,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             let replacementStarted = false;
             const startAndPersistReplacement = Effect.gen(function* () {
               yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
+              const resolvedAdapterStartInput = {
+                ...adapterStartInput,
+                lifecycleGeneration: lease.generation,
+                ...(effectiveProviderOptions !== undefined
+                  ? { providerOptions: effectiveProviderOptions }
+                  : {}),
+                ...(hasResumeCursor(effectiveResumeCursor)
+                  ? { resumeCursor: effectiveResumeCursor }
+                  : {}),
+              };
               // A provider start that never returns holds this thread's
               // lifecycle lock and the caller's command slot forever. Bound it,
               // retire whatever the adapter may have half-spawned, and fail
               // with text the caller can surface as a session error.
               const started = yield* adapter
-                .startSession({
-                  ...adapterStartInput,
-                  lifecycleGeneration: lease.generation,
-                  ...(effectiveProviderOptions !== undefined
-                    ? { providerOptions: effectiveProviderOptions }
-                    : {}),
-                  ...(effectiveResumeCursor !== undefined
-                    ? { resumeCursor: effectiveResumeCursor }
-                    : {}),
-                })
+                .startSession(resolvedAdapterStartInput)
                 .pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
               if (Option.isNone(started)) {
                 yield* Effect.logError("provider session start exceeded its deadline", {
@@ -1749,6 +1768,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }
               const session = started.value;
               replacementStarted = true;
+              const nativeResumeSucceeded = hasResumeCursor(effectiveResumeCursor)
+                ? (adapter.didResumeSession?.(resolvedAdapterStartInput, session) ?? true)
+                : false;
+              const priorTranscriptBootstrapPending =
+                persistedPriorTranscriptBootstrapPending ||
+                (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+                  !nativeResumeSucceeded);
 
               if (session.provider !== adapter.provider) {
                 return yield* toValidationError(
@@ -1763,17 +1789,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   modelSelection: input.modelSelection,
                   providerOptions: effectiveProviderOptions,
                   lifecycleGeneration: lease.generation,
-                }).pipe(
-                  Effect.andThen(
-                    directory.upsert({
-                      threadId,
-                      provider: session.provider,
-                      runtimePayload: {
-                        [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
-                      },
-                    }),
-                  ),
-                ),
+                  runtimePayload: {
+                    [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                    [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
+                  },
+                }),
               );
               lease.commit();
               if (
@@ -1783,7 +1803,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 providerInterruptionFences.delete(threadId);
               }
 
-              return session;
+              return {
+                session,
+                nativeResumeSucceeded,
+                priorTranscriptBootstrapPending,
+              };
             });
 
             if (!persistedBinding || persistedBinding.provider === input.provider) {
@@ -1854,6 +1878,36 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     }),
               ),
             );
+          }),
+        );
+      });
+
+    const startSession: ProviderServiceShape["startSession"] = (threadId, input) =>
+      startSessionWithOutcome(threadId, input).pipe(Effect.map(({ session }) => session));
+
+    const completePriorTranscriptBootstrap: NonNullable<
+      ProviderServiceShape["completePriorTranscriptBootstrap"]
+    > = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.completePriorTranscriptBootstrap",
+          schema: CompletePriorTranscriptBootstrapInput,
+          payload: rawInput,
+        });
+        yield* withBindingWriteLock(
+          input.threadId,
+          Effect.gen(function* () {
+            const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+            if (!binding) {
+              return;
+            }
+            yield* directory.upsert({
+              threadId: input.threadId,
+              provider: binding.provider,
+              runtimePayload: {
+                [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: false,
+              },
+            });
           }),
         );
       });
@@ -2978,6 +3032,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     return {
       startSession,
+      startSessionWithOutcome,
+      completePriorTranscriptBootstrap,
       forkThread,
       sendTurn,
       steerTurn,

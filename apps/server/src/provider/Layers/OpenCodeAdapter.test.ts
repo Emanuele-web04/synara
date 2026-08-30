@@ -1763,6 +1763,37 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("reports no native resume when a supplied cursor has no session id", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    const confirmed = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const input = {
+          provider: "opencode" as const,
+          threadId: asThreadId("thread-malformed-resume-cursor"),
+          runtimeMode: "full-access" as const,
+          resumeCursor: { cwd: "/repo/resume" },
+        };
+        const session = yield* adapter.startSession(input);
+        return adapter.didResumeSession?.(input, session) ?? false;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(confirmed).toBe(false);
+    expect(runtime.createCalls).toHaveLength(1);
+    expect(runtime.updateCalls).toEqual([]);
+  });
+
   it("applies fail-closed resume permissions and restores Full Access for a new turn", async () => {
     const runtime = createMockOpenCodeRuntime();
 
@@ -1836,7 +1867,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           ),
         ),
       ),
-    ).rejects.toThrow("session.update unavailable during resume");
+    ).rejects.toMatchObject({
+      _tag: "ProviderAdapterRequestError",
+      provider: "opencode",
+      method: "session.update",
+      detail: "session.update unavailable during resume",
+    });
 
     expect(runtime.updateCalls).toEqual([
       { sessionID: "existing-session-1", permission: OPEN_CODE_PLAN_PERMISSION_RULES },
