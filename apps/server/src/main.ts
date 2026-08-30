@@ -22,6 +22,10 @@ import {
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
+  MIGRATION_DIVERGENCE_CONSENT_ENV,
+  MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
+} from "@synara/shared/migrationRecovery";
+import {
   optionalBooleanEnvironmentConfig,
   optionalBooleanFlag,
   resolveBooleanConfig,
@@ -65,6 +69,10 @@ import {
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
 import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
+import {
+  embeddedMigrationRuntimeSourceDigest,
+  verifyMigrationRuntimeIdentity,
+} from "./migrationBundleIdentity";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -73,21 +81,19 @@ export class StartupError extends Data.TaggedError("StartupError")<{
 
 const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
 
-function consumeDesktopShutdownTokenFromProcessEnvironment(): string | undefined {
+function consumeProcessEnvironmentValue(environmentKey: string): string | undefined {
   const matchingKeys =
     process.platform === "win32"
-      ? Object.keys(process.env).filter(
-          (key) => key.toUpperCase() === DESKTOP_SHUTDOWN_TOKEN_ENV_KEY,
-        )
-      : [DESKTOP_SHUTDOWN_TOKEN_ENV_KEY];
-  let token: string | undefined;
+      ? Object.keys(process.env).filter((key) => key.toUpperCase() === environmentKey)
+      : [environmentKey];
+  let value: string | undefined;
 
   for (const key of matchingKeys) {
-    token ??= process.env[key];
+    value ??= process.env[key];
     delete process.env[key];
   }
 
-  return token;
+  return value;
 }
 
 interface CliInput {
@@ -173,6 +179,14 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  migrationDivergenceConsent: Config.string(MIGRATION_DIVERGENCE_CONSENT_ENV).pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  migrationRuntimeSourceDigest: Config.string(MIGRATION_RUNTIME_SOURCE_DIGEST_ENV).pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
   ),
@@ -192,9 +206,34 @@ const ServerConfigLive = (input: CliInput) =>
             new StartupError({ message: "Failed to read environment configuration", cause }),
         ),
       );
-      const liveProcessDesktopShutdownToken = yield* Effect.sync(
-        consumeDesktopShutdownTokenFromProcessEnvironment,
+      const liveProcessDesktopShutdownToken = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(DESKTOP_SHUTDOWN_TOKEN_ENV_KEY),
       );
+      const liveProcessMigrationConsent = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(MIGRATION_DIVERGENCE_CONSENT_ENV),
+      );
+      const liveProcessMigrationSourceDigest = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(MIGRATION_RUNTIME_SOURCE_DIGEST_ENV),
+      );
+
+      const launcherMigrationSourceDigest =
+        env.migrationRuntimeSourceDigest ?? liveProcessMigrationSourceDigest;
+      yield* Effect.try({
+        try: () =>
+          verifyMigrationRuntimeIdentity({
+            cwd: cliConfig.cwd,
+            embeddedDigest: embeddedMigrationRuntimeSourceDigest(),
+            launcherDigest: launcherMigrationSourceDigest,
+          }),
+        catch: (cause) =>
+          new StartupError({
+            message:
+              cause instanceof Error
+                ? `${cause.name}: ${cause.message}`
+                : "Migration bundle check failed",
+            cause,
+          }),
+      });
 
       const mode = Option.getOrElse(input.mode, () => env.mode);
 
@@ -239,6 +278,8 @@ const ServerConfigLive = (input: CliInput) =>
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
       const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
+      const migrationDivergenceConsent =
+        env.migrationDivergenceConsent ?? liveProcessMigrationConsent;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd,
@@ -296,6 +337,7 @@ const ServerConfigLive = (input: CliInput) =>
         noBrowser,
         authToken,
         desktopShutdownToken,
+        migrationDivergenceConsent,
         autoBootstrapProjectFromCwd,
         logProviderEvents,
         logWebSocketEvents,
@@ -334,6 +376,7 @@ export function makeServerStartupLogData(config: ServerConfigShape): Record<stri
   const safeConfig: Record<string, unknown> = { ...config };
   delete safeConfig.authToken;
   delete safeConfig.desktopShutdownToken;
+  delete safeConfig.migrationDivergenceConsent;
   delete safeConfig.devUrl;
 
   return {
