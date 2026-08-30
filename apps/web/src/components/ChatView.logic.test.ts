@@ -2582,6 +2582,12 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
       resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession", "permissions"),
     ).toBeNull();
   });
+
+  it("does not widen a tool approval to full access", () => {
+    expect(
+      resolveRuntimeModeAfterApprovalDecision("approval-required", "acceptForSession", "tool"),
+    ).toBeNull();
+  });
 });
 
 describe("commitAfterRuntimeModePersistence", () => {
