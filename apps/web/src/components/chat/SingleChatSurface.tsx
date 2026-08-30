@@ -102,13 +102,15 @@ import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
-import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
+import { routeSingleDockPaneOpenRequest } from "./dockPaneOpenRequest";
 import {
   selectFloatingBrowserRequested,
   useFloatingBrowserRequestStore,
 } from "./floatingBrowserRequestStore";
-import { routeSingleDevicePaneOpenRequest } from "./devicePaneOpenRequest";
-import { pullRequestDetailInputFromPane } from "../pullRequest/pullRequestDetail.logic";
+import {
+  pullRequestDetailInputFromPane,
+  pullRequestPaneTabLabel,
+} from "../pullRequest/pullRequestDetail.logic";
 import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneStateIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { SidebarInset } from "../ui/sidebar";
@@ -630,18 +632,28 @@ export function SingleChatSurface(props: {
     setDockOpen,
   ]);
 
+  // Panes that follow a cross-thread open request all route the same way:
+  // replace the current entry so the agent's redirect does not pile up history.
+  const navigateToThreadInPlace = (threadId: ThreadId) => {
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+    });
+  };
+
   useBrowserPanelDesktopBridge({
     onToggle: () => {
       requestImmediateDockHydration("browser");
       toggleSingletonPane(props.threadId, { kind: "browser" });
     },
     onOpen: (requestedThreadId) => {
-      routeSingleBrowserPanelOpenRequest({
+      routeSingleDockPaneOpenRequest({
         currentThreadId: props.threadId,
         requestedThreadId,
-        requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
-        showFloatingBrowser: requestFloatingBrowser,
-        rememberFloatingBrowser: requestFloatingBrowser,
+        requestImmediateHydration: () => requestImmediateDockHydration("browser"),
+        openPane: requestFloatingBrowser,
+        crossThread: { kind: "remember", remember: requestFloatingBrowser },
       });
     },
   });
@@ -649,18 +661,12 @@ export function SingleChatSurface(props: {
   useDeviceEventBridge({
     onOpenPaneRequested: hasDeviceSupport
       ? (event) => {
-          routeSingleDevicePaneOpenRequest({
+          routeSingleDockPaneOpenRequest({
             currentThreadId: props.threadId,
             requestedThreadId: event.threadId,
-            requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
-            openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
-            navigateToThread: (threadId) => {
-              void navigate({
-                to: "/$threadId",
-                params: { threadId },
-                replace: true,
-              });
-            },
+            requestImmediateHydration: () => requestImmediateDockHydration("device"),
+            openPane: (threadId) => openPane(threadId, { kind: "device" }),
+            crossThread: { kind: "navigate", navigateToThread: navigateToThreadInPlace },
           });
         }
       : null,
@@ -1127,9 +1133,9 @@ export function SingleChatSurface(props: {
               onToggleDiff={handleToggleDiff}
               onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
-              {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
+              {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onSplitSurface={handleSplitSurface}
               viewModeAction={{
                 label: "Editor view",
@@ -1170,9 +1176,7 @@ export function SingleChatSurface(props: {
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => closePane(props.threadId, paneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
-          onOpenChange={(open) => {
-            setDockOpen(props.threadId, open);
-          }}
+          onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
           renderPane={renderDockPane}
         />
