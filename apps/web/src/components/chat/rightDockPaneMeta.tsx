@@ -16,7 +16,7 @@ import {
   GitPullRequestIcon,
   GlobeIcon,
   InfoIcon,
-  MessageCircleIcon,
+  SidechatIcon,
   TerminalIcon,
 } from "~/lib/icons";
 import {
@@ -47,7 +47,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   explorer: { label: "Explorer", Icon: FoldersIcon },
   file: { label: "File", Icon: FileIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
-  sidechat: { label: "Side chats", Icon: MessageCircleIcon },
+  sidechat: { label: "Side chats", Icon: SidechatIcon },
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
 };

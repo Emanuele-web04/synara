@@ -243,6 +243,9 @@ export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
+// Canonical side-chat glyph — every sidechat surface (right dock pane, environment
+// panel rows, tabs) must use this one so the feature reads consistently.
+export const SidechatIcon: LucideIcon = centralIconWrapper("chat-bubble-7");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
 export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
 export const PanelRightCloseIcon = centralIconWrapper("sidebar-simple-right-wide");

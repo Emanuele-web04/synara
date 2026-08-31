@@ -1,7 +1,7 @@
 // FILE: EnvironmentUsageSection.tsx
-// Purpose: "Usage" section of the Environment panel — one compact menu per enabled provider.
+// Purpose: "Usage" section of the Environment panel — compact menu for the active provider.
 
-import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -107,15 +107,17 @@ function EnvironmentProviderUsageRow({
   );
 }
 
-export function EnvironmentUsageSection() {
+export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   const threads = useStore(selectAccountRateLimitThreads);
   const threadRateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
-  // The server already filters the batch. Rechecking the live settings projection prevents a
+  // Only the active thread's provider is shown. Rechecking the live settings projection prevents a
   // just-disabled provider from lingering while React Query refreshes the previous batch.
   const snapshots = (usageQuery.data ?? []).filter(
-    (snapshot) => settingsQuery.data?.providers[snapshot.provider].enabled !== false,
+    (snapshot) =>
+      snapshot.provider === provider &&
+      settingsQuery.data?.providers[snapshot.provider].enabled !== false,
   );
 
   if (snapshots.length === 0) {
