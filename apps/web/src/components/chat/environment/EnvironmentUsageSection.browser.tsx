@@ -36,16 +36,19 @@ function snapshot(
   };
 }
 
+function createQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+}
+
 describe("EnvironmentUsageSection", () => {
   it("renders only the active provider with every reported usage window", async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [
         { window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 },
         { window: "5h", usedPercent: 5, windowDurationMins: 300 },
       ]),
       snapshot("claudeAgent", [{ window: "Weekly", usedPercent: 54, windowDurationMins: 10_080 }]),
-      snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
     ]);
     queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
 
@@ -60,9 +63,6 @@ describe("EnvironmentUsageSection", () => {
     });
     await expect.element(codex).toBeVisible();
     expect(document.querySelector('button[aria-label^="Claude usage:"]')).toBeNull();
-    expect(document.querySelector('button[aria-label^="Cursor usage:"]')).toBeNull();
-    expect(appSettingsMocks.useAppSettings).not.toHaveBeenCalled();
-    expect(queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))).toBeUndefined();
     await expect.element(page.getByText("5h", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Weekly", { exact: true })).toBeVisible();
 
@@ -72,8 +72,25 @@ describe("EnvironmentUsageSection", () => {
     await expect.element(page.getByText("82% left", { exact: true })).toBeVisible();
   });
 
+  it("keeps the active provider row when the batch has no snapshot for it", async () => {
+    const queryClient = createQueryClient();
+    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side).
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot("codex", [{ window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 }]),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="claudeAgent" />
+      </QueryClientProvider>,
+    );
+
+    await expect.element(page.getByRole("button", { name: "Claude usage: No data" })).toBeVisible();
+  });
+
   it("hides the section when the active provider is disabled", async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
     ]);

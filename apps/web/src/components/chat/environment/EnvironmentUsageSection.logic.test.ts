@@ -66,6 +66,38 @@ describe("resolveEnvironmentProviderUsageSummary", () => {
     expect(summary.ariaLabel).toBe(`Codex usage: ${label}`);
   });
 
+  it("falls back to No data when the batch has no snapshot for the provider", () => {
+    const summary = resolveEnvironmentProviderUsageSummary({
+      providerName: "Claude",
+      rows: [],
+      snapshot: undefined,
+      hasUsageLines: false,
+    });
+
+    expect(summary.statusLabel).toBe("No data");
+    expect(summary.ariaLabel).toBe("Claude usage: No data");
+  });
+
+  it("shows a loading label only while nothing is displayable yet", () => {
+    const loading = resolveEnvironmentProviderUsageSummary({
+      providerName: "Claude",
+      rows: [],
+      snapshot: undefined,
+      hasUsageLines: false,
+      isLoading: true,
+    });
+    expect(loading.statusLabel).toBe("Loading…");
+
+    const withLines = resolveEnvironmentProviderUsageSummary({
+      providerName: "Claude",
+      rows: [],
+      snapshot: undefined,
+      hasUsageLines: true,
+      isLoading: true,
+    });
+    expect(withLines.statusLabel).toBe("Connected");
+  });
+
   it("reports connected when an ok provider only exposes usage text", () => {
     const providerSnapshot = snapshot({
       usageLines: [{ label: "Limits", value: "Remaining limits stay in the provider CLI." }],
