@@ -1412,6 +1412,16 @@ export const makeGitManager = Effect.gen(function* () {
   const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
     function* (input) {
       switch (input.scope) {
+        case "ref": {
+          const compareRef = input.compareRef?.trim() ?? "";
+          if (compareRef.length === 0) {
+            return yield* gitManagerError(
+              "readWorkingTreeDiff",
+              "A branch or commit is required to compare the working tree against.",
+            );
+          }
+          return yield* gitCore.readRefPatch(input.cwd, compareRef);
+        }
         case "branch":
           return yield* gitCore.readBranchPatch(input.cwd);
         case "staged":
@@ -1424,8 +1434,30 @@ export const makeGitManager = Effect.gen(function* () {
       }
     },
   );
+
+  const blameLine: GitManagerShape["blameLine"] = Effect.fnUntraced(function* (input) {
+    return yield* gitCore.blameLine(input);
+  });
+
+  const readFileAtRev: GitManagerShape["readFileAtRev"] = Effect.fnUntraced(function* (input) {
+    return yield* gitCore.readFileAtRev(input);
+  });
+
+  // Same reason as summarizeDiff below: the badge surfaces need three integers, not the patch.
+  // Deriving them from the very patch readWorkingTreeDiff would have returned keeps the numbers
+  // identical to the ones a client-side parse produced, so no surface changes what it displays.
   const readWorkingTreeDiffStats: GitManagerShape["readWorkingTreeDiffStats"] = Effect.fnUntraced(
     function* (input) {
+      if (input.scope === "ref") {
+        const compareRef = input.compareRef?.trim() ?? "";
+        if (compareRef.length === 0) {
+          return yield* gitManagerError(
+            "readWorkingTreeDiffStats",
+            "A branch or commit is required to compare the working tree against.",
+          );
+        }
+        return yield* gitCore.readDiffStats(input.cwd, "ref", compareRef);
+      }
       return yield* gitCore.readDiffStats(input.cwd, input.scope ?? "workingTree");
     },
   );
@@ -2777,6 +2809,8 @@ The local stash entry was kept for recovery.`,
     pullRequestForBranch,
     readWorkingTreeDiff,
     readWorkingTreeDiffStats,
+    blameLine,
+    readFileAtRev,
     summarizeDiff,
     resolvePullRequest,
     pullRequestSnapshot,

@@ -26,11 +26,18 @@ import { createReadStream } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
+import {
+  DEFAULT_GIT_RECENT_COMMIT_LIMIT,
+  GIT_READ_FILE_AT_REV_MAX_BYTES,
+  type GitRecentCommit,
+} from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
+import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
 import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
@@ -71,7 +78,9 @@ export function statusUpstreamRefreshCacheTimeToLive(
 }
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const RECENT_COMMIT_FIELD_SEPARATOR = "\u001f";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
+const BLAME_LINE_TIMEOUT_MS = 10_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
@@ -158,6 +167,19 @@ function parseBranchLine(line: string): { name: string; current: boolean } | nul
     name,
     current: trimmed.startsWith("* "),
   };
+}
+
+function parseRecentCommitLines(stdout: string): ReadonlyArray<GitRecentCommit> {
+  const commits: GitRecentCommit[] = [];
+  for (const line of stdout.split("\n")) {
+    if (line.length === 0) continue;
+    const [sha = "", shortSha = "", subject = "", committedAt = ""] = line.split(
+      RECENT_COMMIT_FIELD_SEPARATOR,
+    );
+    if (sha.length === 0 || shortSha.length === 0) continue;
+    commits.push({ sha, shortSha, subject, committedAt });
+  }
+  return commits;
 }
 
 function parseRemoteNames(stdout: string): ReadonlyArray<string> {
@@ -554,6 +576,13 @@ export const collectGitOutput = Effect.fn(function* <E>(
 
   yield* Stream.runForEach(stream, (chunk) =>
     Effect.gen(function* () {
+      // In truncate mode the retained prefix is complete once `text` is full:
+      // keep draining the pipe so the child can exit promptly, but skip the
+      // decoding and line-scanning work for everything past the limit so a
+      // huge blob costs O(1) per chunk instead of proportional processing.
+      if (outputMode === "truncate" && text.length >= maxOutputBytes) {
+        return;
+      }
       bytes += chunk.byteLength;
       if (bytes > maxOutputBytes && outputMode === "error") {
         return yield* new GitCommandError({
@@ -1744,6 +1773,69 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const readFileAtRev: GitCoreShape["readFileAtRev"] = (input) =>
+      Effect.gen(function* () {
+        const filePath = input.filePath.trim();
+        if (!isWorkspaceRelativePathSafe(filePath)) {
+          return yield* createGitCommandError(
+            "GitCore.readFileAtRev",
+            input.cwd,
+            ["cat-file", "blob", filePath],
+            "File path must be a workspace-relative path.",
+          );
+        }
+
+        const maxBytes = input.maxBytes ?? GIT_READ_FILE_AT_REV_MAX_BYTES;
+        const requestedRev = input.rev?.trim() || "HEAD";
+        const baseRev = input.mergeBaseWith
+          ? (yield* executeGit(
+              "GitCore.readFileAtRev.mergeBase",
+              input.cwd,
+              ["merge-base", input.mergeBaseWith, "HEAD"],
+              { allowNonZeroExit: true },
+            ).pipe(Effect.map((result) => result.stdout.trim()))) || "HEAD"
+          : requestedRev;
+
+        const resolvedRev =
+          (yield* executeGit(
+            "GitCore.readFileAtRev.revParse",
+            input.cwd,
+            ["rev-parse", "--verify", "--quiet", `${baseRev}^{commit}`],
+            { allowNonZeroExit: true },
+          ).pipe(Effect.map((result) => result.stdout.trim()))) || baseRev;
+
+        const blobRef = `${resolvedRev}:${filePath}`;
+        const sizeResult = yield* executeGit(
+          "GitCore.readFileAtRev.size",
+          input.cwd,
+          ["cat-file", "-s", blobRef],
+          { allowNonZeroExit: true },
+        );
+        if (sizeResult.code !== 0) {
+          return { contents: "", resolvedRev, missing: true, truncated: false };
+        }
+        const blobSize = Number.parseInt(sizeResult.stdout.trim(), 10);
+        const truncated = Number.isFinite(blobSize) && blobSize > maxBytes;
+
+        const contents = yield* executeGit(
+          "GitCore.readFileAtRev.blob",
+          input.cwd,
+          ["cat-file", "blob", blobRef],
+          { maxOutputBytes: maxBytes, outputMode: "truncate" },
+        ).pipe(Effect.map((result) => result.stdout));
+
+        if (contents.includes("\u0000")) {
+          return yield* createGitCommandError(
+            "GitCore.readFileAtRev",
+            input.cwd,
+            ["cat-file", "blob", blobRef],
+            "File at this revision appears to be binary.",
+          );
+        }
+
+        return { contents, resolvedRev, missing: false, truncated };
+      });
+
     const readBranchPatch: GitCoreShape["readBranchPatch"] = (cwd) =>
       Effect.gen(function* () {
         const mergeBase = yield* resolveBranchMergeBase(cwd);
@@ -1764,7 +1856,69 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope) =>
+    const blameLine: GitCoreShape["blameLine"] = (input) =>
+      Effect.gen(function* () {
+        const args = [
+          "blame",
+          "--porcelain",
+          "-L",
+          `${input.line},${input.line}`,
+          ...(input.rev ? [input.rev] : []),
+          "--",
+          input.filePath,
+        ];
+        const stdout = yield* executeGit("GitCore.blameLine", input.cwd, args, {
+          timeoutMs: BLAME_LINE_TIMEOUT_MS,
+          fallbackErrorMessage: "git blame failed",
+        }).pipe(Effect.map((result) => result.stdout));
+
+        const parsed = parseGitBlamePorcelain(stdout);
+        if (!parsed) {
+          return yield* createGitCommandError(
+            "GitCore.blameLine",
+            input.cwd,
+            args,
+            "git blame returned no attribution for this line.",
+          );
+        }
+        return parsed;
+      });
+
+    const readRefPatch: GitCoreShape["readRefPatch"] = (cwd, ref) =>
+      Effect.gen(function* () {
+        const verified = yield* executeGit(
+          "GitCore.readRefPatch.verifyRef",
+          cwd,
+          ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+          { allowNonZeroExit: true },
+        );
+        const resolvedRef = verified.stdout.trim();
+        if (verified.code !== 0 || resolvedRef.length === 0) {
+          return yield* createGitCommandError(
+            "GitCore.readRefPatch.verifyRef",
+            cwd,
+            ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+            `Cannot resolve "${ref}" to a commit in this repository.`,
+          );
+        }
+
+        const trackedPatch = yield* executeGit(
+          "GitCore.readRefPatch.trackedPatch",
+          cwd,
+          ["diff", "--patch", "--no-color", "--no-ext-diff", resolvedRef],
+          {
+            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+            maxOutputBytes: 10_000_000,
+          },
+        ).pipe(Effect.map((result) => result.stdout));
+        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readRefPatch");
+
+        return {
+          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
+        };
+      });
+
+    const readDiffStats: GitCoreShape["readDiffStats"] = (cwd, scope, ref) =>
       Effect.gen(function* () {
         let trackedArgs: ReadonlyArray<string>;
         let includeUntracked = false;
@@ -1779,6 +1933,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           case "branch": {
             const mergeBase = yield* resolveBranchMergeBase(cwd);
             trackedArgs = ["diff", "--numstat", "-z", "--minimal", "--no-ext-diff", mergeBase];
+            includeUntracked = true;
+            break;
+          }
+          case "ref": {
+            const compareRef = (ref ?? "").trim();
+            const verified = yield* executeGit(
+              "GitCore.readDiffStats.verifyRef",
+              cwd,
+              ["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`],
+              { allowNonZeroExit: true },
+            );
+            const resolvedRef = verified.stdout.trim();
+            if (verified.code !== 0 || resolvedRef.length === 0) {
+              return yield* createGitCommandError(
+                "GitCore.readDiffStats.verifyRef",
+                cwd,
+                ["rev-parse", "--verify", "--quiet", `${compareRef}^{commit}`],
+                `Cannot resolve "${compareRef}" to a commit in this repository.`,
+              );
+            }
+            trackedArgs = ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef];
             includeUntracked = true;
             break;
           }
@@ -2278,6 +2453,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const branches = [...localBranches, ...remoteBranches];
 
         return { branches, isRepo: true, hasOriginRemote: remoteNames.includes("origin") };
+      });
+
+    const listRecentCommits: GitCoreShape["listRecentCommits"] = (input) =>
+      Effect.gen(function* () {
+        const limit = input.limit ?? DEFAULT_GIT_RECENT_COMMIT_LIMIT;
+        const result = yield* executeGit(
+          "GitCore.listRecentCommits",
+          input.cwd,
+          ["log", "--format=%H%x1f%h%x1f%s%x1f%cI", "-n", String(limit)],
+          {
+            timeoutMs: 10_000,
+            allowNonZeroExit: true,
+          },
+        ).pipe(
+          Effect.catchIf(isMissingGitCwdError, () =>
+            Effect.succeed({ code: 128, stdout: "", stderr: "fatal: not a git repository" }),
+          ),
+        );
+
+        if (result.code !== 0) {
+          return { commits: [] };
+        }
+
+        return { commits: parseRecentCommitLines(result.stdout) };
       });
 
     const createWorktree: GitCoreShape["createWorktree"] = (input) =>
@@ -3419,6 +3618,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readUnstagedPatch,
       readStagedPatch,
       readBranchPatch,
+      blameLine,
+      readFileAtRev,
+      readRefPatch,
       readDiffStats,
       prepareCommitContext,
       commit,
@@ -3427,6 +3629,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readRangeContext,
       readConfigValue,
       listBranches,
+      listRecentCommits,
       createWorktree,
       recordWorktreeOwnership,
       verifyWorktreeOwnership,
