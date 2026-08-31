@@ -72,9 +72,10 @@ describe("EnvironmentUsageSection", () => {
     await expect.element(page.getByText("82% left", { exact: true })).toBeVisible();
   });
 
-  it("keeps the active provider row when the batch has no snapshot for it", async () => {
+  it("hides the section while the provider has nothing displayable yet", async () => {
     const queryClient = createQueryClient();
-    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side).
+    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side) and no
+    // local/thread fallback produced rows: nothing renders until some source yields data.
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [{ window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 }]),
     ]);
@@ -86,7 +87,29 @@ describe("EnvironmentUsageSection", () => {
       </QueryClientProvider>,
     );
 
-    await expect.element(page.getByRole("button", { name: "Claude usage: No data" })).toBeVisible();
+    expect(document.querySelector('button[aria-label^="Claude usage:"]')).toBeNull();
+  });
+
+  it("shows the row from usage lines alone when the provider reports no limit windows", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot(
+        "droid",
+        [],
+        [{ label: "Limits", value: "Remaining limits stay in the Droid CLI." }],
+      ),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="droid" />
+      </QueryClientProvider>,
+    );
+
+    await expect
+      .element(page.getByRole("button", { name: "Droid usage: Connected" }))
+      .toBeVisible();
   });
 
   it("hides the section when the active provider is disabled", async () => {

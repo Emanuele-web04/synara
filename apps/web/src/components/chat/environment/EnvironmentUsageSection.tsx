@@ -37,6 +37,11 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
   if (settingsQuery.data?.providers[provider].enabled === false) {
     return null;
   }
+  // Nothing displayable yet (first fetch still running, sign-in required, or the provider
+  // exposes no usage): hide the section entirely — it appears once any source yields data.
+  if (model.rows.length === 0 && model.usageLines.length === 0) {
+    return null;
+  }
 
   const providerName = providerUsageDisplayName(provider);
   const summary = resolveEnvironmentProviderUsageSummary({
@@ -44,7 +49,6 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
     rows: model.rows,
     snapshot,
     hasUsageLines: model.usageLines.length > 0,
-    isLoading: model.isLoading,
   });
 
   return (

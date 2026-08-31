@@ -32,12 +32,8 @@ export function resolveEnvironmentProviderUsageSummary(input: {
   /** Live batch snapshot when available; the row renders without one (local/thread fallbacks). */
   readonly snapshot: ServerProviderUsageSnapshot | undefined;
   readonly hasUsageLines: boolean;
-  readonly isLoading?: boolean;
 }): EnvironmentProviderUsageSummary {
-  const statusLabel =
-    input.isLoading === true && input.rows.length === 0 && !input.hasUsageLines
-      ? "Loading…"
-      : providerUsageStatusLabel(input.snapshot, input.hasUsageLines);
+  const statusLabel = providerUsageStatusLabel(input.snapshot, input.hasUsageLines);
   const rowSummary = input.rows
     .map((row) => `${row.label} ${row.remainingLabel} remaining`)
     .join(", ");
