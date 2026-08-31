@@ -1596,6 +1596,10 @@ export default function Sidebar() {
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
+  const openBugReport = useCallback(
+    () => openFeedbackDialog(undefined, "bug"),
+    [openFeedbackDialog],
+  );
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
@@ -5609,7 +5613,7 @@ export default function Sidebar() {
         label: "Report a bug",
         description: "Open the bug report dialog with the Bug category selected.",
         keywords: ["bug", "report", "issue", "problem", "broken", "crash", "synara"],
-        run: () => openFeedbackDialog(undefined, "bug"),
+        run: openBugReport,
       },
       {
         id: "settings",
@@ -5673,6 +5677,7 @@ export default function Sidebar() {
       importThreadShortcutLabel,
       newChatShortcutLabel,
       newThreadShortcutLabel,
+      openBugReport,
       openSpaceCreator,
       spaces,
       usageSettingsShortcutLabel,
@@ -6463,7 +6468,7 @@ export default function Sidebar() {
                   icon={BugIcon}
                   label="Report a bug"
                   tooltip="Report a bug"
-                  onClick={() => openFeedbackDialog(undefined, "bug")}
+                  onClick={openBugReport}
                 />
                 {showDesktopUpdateButton ? (
                   <Tooltip>
