@@ -181,12 +181,12 @@ describe("composerDraftStore persisted-state hydration", () => {
     });
 
     expect(hydrated.draftsByThreadId[threadId]?.activeProvider).toBe("opencode");
-    expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider.opencode).toEqual({
+    expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider?.opencode).toEqual({
       provider: "opencode",
       model: "openai/gpt-5",
     });
     expect(hydrated.stickyActiveProvider).toBe("opencode");
-    expect(hydrated.stickyModelSelectionByProvider.opencode?.provider).toBe("opencode");
+    expect(hydrated.stickyModelSelectionByProvider?.opencode?.provider).toBe("opencode");
   });
 
   it("preserves a staged goal in draft-thread state during hydration and drops blank ones", () => {
