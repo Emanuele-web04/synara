@@ -59,9 +59,7 @@ export function resolveProviderUsageSummary(input: {
   const derivedRateLimits = input.accountRateLimits.filter((rateLimit) =>
     input.provider ? rateLimit.provider === input.provider : true,
   );
-  const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(
-    input.authoritativeLiveSnapshot,
-  );
+  const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(input.authoritativeLiveSnapshot);
   const localUsageRateLimit = normalizeServerProviderUsageRateLimit(input.localUsageSnapshot);
   const openUsageRateLimit = normalizeOpenUsageSnapshot(input.openUsageSnapshot, input.provider);
   const rateLimits = mergeProviderRateLimits(
@@ -87,8 +85,7 @@ export function resolveProviderUsageSummary(input: {
 
   return {
     learnMoreHref:
-      deriveRateLimitLearnMoreHref(rateLimits) ??
-      deriveProviderUsageLearnMoreHref(input.provider),
+      deriveRateLimitLearnMoreHref(rateLimits) ?? deriveProviderUsageLearnMoreHref(input.provider),
     rateLimits,
     usageLines,
     usageNotice: detail ? detail : undefined,

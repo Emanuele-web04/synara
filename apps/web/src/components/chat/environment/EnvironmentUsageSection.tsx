@@ -59,12 +59,7 @@ function EnvironmentProviderUsageRow({
   });
 
   return (
-    <ProviderUsageMenuPopup
-      provider={provider}
-      model={model}
-      align="start"
-      showUsageLines={true}
-    >
+    <ProviderUsageMenuPopup provider={provider} model={model} align="start" showUsageLines={true}>
       <MenuTrigger
         render={
           <button

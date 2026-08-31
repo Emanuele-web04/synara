@@ -3,10 +3,7 @@
 
 import "../../../index.css";
 
-import {
-  DEFAULT_SERVER_SETTINGS_VIEW,
-  type ServerProviderUsageSnapshot,
-} from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,16 +48,18 @@ describe("EnvironmentUsageSection", () => {
         { window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 },
         { window: "5h", usedPercent: 5, windowDurationMins: 300 },
       ]),
-      snapshot("claudeAgent", [
-        { window: "Weekly", usedPercent: 54, windowDurationMins: 10_080 },
-      ]),
+      snapshot("claudeAgent", [{ window: "Weekly", usedPercent: 54, windowDurationMins: 10_080 }]),
       snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
-      snapshot("droid", [], [
-        {
-          label: "Limits",
-          value: "Remaining limits stay in the Droid CLI.",
-        },
-      ]),
+      snapshot(
+        "droid",
+        [],
+        [
+          {
+            label: "Limits",
+            value: "Remaining limits stay in the Droid CLI.",
+          },
+        ],
+      ),
     ]);
     queryClient.setQueryData(serverQueryKeys.settings(), {
       ...DEFAULT_SERVER_SETTINGS_VIEW,
@@ -88,9 +87,7 @@ describe("EnvironmentUsageSection", () => {
     await expect.element(droid).toBeVisible();
     expect(document.querySelector('button[aria-label^="Cursor usage:"]')).toBeNull();
     expect(appSettingsMocks.useAppSettings).not.toHaveBeenCalled();
-    expect(
-      queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null)),
-    ).toBeUndefined();
+    expect(queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))).toBeUndefined();
     await expect.element(page.getByText("5h", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Weekly", { exact: true }).first()).toBeVisible();
 
