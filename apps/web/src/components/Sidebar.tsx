@@ -6,6 +6,7 @@ import {
   AddPlusIcon,
   ArchiveIcon,
   BookIcon,
+  BugIcon,
   ChatBubbleIcon,
   CircleQuestionIcon,
   ClockIcon,
@@ -206,7 +207,6 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-
 import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
-import { SidebarBugReportButton } from "./SidebarBugReportButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
@@ -5609,6 +5609,7 @@ export default function Sidebar() {
         label: "Report a bug",
         description: "Open the bug report dialog with the Bug category selected.",
         keywords: ["bug", "report", "issue", "problem", "broken", "crash", "synara"],
+        run: () => openFeedbackDialog(undefined, "bug"),
       },
       {
         id: "settings",
@@ -6458,7 +6459,12 @@ export default function Sidebar() {
                     <span>Settings</span>
                   </SidebarMenuButton>
                 )}
-                <SidebarBugReportButton onClick={() => openFeedbackDialog(undefined, "bug")} />
+                <SidebarIconButton
+                  icon={BugIcon}
+                  label="Report a bug"
+                  tooltip="Report a bug"
+                  onClick={() => openFeedbackDialog(undefined, "bug")}
+                />
                 {showDesktopUpdateButton ? (
                   <Tooltip>
                     <TooltipTrigger
@@ -6920,7 +6926,6 @@ export default function Sidebar() {
             void navigate({ to: "/settings" });
           }}
           onOpenFeedback={openFeedbackDialog}
-          onOpenBugReport={() => openFeedbackDialog(undefined, "bug")}
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
@@ -6952,7 +6957,6 @@ function SidebarSearchPaletteController(props: {
   homeDir: string | null;
   onOpenSettings: () => void;
   onOpenFeedback: () => void;
-  onOpenBugReport: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
@@ -7018,7 +7022,6 @@ function SidebarSearchPaletteController(props: {
       homeDir={props.homeDir}
       onOpenSettings={props.onOpenSettings}
       onOpenFeedback={props.onOpenFeedback}
-      onOpenBugReport={props.onOpenBugReport}
       onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
       importProviders={importProviders}
