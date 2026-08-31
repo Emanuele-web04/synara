@@ -16,7 +16,7 @@ export interface RateLimitWindow {
 export interface ProviderRateLimit {
   provider: string;
   updatedAt: string;
-  limits?: RateLimitWindow[];
+  limits?: ReadonlyArray<RateLimitWindow>;
   usedPercent?: number;
   utilization?: number;
   resetsAt?: string;
