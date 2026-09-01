@@ -66,6 +66,11 @@ import {
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import {
+  hasDevinApiKeyEnv,
+  readDevinStoredCredentials,
+  resolveDevinBinaryPath,
+} from "../acp/DevinAcpSupport";
+import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
   parseClaudeAuthStatusFromOutput,
@@ -117,6 +122,7 @@ const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
+const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
@@ -130,6 +136,7 @@ const PROVIDERS = [
   ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
+  DEVIN_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
@@ -1821,6 +1828,88 @@ export const makeCheckCursorProviderStatus = (
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
+// ── Devin health check ───────────────────────────────────────────────
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+  readStoredCredentials: typeof readDevinStoredCredentials = readDevinStoredCredentials,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDevinBinaryPath(binaryPath);
+    const env = buildProviderChildEnvironment({ provider: DEVIN_PROVIDER });
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runProviderCommand(executable, ["--version"], env),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Devin CLI (`devin`) is not installed or not on PATH."
+            : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const versionResult = versionProbe.result;
+      const detail = detailFromResult(versionResult);
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const versionResult = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(
+      `${versionResult.stdout}\n${versionResult.stderr}`,
+    );
+    const storedCredentials = yield* Effect.promise(() => readStoredCredentials());
+    const hasApiKey = hasDevinApiKeyEnv() || storedCredentials?.apiKey !== undefined;
+
+    return {
+      provider: DEVIN_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
+        : {
+            message:
+              "Devin CLI is installed. Run `devin auth login` to authenticate locally, or set WINDSURF_API_KEY before starting a session.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -2104,6 +2193,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.opencode.binaryPath;
           case "pi":
             return settings.providers.pi.binaryPath;
+          case "devin":
+            return settings.providers.devin.binaryPath;
         }
       };
 
@@ -2143,7 +2234,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
@@ -2283,6 +2374,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   CURSOR_PROVIDER,
                   makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DEVIN_PROVIDER,
+                  makeCheckDevinProviderStatus(settings.providers.devin?.binaryPath),
                 ),
                 checkProviderWhenEnabled(
                   settings,

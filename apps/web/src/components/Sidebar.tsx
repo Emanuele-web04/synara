@@ -2590,6 +2590,7 @@ export default function Sidebar() {
             ? {}
             : { createIfMissing: options.createIfMissing }),
           ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+          defaultProvider: appSettings.defaultProvider,
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2632,6 +2633,7 @@ export default function Sidebar() {
       await runExclusiveProjectAddition(projectAdditionLockRef, runAddProject);
     },
     [
+      appSettings.defaultProvider,
       appSettings.defaultThreadEnvMode,
       handleNewThread,
       projects,

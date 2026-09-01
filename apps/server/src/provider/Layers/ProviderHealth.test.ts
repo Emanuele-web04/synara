@@ -22,6 +22,7 @@ import {
   checkAntigravityProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
+  checkDevinProviderStatus,
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   checkPiProviderStatus,
@@ -30,6 +31,7 @@ import {
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
+  makeCheckDevinProviderStatus,
   makeCheckGrokProviderStatus,
   makeCheckOpenCodeProviderStatus,
   makeProviderHealthLive,
@@ -155,6 +157,7 @@ const allProvidersDisabledSettings = {
     codex: { enabled: false },
     claudeAgent: { enabled: false },
     cursor: { enabled: false },
+    devin: { enabled: false },
     antigravity: { enabled: false },
     grok: { enabled: false },
     droid: { enabled: false },
@@ -169,6 +172,7 @@ const allProvidersDisabledServerSettings = {
     codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
     claudeAgent: { ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent, enabled: false },
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
+    devin: { ...DEFAULT_SERVER_SETTINGS.providers.devin, enabled: false },
     antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
@@ -499,7 +503,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 8);
+      assert.strictEqual(statuses.length, 9);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -634,7 +638,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 8);
+        assert.strictEqual(statuses.length, 9);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -2297,6 +2301,115 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(status.message, "Grok CLI (`grok`) is not installed or not on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn grok ENOENT"))),
+    );
+  });
+
+  describe("checkDevinProviderStatus", () => {
+    it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () => {
+      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
+      const previousDevinKey = process.env.DEVIN_API_KEY;
+      process.env.WINDSURF_API_KEY = "windsurf-test-key";
+      delete process.env.DEVIN_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(status.authLabel, "Devin API Key");
+        assert.strictEqual(status.version, "2.0.0");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousWindsurfKey === undefined) {
+              delete process.env.WINDSURF_API_KEY;
+            } else {
+              process.env.WINDSURF_API_KEY = previousWindsurfKey;
+            }
+            if (previousDevinKey === undefined) {
+              delete process.env.DEVIN_API_KEY;
+            } else {
+              process.env.DEVIN_API_KEY = previousDevinKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("returns ready with auth guidance when no Devin API key is set", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.match(status.message ?? "", /devin auth login|WINDSURF_API_KEY/u);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("recognizes credentials saved by devin auth login", () => {
+      let credentialsRead = false;
+      return Effect.gen(function* () {
+        const status = yield* makeCheckDevinProviderStatus(undefined, async () => {
+          credentialsRead = true;
+          return { apiKey: "stored-test-key" };
+        });
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(credentialsRead, true);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+
+    it.effect("returns unavailable when Devin CLI is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.message, "Devin CLI (`devin`) is not installed or not on PATH.");
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn devin ENOENT"))),
+    );
+
+    it.effect("uses the configured Devin binary for the version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckDevinProviderStatus("/custom/bin/devin");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/devin");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 2.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
     );
   });
 

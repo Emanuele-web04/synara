@@ -150,10 +150,23 @@ export const DroidModelOptions = Schema.Struct({
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
+export const DevinModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(TrimmedNonEmptyString),
+  // Devin's ACP command accepts a concrete model UID at process start. This
+  // is populated from runtime discovery when an abstract effort/context
+  // selection needs to resolve to a specific variant.
+  modelVariant: Schema.optional(TrimmedNonEmptyString),
+});
+export type DevinModelOptions = typeof DevinModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
+  devin: Schema.optional(DevinModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
@@ -533,6 +546,16 @@ type ModelDefinition = {
   readonly capabilities: ModelCapabilities;
 };
 
+// Static catalog entries that rely on live CLI discovery advertise no
+// capabilities of their own.
+const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
 /**
  * TODO: This should not be a static array, each provider
  * should return its own model list over the WS API.
@@ -845,13 +868,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "openai/gpt-5",
       name: "OpenAI GPT-5",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
@@ -1054,6 +1071,38 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],
+  // Devin selects its model at process start via `devin acp --model`; the ACP
+  // session does not expose a live model list. This list is a static fallback
+  // for when the CLI is unreachable.
+  devin: [
+    {
+      slug: "adaptive",
+      name: "Adaptive",
+      capabilities: EMPTY_MODEL_CAPABILITIES,
+    },
+    {
+      slug: "swe-1-6",
+      name: "SWE 1.6",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-7",
+      name: "SWE 1.7",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -1066,6 +1115,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
+  devin: "adaptive",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
@@ -1210,6 +1260,20 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
+  devin: {
+    adaptive: "adaptive",
+    auto: "adaptive",
+    fast: "swe-1-6",
+    "swe-1.6-fast": "swe-1-6",
+    "swe-1.6": "swe-1-6",
+    "swe-1.7": "swe-1-7",
+    swe: "swe-1-6",
+    "swe-1-6": "swe-1-6",
+    "swe-1-7": "swe-1-7",
+    opus: "claude-opus-4-8",
+    sonnet: "claude-sonnet-5",
+    fable: "claude-fable-5",
+  },
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1246,6 +1310,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
+  devin: "Devin",
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",

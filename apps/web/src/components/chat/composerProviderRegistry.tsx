@@ -12,7 +12,9 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import {
+  getDefaultContextWindow,
   getDefaultEffort,
+  hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
@@ -20,6 +22,7 @@ import {
   normalizeCursorModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
+  resolveDevinModelVariant,
   resolveLabeledOptionValue,
   trimOrNull,
 } from "@synara/shared/model";
@@ -211,6 +214,56 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizePiModelOptions(providerOptions);
       break;
     }
+    case "devin": {
+      const providerOptions = modelOptions?.devin;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
+      const defaultContextWindow = getDefaultContextWindow(caps);
+      const contextWindow =
+        rawContextWindow &&
+        hasContextWindowOption(caps, rawContextWindow) &&
+        rawContextWindow !== defaultContextWindow
+          ? rawContextWindow
+          : undefined;
+      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      const requestedThinking =
+        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
+          ? providerOptions.thinking
+          : undefined;
+      const modelVariant = resolveDevinModelVariant({
+        model,
+        runtimeModel,
+        modelVariant: providerOptions?.modelVariant,
+        reasoningEffort: rawEffort && hasEffortLevel(caps, rawEffort) ? rawEffort : undefined,
+        fastMode: caps.supportsFastMode ? providerOptions?.fastMode : undefined,
+        thinking: requestedThinking,
+        contextWindow:
+          rawContextWindow && hasContextWindowOption(caps, rawContextWindow)
+            ? rawContextWindow
+            : undefined,
+      });
+      const nextOptions = {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(requestedThinking !== undefined ? { thinking: requestedThinking } : {}),
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(modelVariant &&
+        (Boolean(reasoningEffort) ||
+          fastModeEnabled ||
+          requestedThinking !== undefined ||
+          Boolean(contextWindow) ||
+          Boolean(providerOptions?.modelVariant))
+          ? { modelVariant }
+          : {}),
+      };
+      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -262,6 +315,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
+  },
+  devin: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("devin", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("devin", input),
   },
   antigravity: {
     getState: (input) => getProviderStateFromCapabilities(input),

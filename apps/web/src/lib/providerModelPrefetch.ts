@@ -25,6 +25,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "claudeBinaryPath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
+  | "devinBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
@@ -47,6 +48,7 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   "grok",
   "opencode",
   "pi",
+  "devin",
 ];
 
 /** Warm results stay fresh for 30 minutes instead of the interactive 60s. */
@@ -129,6 +131,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "cursor",
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
+      });
+    case "devin":
+      return providerModelsQueryOptions({
+        provider: "devin",
+        binaryPath: settings.devinBinaryPath || null,
+        cwd,
       });
     case "antigravity":
       return providerModelsQueryOptions({

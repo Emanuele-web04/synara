@@ -1682,10 +1682,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const resolvedProvider = parsed.provider ?? parsed.modelSelection?.provider;
+        if (resolvedProvider === undefined) {
+          return yield* toValidationError(
+            "provider.session.start",
+            "startSession requires an explicit provider or modelSelection with a provider",
+          );
+        }
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? "codex",
+          provider: resolvedProvider,
         };
         yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
         yield* validateAutoRuntimeMode(

@@ -33,6 +33,7 @@ function makeSettings(
     claudeBinaryPath: "",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
+    devinBinaryPath: "",
     antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
@@ -202,6 +203,15 @@ describe("providerModelsPrefetchQueryOptions", () => {
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
     );
 
+    const devinOptions = providerModelsPrefetchQueryOptions({
+      provider: "devin",
+      settings: makeSettings({ devinBinaryPath: "/bin/devin" }),
+      cwd: "/tmp/project",
+    });
+    expect(devinOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("devin", "/bin/devin", null, null, "/tmp/project"),
+    );
+
     expect(providerModelsPrefetchQueryOptions({ provider: "codex", settings }).queryKey).toEqual(
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );
@@ -227,7 +237,7 @@ describe("prefetchModelsForNewThread", () => {
     );
     // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
     expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
-    expect(modelKeys).toHaveLength(7);
+    expect(modelKeys).toHaveLength(8);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
@@ -256,7 +266,7 @@ describe("prefetchModelsForNewThread", () => {
     const modelKeys = prefetchQuery.mock.calls
       .map((call) => call[0].queryKey)
       .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
-    expect(modelKeys).toHaveLength(5);
+    expect(modelKeys).toHaveLength(6);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("cursor", null, null, null, "/tmp/project"),
     );
@@ -348,7 +358,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
-    // Reconciled + confirmed-unavailable cursor → skipped (7 - 1 = 6).
+    // Reconciled + confirmed-unavailable cursor → skipped (8 - 1 = 7).
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
       providerStatuses: availableStatuses(["cursor"]),
@@ -356,12 +366,12 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       projectCwd: "/tmp/project",
     });
     let modelKeys = modelKeysFromCalls(prefetchQuery);
-    expect(modelKeys).toHaveLength(6);
+    expect(modelKeys).toHaveLength(7);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("cursor", null, null, null, null),
     );
 
-    // Unreconciled → safe default: warm everything (7), even confirmed-unavailable.
+    // Unreconciled → safe default: warm everything (8), even confirmed-unavailable.
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
@@ -370,7 +380,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       projectCwd: "/tmp/project",
     });
     modelKeys = modelKeysFromCalls(prefetchQuery);
-    expect(modelKeys).toHaveLength(7);
+    expect(modelKeys).toHaveLength(8);
 
     // Preferred provider unavailable → warm leads with ChatView's swap target (codex).
     prefetchQuery.mockClear();
@@ -431,8 +441,8 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     });
 
     const calls = prefetchQuery.mock.calls.map((call) => call[0]);
-    // 7 models + 7 capabilities + 3 agents (claudeAgent, codex, opencode).
-    expect(calls).toHaveLength(7 + 7 + 3);
+    // 8 models + 8 capabilities + 3 agents (claudeAgent, codex, opencode).
+    expect(calls).toHaveLength(8 + 8 + 3);
     for (const options of calls) {
       expect(options.retry).toBe(0);
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);

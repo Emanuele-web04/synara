@@ -8,6 +8,7 @@ import {
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
   type CursorModelOptions,
+  type DevinModelOptions,
   type DroidReasoningEffort,
   type GrokReasoningEffort,
   type ModelSelection,
@@ -32,6 +33,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "antigravity",
   "grok",
   "droid",
@@ -124,6 +126,10 @@ function trimStringOrUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
   return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
 }
@@ -170,6 +176,14 @@ export function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
+          : {}),
+      };
+    case "devin":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
           : {}),
       };
     case "grok":
@@ -225,6 +239,10 @@ export function normalizeProviderModelOptions(
     candidate?.cursor && typeof candidate.cursor === "object"
       ? (candidate.cursor as Record<string, unknown>)
       : null;
+  const devinCandidate =
+    candidate?.devin && typeof candidate.devin === "object"
+      ? (candidate.devin as Record<string, unknown>)
+      : null;
   const antigravityCandidate =
     candidate?.antigravity && typeof candidate.antigravity === "object"
       ? (candidate.antigravity as Record<string, unknown>)
@@ -266,12 +284,7 @@ export function normalizeProviderModelOptions(
         }
       : undefined;
 
-  const claudeThinking =
-    claudeCandidate?.thinking === true
-      ? true
-      : claudeCandidate?.thinking === false
-        ? false
-        : undefined;
+  const claudeThinking = booleanOrUndefined(claudeCandidate?.thinking);
   const claudeEffort: ClaudeCodeEffort | undefined =
     claudeCandidate?.effort === "low" ||
     claudeCandidate?.effort === "medium" ||
@@ -282,12 +295,7 @@ export function normalizeProviderModelOptions(
     claudeCandidate?.effort === "ultracode"
       ? claudeCandidate.effort
       : undefined;
-  const claudeFastMode =
-    claudeCandidate?.fastMode === true
-      ? true
-      : claudeCandidate?.fastMode === false
-        ? false
-        : undefined;
+  const claudeFastMode = booleanOrUndefined(claudeCandidate?.fastMode);
   const claudeAutoCompactWindow =
     trimStringOrUndefined(claudeCandidate?.autoCompactWindow) ??
     trimStringOrUndefined(claudeCandidate?.contextWindow);
@@ -307,18 +315,8 @@ export function normalizeProviderModelOptions(
       : undefined;
 
   const cursorReasoningEffort = trimStringOrUndefined(cursorCandidate?.reasoningEffort);
-  const cursorFastMode =
-    cursorCandidate?.fastMode === true
-      ? true
-      : cursorCandidate?.fastMode === false
-        ? false
-        : undefined;
-  const cursorThinking =
-    cursorCandidate?.thinking === true
-      ? true
-      : cursorCandidate?.thinking === false
-        ? false
-        : undefined;
+  const cursorFastMode = booleanOrUndefined(cursorCandidate?.fastMode);
+  const cursorThinking = booleanOrUndefined(cursorCandidate?.thinking);
   const cursorContextWindow = trimStringOrUndefined(cursorCandidate?.contextWindow);
   const cursor: CursorModelOptions | undefined =
     cursorReasoningEffort !== undefined ||
@@ -372,13 +370,43 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  if (!codex && !claude && !cursor && !antigravity && !grok && !droid && !opencode && !pi) {
+  const devinFastMode = booleanOrUndefined(devinCandidate?.fastMode);
+  const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
+  const devinThinking = booleanOrUndefined(devinCandidate?.thinking);
+  const devinContextWindow = trimStringOrUndefined(devinCandidate?.contextWindow);
+  const devinModelVariant = trimStringOrUndefined(devinCandidate?.modelVariant);
+  const devin: DevinModelOptions | undefined =
+    devinReasoningEffort !== undefined ||
+    devinFastMode !== undefined ||
+    devinThinking !== undefined ||
+    devinContextWindow !== undefined ||
+    devinModelVariant !== undefined
+      ? {
+          ...(devinReasoningEffort !== undefined ? { reasoningEffort: devinReasoningEffort } : {}),
+          ...(devinFastMode !== undefined ? { fastMode: devinFastMode } : {}),
+          ...(devinThinking !== undefined ? { thinking: devinThinking } : {}),
+          ...(devinContextWindow !== undefined ? { contextWindow: devinContextWindow } : {}),
+          ...(devinModelVariant !== undefined ? { modelVariant: devinModelVariant } : {}),
+        }
+      : undefined;
+  if (
+    !codex &&
+    !claude &&
+    !cursor &&
+    !devin &&
+    !antigravity &&
+    !grok &&
+    !droid &&
+    !opencode &&
+    !pi
+  ) {
     return null;
   }
   return {
     ...(codex ? { codex } : {}),
     ...(claude ? { claudeAgent: claude } : {}),
     ...(cursor ? { cursor } : {}),
+    ...(devin ? { devin } : {}),
     ...(antigravity ? { antigravity } : {}),
     ...(grok ? { grok } : {}),
     ...(droid ? { droid } : {}),
@@ -455,7 +483,9 @@ export function normalizeModelSelection(
                   ? modelOptions?.opencode
                   : provider === "pi"
                     ? modelOptions?.pi
-                    : undefined;
+                    : provider === "devin"
+                      ? modelOptions?.devin
+                      : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {
@@ -727,27 +757,42 @@ export function resolvePreferredComposerModelSelection(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
+  // Fresh bootstrap: the draft has no thread history yet, so its model state is
+  // only sticky-seeded carry-over. An explicit persisted default (or an explicit
+  // thread/project selection) must beat that stale sticky provider.
+  fresh?: boolean;
 }): ModelSelection {
   const draftProviderWithSelection =
     COMPOSER_PROVIDER_KINDS.find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
-  const preferredProvider =
-    input.draft?.activeProvider ??
-    draftProviderWithSelection ??
-    input.threadModelSelection?.provider ??
-    input.projectModelSelection?.provider ??
-    input.defaultProvider ??
-    "codex";
+  const preferredProvider = input.fresh
+    ? (input.threadModelSelection?.provider ??
+      input.projectModelSelection?.provider ??
+      input.defaultProvider ??
+      input.draft?.activeProvider ??
+      draftProviderWithSelection ??
+      "codex")
+    : (input.draft?.activeProvider ??
+      draftProviderWithSelection ??
+      input.threadModelSelection?.provider ??
+      input.projectModelSelection?.provider ??
+      input.defaultProvider ??
+      "codex");
 
-  return (
-    input.draft?.modelSelectionByProvider?.[preferredProvider] ??
+  const persistedSelection =
     (input.threadModelSelection?.provider === preferredProvider
       ? input.threadModelSelection
       : null) ??
     (input.projectModelSelection?.provider === preferredProvider
       ? input.projectModelSelection
-      : null) ?? {
+      : null);
+  const draftSelection = input.draft?.modelSelectionByProvider?.[preferredProvider] ?? null;
+
+  return (
+    (input.fresh
+      ? (persistedSelection ?? draftSelection)
+      : (draftSelection ?? persistedSelection)) ?? {
       provider: preferredProvider === "pi" ? "codex" : preferredProvider,
       model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }
