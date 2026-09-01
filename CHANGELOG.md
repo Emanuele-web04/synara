@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.8.0 - 2026-09-01
+
+### Added
+
+- Added Devin CLI as a first-class ACP provider, including fresh-session startup, native resume, model and command discovery, Plan mode, conversation compaction, file and image attachments, MCP server configuration, account usage, authentication guidance, and capability-aware UI behavior.
+- Added provider-neutral WebMCP browser tools so every compatible runtime can discover and operate the task-owned browser through the same bounded tool surface, timeout policy, result shaping, tab ownership, and cleanup lifecycle.
+- Added in-thread transcript search through a floating Cmd/Ctrl+F panel with live result counts, previous and next navigation, keyboard controls, match highlighting, and focused scrolling across real conversation messages.
+- Added server-backed provider enablement so disabling a provider stops its lifecycle execution rather than only hiding it in the client.
+- Added provider-originated context-change events to the conversation so compaction and other runtime context transitions remain visible and attributable.
+- Added usage coverage for every enabled provider whose account state Synara can verify, with shared refresh, caching, and presentation behavior.
+- Added customizable ordering for the primary sidebar navigation, including drag-and-drop controls, durable local persistence, cross-window synchronization, forward-compatible defaults, and invalid-state recovery.
+- Added durable parent-linked side-chat panes with persisted leases, restoration after refresh, safe expiry, and lease preservation across archive and unarchive operations.
+- Added macOS Reveal in Finder for changed files and split the edited-file actions into explicit Open, Reveal, and Copy Path operations.
+- Added absolute workspace-path badges while refusing to turn missing relative references into misleading file chips.
+- Added Factory Droid support to the shared Git text-generation flow for commit messages and pull-request descriptions.
+- Added explicit acceptance of dot-prefixed attachment, preview, plugin, favicon, and generated-image filenames.
+- Added numeric PDF destination resolution so document links can open the intended page instead of treating the destination as an unresolved label.
+- Added migration recovery consent and repair surfaces for failed database upgrades, including runtime identity checks, recoverable backups, deliberate restore or retry choices, and durable recovery state.
+
+### Changed
+
+- Removed the retired Kilo Code provider and migrated existing Kilo provider sessions, tasks, favorite-provider preferences, and saved editor-tab state to OpenCode.
+- Isolated source desktop launches from installed Stable and Canary data by default while preserving explicit home-directory behavior and existing installed-app identities.
+- Improved live-conversation performance by loading model options sooner, reducing repeated sidebar projections, limiting visibility-driven updates, and keeping the common transcript path free of unnecessary virtualization churn.
+- Restricted auto-scroll re-arming to real transcript messages and active assistant text; buffering, reconnecting, approvals, tool-only activity, and generic working state no longer masquerade as new streamed content.
+- Strengthened queued follow-up dispatch so a follow-up waits until the previous turn actually starts, backgrounded tasks promote queued work, constrained-capacity previews retain their contents, and idle-stop recovery resumes from the durable cursor.
+- Consolidated WebMCP discovery and invocation behind provider-neutral server and web contracts instead of runtime-specific browser plumbing.
+- Moved provider visibility policy into shared server state so Settings, runtime startup, provider discovery, usage, and client presentation agree on the enabled set.
+- Hid routine provider lifecycle hooks from the transcript while retaining user-relevant context transitions, errors, tools, and recovery evidence.
+- Refined the What’s New popout, chat picker pills, composer rail, folded segmented assistant messages, environment usage display, and release-history layout.
+- Preserved one self-contained final assistant response after segmented text, tools, folded output, and terminal settlement instead of leaving the visible conclusion dependent on earlier fragments.
+- Improved edited-file actions, path copying, preview retention, and platform-native file management without combining unrelated operations behind one ambiguous control.
+- Upgraded Electron from 40.10.6 to 43.4.1 to include the fix for CVE-2026-70608 and the corresponding Chromium security updates.
+- Changed POSIX desktop update shutdown to ask the backend to exit gracefully before replacement, while retaining a bounded fallback for unresponsive processes.
+- Abbreviated Windows home-directory paths consistently in the interface and preserved valid Windows drive roots during path normalization.
+- Tightened provider runtime identity handling: source validation consults the cwd only when no launcher digest exists, prerelease versions preserve every identifier segment, and native resume is gated by the provider's actual capability.
+- Made Claude Auto context variants match their exact advertised context limits and fail closed when a model descriptor is ambiguous.
+- Made long-thread pagination lossless across message boundaries, bound continuations to the original message version and offset, and count Unicode-safe character offsets instead of byte slicing.
+- Refreshed provider usage from the post-compaction boundary so stale pre-compaction accounting is not presented as current state.
+- Bumped Synara release package versions to `0.8.0` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed queued follow-ups racing the turn ahead of them, dispatching only in the foreground, losing preview content under capacity pressure, or failing to resume after an idle provider stop.
+- Fixed streamed assistant replies being duplicated when reconnect, replay, settlement, and live projection overlapped.
+- Fixed sidebar and transcript streaming paths doing repeated scans and measurement work that could cause visible toggle lag or scroll-follow feedback loops.
+- Fixed transcript search and auto-follow treating tool rows or non-message runtime activity as newly arrived conversation text.
+- Fixed provider disablement being cosmetic: hidden providers can no longer continue to start sessions or execute lifecycle work on the server.
+- Fixed provider context changes and meaningful update notices disappearing when lifecycle events were filtered or availability checks overlapped.
+- Fixed source builds silently sharing installed-app state, and fixed migration recovery proceeding without verifying the launcher, database identity, backup, and user-selected recovery path.
+- Fixed Kilo removal leaving legacy provider kinds, favorite selections, or editor-tab state that could no longer be opened.
+- Fixed ACP session-load replay being projected as fresh user-visible activity before the restored session was ready.
+- Fixed native provider resume being attempted when the selected runtime could not safely support it.
+- Fixed Claude Auto selection accepting near matches for the wrong context window and fixed provider usage remaining stale after a compaction boundary.
+- Fixed long-message continuation losing or repeating text, accepting a stale message revision, or splitting Unicode content at an unsafe offset.
+- Fixed side-chat panes losing their durable parent relationship or active lease after refresh, expiry reconciliation, archive, or unarchive.
+- Fixed pull-request attribution using neighboring workspace state instead of the owning task's thread-specific Git context.
+- Fixed task created-at ordering drifting after updates and reconciliations.
+- Fixed numbered terminal shortcuts selecting the wrong terminal when multiple sessions were open.
+- Fixed missing relative workspace references rendering as actionable chips and valid absolute paths losing their file-badge affordance.
+- Fixed Copy Path operating through the wrong desktop action and added a platform-native Reveal in Finder path on macOS.
+- Fixed dot-prefixed images, attachments, previews, plugins, favicons, and generated files being rejected as extensionless or unsafe despite having an intentional name.
+- Fixed numeric PDF destinations being ignored or misclassified instead of resolving to a page.
+- Fixed untrusted `__proto__`, `prototype`, and `constructor` keys being able to cross object-decoding boundaries and influence inherited state.
+- Fixed Windows drive-relative paths being treated like safe absolute paths while preserving legitimate drive roots and UNC behavior.
+- Fixed payload and stream limits counting JavaScript characters instead of UTF-8 bytes, including split multibyte characters at a boundary.
+- Fixed IPv4-mapped IPv6 addresses bypassing local-network and destination policy checks.
+- Fixed empty agent-mention payloads and empty terminal chunks at a size limit producing ambiguous lifecycle behavior.
+- Fixed Bun close-listener handling conflating distinct listener registrations during process settlement.
+- Fixed delivery-block boundaries accepting one event beyond the configured limit or dropping the event that established the boundary.
+- Fixed malformed, negative, fractional, or unbounded `Retry-After` values controlling provider retry scheduling.
+- Fixed provider credential temporary files sharing predictable locations instead of using isolated, lifecycle-owned temporary paths.
+- Fixed legacy workspace fallback state and malformed shared local-storage preferences surviving after their owning state was cleared.
+- Fixed Windows home paths displaying in expanded or inconsistent forms across provider and workspace surfaces.
+- Fixed provider prerelease versions losing hyphenated identifier segments during comparison and update checks.
+- Fixed POSIX updater shutdown terminating the backend too abruptly for ordinary cleanup and state settlement.
+- Fixed Electron builds remaining on a release line affected by CVE-2026-70608.
+
+### Contributors
+
+- Thanks to Emanuele Di Pietro, Chara (`cmdr-chara`), NachoooLK, Leonardo Bassanello (`xFurti`), Kartik (`kartikkabadi`), Tasi Balázs (`balazstasi`), Keyur (`keyurbodar`), and `sanirudh17` for the commits and merged pull requests included in this release.
+
+### Verification
+
+- `bun run fmt:check` passed across 16,081 files.
+- `bun run lint` passed with 489 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; two existing Effect Schema suggestions remained informational.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing deprecation, plugin-timing, stale Browserslist, and large-chunk advisories remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m19.63s. Web passed 336 files / 4,216 tests. Server/CLI passed 378 files / 4,387 tests with 3 skipped files / 16 skipped tests. No targeted rerun or flaky product failure was needed.
+
 ## 0.7.3 - 2026-08-21
 
 ### Added
