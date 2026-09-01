@@ -11286,8 +11286,9 @@ export default function ChatView({
         <ProjectPicker
           align="start"
           side="top"
+          triggerVariant="ghost"
           triggerClassName={cn(
-            "h-7 py-1",
+            "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
             COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
           )}
           showResetToHome={Boolean(
@@ -11309,8 +11310,9 @@ export default function ChatView({
         <ProjectPicker
           align="start"
           side="top"
+          triggerVariant="ghost"
           triggerClassName={cn(
-            "h-7 py-1",
+            "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
             COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
           )}
           selectionMode="project"

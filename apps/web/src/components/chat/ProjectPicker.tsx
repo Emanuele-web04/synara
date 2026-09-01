@@ -12,6 +12,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactElement,
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
@@ -57,6 +58,8 @@ interface ProjectPickerProps {
   onResetToHome?: (() => void | Promise<void>) | undefined;
   /** Class override for the trigger button (e.g. tighter height in the composer tray). */
   triggerClassName?: string;
+  /** Visual variant override for the trigger button. */
+  triggerVariant?: ComponentProps<typeof PickerTriggerButton>["variant"];
   /**
    * Replaces the default PickerTriggerButton with a custom trigger element (e.g. the inline
    * project name in the new-chat heading). The element receives the combobox trigger props.
@@ -149,6 +152,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onCreateProjectFromPath,
   onResetToHome,
   triggerClassName,
+  triggerVariant,
   renderTrigger,
   emptyTriggerLabel: emptyTriggerLabelProp,
   addActionLabel,
@@ -607,6 +611,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                 }
                 label={triggerLabel}
                 hideChevron
+                {...(triggerVariant ? { variant: triggerVariant } : {})}
                 {...(triggerClassName ? { className: triggerClassName } : {})}
               />
             }

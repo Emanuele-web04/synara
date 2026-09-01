@@ -6219,9 +6219,36 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
       const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
+      const temporaryChatButton = page.getByLabelText("Temporary chat");
+      await temporaryChatButton.hover();
+      const temporaryChatElement = temporaryChatButton.element();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+      const temporaryHoverBackground = getComputedStyle(temporaryChatElement).backgroundColor;
+      const temporaryCapsuleRadius = getComputedStyle(temporaryChatElement).borderRadius;
+      const temporaryCapsulePadding = getComputedStyle(temporaryChatElement).paddingInlineStart;
       await projectPickerTrigger.hover();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
       await vi.waitFor(() => {
         expect(getComputedStyle(resetProjectButton.element()).opacity).toBe("1");
+        expect(getComputedStyle(projectPickerTrigger.element()).backgroundColor).toBe(
+          temporaryHoverBackground,
+        );
+      });
+      expect(getComputedStyle(projectPickerTrigger.element()).borderRadius).toBe(
+        temporaryCapsuleRadius,
+      );
+      expect(getComputedStyle(projectPickerTrigger.element()).paddingInlineStart).toBe(
+        temporaryCapsulePadding,
+      );
+      expect(projectPickerTrigger.element().getBoundingClientRect().height).toBe(
+        temporaryChatElement.getBoundingClientRect().height,
+      );
+      await resetProjectButton.hover();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+      await vi.waitFor(() => {
+        expect(getComputedStyle(projectPickerTrigger.element()).backgroundColor).toBe(
+          temporaryHoverBackground,
+        );
       });
 
       const originalRequestAnimationFrame = window.requestAnimationFrame;
