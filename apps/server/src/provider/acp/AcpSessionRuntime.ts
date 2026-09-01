@@ -168,6 +168,48 @@ type AcpIncomingFrame =
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
 
+export function normalizeAcpIncomingJsonMessages(
+  input: ReadableStream<Uint8Array>,
+  normalize: (message: unknown) => unknown,
+): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+  return input.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        pending += decoder.decode(chunk, { stream: true });
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            controller.enqueue(encoder.encode("\n"));
+            continue;
+          }
+          try {
+            controller.enqueue(
+              encoder.encode(`${JSON.stringify(normalize(JSON.parse(trimmed)))}\n`),
+            );
+          } catch {
+            controller.enqueue(encoder.encode(`${line}\n`));
+          }
+        }
+      },
+      flush(controller) {
+        pending += decoder.decode();
+        if (!pending) return;
+        const trimmed = pending.trim();
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(normalize(JSON.parse(trimmed)))));
+        } catch {
+          controller.enqueue(encoder.encode(pending));
+        }
+      },
+    }),
+  );
+}
+
 export type SessionEpoch = { generation: number; activeSessionId: Option.Option<string> };
 const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
   Option.isSome(epoch.activeSessionId) && epoch.activeSessionId.value === sessionId;
@@ -326,6 +368,7 @@ export interface AcpSessionRuntimeOptions {
     readonly hardTimeoutMs?: number;
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
+  readonly normalizeIncomingMessage?: (message: unknown) => unknown;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
@@ -518,7 +561,7 @@ function officialSdkError(acpSdk: AcpSdkModule, error: unknown): AcpErrors.AcpEr
 const makeOfficialSdkClient = Effect.fnUntraced(function* (
   child: ChildProcessSpawner.ChildProcessHandle,
   runtimeScope: Scope.Scope,
-  protocolLogging?: AcpSessionRuntimeOptions["protocolLogging"],
+  options: Pick<AcpSessionRuntimeOptions, "normalizeIncomingMessage" | "protocolLogging">,
 ) {
   // The ACP SDK is only needed once a provider process is actually spawned, so
   // it is imported here instead of at module scope (see AcpSdk.ts).
@@ -554,12 +597,12 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     payload: unknown,
   ) => {
     if (
-      (direction === "incoming" && protocolLogging?.logIncoming !== true) ||
-      (direction === "outgoing" && protocolLogging?.logOutgoing !== true)
+      (direction === "incoming" && options.protocolLogging?.logIncoming !== true) ||
+      (direction === "outgoing" && options.protocolLogging?.logOutgoing !== true)
     ) {
       return Effect.void;
     }
-    const logger = protocolLogging?.logger;
+    const logger = options.protocolLogging?.logger;
     return logger?.({ direction, stage, payload }) ?? Effect.void;
   };
   let sessionUpdateTail = Promise.resolve();
@@ -628,7 +671,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     Effect.forkIn(runtimeScope),
   );
   yield* Scope.addFinalizer(runtimeScope, Queue.shutdown(incoming));
-  const input = new ReadableStream<Uint8Array>({
+  const rawInput = new ReadableStream<Uint8Array>({
     pull(controller) {
       return Effect.runPromise(Queue.take(incoming)).then((frame) => {
         switch (frame._tag) {
@@ -652,6 +695,10 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
       );
     },
   });
+
+  const input = options.normalizeIncomingMessage
+    ? normalizeAcpIncomingJsonMessages(rawInput, options.normalizeIncomingMessage)
+    : rawInput;
 
   const clientApp = acpSdk
     .client({ name: "synara" })
@@ -1367,7 +1414,7 @@ const makeAcpSessionRuntime = (
     // prompt/fork waiter before waiting for the child process to exit.
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
 
-    const acp = yield* makeOfficialSdkClient(child, runtimeScope, options.protocolLogging);
+    const acp = yield* makeOfficialSdkClient(child, runtimeScope, options);
 
     const resolveConfigOptionUpdateWaiters = (
       configOptions: ReadonlyArray<Acp.SessionConfigOption>,
