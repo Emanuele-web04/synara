@@ -6219,6 +6219,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
       const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
+      const folderIcon = projectPickerTrigger
+        .element()
+        .querySelector<HTMLElement>("[class*='transition-opacity']");
+      expect(folderIcon).not.toBeNull();
+      const expectResetAlignedWithFolderIcon = () => {
+        const folderIconRect = folderIcon!.getBoundingClientRect();
+        const resetButtonRect = resetProjectButton.element().getBoundingClientRect();
+        const folderIconCenterX = folderIconRect.left + folderIconRect.width / 2;
+        const resetButtonCenterX = resetButtonRect.left + resetButtonRect.width / 2;
+        expect(Math.abs(resetButtonCenterX - folderIconCenterX)).toBeLessThanOrEqual(0.5);
+      };
       const temporaryChatButton = page.getByLabelText("Temporary chat");
       await temporaryChatButton.hover();
       const temporaryChatElement = temporaryChatButton.element();
@@ -6234,6 +6245,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           temporaryHoverBackground,
         );
       });
+      expectResetAlignedWithFolderIcon();
       expect(getComputedStyle(projectPickerTrigger.element()).borderRadius).toBe(
         temporaryCapsuleRadius,
       );
@@ -6250,6 +6262,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
           temporaryHoverBackground,
         );
       });
+      await mounted.setViewport(TEXT_VIEWPORT_MATRIX[2]);
+      await projectPickerTrigger.hover();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expectResetAlignedWithFolderIcon();
+      await mounted.setViewport(DEFAULT_VIEWPORT);
 
       const originalRequestAnimationFrame = window.requestAnimationFrame;
       let frameRequestCount = 0;

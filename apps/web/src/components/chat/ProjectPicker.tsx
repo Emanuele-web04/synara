@@ -623,7 +623,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               aria-label={resetActionLabel}
               title={resetActionLabel}
               className={cn(
-                "group/reset-project pointer-events-none absolute top-1/2 left-0.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center",
+                "group/reset-project pointer-events-none absolute top-1/2 left-1.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center sm:left-2",
                 "opacity-0 transition-opacity duration-150 ease-out",
                 "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
                 "group-hover/project-picker-trigger:pointer-events-auto group-hover/project-picker-trigger:opacity-100",
