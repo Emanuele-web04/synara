@@ -73,6 +73,50 @@ describe("parseClaudeUsage", () => {
     expect(extra?.value).toContain("5.00");
     expect(extra?.value).toContain("100.00");
   });
+
+  it("maps per-model weekly windows from the scoped limits array, falling back to legacy keys", () => {
+    // Anthropic moved per-model weekly windows into `limits[]` (`weekly_scoped`, named by
+    // `scope.model.display_name`); the legacy `seven_day_<model>` keys now come back null.
+    const snapshot = parseClaudeUsage({
+      json: {
+        seven_day: { utilization: 40, resets_at: "2026-02-01T00:00:00Z" },
+        seven_day_sonnet: null,
+        seven_day_opus: { utilization: 12, resets_at: "2026-02-01T00:00:00Z" },
+        limits: [
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 7,
+            resets_at: "2026-02-01T00:00:00Z",
+            scope: { model: { display_name: "Fable", id: null }, surface: null },
+          },
+          {
+            kind: "weekly_scoped",
+            percent: 3,
+            resets_at: "2026-02-01T00:00:00Z",
+            scope: { model: { display_name: "Sonnet" } },
+          },
+          { kind: "weekly_scoped", percent: 99, scope: { model: { display_name: "Fable" } } },
+          { kind: "session", percent: 50 },
+          "garbage",
+        ],
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.limits.map((entry) => entry.window)).toEqual([
+      "Weekly",
+      "Fable",
+      "Sonnet",
+      "Opus",
+    ]);
+    const fable = limit(snapshot, "Fable");
+    expect(fable?.usedPercent).toBe(7);
+    expect(fable?.windowDurationMins).toBe(10_080);
+    expect(fable?.resetsAt).toBe("2026-02-01T00:00:00.000Z");
+    expect(limit(snapshot, "Sonnet")?.usedPercent).toBe(3);
+    expect(limit(snapshot, "Opus")?.usedPercent).toBe(12);
+  });
 });
 
 describe("parseCursorUsage", () => {

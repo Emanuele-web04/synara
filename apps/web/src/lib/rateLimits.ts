@@ -44,9 +44,10 @@ const WINDOW_ORDER = new Map([
   ["Daily", 1],
   ["Weekly", 2],
   ["Weekly (overage)", 3],
-  ["Sonnet", 4],
-  ["Opus", 5],
-  ["Current", 6],
+  ["Fable", 4],
+  ["Sonnet", 5],
+  ["Opus", 6],
+  ["Current", 7],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -111,6 +112,9 @@ export function normalizeRateLimitLabel(
   }
   if (normalized === "weekly" || normalized === "seven_day" || normalized === "7d") {
     return "Weekly";
+  }
+  if (normalized === "seven_day_fable" || normalized === "weekly_fable" || normalized === "fable") {
+    return "Fable";
   }
   if (
     normalized === "seven_day_sonnet" ||
