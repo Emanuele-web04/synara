@@ -566,6 +566,7 @@ import {
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
+  COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
@@ -11348,10 +11349,11 @@ export default function ChatView({
           }
           aria-label="Temporary chat"
           className={cn(
-            "ml-auto shrink-0 gap-1.5 whitespace-nowrap rounded-full px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors sm:px-2.5",
+            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-2.5",
+            COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
             isThreadTemporary
-              ? "text-[var(--color-text-accent)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-accent)]"
-              : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+              ? "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]"
+              : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
           )}
         >
           <TemporaryThreadIcon className="size-3.5" />
