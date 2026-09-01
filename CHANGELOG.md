@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.8.1 - 2026-09-02
+
+### Added
+
+- Added Claude Fable 5.1 as the leading Claude Agent model, with the exact `claude-fable-5-1` slug, a one-million-token context window, always-on thinking, Low through Max effort, no fast-mode lane, and no legacy ultrathink prompt mode.
+- Added Fable 5.1 to Pi's repaired Anthropic catalog so authenticated Pi installations whose upstream model list predates the release can still select it alongside Fable 5 and Opus 4.8.
+- Added Fable 5.1 aliases for `fable`, `fable-5.1`, `claude-fable-5.1`, `claude-fable-5-1`, and bracketed context-window descriptors while preserving explicit Fable 5 selections.
+- Added Fable 5.1 to Cursor's compatible one-million-token Claude variant fallback.
+- Added Claude's model-scoped Fable weekly allowance to usage surfaces, parsed from Anthropic's current `weekly_scoped` limits array and ordered directly after the general Weekly window.
+- Added shared platform process, environment, filesystem, WSL, lifecycle, and process-tree teardown boundaries for provider, Git, updater, voice, terminal, and server execution.
+- Added typed provider startup phases and failure reasons so executable lookup, spawn, handshake, authentication, protocol, timeout, cancellation, and unproven-exit failures remain distinguishable.
+- Added a Windows runtime boundary check to CI and internal architecture documentation for executable resolution, process launch, WSL routing, teardown proof, filesystem durability, and provider integration.
+
+### Changed
+
+- Reduced large-database startup work by accepting the live shell-stream snapshot as authoritative and issuing a deferred query only when that subscription generation still lacks a snapshot, including reconnect recovery.
+- Pruned open-turn journal rows for purged, deleted, or archived threads without a live projected turn, and stopped replaying a turn after its first failure instead of repeating hundreds of warnings on every boot.
+- Scaled SQLite page-cache and mmap budgets to physical memory: 64 MB / 256 MB below 12 GB, 128 MB / 512 MB below 24 GB, and the existing larger defaults on higher-memory systems.
+- Preloaded the Google Fonts stylesheet so a slow or unavailable network cannot hold back the application module during startup.
+- Gave active Devin tool calls a separate one-hour inactivity budget while retaining the ordinary 30-minute idle budget for turns without an active tool; both remain environment-configurable.
+- Centralized native Windows, POSIX, and WSL launch planning, including PATH/PATHEXT lookup, qualified relative commands, `.cmd` and `.bat` shims, PowerShell scripts, argument serialization, working directories, and command-not-found mapping.
+- Centralized supervised process-tree teardown and made success require proof that the owned root and captured descendants exited; Windows escalation revalidates creation identity before signalling.
+- Changed the Git text-generation picker to include only dedicated one-shot backends: Codex, Cursor, OpenCode, and Factory Droid.
+- Tightened composer vertical spacing and aligned picker capsules, project reset highlighting, and folder/reset icon treatment.
+- Bumped Synara release package versions to `0.8.1` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed the plain Claude `fable` alias continuing to select Fable 5 instead of Fable 5.1, while keeping `fable-5` and `claude-fable-5` backward compatible.
+- Fixed older Pi Anthropic catalogs omitting Fable 5.1 and fixed Cursor fallback matching not recognizing its one-million-token context variant.
+- Fixed Claude's per-model weekly limits disappearing after Anthropic moved them from nullable legacy top-level fields into scoped rows under `limits[]`.
+- Fixed startup fetching and transferring the large shell snapshot up to three times even when the live stream had already supplied it.
+- Fixed deleted or unrecoverable turns being replayed on every boot and producing repeated stack-trace warnings before the server began listening.
+- Fixed low-memory machines using SQLite cache and mmap defaults large enough to increase swap pressure.
+- Fixed Devin's watchdog terminating healthy turns whose current tool produced no events for longer than the ordinary idle window.
+- Fixed stale Devin events from older turns refreshing the active watchdog clock.
+- Fixed Devin's boolean `get_output.block` field being rejected by strict ACP decoding before the tool could complete; the normalization is restricted to that provider, method, and field.
+- Fixed project and project-task creation reporting success before a real task ID existed, and fixed superseded navigation replacing a newer route.
+- Fixed Git-writing settings exposing chat-only providers without a dedicated one-shot text-generation backend and omitting Cursor despite its supported backend.
+- Fixed qualified relative executables resolving against the server directory instead of the requested child working directory.
+- Fixed Windows and WSL process launches duplicating provider-specific command lookup, shell, quoting, and working-directory rules.
+- Fixed provider startup deadline expiry being reported as cancellation instead of a handshake timeout.
+- Fixed process teardown reporting success without proving root and descendant exit, targeting a reused Windows PID, or losing proof state across bounded snapshot retries.
+- Fixed new task creation being allowed before project hydration completed.
+
+### Verification
+
+- `bun run fmt:check` passed across 18,823 files.
+- `bun run lint` passed with 489 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; two existing Effect Schema suggestions and Astro/Vite deprecation notices remained informational.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing deprecation, plugin-timing, stale Browserslist, and large-chunk advisories remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m47.485s: 890 test files and 10,247 tests passed, with 4 files and 22 tests skipped by platform or integration gates. No targeted rerun was needed.
+
 ## 0.8.0 - 2026-09-01
 
 ### Added
