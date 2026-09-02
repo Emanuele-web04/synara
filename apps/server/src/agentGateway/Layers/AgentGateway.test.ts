@@ -35,9 +35,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
+import { MindServiceLive } from "../../mind/Layers/MindService.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { MindRepositoryLive } from "../../persistence/Layers/MindRepository.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import {
@@ -1150,6 +1153,12 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
+    Layer.provide(
+      MindServiceLive.pipe(
+        Layer.provideMerge(MindRepositoryLive),
+        Layer.provideMerge(SqlitePersistenceMemory),
+      ),
+    ),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
