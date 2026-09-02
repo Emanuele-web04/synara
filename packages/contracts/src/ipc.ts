@@ -42,6 +42,13 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  MindForgetInput,
+  MindListInput,
+  MindListResult,
+  MindMemory,
+  MindSetPinnedInput,
+} from "./mind";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -906,6 +913,11 @@ export interface NativeApi {
       input: AutomationResolveProposalInput,
     ) => Promise<AutomationResolveProposalResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
+  mind: {
+    list: (input: MindListInput) => Promise<MindListResult>;
+    forget: (input: MindForgetInput) => Promise<void>;
+    setPinned: (input: MindSetPinnedInput) => Promise<MindMemory>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;
