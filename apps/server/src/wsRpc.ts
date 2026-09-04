@@ -2052,6 +2052,7 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             mindService
               .forget({
+                projectId: input.projectId,
                 memoryId: input.memoryId,
                 // The UI has no thread context; journal actor is the plain user.
                 actor: { kind: "user" },
@@ -2064,6 +2065,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.mindSetPinned]: (input) =>
           rpcEffect(
             mindService.setPinned({
+              projectId: input.projectId,
               memoryId: input.memoryId,
               pinned: input.pinned,
               actor: { kind: "user" },
