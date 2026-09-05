@@ -18,6 +18,7 @@ import {
   type JsonRpcRequest,
 } from "./protocol.ts";
 import {
+  filterToolsByCapability,
   GatewayToolError,
   gatewayToolErrorResult,
   type ToolContext,
@@ -84,7 +85,9 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {});
         case "tools/list":
           return jsonRpcResult(request.id, {
-            tools: input.tools.map((tool) => tool.definition),
+            tools: filterToolsByCapability(input.tools, context.callerCapabilities).map(
+              (tool) => tool.definition,
+            ),
           });
         case "tools/call": {
           const toolName = request.params.name;
