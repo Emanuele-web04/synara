@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
 } from "@synara/contracts";
@@ -19,6 +20,7 @@ import {
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  threadHasInFlightTurn,
 } from "./commandInvariants.ts";
 
 const now = new Date().toISOString();
@@ -363,5 +365,20 @@ describe("commandInvariants", () => {
         }),
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it("threadHasInFlightTurn includes starting/running sessions that active-turn misses", () => {
+    const runningSession = {
+      status: "running" as const,
+      activeTurnId: TurnId.makeUnsafe("turn-x"),
+    };
+    expect(
+      threadHasInFlightTurn({ session: runningSession, latestTurn: { state: "completed" } }),
+    ).toBe(true);
+    expect(threadHasInFlightTurn({ session: null, latestTurn: { state: "completed" } })).toBe(
+      false,
+    );
+    const errored = { status: "error" as const, activeTurnId: TurnId.makeUnsafe("turn-x") };
+    expect(threadHasInFlightTurn({ session: errored, latestTurn: null })).toBe(false);
   });
 });
