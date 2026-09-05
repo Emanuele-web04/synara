@@ -436,6 +436,10 @@ export interface DesktopAppSnapShortcutUpdateResult {
   availability: DesktopAppSnapShortcutAvailability;
 }
 
+export type DesktopAppSnapSettingsPane = "input-monitoring" | "screen-recording";
+
+export type DesktopAppSnapPermissionGuideState = "shown" | "closed" | "granted";
+
 export interface DesktopAppSnapState {
   platform: DesktopAppSnapPlatform;
   supported: boolean;
@@ -445,6 +449,8 @@ export interface DesktopAppSnapState {
   inputMonitoringPermission: DesktopAppSnapPermission;
   screenRecordingPermission: DesktopAppSnapPermission;
   message: string | null;
+  /** Name macOS shows for this build in System Settings permission lists. */
+  appDisplayName: string;
 }
 
 export interface DesktopAppSnapCapture {
@@ -464,6 +470,14 @@ export interface DesktopAppSnapErrorEvent {
   code: string;
   message: string;
   capturedAt: string;
+}
+
+export interface DesktopAppSnapWindowEntry {
+  windowId: number;
+  appName: string | null;
+  bundleIdentifier: string | null;
+  windowTitle: string | null;
+  appIconDataUrl: string | null;
 }
 
 // Pushed from the desktop main process when the in-app browser copy-link chord fires
@@ -634,6 +648,15 @@ export interface DesktopBridge {
     requestPermissions: () => Promise<DesktopAppSnapState>;
     listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
     acknowledgeCapture: (captureId: string) => Promise<void>;
+    listWindows: () => Promise<DesktopAppSnapWindowEntry[]>;
+    captureWindow: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
+    openPermissionSettings: (pane: DesktopAppSnapSettingsPane) => Promise<boolean>;
+    restartApp: () => Promise<void>;
+    showPermissionGuide: (pane: DesktopAppSnapSettingsPane) => Promise<void>;
+    hidePermissionGuide: () => Promise<void>;
+    onPermissionGuideState: (
+      listener: (state: DesktopAppSnapPermissionGuideState) => void,
+    ) => () => void;
     onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
     onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
     onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
