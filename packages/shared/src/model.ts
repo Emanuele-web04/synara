@@ -245,7 +245,28 @@ export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: strin
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
-export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
+// Claude model ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`.
+const CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN = /\[([^\]]+)\]$/u;
+
+export function getClaudeContextWindowSuffix(model: string | null | undefined): string | null {
+  if (typeof model !== "string") return null;
+  return CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN.exec(model)?.[1]?.toLowerCase() ?? null;
+}
+
+export function stripClaudeContextWindowSuffix(model: string): string {
+  return model.replace(CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN, "");
+}
+
+export function getDefaultAutoCompactWindow(
+  caps: ModelCapabilities,
+  model: string | null | undefined,
+): string | null {
+  const usesMillionTokenContext =
+    getClaudeContextWindowSuffix(model) === "1m" ||
+    (caps.contextWindowTokens !== undefined && caps.contextWindowTokens >= 1_000_000);
+  if (usesMillionTokenContext && hasAutoCompactWindowOption(caps, "1m")) {
+    return "1m";
+  }
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
 
@@ -442,20 +463,45 @@ function legacyCapabilityDescriptors(
   return descriptors;
 }
 
+function withModelAwareAutoCompactDefault(
+  descriptor: ProviderOptionDescriptor,
+  caps: ModelCapabilities,
+  model: string | null | undefined,
+): ProviderOptionDescriptor {
+  if (descriptor.type !== "select" || descriptor.id !== "autoCompactWindow") {
+    return descriptor;
+  }
+  const defaultValue = getDefaultAutoCompactWindow(caps, model);
+  return {
+    ...descriptor,
+    options: descriptor.options.map(({ isDefault: _isDefault, ...option }) => ({
+      ...option,
+      ...(option.id === defaultValue ? { isDefault: true as const } : {}),
+    })),
+    ...(defaultValue ? { currentValue: defaultValue } : {}),
+  };
+}
+
 export function getProviderOptionDescriptors(input: {
   provider: ProviderKind;
   caps: ModelCapabilities;
+  model?: string | null | undefined;
   selections?: ProviderOptionSelectionsInput;
 }): ReadonlyArray<ProviderOptionDescriptor> {
   const descriptors =
     input.caps.optionDescriptors?.map(cloneProviderOptionDescriptor) ??
     legacyCapabilityDescriptors(input.provider, input.caps);
-  return descriptors.map((descriptor) =>
-    withProviderOptionCurrentValue(
+  return descriptors.map((descriptor) => {
+    const modelAwareDescriptor = withModelAwareAutoCompactDefault(
       descriptor,
+      input.caps,
+      input.model,
+    );
+    return withProviderOptionCurrentValue(
+      modelAwareDescriptor,
       providerOptionSelectionValue(input.selections, descriptor.id),
-    ),
-  );
+    );
+  });
 }
 
 export function getProviderOptionCurrentValue(
@@ -580,7 +626,7 @@ export function normalizeModelSlug(
 
   const providerScopedModel =
     provider === "claudeAgent"
-      ? trimmed.replace(/\[[^\]]+\]$/u, "")
+      ? stripClaudeContextWindowSuffix(trimmed)
       : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
         ? trimmed.slice(0, -"-medium".length)
         : trimmed;
@@ -670,13 +716,18 @@ export function normalizeCodexModelOptions(
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
+/**
+ * Keeps only explicit Claude option overrides. The model-native auto-compact
+ * window stays unset so Claude Code can apply server tuning, settings.json,
+ * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
 ): ClaudeModelOptions | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
   const defaultReasoningEffort = getDefaultEffort(caps);
-  const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
+  const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps, model);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
   const resolvedAutoCompactWindow =
     trimOrNull(modelOptions?.autoCompactWindow) ?? trimOrNull(modelOptions?.contextWindow);

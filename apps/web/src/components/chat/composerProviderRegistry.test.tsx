@@ -680,6 +680,62 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it.each([
+    ["claude-fable-5-1", "1m"],
+    ["claude-opus-5", "1m"],
+    ["claude-opus-4-8", "1m"],
+    ["claude-sonnet-5", "1m"],
+    ["claude-opus-4-6", "200k"],
+    ["claude-sonnet-4-6", "200k"],
+  ] as const)("shows %s with the %s model-native window", (model, expectedDefault) => {
+    const selection = getComposerTraitSelection("claudeAgent", model, "", undefined);
+
+    expect(selection.defaultContextWindow).toBe(expectedDefault);
+    expect(selection.contextWindow).toBe(expectedDefault);
+    expect(
+      selection.contextWindowOptions.find((option) => option.value === expectedDefault)?.isDefault,
+    ).toBe(true);
+  });
+
+  it("shows 1M as the default auto-compact window for a 1M Claude suffix", () => {
+    const defaults = getComposerTraitSelection(
+      "claudeAgent",
+      "claude-fable-5-1[1M]",
+      "",
+      undefined,
+    );
+    const explicit200k = getComposerTraitSelection("claudeAgent", "claude-fable-5-1[1m]", "", {
+      autoCompactWindow: "200k",
+    });
+
+    expect(defaults.defaultContextWindow).toBe("1m");
+    expect(defaults.contextWindow).toBe("1m");
+    expect(defaults.contextWindowOptions).toEqual([
+      { value: "200k", label: "200k" },
+      { value: "1m", label: "1M", isDefault: true },
+    ]);
+    expect(explicit200k.contextWindow).toBe("200k");
+  });
+
+  it("normalizes Claude auto-compact dispatch against the model-aware default", () => {
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
+      }).modelOptionsForDispatch,
+    ).toBeUndefined();
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "200k" } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ autoCompactWindow: "200k" });
+  });
+
   it("tracks Claude ultrathink from the prompt without changing dispatch effort", () => {
     const state = getComposerProviderState({
       provider: "claudeAgent",
