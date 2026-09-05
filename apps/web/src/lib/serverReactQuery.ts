@@ -31,6 +31,7 @@ export const serverQueryKeys = {
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
+  computerStatus: () => ["server", "computerStatus"] as const,
 };
 
 export const serverMutationKeys = {
@@ -46,6 +47,39 @@ export function serverConfigQueryOptions() {
     },
     staleTime: Infinity,
   });
+}
+
+/** Polled while the Computer use settings panel is visible, so keep it refetchable. */
+export const COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+
+export function computerStatusQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.computerStatus(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      // Desktop-bridge NativeApi implementations update out of band and may
+      // predate the computer namespace.
+      if (!api.computer) {
+        throw new Error("This app build cannot read computer status.");
+      }
+      return api.computer.getStatus({});
+    },
+    staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+  });
+}
+
+/**
+ * Installs or compiles whatever this desktop is missing.
+ *
+ * Not a query: it is the one computer call that changes the machine, and it
+ * only ever runs because a user pressed the button that does it.
+ */
+export async function provisionComputer() {
+  const api = ensureNativeApi();
+  if (!api.computer?.provision) {
+    throw new Error("This app build cannot set up computer control.");
+  }
+  return api.computer.provision({});
 }
 
 interface ProviderStatusSnapshot {
