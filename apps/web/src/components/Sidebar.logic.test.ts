@@ -27,21 +27,27 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  formatThreadElapsed,
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneProjectThreadListPagingForCollapsedProjects,
+  pruneProjectThreadListExtraPagesById,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
   resolveSidebarThreadPullRequest,
   resolveThreadDisplayBranch,
+  resolveThreadElapsedMs,
+  resolveUrgentThreadTimeLabel,
+  shouldShowThreadStartingLabel,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
+  resolveActiveSidebarThreadId,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
@@ -57,6 +63,7 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { ProjectId, ThreadId } from "@synara/contracts";
+import { groupThreadFolderEntries } from "../sidebarThreadFolderStore";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -372,6 +379,144 @@ describe("hasUnseenCompletion", () => {
   });
 });
 
+function makeRunningTurn(
+  startedAt: string | null,
+  requestedAt = "2026-03-09T10:00:00.000Z",
+): Thread["latestTurn"] {
+  return {
+    turnId: "turn-1" as never,
+    state: "running",
+    assistantMessageId: null,
+    requestedAt,
+    startedAt,
+    completedAt: null,
+  };
+}
+
+describe("resolveThreadElapsedMs", () => {
+  const nowMs = Date.parse("2026-03-09T10:12:00.000Z");
+
+  it("measures from the turn start while the turn is unfinished", () => {
+    expect(
+      resolveThreadElapsedMs({ latestTurn: makeRunningTurn("2026-03-09T10:00:00.000Z") }, nowMs),
+    ).toBe(12 * 60 * 1000);
+  });
+
+  it("falls back to the request time when the turn never started", () => {
+    expect(
+      resolveThreadElapsedMs(
+        { latestTurn: makeRunningTurn(null, "2026-03-09T10:10:00.000Z") },
+        nowMs,
+      ),
+    ).toBe(2 * 60 * 1000);
+  });
+
+  it("returns null for finished turns and threads without turns", () => {
+    expect(resolveThreadElapsedMs({ latestTurn: makeLatestTurn() }, nowMs)).toBeNull();
+    expect(resolveThreadElapsedMs({ latestTurn: null }, nowMs)).toBeNull();
+  });
+
+  it("clamps future start timestamps to zero", () => {
+    expect(
+      resolveThreadElapsedMs(
+        {
+          latestTurn: makeRunningTurn("2026-03-09T10:30:00.000Z", "2026-03-09T10:30:00.000Z"),
+        },
+        nowMs,
+      ),
+    ).toBe(0);
+  });
+});
+
+describe("formatThreadElapsed", () => {
+  it("matches the chat Working-for clock (seconds under a minute)", () => {
+    expect(formatThreadElapsed(45_000)).toBe("45s");
+  });
+
+  it("keeps seconds past the minute like the chat clock", () => {
+    expect(formatThreadElapsed(90_000)).toBe("1m 30s");
+    expect(formatThreadElapsed(12 * 60 * 1000)).toBe("12m");
+  });
+
+  it("renders hours with minutes only when nonzero", () => {
+    expect(formatThreadElapsed(60 * 60 * 1000)).toBe("1h");
+    expect(formatThreadElapsed(65 * 60 * 1000)).toBe("1h 5m");
+  });
+});
+
+describe("resolveUrgentThreadTimeLabel", () => {
+  it("prefers the live elapsed over recency", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({
+        elapsedMs: 12 * 60 * 1000,
+        isStarting: true,
+        recencyLabel: "6m",
+      }),
+    ).toEqual({ text: "12m", title: "Running for 12m" });
+  });
+
+  it("reads as starting while the new turn has not arrived yet", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({ elapsedMs: null, isStarting: true, recencyLabel: "6m" }),
+    ).toEqual({ text: "0s", title: "Starting…" });
+  });
+
+  it("falls back to recency when the thread is not running", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({ elapsedMs: null, isStarting: false, recencyLabel: "6m" }),
+    ).toEqual({ text: "6m" });
+  });
+
+  it("shows nothing without elapsed, start, or recency", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({ elapsedMs: null, isStarting: false, recencyLabel: null }),
+    ).toBeNull();
+  });
+});
+
+describe("shouldShowThreadStartingLabel", () => {
+  const runningSession: Thread["session"] = {
+    provider: "codex" as const,
+    status: "running" as const,
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:11:00.000Z",
+    orchestrationStatus: "running" as const,
+  };
+  const idleSession: Thread["session"] = {
+    provider: "codex" as const,
+    status: "closed" as const,
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:11:00.000Z",
+    orchestrationStatus: "running" as const,
+  };
+
+  it("starts while the new turn has not arrived yet", () => {
+    expect(shouldShowThreadStartingLabel({ latestTurn: null, session: runningSession })).toBe(true);
+  });
+
+  it("never starts off a finished turn, even when running flags lag behind", () => {
+    expect(
+      shouldShowThreadStartingLabel({ latestTurn: makeLatestTurn(), session: runningSession }),
+    ).toBe(false);
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeLatestTurn(),
+        hasLiveTailWork: true,
+        session: runningSession,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays quiet on idle threads", () => {
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeRunningTurn("2026-03-09T10:00:00.000Z"),
+        session: idleSession,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("shouldClearThreadSelectionOnMouseDown", () => {
   it("preserves selection for thread items", () => {
     const child = {
@@ -649,6 +794,36 @@ describe("pruneProjectThreadListPagingForCollapsedProjects", () => {
       threadListExtraPagesByProjectCwd: current,
       projects: [{ cwd: "/Users/tester/Code/one", expanded: true }],
       normalizeProjectCwd: (cwd) => cwd.replace(/\/+$/, ""),
+    });
+
+    expect(next).toBe(current);
+  });
+});
+
+describe("pruneProjectThreadListExtraPagesById", () => {
+  it("clears remembered show-more paging when a project is collapsed", () => {
+    const current = new Map([
+      ["project-one" as ProjectId, 2],
+      ["project-two" as ProjectId, 1],
+    ]);
+
+    const next = pruneProjectThreadListExtraPagesById({
+      threadListExtraPagesByProjectId: current,
+      projects: [
+        { id: "project-one" as ProjectId, expanded: false },
+        { id: "project-two" as ProjectId, expanded: true },
+      ],
+    });
+
+    expect([...next]).toEqual([["project-two", 1]]);
+  });
+
+  it("preserves the existing map when no collapsed project needs pruning", () => {
+    const current = new Map([["project-one" as ProjectId, 1]]);
+
+    const next = pruneProjectThreadListExtraPagesById({
+      threadListExtraPagesByProjectId: current,
+      projects: [{ id: "project-one" as ProjectId, expanded: true }],
     });
 
     expect(next).toBe(current);
@@ -940,6 +1115,8 @@ describe("pin helpers", () => {
       createdAt: "2026-03-09T10:00:00.000Z",
       updatedAt: "2026-03-09T10:00:00.000Z",
       scripts: [],
+      sources: [],
+      primarySourceId: null,
     }) satisfies Project;
 
   const makeThread = (id: string): Thread =>
@@ -1882,6 +2059,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     createdAt: "2026-03-09T10:00:00.000Z",
     updatedAt: "2026-03-09T10:00:00.000Z",
     scripts: [],
+    sources: [],
+    primarySourceId: null,
     ...rest,
   };
 }
@@ -1963,6 +2142,49 @@ describe("partitionSidebarThreadsByProjectIds", () => {
 });
 
 describe("deriveSidebarProjectData", () => {
+  it("keeps the focused folder thread visible after Show less returns to the base preview", () => {
+    const project = makeProject({ cwd: "/Users/tester/Code/payment-seeker" });
+    const threads = Array.from({ length: 7 }, (_, index) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        title: `Thread ${index + 1}`,
+        createdAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        updatedAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const focusedThreadId = threads[6]!.id;
+    const activeSidebarThreadId = resolveActiveSidebarThreadId({
+      focusedThreadId,
+      optimisticThreadId: null,
+      routeThreadId: threads[0]!.id,
+    });
+
+    const derive = (extraPages: number) =>
+      deriveSidebarProjectData({
+        projects: [project],
+        sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId(threads),
+        pinnedThreadIds: [],
+        threadListExtraPagesByProjectCwd: new Map([[project.cwd, extraPages]]),
+        normalizeProjectCwd: (cwd) => cwd,
+        activeSidebarThreadId: activeSidebarThreadId ?? undefined,
+        previewLimit: 5,
+        previewPageSize: 5,
+      }).get(project.id);
+
+    expect(derive(1)?.visibleEntries).toHaveLength(7);
+    const foldedEntries = derive(0)?.visibleEntries ?? [];
+    const groupedEntries = groupThreadFolderEntries({
+      entries: foldedEntries,
+      activeFolderIds: new Set(["payment-folder"]),
+      folderIdByThreadId: { [focusedThreadId]: "payment-folder" },
+    });
+
+    expect(
+      groupedEntries.entriesByFolderId.get("payment-folder")?.map((entry) => entry.rowId),
+    ).toContain(focusedThreadId);
+    expect(derive(0)?.canShowLessThreads).toBe(false);
+  });
+
   it("keeps pinned threads in the total project thread count", () => {
     const project = makeProject();
     const pinnedThread = makeSidebarThreadSummary({

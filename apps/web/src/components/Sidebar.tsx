@@ -9,11 +9,13 @@ import {
   ChatBubbleIcon,
   CircleQuestionIcon,
   ClockIcon,
+  CoffeeIcon,
   CopyIcon,
   CustomizeIcon,
   DragHandleIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
+  FoldersIcon,
   GiftIcon,
   KanbanIcon,
   KeyboardIcon,
@@ -33,6 +35,7 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
+import { APP_BASE_NAME } from "~/branding";
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
@@ -81,7 +84,9 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type AutomationDefinition,
   type AutomationListResult,
+  type KeepAwakeMode,
   MAX_PINNED_PROJECTS,
+  type ServerKeepAwakeState,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
@@ -103,6 +108,14 @@ import {
   type SidebarThreadSortOrder,
   useAppSettings,
 } from "../appSettings";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import {
+  KEEP_AWAKE_MODE_OPTIONS,
+  KEEP_AWAKE_ROW_TITLE,
+  keepAwakeIndicatorState,
+  keepAwakeStatusLabel,
+  keepAwakeTooltip,
+} from "../lib/keepAwake";
 import {
   normalizeHiddenSidebarNavItems,
   normalizeSidebarNavOrder,
@@ -190,6 +203,7 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
+import { FolderClosed } from "./FolderClosed";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
 import {
@@ -209,8 +223,9 @@ import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButt
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
+import { SidebarElapsedTimeLabel } from "./SidebarElapsedTimeLabel";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -220,6 +235,11 @@ import {
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import {
+  ThreadFolderRemovalDialog,
+  type ThreadFolderRemovalDisposition,
+  type ThreadFolderRemovalMode,
+} from "./ThreadFolderRemovalDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
@@ -241,6 +261,7 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  resolveProjectThreadListExtraPages,
   subscribeSidebarUiState,
 } from "./Sidebar.uiState";
 import {
@@ -300,6 +321,13 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
+  getProjectThreadFolders,
+  getThreadIdsInFolder,
+  groupThreadFolderEntries,
+  type SidebarThreadFolder,
+  useSidebarThreadFolderStore,
+} from "../sidebarThreadFolderStore";
+import {
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -316,11 +344,14 @@ import {
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
-  pruneProjectThreadListPagingForCollapsedProjects,
+  isThreadActivelyWorking,
+  isUrgentThreadStatusPill,
+  pruneProjectThreadListExtraPagesById,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
+  resolveActiveSidebarThreadId,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -336,6 +367,7 @@ import {
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
   type SidebarDerivedProjectData,
+  type SidebarProjectEntry,
   type SidebarActionBadge,
   type SidebarView,
   shouldShowDebugFeatureFlagsMenu,
@@ -383,7 +415,13 @@ import {
 import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
+import {
+  hasThreadDragType,
+  parseThreadDragPayload,
+  resolveSidebarFolderDropTarget,
+  resolveThreadFolderMenuTarget,
+  THREAD_DRAG_MIME,
+} from "../threadDrag";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import {
@@ -493,6 +531,7 @@ type ProjectContextMenuId =
   | "start-dev"
   | "stop-dev"
   | "open-dev-server"
+  | "new-folder"
   | "rename"
   | "toggle-pin"
   | "archive-threads"
@@ -503,6 +542,19 @@ type ProjectContextMenuState = {
   projectId: ProjectId;
   position: { x: number; y: number };
 };
+
+type ThreadFolderEditorState =
+  | { mode: "create"; projectId: ProjectId; threadIds: readonly ThreadId[] }
+  | { mode: "rename"; folder: SidebarThreadFolder };
+
+type ThreadFolderRemovalState = {
+  folder: SidebarThreadFolder;
+  mode: ThreadFolderRemovalMode;
+};
+
+function threadFolderDropKey(projectId: ProjectId, folderId: string | null): string {
+  return `${projectId}:${folderId ?? "project-root"}`;
+}
 
 // Sidebar right-click menus (project rows, Space tabs) share one chrome; see
 // sidebarContextMenuStyles.
@@ -610,8 +662,9 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
 /** Status glyph slot; matches the 15px meta-chip column so trailing icons stay compact. */
 function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?: string): string {
   return cn(
+    // The status glyph stays visible on hover (only the meta chips fade), so the
+    // hover-action overlay carries its own solid background to sit above it.
     "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
-    sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
       ? "text-[10px]"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
@@ -806,6 +859,72 @@ const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).sl
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).
+const KEEP_AWAKE_INDICATOR_ICON_CLASS_NAME = {
+  dimmed: "opacity-40",
+  default: "",
+  highlighted: "text-primary",
+  error: "text-destructive",
+} as const satisfies Record<ReturnType<typeof keepAwakeIndicatorState>, string>;
+
+// Footer keep-awake (caffeinate) indicator; sits left of the help menu and is
+// hidden entirely while the server reports keep-awake as unavailable.
+function SidebarKeepAwakeMenu({
+  state,
+  onSelectMode,
+}: {
+  state: ServerKeepAwakeState;
+  onSelectMode: (mode: KeepAwakeMode) => void;
+}) {
+  const indicator = keepAwakeIndicatorState(state.mode, state.active, state.error);
+  return (
+    <Menu>
+      <SidebarIconButton
+        render={<MenuTrigger />}
+        icon={CoffeeIcon}
+        label={KEEP_AWAKE_ROW_TITLE}
+        tooltip={keepAwakeTooltip(state)}
+        iconClassName={cn(
+          sidebarGlyphClass("chrome"),
+          KEEP_AWAKE_INDICATOR_ICON_CLASS_NAME[indicator],
+        )}
+        data-testid="sidebar-keep-awake-button"
+      />
+      <ComposerPickerMenuPopup align="end" side="top" className="w-72 min-w-72">
+        <MenuGroup>
+          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+            {KEEP_AWAKE_ROW_TITLE}
+          </div>
+          <div
+            className={cn(
+              "px-2 pb-1 text-[11px]",
+              state.error ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {state.error ?? keepAwakeStatusLabel(state)}
+          </div>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuRadioGroup
+          value={state.mode}
+          onValueChange={(value) => onSelectMode(value as KeepAwakeMode)}
+        >
+          {KEEP_AWAKE_MODE_OPTIONS.map((option) => (
+            <MenuRadioItem
+              key={option.value}
+              value={option.value}
+              className={cn(SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME, "min-h-7 py-1 sm:text-xs")}
+            >
+              <span className="flex min-w-0 flex-col">
+                <span>{option.label}</span>
+                <span className="text-[11px] text-muted-foreground">{option.description}</span>
+              </span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
 function SidebarHelpMenu({
   onOpenShortcuts,
   onOpenFeedback,
@@ -1268,7 +1387,7 @@ function SidebarActivityBellButton({
 }
 
 const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
-  threads: { title: "Synara", description: "Build, debug, and ship" },
+  threads: { title: `${APP_BASE_NAME} by nacholk`, description: "Build, debug, and ship" },
   studio: { title: "Studio", description: "Open-ended agent work" },
 };
 
@@ -1455,6 +1574,7 @@ export default function Sidebar() {
     [automationListQuery.data],
   );
   const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
+  const keepAwakeState = useKeepAwakeState();
   // Projects is always available; Studio and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -1590,7 +1710,7 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const { activeProjectId: focusedProjectId } = useFocusedChatContext();
+  const { activeProjectId: focusedProjectId, focusedThreadId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
@@ -1599,10 +1719,26 @@ export default function Sidebar() {
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
+  const [threadFolderEditorState, setThreadFolderEditorState] =
+    useState<ThreadFolderEditorState | null>(null);
+  const [threadFolderRemovalState, setThreadFolderRemovalState] =
+    useState<ThreadFolderRemovalState | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
-  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
-  const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
+  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project id.
+  const [threadListExtraPagesByProjectId, setThreadListExtraPagesByProjectId] = useState<
+    ReadonlyMap<ProjectId, number>
+  >(
+    () =>
+      new Map<ProjectId, number>(
+        Object.entries(readSidebarUiState().projectThreadListExtraPagesById) as Array<
+          [ProjectId, number]
+        >,
+      ),
+  );
+  // Pre-migration paging keyed by normalized cwd: read-only fallback for the id-first
+  // lookup, preserved verbatim on persist but never written by the paging handlers.
+  const [legacyThreadListExtraPagesByCwd, setLegacyThreadListExtraPagesByCwd] = useState<
     ReadonlyMap<string, number>
   >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
@@ -1640,7 +1776,12 @@ export default function Sidebar() {
       subscribeSidebarUiState((state) => {
         setChatSectionExpanded(state.chatSectionExpanded);
         setChatThreadListExtraPages(state.chatThreadListExtraPages);
-        setThreadListExtraPagesByProjectCwd(
+        setThreadListExtraPagesByProjectId(
+          new Map<ProjectId, number>(
+            Object.entries(state.projectThreadListExtraPagesById) as Array<[ProjectId, number]>,
+          ),
+        );
+        setLegacyThreadListExtraPagesByCwd(
           new Map(Object.entries(state.projectThreadListExtraPagesByCwd)),
         );
         setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
@@ -1663,6 +1804,12 @@ export default function Sidebar() {
   } | null>(null);
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
+  const pendingThreadFolderArchiveIdsRef = useRef(new Set<string>());
+  const sidebarThreadDragIdsRef = useRef<readonly ThreadId[]>([]);
+  const [sidebarThreadDragProjectId, setSidebarThreadDragProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [threadFolderDropTargetKey, setThreadFolderDropTargetKey] = useState<string | null>(null);
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
@@ -1679,10 +1826,25 @@ export default function Sidebar() {
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
+  const threadFolders = useSidebarThreadFolderStore((state) => state.folders);
+  const folderIdByThreadId = useSidebarThreadFolderStore((state) => state.folderIdByThreadId);
+  const collapsedThreadFolderIds = useSidebarThreadFolderStore((state) => state.collapsedFolderIds);
+  const createThreadFolder = useSidebarThreadFolderStore((state) => state.createFolder);
+  const renameThreadFolder = useSidebarThreadFolderStore((state) => state.renameFolder);
+  const assignThreadsToFolder = useSidebarThreadFolderStore((state) => state.assignThreads);
+  const setThreadFolderCollapsed = useSidebarThreadFolderStore((state) => state.setFolderCollapsed);
+  const archiveThreadFolder = useSidebarThreadFolderStore((state) => state.archiveFolder);
+  const restoreThreadFolder = useSidebarThreadFolderStore((state) => state.restoreFolder);
+  const deleteThreadFolder = useSidebarThreadFolderStore((state) => state.deleteFolder);
+  const pruneThreadFolderProjects = useSidebarThreadFolderStore((state) => state.pruneProjects);
 
   const routeActiveSidebarThreadId = routeThreadId;
-  const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
-  const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
+  const activeSidebarThreadId = resolveActiveSidebarThreadId({
+    focusedThreadId,
+    optimisticThreadId: optimisticActiveThreadId,
+    routeThreadId,
+  });
+  const visualActiveSidebarThreadId = activeSidebarThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
   const selectSidebarTreeThreads = useMemo(
@@ -1821,6 +1983,35 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  useEffect(() => {
+    if (!threadsHydrated) return;
+    pruneThreadFolderProjects(projects.map((project) => project.id));
+  }, [projects, pruneThreadFolderProjects, threadsHydrated]);
+
+  useEffect(() => {
+    if (!threadsHydrated) return;
+    const archivedFolders = threadFolders.filter((folder) => folder.archivedAt !== null);
+    if (archivedFolders.length === 0) return;
+    const activeThreadIds = new Set(
+      sidebarThreads
+        .filter((thread) => thread.archivedAt == null)
+        .map((thread) => thread.id as string),
+    );
+    // A thread restored from Settings must never remain invisible because its
+    // visual folder is still archived. Reopen the folder as soon as an active
+    // assigned thread reappears in the normal sidebar projection.
+    for (const folder of archivedFolders) {
+      const assignedThreadIds = getThreadIdsInFolder(folderIdByThreadId, folder.id);
+      const hasActiveAssignedThread = assignedThreadIds.some((threadId) =>
+        activeThreadIds.has(threadId),
+      );
+      if (pendingThreadFolderArchiveIdsRef.current.has(folder.id)) {
+        if (!hasActiveAssignedThread) pendingThreadFolderArchiveIdsRef.current.delete(folder.id);
+        continue;
+      }
+      if (hasActiveAssignedThread) restoreThreadFolder(folder.id);
+    }
+  }, [folderIdByThreadId, restoreThreadFolder, sidebarThreads, threadFolders, threadsHydrated]);
   const {
     pinnedThreadIds,
     pinnedThreadIdSet,
@@ -2551,7 +2742,12 @@ export default function Sidebar() {
   const addProjectFromPath = useCallback(
     async (
       rawCwd: string,
-      options: { createIfMissing?: boolean; spaceId?: SpaceId | null } = {},
+      options: {
+        title?: string;
+        createIfMissing?: boolean;
+        spaceId?: SpaceId | null;
+        additionalSourcePaths?: ReadonlyArray<string>;
+      } = {},
     ) => {
       const cwd = rawCwd.trim();
       if (!cwd) {
@@ -2573,6 +2769,9 @@ export default function Sidebar() {
         const existingRecovery = await recoverExistingAddProjectTarget({
           existingProjectId: existing?.id,
           workspaceRoot: cwd,
+          ...(options.additionalSourcePaths === undefined
+            ? {}
+            : { sourcePaths: options.additionalSourcePaths }),
           recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
           recoverByWorkspaceRoot: (workspaceRoot) =>
             recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
@@ -2587,7 +2786,11 @@ export default function Sidebar() {
 
         const creationResult = await createOrRecoverProjectFromPath({
           api,
+          ...(options.title === undefined ? {} : { title: options.title }),
           workspaceRoot: cwd,
+          ...(options.additionalSourcePaths === undefined
+            ? {}
+            : { sourcePaths: options.additionalSourcePaths }),
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
@@ -2913,6 +3116,289 @@ export default function Sidebar() {
     [openRenameThreadDialog],
   );
 
+  const openCreateThreadFolder = useCallback(
+    (projectId: ProjectId, requestedThreadIds: readonly ThreadId[] = []) => {
+      const threadIds = requestedThreadIds.filter((threadId) => {
+        const thread = getThreadFromState(useStore.getState(), threadId);
+        return thread?.projectId === projectId && (thread.parentThreadId ?? null) === null;
+      });
+      setThreadFolderEditorState({ mode: "create", projectId, threadIds });
+    },
+    [],
+  );
+
+  const commitThreadFolderEditor = useCallback(
+    async (name: string) => {
+      const state = threadFolderEditorState;
+      if (!state) return;
+      const projectId = state.mode === "create" ? state.projectId : state.folder.projectId;
+      const duplicate = getProjectThreadFolders(
+        useSidebarThreadFolderStore.getState().folders,
+        projectId,
+        { includeArchived: true },
+      ).some(
+        (folder) =>
+          folder.id !== (state.mode === "rename" ? state.folder.id : null) &&
+          folder.name.localeCompare(name.trim(), undefined, { sensitivity: "accent" }) === 0,
+      );
+      if (duplicate) {
+        toastManager.add({
+          type: "warning",
+          title: "A folder with that name already exists",
+        });
+        throw new Error("Duplicate thread folder name.");
+      }
+      if (state.mode === "create") {
+        createThreadFolder({
+          id: `thread-folder-${randomUUID()}`,
+          projectId: state.projectId,
+          name,
+          threadIds: state.threadIds,
+        });
+        if (state.threadIds.length > 0) removeFromSelection(state.threadIds);
+        return;
+      }
+      renameThreadFolder(state.folder.id, name);
+    },
+    [createThreadFolder, removeFromSelection, renameThreadFolder, threadFolderEditorState],
+  );
+
+  const moveThreadsToFolder = useCallback(
+    (threadIds: readonly ThreadId[], folderId: string | null) => {
+      const folder = folderId
+        ? (useSidebarThreadFolderStore.getState().folders.find((entry) => entry.id === folderId) ??
+          null)
+        : null;
+      // A `folderId` that no longer resolves is a stale drop target (folder deleted mid-drag):
+      // moving threads into it would strand them, so drop the request instead.
+      if (folderId !== null && folder === null) return;
+      const eligibleIds = threadIds.filter((threadId) => {
+        const thread = getThreadFromState(useStore.getState(), threadId);
+        return (
+          thread !== undefined &&
+          (thread.parentThreadId ?? null) === null &&
+          (folder === null || (thread.projectId === folder.projectId && folder.archivedAt === null))
+        );
+      });
+      assignThreadsToFolder(folderId, eligibleIds);
+      removeFromSelection(eligibleIds);
+    },
+    [assignThreadsToFolder, removeFromSelection],
+  );
+
+  // A thread started from a folder row belongs to that folder from the first keystroke:
+  // the draft id is stable through promotion, so assigning it here survives thread.create.
+  const createThreadInFolder = useCallback(
+    async (folder: SidebarThreadFolder) => {
+      const threadId = await handleNewThread(folder.projectId, {
+        envMode: resolveSidebarNewThreadEnvMode({
+          defaultEnvMode: appSettings.defaultThreadEnvMode,
+        }),
+      });
+      if (!threadId) return;
+      assignThreadsToFolder(folder.id, [threadId]);
+      setThreadFolderCollapsed(folder.id, false);
+    },
+    [
+      appSettings.defaultThreadEnvMode,
+      assignThreadsToFolder,
+      handleNewThread,
+      setThreadFolderCollapsed,
+    ],
+  );
+
+  const clearSidebarThreadDrag = useCallback(() => {
+    sidebarThreadDragIdsRef.current = [];
+    setSidebarThreadDragProjectId(null);
+    setThreadFolderDropTargetKey(null);
+  }, []);
+
+  const resolveSidebarThreadDropIds = useCallback(
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId): ThreadId[] => {
+      if (!hasThreadDragType(event.dataTransfer)) return [];
+      const payload = parseThreadDragPayload(event.dataTransfer);
+      const rememberedIds = sidebarThreadDragIdsRef.current;
+      const candidateIds =
+        rememberedIds.length > 0 &&
+        (!payload || rememberedIds.some((threadId) => threadId === payload.threadId))
+          ? rememberedIds
+          : payload
+            ? [payload.threadId]
+            : [];
+      return candidateIds.filter((threadId) => {
+        const thread = getThreadFromState(useStore.getState(), threadId);
+        return thread?.projectId === projectId && (thread.parentThreadId ?? null) === null;
+      });
+    },
+    [],
+  );
+
+  const handleThreadFolderDragOver = useCallback(
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
+      if (!hasThreadDragType(event.dataTransfer)) return;
+      // A folder owns its whole subtree as a drop target. Blocking the project-root
+      // parent prevents dropping on the current folder from accidentally extracting it.
+      if (targetFolderId !== null) event.stopPropagation();
+      const threadIds = resolveSidebarThreadDropIds(event, projectId);
+      const assignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
+      const acceptsDrop = threadIds.some(
+        (threadId) => (assignments[threadId] ?? null) !== targetFolderId,
+      );
+      if (!acceptsDrop) {
+        event.dataTransfer.dropEffect = "none";
+        setThreadFolderDropTargetKey(null);
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setThreadFolderDropTargetKey(threadFolderDropKey(projectId, targetFolderId));
+    },
+    [resolveSidebarThreadDropIds],
+  );
+
+  const handleThreadFolderDragLeave = useCallback(
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
+      if (!hasThreadDragType(event.dataTransfer)) return;
+      const relatedTarget = event.relatedTarget as Node | null;
+      if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
+      const key = threadFolderDropKey(projectId, targetFolderId);
+      setThreadFolderDropTargetKey((current) => (current === key ? null : current));
+    },
+    [],
+  );
+
+  const handleThreadFolderDrop = useCallback(
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
+      if (!hasThreadDragType(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const threadIds = resolveSidebarThreadDropIds(event, projectId);
+      const assignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
+      const movableIds = threadIds.filter(
+        (threadId) => (assignments[threadId] ?? null) !== targetFolderId,
+      );
+      if (movableIds.length > 0) {
+        moveThreadsToFolder(movableIds, targetFolderId);
+        if (targetFolderId !== null) setThreadFolderCollapsed(targetFolderId, false);
+      }
+      clearSidebarThreadDrag();
+    },
+    [
+      clearSidebarThreadDrag,
+      moveThreadsToFolder,
+      resolveSidebarThreadDropIds,
+      setThreadFolderCollapsed,
+    ],
+  );
+
+  const runThreadFolderRemoval = useCallback(
+    async (
+      state: ThreadFolderRemovalState,
+      disposition: ThreadFolderRemovalDisposition,
+    ): Promise<void> => {
+      const { folder, mode } = state;
+      const assignedIds = getThreadIdsInFolder(
+        useSidebarThreadFolderStore.getState().folderIdByThreadId,
+        folder.id,
+      );
+      if (disposition === "move-to-project") {
+        assignThreadsToFolder(null, assignedIds);
+        if (mode === "archive") archiveThreadFolder(folder.id);
+        else deleteThreadFolder(folder.id);
+        return;
+      }
+
+      const topLevelIds = assignedIds.filter((threadId) => {
+        const thread = getThreadFromState(useStore.getState(), threadId);
+        return thread !== undefined && (thread.parentThreadId ?? null) === null;
+      });
+      try {
+        if (mode === "archive") {
+          pendingThreadFolderArchiveIdsRef.current.add(folder.id);
+          for (const threadId of topLevelIds) {
+            const thread = getThreadFromState(useStore.getState(), threadId);
+            if (thread && (thread.archivedAt ?? null) === null) await archiveThread(threadId);
+          }
+          archiveThreadFolder(folder.id);
+          removeFromSelection(topLevelIds);
+          return;
+        }
+
+        const deletedIds = new Set<ThreadId>(topLevelIds);
+        const successfullyDeletedIds: ThreadId[] = [];
+        try {
+          for (const threadId of topLevelIds) {
+            await deleteThread(threadId, {
+              deletedThreadIds: deletedIds,
+              reconcileDeletedThread: false,
+            });
+            successfullyDeletedIds.push(threadId);
+          }
+        } finally {
+          if (successfullyDeletedIds.length > 0) {
+            await reconcileDeletedThreadsFromClient({
+              threadIds: successfullyDeletedIds,
+              removeDeletedThreadFromClientState:
+                useStore.getState().removeDeletedThreadFromClientState,
+            });
+          }
+        }
+        deleteThreadFolder(folder.id);
+        removeFromSelection(topLevelIds);
+      } catch (error) {
+        pendingThreadFolderArchiveIdsRef.current.delete(folder.id);
+        toastManager.add({
+          type: "error",
+          title: `Failed to ${mode} folder`,
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+        throw error;
+      }
+    },
+    [
+      archiveThread,
+      archiveThreadFolder,
+      assignThreadsToFolder,
+      deleteThread,
+      deleteThreadFolder,
+      removeFromSelection,
+    ],
+  );
+
+  const handleThreadFolderContextMenu = useCallback(
+    async (folder: SidebarThreadFolder, position: { x: number; y: number }) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const clicked = await api.contextMenu.show(
+        [
+          { id: "rename", label: "Rename folder" },
+          { id: "move-to-project", label: "Move threads to project" },
+          { id: "archive", label: "Archive folder", separatorBefore: true },
+          { id: "delete", label: "Delete folder", destructive: true },
+        ],
+        position,
+      );
+      if (clicked === "rename") {
+        setThreadFolderEditorState({ mode: "rename", folder });
+        return;
+      }
+      if (clicked === "move-to-project") {
+        moveThreadsToFolder(
+          getThreadIdsInFolder(
+            useSidebarThreadFolderStore.getState().folderIdByThreadId,
+            folder.id,
+          ),
+          null,
+        );
+        return;
+      }
+      if (clicked === "archive" || clicked === "delete") {
+        setThreadFolderRemovalState({ folder, mode: clicked });
+      }
+    },
+    [moveThreadsToFolder],
+  );
+
   const { prewarmThreadDetail: prewarmThreadDetailForIntent } = useThreadDetailPrewarm();
 
   const primeThreadActivation = useCallback(
@@ -3016,6 +3502,26 @@ export default function Sidebar() {
         envMode: thread.envMode,
         worktreePath: thread.worktreePath,
       });
+      const projectThreadFolders = getProjectThreadFolders(
+        useSidebarThreadFolderStore.getState().folders,
+        thread.projectId,
+      );
+      const currentThreadFolderId =
+        useSidebarThreadFolderStore.getState().folderIdByThreadId[threadId] ?? null;
+      const threadFolderItems = thread.parentThreadId
+        ? []
+        : [
+            { id: "folder:new", label: "New folder with this thread", separatorBefore: true },
+            ...(currentThreadFolderId
+              ? [{ id: "folder:root", label: "Move to project root" }]
+              : []),
+            ...projectThreadFolders
+              .filter((folder) => folder.id !== currentThreadFolderId)
+              .map((folder) => ({
+                id: `folder:${folder.id}`,
+                label: `Move to ${folder.name}`,
+              })),
+          ];
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
@@ -3030,6 +3536,7 @@ export default function Sidebar() {
             ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
             : []),
           { id: "copy-thread-id", label: "Copy Thread ID" },
+          ...threadFolderItems,
           ...(options?.extraItems ?? []),
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
@@ -3173,6 +3680,18 @@ export default function Sidebar() {
         copyThreadIdToClipboard(threadId);
         return;
       }
+      if (clicked === "folder:new") {
+        openCreateThreadFolder(thread.projectId, [threadId]);
+        return;
+      }
+      if (clicked === "folder:root") {
+        moveThreadsToFolder([threadId], null);
+        return;
+      }
+      if (typeof clicked === "string" && clicked.startsWith("folder:")) {
+        moveThreadsToFolder([threadId], resolveThreadFolderMenuTarget(clicked));
+        return;
+      }
       if (clicked === "return-to-single-chat") {
         await options?.onExtraAction?.("return-to-single-chat");
         return;
@@ -3194,6 +3713,8 @@ export default function Sidebar() {
       handoffThread,
       markThreadUnread,
       navigate,
+      moveThreadsToFolder,
+      openCreateThreadFolder,
       openRenameThreadDialog,
       pinnedThreadIdSet,
       projectCwdById,
@@ -3211,15 +3732,63 @@ export default function Sidebar() {
       const ids = [...selectedThreadIds];
       if (ids.length === 0) return;
       const count = ids.length;
+      const selectedThreads = ids
+        .map((id) => getThreadFromState(useStore.getState(), id))
+        .filter((thread): thread is Thread => thread !== undefined);
+      const selectedProjectId = selectedThreads[0]?.projectId ?? null;
+      const canOrganizeSelection =
+        selectedProjectId !== null &&
+        selectedThreads.length === ids.length &&
+        selectedThreads.every(
+          (thread) =>
+            thread.projectId === selectedProjectId && (thread.parentThreadId ?? null) === null,
+        );
+      const projectFolders =
+        canOrganizeSelection && selectedProjectId !== null
+          ? getProjectThreadFolders(
+              useSidebarThreadFolderStore.getState().folders,
+              selectedProjectId,
+            )
+          : [];
+      const folderAssignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
+      const hasFolderAssignment = ids.some((id) => folderAssignments[id] !== undefined);
 
       const clicked = await api.contextMenu.show(
         [
+          ...(canOrganizeSelection
+            ? [
+                {
+                  id: "folder:new",
+                  label: `New folder with ${count} ${pluralize(count, "thread")}`,
+                },
+                ...(hasFolderAssignment
+                  ? [{ id: "folder:root", label: "Move to project root" }]
+                  : []),
+                ...projectFolders.map((folder) => ({
+                  id: `folder:${folder.id}`,
+                  label: `Move to ${folder.name}`,
+                })),
+              ]
+            : []),
           { id: "mark-unread", label: `Mark unread (${count})` },
           { id: "archive", label: `Archive (${count})` },
           { id: "delete", label: `Delete (${count})`, destructive: true },
         ],
         position,
       );
+
+      if (clicked === "folder:new" && selectedProjectId) {
+        openCreateThreadFolder(selectedProjectId, ids);
+        return;
+      }
+      if (clicked === "folder:root") {
+        moveThreadsToFolder(ids, null);
+        return;
+      }
+      if (typeof clicked === "string" && clicked.startsWith("folder:")) {
+        moveThreadsToFolder(ids, clicked.slice("folder:".length));
+        return;
+      }
 
       if (clicked === "mark-unread") {
         for (const id of ids) {
@@ -3297,6 +3866,8 @@ export default function Sidebar() {
       clearDismissedThreadStatus,
       deleteThread,
       markThreadUnread,
+      moveThreadsToFolder,
+      openCreateThreadFolder,
       removeFromSelection,
       selectedThreadIds,
     ],
@@ -3308,7 +3879,8 @@ export default function Sidebar() {
       persistSidebarUiState({
         chatSectionExpanded,
         chatThreadListExtraPages,
-        projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
+        projectThreadListExtraPagesByCwd: Object.fromEntries(legacyThreadListExtraPagesByCwd),
+        projectThreadListExtraPagesById: Object.fromEntries(threadListExtraPagesByProjectId),
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
@@ -3319,7 +3891,8 @@ export default function Sidebar() {
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
-      threadListExtraPagesByProjectCwd,
+      legacyThreadListExtraPagesByCwd,
+      threadListExtraPagesByProjectId,
     ],
   );
   const { activateThreadFromSidebarIntent } = useThreadActivationController({
@@ -3466,8 +4039,10 @@ export default function Sidebar() {
         } else {
           handleSelectSpaceForIncomingProject(destinationSpaceId);
           await addProjectFromPath(value.workspaceRoot, {
+            title: value.title,
             createIfMissing: value.createIfMissing,
             spaceId: value.spaceId,
+            additionalSourcePaths: value.additionalSourcePaths,
           });
         }
       };
@@ -3554,6 +4129,10 @@ export default function Sidebar() {
         setRenameProjectDialogId(projectId);
         return;
       }
+      if (clicked === "new-folder") {
+        openCreateThreadFolder(projectId);
+        return;
+      }
       if (clicked === "toggle-pin") {
         toggleProjectPinned(projectId);
         return;
@@ -3638,6 +4217,7 @@ export default function Sidebar() {
       handleStopProjectRun,
       navigate,
       openProjectRunDialog,
+      openCreateThreadFolder,
       projectById,
       removeDeletedProjectFromClientState,
       sidebarThreads,
@@ -3946,6 +4526,8 @@ export default function Sidebar() {
     canShowLessChatThreads,
     canShowMoreChatThreads,
     chatThreadListEffectiveExtraPages,
+    hiddenChatThreadCount,
+    chatShowMoreCount,
     renderedChatEntries,
   } = useMemo(() => {
     const paging = resolveSidebarThreadListPaging({
@@ -3959,6 +4541,7 @@ export default function Sidebar() {
       activeEntryId: activeChatPreviewEntry?.rowId,
       previewLimit: paging.previewLimit,
     });
+    const hiddenThreadCount = Math.max(0, visibleChatPreviewEntries.length - paging.previewLimit);
     return {
       // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
       // cap, so only offer "Show more" while rows are genuinely hidden.
@@ -3966,6 +4549,8 @@ export default function Sidebar() {
         paging.canShowMore && visibleEntries.length < visibleChatPreviewEntries.length,
       canShowLessChatThreads: paging.canShowLess,
       chatThreadListEffectiveExtraPages: paging.effectiveExtraPages,
+      hiddenChatThreadCount: hiddenThreadCount,
+      chatShowMoreCount: Math.min(THREAD_PREVIEW_PAGE_SIZE, hiddenThreadCount),
       renderedChatEntries: visibleEntries,
     };
   }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
@@ -4020,6 +4605,33 @@ export default function Sidebar() {
     () => orderPinnedProjectsForSidebar(standardProjectsBase, pinnedProjectIds),
     [pinnedProjectIds, standardProjectsBase],
   );
+  // deriveSidebarProjectData still pages by normalized cwd, so resolve every surface
+  // project through the id-first lookup (stable id wins, legacy cwd map backfills).
+  const threadListExtraPagesByProjectCwd = useMemo(() => {
+    const resolved = new Map<string, number>();
+    for (const project of [...standardProjects, ...studioProjects]) {
+      const extraPages = resolveProjectThreadListExtraPages({
+        extraPagesById: threadListExtraPagesByProjectId,
+        legacyExtraPagesByCwd: legacyThreadListExtraPagesByCwd,
+        projectId: project.id,
+        projectCwd: project.cwd,
+      });
+      if (extraPages <= 0) {
+        continue;
+      }
+      const cwdKey = normalizeSidebarProjectThreadListCwd(project.cwd);
+      if (cwdKey.length === 0) {
+        continue;
+      }
+      resolved.set(cwdKey, Math.max(resolved.get(cwdKey) ?? 0, extraPages));
+    }
+    return resolved;
+  }, [
+    legacyThreadListExtraPagesByCwd,
+    standardProjects,
+    studioProjects,
+    threadListExtraPagesByProjectId,
+  ]);
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
     shouldShowProjectPathEntry: createProjectDialogOpen,
@@ -4089,11 +4701,10 @@ export default function Sidebar() {
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
     const settle = window.setTimeout(() => {
-      setThreadListExtraPagesByProjectCwd((current) =>
-        pruneProjectThreadListPagingForCollapsedProjects({
-          threadListExtraPagesByProjectCwd: current,
+      setThreadListExtraPagesByProjectId((current) =>
+        pruneProjectThreadListExtraPagesById({
+          threadListExtraPagesByProjectId: current,
           projects: standardProjects,
-          normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         }),
       );
     }, 0);
@@ -4127,7 +4738,8 @@ export default function Sidebar() {
     persistSidebarUiState({
       chatSectionExpanded,
       chatThreadListExtraPages,
-      projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
+      projectThreadListExtraPagesByCwd: Object.fromEntries(legacyThreadListExtraPagesByCwd),
+      projectThreadListExtraPagesById: Object.fromEntries(threadListExtraPagesByProjectId),
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
       activityViewEnabled,
@@ -4137,7 +4749,8 @@ export default function Sidebar() {
     chatSectionExpanded,
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
-    threadListExtraPagesByProjectCwd,
+    legacyThreadListExtraPagesByCwd,
+    threadListExtraPagesByProjectId,
     lastThreadRoute,
   ]);
 
@@ -4210,7 +4823,15 @@ export default function Sidebar() {
         continue;
       }
 
-      for (const entry of projectSidebarData.visibleEntries) {
+      const projectThreadFolders = getProjectThreadFolders(threadFolders, project.id);
+      const activeFolderIds = new Set(projectThreadFolders.map((folder) => folder.id));
+      const { visibleEntries } = groupThreadFolderEntries({
+        entries: projectSidebarData.visibleEntries,
+        activeFolderIds,
+        folderIdByThreadId,
+        collapsedFolderIds: collapsedThreadFolderIds,
+      });
+      for (const entry of visibleEntries) {
         addVisibleThreadId(entry.rowId);
       }
     }
@@ -4224,7 +4845,15 @@ export default function Sidebar() {
     }
 
     return [...visibleThreadIdSet];
-  }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  }, [
+    collapsedThreadFolderIds,
+    folderIdByThreadId,
+    pinnedThreads,
+    studioChatThreadIds,
+    surfaceProjectSidebarDataById,
+    surfaceProjects,
+    threadFolders,
+  ]);
   const visibleSidebarThreadIds =
     activityViewEnabled && !isOnStudio ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
@@ -4353,7 +4982,12 @@ export default function Sidebar() {
     const includePinToggle = input.includePinToggle !== false;
 
     return (
-      <SidebarRowHoverActions threadId={input.threadId}>
+      <SidebarRowHoverActions
+        testId={`thread-hover-actions-${input.threadId}`}
+        // Solid background so the actions read as an overlay above the status
+        // glyph, which no longer fades out on hover.
+        className="rounded-md bg-[var(--sidebar-background,var(--background))]"
+      >
         <div className="pointer-events-auto inline-flex items-center gap-2">
           {includePinToggle ? (
             <ThreadPinToggleButton
@@ -4719,6 +5353,16 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    // Urgent rows keep a short time label in normal flow (next to the title, which
+    // truncates first) now that the trailing status slot is always visible.
+    // Running rows render a live "running for" elapsed via SidebarElapsedTimeLabel
+    // (1s tick scoped to the row); settled rows fall back to recency here.
+    const threadIsRunning =
+      isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
+    const urgentThreadRecency =
+      threadStatus !== null && isUrgentThreadStatusPill(threadStatus)
+        ? formatRelativeTime(thread.latestTurn?.completedAt ?? thread.updatedAt ?? thread.createdAt)
+        : null;
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
@@ -4763,6 +5407,22 @@ export default function Sidebar() {
                 draggable
                 onDragStart={(event) => {
                   const dragImage = event.currentTarget as HTMLElement | null;
+                  const candidateIds = selectedThreadIds.has(thread.id)
+                    ? [...selectedThreadIds]
+                    : [thread.id];
+                  const draggableFolderThreadIds = candidateIds.filter((threadId) => {
+                    const candidate = getThreadFromState(useStore.getState(), threadId);
+                    return (
+                      candidate !== undefined &&
+                      candidate.projectId === thread.projectId &&
+                      (candidate.parentThreadId ?? null) === null
+                    );
+                  });
+                  sidebarThreadDragIdsRef.current = draggableFolderThreadIds;
+                  setSidebarThreadDragProjectId(
+                    draggableFolderThreadIds.length > 0 ? thread.projectId : null,
+                  );
+                  setThreadFolderDropTargetKey(null);
                   event.dataTransfer.effectAllowed = "move";
                   event.dataTransfer.setData(
                     THREAD_DRAG_MIME,
@@ -4777,6 +5437,7 @@ export default function Sidebar() {
                     );
                   }
                 }}
+                onDragEnd={clearSidebarThreadDrag}
                 onClick={(event) => {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}
@@ -4826,18 +5487,23 @@ export default function Sidebar() {
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
               suffix={
-                showTemporaryThreadIcon ? (
+                showTemporaryThreadIcon || threadIsRunning || urgentThreadRecency !== null ? (
                   <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                            <TemporaryThreadIcon />
-                          </span>
-                        }
-                      />
-                      <TooltipPopup side="top">Temporary chat</TooltipPopup>
-                    </Tooltip>
+                    {threadIsRunning || urgentThreadRecency !== null ? (
+                      <SidebarElapsedTimeLabel thread={thread} recencyLabel={urgentThreadRecency} />
+                    ) : null}
+                    {showTemporaryThreadIcon ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
+                              <TemporaryThreadIcon />
+                            </span>
+                          }
+                        />
+                        <TooltipPopup side="top">Temporary chat</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
                   </div>
                 ) : undefined
               }
@@ -4869,6 +5535,118 @@ export default function Sidebar() {
     );
   }
 
+  function renderThreadFolder(
+    folder: SidebarThreadFolder,
+    entries: readonly SidebarProjectEntry[],
+    orderedProjectThreadIds: readonly ThreadId[],
+    totalThreadCount: number,
+  ) {
+    // Match project disclosure semantics: an active thread does not override an
+    // explicit user collapse. The chat stays active while its sidebar group closes.
+    const open = collapsedThreadFolderIds[folder.id] !== true;
+    const dropTargetKey = threadFolderDropKey(folder.projectId, folder.id);
+    const dropActive = threadFolderDropTargetKey === dropTargetKey;
+    const resolvePointerDropTarget = (event: ReactDragEvent<HTMLElement>) =>
+      resolveSidebarFolderDropTarget({
+        clientX: event.clientX,
+        containerLeft: event.currentTarget.getBoundingClientRect().left,
+        folderId: folder.id,
+      });
+    return (
+      <div
+        key={folder.id}
+        className="group/thread-folder w-full"
+        onDragEnter={(event) =>
+          handleThreadFolderDragOver(event, folder.projectId, resolvePointerDropTarget(event))
+        }
+        onDragOver={(event) =>
+          handleThreadFolderDragOver(event, folder.projectId, resolvePointerDropTarget(event))
+        }
+        onDragLeave={(event) => {
+          handleThreadFolderDragLeave(event, folder.projectId, folder.id);
+          handleThreadFolderDragLeave(event, folder.projectId, null);
+        }}
+        onDrop={(event) =>
+          handleThreadFolderDrop(event, folder.projectId, resolvePointerDropTarget(event))
+        }
+      >
+        <SidebarMenuSubItem className="group/thread-folder-row w-full">
+          <SidebarMenuSubButton
+            render={<button type="button" />}
+            size="sm"
+            aria-expanded={open}
+            className={cn(
+              "ml-3 h-6 w-[calc(100%-0.75rem)] translate-x-0 gap-1.5 rounded-md border border-transparent pr-2 pl-1.5 text-left",
+              SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+              SIDEBAR_ROW_HOVER_CLASS_NAME,
+              dropActive && "border-info/65 bg-info/14 text-foreground ring-1 ring-info/45",
+            )}
+            onClick={() => setThreadFolderCollapsed(folder.id, open)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void handleThreadFolderContextMenu(folder, {
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
+          >
+            <FoldersIcon className="size-3 shrink-0 text-muted-foreground/65" aria-hidden />
+            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-xs,11px)] font-normal text-muted-foreground/82">
+              {folder.name}
+            </span>
+            <span
+              className={cn(
+                "shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/42 transition-opacity",
+                // Yields its slot to the new-thread action so the row keeps its full
+                // width instead of permanently reserving space for a hover control.
+                sidebarHoverRevealHideClassName("thread-folder-row"),
+              )}
+            >
+              {totalThreadCount}
+            </span>
+            <DisclosureChevron open={open} className="size-3 text-muted-foreground/55" />
+          </SidebarMenuSubButton>
+          {/* Offset past the chevron so the strip lands on the thread count it replaces. */}
+          <SidebarRowHoverActions
+            row="thread-folder-row"
+            testId={`thread-folder-hover-actions-${folder.id}`}
+            className="right-5"
+          >
+            <SidebarIconButton
+              icon={NewThreadIcon}
+              size="sm"
+              label={`Create new thread in ${folder.name}`}
+              tooltip="New thread in folder"
+              tooltipSide="top"
+              onMouseEnter={() => {
+                prefetchModelsForProjectNewThread(folder.projectId);
+              }}
+              onFocus={() => {
+                prefetchModelsForProjectNewThread(folder.projectId);
+              }}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                prefetchModelsForProjectNewThread(folder.projectId, { includeDroid: true });
+                void createThreadInFolder(folder);
+              }}
+            />
+          </SidebarRowHoverActions>
+        </SidebarMenuSubItem>
+        <div className={disclosureShellClassName(open)}>
+          <div className={DISCLOSURE_INNER_CLASS}>
+            <div className={cn("pl-5", disclosureContentClassName(open))}>
+              {entries.map((entry) =>
+                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false),
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderProjectItem(
     project: (typeof sortedProjects)[number],
     dragHandleProps: SortableProjectHandleProps | null,
@@ -4881,12 +5659,44 @@ export default function Sidebar() {
     const {
       orderedProjectThreadIds,
       allProjectThreadCount,
+      projectThreads,
       projectStatus,
       visibleEntries,
       threadListExtraPages,
       canShowMoreThreads,
       canShowLessThreads,
     } = projectSidebarData;
+    // "Show more" reveals one page; the label names that page and the total still hidden.
+    const projectPreviewLimit =
+      THREAD_PREVIEW_LIMIT + threadListExtraPages * THREAD_PREVIEW_PAGE_SIZE;
+    const hiddenProjectThreadCount = Math.max(
+      0,
+      orderedProjectThreadIds.length - projectPreviewLimit,
+    );
+    const projectShowMoreCount = Math.min(THREAD_PREVIEW_PAGE_SIZE, hiddenProjectThreadCount);
+    const projectThreadFolders = getProjectThreadFolders(threadFolders, project.id);
+    const activeFolderIds = new Set(projectThreadFolders.map((folder) => folder.id));
+    const { entriesByFolderId: visibleEntriesByFolderId, rootEntries: rootVisibleEntries } =
+      groupThreadFolderEntries({
+        entries: visibleEntries,
+        activeFolderIds,
+        folderIdByThreadId,
+        collapsedFolderIds: collapsedThreadFolderIds,
+      });
+    const threadCountByFolderId = new Map<string, number>();
+    for (const thread of projectThreads) {
+      if ((thread.parentThreadId ?? null) !== null) continue;
+      const folderId = folderIdByThreadId[thread.id];
+      if (!folderId || !activeFolderIds.has(folderId)) continue;
+      threadCountByFolderId.set(folderId, (threadCountByFolderId.get(folderId) ?? 0) + 1);
+    }
+    const projectRootDropKey = threadFolderDropKey(project.id, null);
+    const projectRootDropActive = threadFolderDropTargetKey === projectRootDropKey;
+    const showProjectRootDropTarget =
+      sidebarThreadDragProjectId === project.id &&
+      sidebarThreadDragIdsRef.current.some(
+        (threadId) => folderIdByThreadId[threadId] !== undefined,
+      );
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : sidebarHoverRevealHideClassName("project-header");
@@ -4897,13 +5707,13 @@ export default function Sidebar() {
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
     const collapsedProjectStatus = project.expanded ? null : projectStatus;
     // The "open dev server" affordance now lives in the project context menu, so
-    // the hover toolbar always reserves space for the three thread actions. The
+    // the hover toolbar always reserves space for the four project/thread actions. The
     // reserve lives on the *name* container (not the button) so only the truncating
     // name yields to the overlay toolbar; the trailing run dot stays put and fades
     // in place instead of sliding left. Focus is read from the group because the
     // name container itself is not focusable — the row's button is.
     const projectToolbarReserveClassName =
-      "group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]";
+      "group-hover/project-header:pr-[6.25rem] group-has-[:focus-visible]/project-header:pr-[6.25rem]";
 
     return (
       <div className="group/collapsible">
@@ -4924,6 +5734,7 @@ export default function Sidebar() {
                 SIDEBAR_HEADER_ROW_CLASS_NAME,
                 "hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
                 isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+                projectRootDropActive && "bg-info/14 ring-1 ring-info/55 ring-inset",
               )}
               {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
               {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
@@ -4952,6 +5763,10 @@ export default function Sidebar() {
                   y: event.clientY,
                 });
               }}
+              onDragEnter={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragOver={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragLeave={(event) => handleThreadFolderDragLeave(event, project.id, null)}
+              onDrop={(event) => handleThreadFolderDrop(event, project.id, null)}
             >
               <SidebarLeadingIcon
                 size="sm"
@@ -5026,7 +5841,12 @@ export default function Sidebar() {
             >
               <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
             </button>
-            <SidebarSectionToolbar placement="overlay" revealOnHover>
+            <SidebarSectionToolbar
+              placement="overlay"
+              revealOnHover
+              // Solid background so the toolbar reads as an overlay above the row content.
+              className="rounded-md bg-[var(--sidebar-background,var(--background))]"
+            >
               <SidebarIconButton
                 icon={IoIosGitCompare}
                 label={`View pull requests for ${project.name}`}
@@ -5041,6 +5861,17 @@ export default function Sidebar() {
                     to: "/pull-requests",
                     search: { involvement: "all", state: "open", projectId: project.id },
                   });
+                }}
+              />
+              <SidebarIconButton
+                icon={FolderClosed}
+                label={`Create thread folder in ${project.name}`}
+                tooltip="New thread folder"
+                tooltipSide="top"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openCreateThreadFolder(project.id);
                 }}
               />
               <SidebarIconButton
@@ -5106,9 +5937,35 @@ export default function Sidebar() {
                 SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
                 disclosureContentClassName(project.expanded),
               )}
+              onDragEnter={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragOver={(event) => handleThreadFolderDragOver(event, project.id, null)}
+              onDragLeave={(event) => handleThreadFolderDragLeave(event, project.id, null)}
+              onDrop={(event) => handleThreadFolderDrop(event, project.id, null)}
             >
-              {visibleEntries.map((entry) =>
-                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
+              {showProjectRootDropTarget ? (
+                <SidebarMenuSubItem className="w-full">
+                  <div
+                    className={cn(
+                      "mx-1 flex h-7 items-center gap-1.5 rounded-md border border-dashed border-border/60 px-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 transition-colors",
+                      projectRootDropActive &&
+                        "border-info/70 bg-info/14 text-foreground ring-1 ring-info/45",
+                    )}
+                  >
+                    <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden />
+                    <span>Move out of folder</span>
+                  </div>
+                </SidebarMenuSubItem>
+              ) : null}
+              {projectThreadFolders.map((folder) =>
+                renderThreadFolder(
+                  folder,
+                  visibleEntriesByFolderId.get(folder.id) ?? [],
+                  orderedProjectThreadIds,
+                  threadCountByFolderId.get(folder.id) ?? 0,
+                ),
+              )}
+              {rootVisibleEntries.map((entry) =>
+                renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false),
               )}
 
               {(canShowMoreThreads || canShowLessThreads) && (
@@ -5122,10 +5979,12 @@ export default function Sidebar() {
                         className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
-                          showMoreThreadsForProject(project.cwd, threadListExtraPages);
+                          showMoreThreadsForProject(project.id, threadListExtraPages);
                         }}
                       >
-                        <span>Show more</span>
+                        <span>
+                          Show {projectShowMoreCount} more ({hiddenProjectThreadCount})
+                        </span>
                       </SidebarMenuSubButton>
                     )}
                     {canShowLessThreads && (
@@ -5140,7 +5999,7 @@ export default function Sidebar() {
                         )}
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
-                          showLessThreadsForProject(project.cwd, threadListExtraPages);
+                          showLessThreadsForProject(project.id, threadListExtraPages);
                         }}
                       >
                         <span>Show less</span>
@@ -5824,17 +6683,15 @@ export default function Sidebar() {
   // Both handlers step from the *effective* (clamped) page count reported by the derived
   // project data, so stale/oversized stored paging self-heals on the very next click.
   const setThreadListExtraPagesForProject = useCallback(
-    (projectCwd: string, nextExtraPages: number) => {
-      const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
-      if (cwdKey.length === 0) return;
-      setThreadListExtraPagesByProjectCwd((current) => {
+    (projectId: ProjectId, nextExtraPages: number) => {
+      setThreadListExtraPagesByProjectId((current) => {
         const clampedExtraPages = Math.max(0, nextExtraPages);
-        if ((current.get(cwdKey) ?? 0) === clampedExtraPages) return current;
+        if ((current.get(projectId) ?? 0) === clampedExtraPages) return current;
         const next = new Map(current);
         if (clampedExtraPages === 0) {
-          next.delete(cwdKey);
+          next.delete(projectId);
         } else {
-          next.set(cwdKey, clampedExtraPages);
+          next.set(projectId, clampedExtraPages);
         }
         return next;
       });
@@ -5843,15 +6700,15 @@ export default function Sidebar() {
   );
 
   const showMoreThreadsForProject = useCallback(
-    (projectCwd: string, currentExtraPages: number) => {
-      setThreadListExtraPagesForProject(projectCwd, currentExtraPages + 1);
+    (projectId: ProjectId, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectId, currentExtraPages + 1);
     },
     [setThreadListExtraPagesForProject],
   );
 
   const showLessThreadsForProject = useCallback(
-    (projectCwd: string, currentExtraPages: number) => {
-      setThreadListExtraPagesForProject(projectCwd, currentExtraPages - 1);
+    (projectId: ProjectId, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectId, currentExtraPages - 1);
     },
     [setThreadListExtraPagesForProject],
   );
@@ -5907,6 +6764,11 @@ export default function Sidebar() {
   const projectContextMenuHasArchivableThreads = projectContextMenuThreads.some(
     (thread) => thread.archivedAt == null,
   );
+  const projectContextMenuArchivedThreadFolders = projectContextMenuProject
+    ? getProjectThreadFolders(threadFolders, projectContextMenuProject.id, {
+        includeArchived: true,
+      }).filter((folder) => folder.archivedAt !== null)
+    : [];
   const projectContextMenuIsPinned = projectContextMenuProject
     ? pinnedProjectIdSet.has(projectContextMenuProject.id)
     : false;
@@ -5918,6 +6780,11 @@ export default function Sidebar() {
     : null;
   const projectContextMenuHasOpenServer =
     projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
+  const threadFolderRemovalThreadCount = threadFolderRemovalState
+    ? getThreadIdsInFolder(folderIdByThreadId, threadFolderRemovalState.folder.id).filter(
+        (threadId) => getThreadFromState(useStore.getState(), threadId) !== undefined,
+      ).length
+    : 0;
 
   return (
     <>
@@ -6147,6 +7014,7 @@ export default function Sidebar() {
                     projectById={projectById}
                     activeThreadId={visualActiveSidebarThreadId}
                     pinnedThreadIdSet={pinnedThreadIdSet}
+                    timestampFormat={appSettings.timestampFormat}
                     settledOverrideByThreadId={settledOverrideByThreadId}
                     threadsHydrated={threadsHydrated}
                     resolveThreadStatus={resolveThreadStatusForSidebar}
@@ -6162,6 +7030,7 @@ export default function Sidebar() {
                     }}
                     onProjectContextMenu={handleProjectContextMenu}
                     prByThreadId={prByThreadId}
+                    threadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
                     onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                     renderThreadHoverCard={(thread, anchorId) =>
                       renderThreadHoverCardPopup(
@@ -6390,7 +7259,9 @@ export default function Sidebar() {
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
                               }
                             >
-                              <span>Show more</span>
+                              <span>
+                                Show {chatShowMoreCount} more ({hiddenChatThreadCount})
+                              </span>
                             </SidebarMenuButton>
                           ) : null}
                           {canShowLessChatThreads ? (
@@ -6451,6 +7322,12 @@ export default function Sidebar() {
                     <span>Settings</span>
                   </SidebarMenuButton>
                 )}
+                {keepAwakeState?.available ? (
+                  <SidebarKeepAwakeMenu
+                    state={keepAwakeState}
+                    onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+                  />
+                ) : null}
                 {showDesktopUpdateButton ? (
                   <Tooltip>
                     <TooltipTrigger
@@ -6688,6 +7565,44 @@ export default function Sidebar() {
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
+                  void handleProjectContextMenuAction(
+                    projectContextMenuState.projectId,
+                    "new-folder",
+                  )
+                }
+              >
+                <ProjectContextMenuIcon icon={AddPlusIcon} />
+                <span>New thread folder…</span>
+              </MenuItem>
+              {projectContextMenuArchivedThreadFolders.length > 0 ? (
+                <MenuSub keepOpenOnFocusOut>
+                  <MenuSubTrigger className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}>
+                    <ProjectContextMenuIcon icon={ArchiveIcon} />
+                    <span>Archived folders</span>
+                  </MenuSubTrigger>
+                  <ComposerPickerMenuSubPopup className="min-w-48">
+                    {projectContextMenuArchivedThreadFolders.map((folder) => (
+                      <MenuItem
+                        key={folder.id}
+                        className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                        onClick={() => {
+                          restoreThreadFolder(folder.id);
+                          setProjectContextMenuState(null);
+                        }}
+                      >
+                        <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
+                          <FolderClosed />
+                        </span>
+                        <span className="min-w-0 truncate">Restore {folder.name}</span>
+                      </MenuItem>
+                    ))}
+                  </ComposerPickerMenuSubPopup>
+                </MenuSub>
+              ) : null}
+              <MenuSeparator />
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
                   void handleProjectContextMenuAction(projectContextMenuState.projectId, "rename")
                 }
               >
@@ -6885,6 +7800,34 @@ export default function Sidebar() {
           );
         }}
       />
+
+      <RenameDialog
+        open={threadFolderEditorState !== null}
+        title={threadFolderEditorState?.mode === "rename" ? "Rename folder" : "New thread folder"}
+        description="Visual organization only — this does not create a Git folder or change the project files."
+        initialValue={
+          threadFolderEditorState?.mode === "rename" ? threadFolderEditorState.folder.name : ""
+        }
+        placeholder="e.g. Sidebar changes"
+        saveLabel={threadFolderEditorState?.mode === "rename" ? "Save" : "Create folder"}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setThreadFolderEditorState(null);
+        }}
+        onSave={commitThreadFolderEditor}
+      />
+
+      {threadFolderRemovalState ? (
+        <ThreadFolderRemovalDialog
+          open
+          folderName={threadFolderRemovalState.folder.name}
+          threadCount={threadFolderRemovalThreadCount}
+          mode={threadFolderRemovalState.mode}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setThreadFolderRemovalState(null);
+          }}
+          onConfirm={(disposition) => runThreadFolderRemoval(threadFolderRemovalState, disposition)}
+        />
+      ) : null}
 
       {searchPaletteOpen ? (
         <SidebarSearchPaletteController

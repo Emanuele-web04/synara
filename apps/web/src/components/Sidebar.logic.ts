@@ -31,6 +31,7 @@ import {
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import {
   canSessionAnswerPendingRequests,
+  formatClockDuration,
   hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
@@ -526,6 +527,35 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
   return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
 }
 
+// Id-keyed twin of the cwd prune above: drops remembered "show more" paging for
+// projects that are currently collapsed. Entries for unknown ids are kept, matching
+// the legacy behavior for cwds that no longer match a project.
+export function pruneProjectThreadListExtraPagesById(input: {
+  threadListExtraPagesByProjectId: ReadonlyMap<Project["id"], number>;
+  projects: readonly Pick<Project, "id" | "expanded">[];
+}): ReadonlyMap<Project["id"], number> {
+  const { projects, threadListExtraPagesByProjectId } = input;
+  const collapsedProjectIds = new Set(
+    projects.filter((project) => !project.expanded).map((project) => project.id),
+  );
+
+  if (collapsedProjectIds.size === 0) {
+    return threadListExtraPagesByProjectId;
+  }
+
+  let changed = false;
+  const nextThreadListExtraPagesByProjectId = new Map<Project["id"], number>();
+  for (const [projectId, extraPages] of threadListExtraPagesByProjectId) {
+    if (collapsedProjectIds.has(projectId)) {
+      changed = true;
+      continue;
+    }
+    nextThreadListExtraPagesByProjectId.set(projectId, extraPages);
+  }
+
+  return changed ? nextThreadListExtraPagesByProjectId : threadListExtraPagesByProjectId;
+}
+
 /**
  * Trailing padding that protects the title from the absolutely-positioned
  * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
@@ -561,7 +591,10 @@ export function resolveThreadRowTrailingReserveClass(input: {
   if (metaChipCount === 2) {
     return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
   }
-  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
+  if (metaChipCount === 3) {
+    return cn(hasTrailingGlyph ? "pr-[4.75rem]" : "pr-[3.75rem]", hoverReserve);
+  }
+  return cn(hasTrailingGlyph ? "pr-[5.75rem]" : "pr-[4.5rem]", hoverReserve);
 }
 
 export function resolveThreadRowClassName(input: {
@@ -603,6 +636,79 @@ export function isThreadActivelyWorking(thread: {
     session?.status === "running" &&
     (thread.latestTurn == null || hasLiveLatestTurn(thread.latestTurn, session))
   );
+}
+
+/**
+ * Elapsed wall-clock time of the thread's unfinished turn, for "running for Xm"
+ * row labels. Null once the turn completes (recency labels take over) or when
+ * no start timestamp exists — callers fall back to the recency label.
+ */
+export function resolveThreadElapsedMs(
+  thread: Pick<Thread, "latestTurn">,
+  nowMs: number,
+): number | null {
+  const turn = thread.latestTurn;
+  if (turn == null || turn.completedAt != null) {
+    return null;
+  }
+  const startIso = turn.startedAt ?? turn.requestedAt ?? null;
+  if (startIso == null) {
+    return null;
+  }
+  const startMs = Date.parse(startIso);
+  if (Number.isNaN(startMs)) {
+    return null;
+  }
+  return Math.max(0, nowMs - startMs);
+}
+
+/** Compact elapsed label; same formatter the chat "Working for" header uses. */
+export function formatThreadElapsed(elapsedMs: number): string {
+  return formatClockDuration(elapsedMs);
+}
+
+/**
+ * Whether a running row is still waiting for its new turn (shows "Starting…").
+ * A finished latest turn means the run is over even if the running flags lag a
+ * frame behind — without this gate the row flashes "0s" on completion instead
+ * of simply dropping the elapsed label.
+ */
+export function shouldShowThreadStartingLabel(thread: {
+  hasLiveTailWork?: boolean | undefined;
+  session?: Thread["session"] | undefined;
+  latestTurn?: Thread["latestTurn"] | undefined;
+}): boolean {
+  const turn = thread.latestTurn;
+  if (turn != null && turn.completedAt != null) {
+    return false;
+  }
+  return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
+}
+
+export type UrgentThreadTimeLabel = {
+  text: string;
+  title?: string | undefined;
+};
+
+/**
+ * Which time label an urgent row shows. A running thread whose new turn has
+ * not arrived yet (stale finished turn still in the summary) must not flash
+ * the old recency ("6m") for a frame and then jump to "0s" — it reads as
+ * starting instead.
+ */
+export function resolveUrgentThreadTimeLabel(input: {
+  elapsedMs: number | null;
+  isStarting: boolean;
+  recencyLabel: string | null;
+}): UrgentThreadTimeLabel | null {
+  if (input.elapsedMs !== null) {
+    const text = formatThreadElapsed(input.elapsedMs);
+    return { text, title: `Running for ${text}` };
+  }
+  if (input.isStarting) {
+    return { text: "0s", title: "Starting…" };
+  }
+  return input.recencyLabel !== null ? { text: input.recencyLabel } : null;
 }
 
 export function resolveThreadStatusPill(input: {
@@ -865,6 +971,16 @@ export function resolveSidebarThreadListPaging(input: {
     canShowMore: totalCount > previewLimit,
     canShowLess: effectiveExtraPages > 0,
   };
+}
+
+// The sidebar can render beside a split chat, where the focused pane differs from
+// the route owner. Preview folding must retain the thread the user is actually viewing.
+export function resolveActiveSidebarThreadId(input: {
+  focusedThreadId: ThreadId | null;
+  optimisticThreadId: ThreadId | null;
+  routeThreadId: ThreadId | null;
+}): ThreadId | null {
+  return input.optimisticThreadId ?? input.focusedThreadId ?? input.routeThreadId;
 }
 
 export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {

@@ -29,6 +29,8 @@ function makeProject(id: ProjectId, name: string): Project {
     defaultModelSelection: null,
     expanded: true,
     scripts: [],
+    sources: [],
+    primarySourceId: null,
   };
 }
 
@@ -73,6 +75,7 @@ function renderActivity(input: {
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  threadJumpLabelByThreadId?: ReadonlyMap<ThreadId, string>;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
@@ -93,6 +96,7 @@ function renderActivity(input: {
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated
       prByThreadId={input.prByThreadId ?? new Map()}
+      threadJumpLabelByThreadId={input.threadJumpLabelByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
@@ -114,6 +118,20 @@ function renderActivity(input: {
 describe("SidebarActivityView", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("shows an assigned thread jump shortcut in its activity row", async () => {
+    const thread = makeThread(0);
+    const mounted = await render(
+      renderActivity({
+        threads: [thread],
+        threadJumpLabelByThreadId: new Map([[thread.id, "⌘1"]]),
+      }),
+    );
+
+    expect(page.getByText("⌘")).toBeVisible();
+    expect(page.getByText("1", { exact: true })).toBeVisible();
+    await mounted.unmount();
   });
 
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {
@@ -158,7 +176,7 @@ describe("SidebarActivityView", () => {
     });
     expect(document.querySelector('[title="#42 PR merged: Live merged PR"]')).not.toBeNull();
 
-    await page.getByRole("button", { name: "Show more" }).click();
+    await page.getByRole("button", { name: /Show \d+ more \(\d+\)/ }).click();
     await vi.waitFor(() => {
       expect(document.querySelectorAll("[data-testid^='activity-thread-']")).toHaveLength(40);
       expect(onVisibleThreadIdsChange.mock.lastCall?.[0]).toHaveLength(40);
@@ -274,14 +292,15 @@ describe("SidebarActivityView", () => {
       }),
     );
 
-    const completedDot = page
-      .getByTestId(`activity-thread-${unseen.id}`)
-      .element()
-      .parentElement?.querySelector('[aria-label="Unread completion"]');
+    const unseenRowButton = page.getByTestId(`activity-thread-${unseen.id}`).element();
+    const completedDot = unseenRowButton.parentElement?.querySelector(
+      '[aria-label="Unread completion"]',
+    );
     expect(completedDot).not.toBeNull();
-    expect(completedDot?.parentElement?.dataset.slot).toBe("activity-completion-status");
-    const completedStatusSlot = completedDot?.parentElement;
-    const completedStatusLeft = completedStatusSlot?.getBoundingClientRect().left;
+    // The status glyph lives inline in the row's second line (next to PR/branch),
+    // not in an absolutely-positioned slot that hovers actions would cover.
+    expect(unseenRowButton.contains(completedDot ?? null)).toBe(true);
+    const completedStatusLeft = completedDot?.getBoundingClientRect().left;
 
     const pinnedRow = page.getByTestId(`activity-thread-${pinned.id}`).element();
     pinnedRow.focus();
@@ -293,9 +312,11 @@ describe("SidebarActivityView", () => {
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
     await vi.waitFor(() => {
-      expect(getComputedStyle(completedStatusSlot!).opacity).toBe("0");
+      // The inline status stays visible while hover actions appear (it no longer
+      // fades out) and the row must not shift around it.
+      expect(getComputedStyle(completedDot!).opacity).not.toBe("0");
     });
-    expect(completedStatusSlot?.getBoundingClientRect().left).toBe(completedStatusLeft);
+    expect(completedDot?.getBoundingClientRect().left).toBe(completedStatusLeft);
     await page.getByRole("button", { name: "Done" }).click();
     expect(onMarkThreadRead).toHaveBeenCalledWith(
       unseen.id,
