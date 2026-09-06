@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { DESKTOP_OPERATION_QUEUE_LIMIT, DesktopOperationQueue } from "./DesktopOperationQueue.ts";
+import {
+  DESKTOP_OPERATION_QUEUE_LIMIT,
+  DesktopOperationQueue,
+  desktopOperationSignal,
+} from "./DesktopOperationQueue.ts";
 
 function deferred() {
   let resolve = () => {};
@@ -80,4 +84,36 @@ describe("DesktopOperationQueue", () => {
     expect(queuedRuns).toBe(0);
     await expect(queue.run(async () => undefined)).rejects.toThrow("closed");
   });
+});
+
+it("cancels running native work before completing shutdown", async () => {
+  const queue = new DesktopOperationQueue();
+  const entered = deferred();
+  const running = queue.run(async () => {
+    const signal = desktopOperationSignal()!;
+    const aborted = new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    entered.resolve();
+    await aborted;
+    expect(signal.aborted).toBe(true);
+  });
+  await entered.promise;
+  await queue.close();
+  await running;
+});
+
+it("does not retain a cancelled turn's signal in detached background work", async () => {
+  const queue = new DesktopOperationQueue();
+  const controller = new AbortController();
+  const release = deferred();
+  let detached!: Promise<AbortSignal | undefined>;
+  await queue.run(async () => {
+    detached = release.promise.then(() => desktopOperationSignal());
+    expect(desktopOperationSignal()?.aborted).toBe(false);
+  }, controller.signal);
+  controller.abort();
+  release.resolve();
+  expect(await detached).toBeUndefined();
+  await queue.close();
 });

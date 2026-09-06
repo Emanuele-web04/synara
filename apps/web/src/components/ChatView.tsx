@@ -1917,17 +1917,15 @@ export default function ChatView({
   useThreadComputerStateSeed(threadId);
   const computerThreadState = useComputerStateStore(selectThreadComputerState(threadId));
   const computerControlAvailable = computerThreadState?.availability.kind === "available";
-  // A chat that has not started yet gets computer control only when the
-  // machine-wide opt-in allows it and the backend is available; a per-chat
-  // override wins over both, and a chat with turns but no recorded choice stays
-  // off (the first send records the default, see handleSend). `latestTurn`
-  // comes with the thread shell, so this does not wait for message hydration.
+  // New chats follow the default even while permission setup is pending.
+  // First send records the choice; existing chats keep their saved override.
+  // `latestTurn` is in the shell, so this does not wait for message hydration.
   const chatHasTurns =
     activeThread !== undefined &&
     (activeThread.latestTurn !== null || activeThread.messages.length > 0);
   const enableComputerControl = resolveEffectiveComputerControl({
     draftOverride: composerDraft.enableComputerControl,
-    backendAvailable: computerControlAvailable,
+    availability: computerThreadState?.availability,
     allowInNewChats: settings.allowComputerControlInNewChats,
     chatHasTurns,
   });
@@ -11540,6 +11538,7 @@ export default function ChatView({
     onRuntimeModeChange: handleRuntimeModeChange,
     computerControlEnabled: enableComputerControl,
     computerControlAvailable,
+    computerControlSupported: computerThreadState?.availability.kind !== "unsupported-platform",
     computerControlDisabledReason,
     onComputerControlChange: handleComputerControlChange,
     contextWindow: runtimeUsageContextWindow,
