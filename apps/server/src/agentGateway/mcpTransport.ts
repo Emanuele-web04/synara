@@ -19,6 +19,7 @@ import {
 } from "./protocol.ts";
 import { sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
 import {
+  filterToolsByCapability,
   GatewayToolError,
   gatewayToolErrorResult,
   type ToolContext,
@@ -85,7 +86,7 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {});
         case "tools/list":
           return jsonRpcResult(request.id, {
-            tools: input.tools.map((tool) => ({
+            tools: filterToolsByCapability(input.tools, context.callerCapabilities).map((tool) => ({
               ...tool.definition,
               // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
               // returns a fresh object for object input, so this restores the static type.
