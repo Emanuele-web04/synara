@@ -65,7 +65,7 @@ import {
   type OrchestrationCommandQueues,
   takeNextOrchestrationCommand,
   tryAdmitOrchestrationCommand,
-  usesReservedCommandAdmission,
+  isQuiescingCommandAdmissible,
 } from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
@@ -1294,7 +1294,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (
             current.phase === "draining" ||
             current.phase === "stopped" ||
-            (current.phase === "quiescing" && !usesReservedCommandAdmission(command.type))
+            (current.phase === "quiescing" && !isQuiescingCommandAdmissible(command.type))
           ) {
             return [{ accepted: false, reason: "stopped" as const }, current] as const;
           }
