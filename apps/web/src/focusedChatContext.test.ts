@@ -7,7 +7,6 @@ import { type DraftThreadState } from "./composerDraftStore";
 import { useFocusedChatContext, type FocusedChatContext } from "./focusedChatContext";
 import { initialState, type AppState } from "./storeState";
 import { makeProject, makeThread } from "./storeTestFixtures";
-import type { Project, Thread } from "./types";
 import type { SplitView } from "./splitViewStore";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
