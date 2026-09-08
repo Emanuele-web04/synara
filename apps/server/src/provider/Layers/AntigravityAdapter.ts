@@ -138,6 +138,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   harnessPolicyDelivered?: boolean;
+  readonly enableComputerControl?: boolean;
   readonly lifecycleGeneration?: string;
   readonly binaryPath: string;
   readonly turns: StoredTurn[];
@@ -1993,6 +1994,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           updatedAt: now,
         };
         const context: AntigravitySessionContext = {
+          enableComputerControl: input.enableComputerControl === true,
           session,
           gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined

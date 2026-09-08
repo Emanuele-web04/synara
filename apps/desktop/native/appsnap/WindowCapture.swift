@@ -718,7 +718,7 @@ final class AppSnapCaptureCoordinator {
                     result,
                     selectedWindow: selectedWindow,
                     id: id,
-                    capturedAt: capturedAt
+                    capturedAt: appSnapTimestamp()
                 )
             }
         }

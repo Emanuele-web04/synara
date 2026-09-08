@@ -177,6 +177,7 @@ import type {
 } from "./device";
 import type {
   ComputerActionResult,
+  ComputerControlEnabledResult,
   ComputerEvent,
   ComputerGetStateInput,
   ComputerGetStatusInput,
@@ -187,6 +188,7 @@ import type {
   ComputerListWindowsResult,
   ComputerProvisionInput,
   ComputerProvisionResult,
+  ComputerSetControlEnabledInput,
   ComputerState,
   ComputerStatusResult,
   ComputerThreadInput,
@@ -677,6 +679,8 @@ export interface DesktopBridge {
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
   appSnap: {
+    captureCurrentApp: (requestId: string) => Promise<DesktopAppSnapCapture>;
+    cancelCapture: (requestId: string) => Promise<void>;
     getState: () => Promise<DesktopAppSnapState>;
     setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
     checkShortcut: (
@@ -1004,10 +1008,9 @@ export interface NativeApi {
     /** Thread-independent backend status for surfaces outside any conversation. */
     getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
     provision: (input: ComputerProvisionInput) => Promise<ComputerProvisionResult>;
-    setControlEnabled: (input: {
-      threadId: ThreadId;
-      enabled: boolean;
-    }) => Promise<{ enabled: boolean }>;
+    setControlEnabled: (
+      input: ComputerSetControlEnabledInput,
+    ) => Promise<ComputerControlEnabledResult>;
     getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
     getState: (input: ComputerGetStateInput) => Promise<ComputerState>;
     /** User input from the computer dock pane; needs no agent turn in flight. */

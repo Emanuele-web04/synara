@@ -1,5 +1,7 @@
 import { CuaDriverHost } from "./cuaDriverHost";
+import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 // FILE: main.ts
 // Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
 // Layer: Desktop main process
@@ -26,6 +28,7 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  powerMonitor,
   screen,
   safeStorage,
   session,
@@ -3542,6 +3545,7 @@ function backendNodeArgs(): string[] {
 }
 
 let cuaDriverHost: CuaDriverHost | undefined;
+let disposeComputerDesktopLifecycle: (() => void) | undefined;
 let cuaHostEndpoint: string | undefined;
 
 async function startCuaHost(): Promise<void> {
@@ -3565,8 +3569,8 @@ async function startCuaHost(): Promise<void> {
       if (!image?.data) return result;
       const native = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
       const size = native.getSize();
-      if (Math.max(size.width, size.height) <= 1536) return result;
-      const ratio = 1536 / Math.max(size.width, size.height);
+      if (Math.max(size.width, size.height) <= MODEL_SCREEN_IMAGE_MAX_DIMENSION) return result;
+      const ratio = MODEL_SCREEN_IMAGE_MAX_DIMENSION / Math.max(size.width, size.height);
       const scaled = native.resize({
         width: Math.round(size.width * ratio),
         height: Math.round(size.height * ratio),
@@ -3578,6 +3582,9 @@ async function startCuaHost(): Promise<void> {
   });
   cuaHostEndpoint = await host.listen();
   cuaDriverHost = host;
+  disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
+    safeConsoleError("[desktop] computer input pause failed", error),
+  );
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
@@ -4233,6 +4240,8 @@ async function stopBackendAndWaitForExit(): Promise<void> {
 }
 
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
+  disposeComputerDesktopLifecycle?.();
+  disposeComputerDesktopLifecycle = undefined;
   await cuaDriverHost?.dispose();
   cuaDriverHost = undefined;
   cuaHostEndpoint = undefined;

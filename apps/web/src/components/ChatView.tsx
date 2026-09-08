@@ -2,6 +2,10 @@ import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputN
 import { usePendingUserInputDrafts } from "./chat/usePendingUserInputDrafts";
 import { expiredUserInputDrafts } from "../pendingUserInputRecovery";
 import {
+  resolveComputerControlMode,
+  type ComposerComputerControlMode,
+} from "../computerControlMode";
+import {
   type AutomationDefinition,
   type AutomationSchedule,
   type ApprovalRequestId,
@@ -618,6 +622,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   deriveComposerSendState,
   editAndResendDispatchFields,
+  planImplementationDispatchSettings,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   hasLiveTurnTakenOver,
@@ -1361,6 +1366,9 @@ export default function ChatView({
     (store) => store.setProviderModelOptions,
   );
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
+  const setComposerDraftComputerControlMode = useComposerDraftStore(
+    (store) => store.setComputerControlMode,
+  );
   const setComposerDraftComputerControl = useComposerDraftStore(
     (store) => store.setEnableComputerControl,
   );
@@ -1977,10 +1985,14 @@ export default function ChatView({
     (activeThread.latestTurn !== null || activeThread.messages.length > 0);
   const enableComputerControl = resolveEffectiveComputerControl({
     draftOverride: composerDraft.enableComputerControl,
+    mode: composerDraft.computerControlMode,
     availability: computerAvailability,
     allowInNewChats: settings.allowComputerControlInNewChats,
     chatHasTurns,
   });
+  const computerControlMode = enableComputerControl
+    ? resolveComputerControlMode(composerDraft.computerControlMode, true)
+    : "off";
   const computerControlDisabledReason = computerAvailability
     ? computerAvailability.kind === "unsupported-platform"
       ? "No computer backend is available on this server."
@@ -5132,8 +5144,9 @@ export default function ChatView({
     [persistRuntimeModeChange],
   );
   const computerControlChangeSequence = useRef(0);
-  const handleComputerControlChange = useCallback(
-    (enabled: boolean) => {
+  const handleComputerControlModeChange = useCallback(
+    (mode: ComposerComputerControlMode) => {
+      const enabled = mode !== "off";
       // A per-chat override only. It never rewrites the machine-wide default —
       // that sticky write is what silently disabled computer control for every
       // later chat after a single per-chat "off".
@@ -5142,9 +5155,12 @@ export default function ChatView({
       const sequence = ++computerControlChangeSequence.current;
       void api.computer
         .setControlEnabled({ threadId, enabled })
-        .then(({ enabled: confirmed }) => {
+        .then(({ enabled: confirmed, generation }) => {
           if (sequence !== computerControlChangeSequence.current) return;
-          setComposerDraftComputerControl(threadId, confirmed);
+          setComposerDraftComputerControlMode(threadId, confirmed ? mode : "off", {
+            revokeQueued: mode === "off",
+            generation: generation ?? 0,
+          });
           scheduleComposerFocus();
         })
         .catch((error) => {
@@ -5156,18 +5172,18 @@ export default function ChatView({
           });
         });
     },
-    [scheduleComposerFocus, setComposerDraftComputerControl, threadId],
+    [scheduleComposerFocus, setComposerDraftComputerControlMode, threadId],
   );
   // "Enable" on a computer-control denial card: switch control on for this chat
   // and suggest a retry message when the composer is empty, so the user can just
   // hit send. Deliberately not auto-sent: the user should see and approve what
   // goes back to the agent.
   const handleEnableComputerControlFromDenial = useCallback(() => {
-    handleComputerControlChange(true);
+    handleComputerControlModeChange("request");
     if (prompt.trim().length === 0) {
       setPrompt("Computer control is on now — try again.");
     }
-  }, [handleComputerControlChange, prompt, setPrompt]);
+  }, [handleComputerControlModeChange, prompt, setPrompt]);
 
   useEffect(() => {
     if (
@@ -6226,6 +6242,8 @@ export default function ChatView({
       modelSelection: selectedModelSelection,
       providerOptions: providerOptionsForDispatch,
       enableComputerControl,
+      computerControlMode,
+      computerControlGeneration: composerDraft.computerControlGeneration ?? 0,
       assistantDeliveryMode,
       runtimeMode,
       interactionMode,
@@ -6233,6 +6251,8 @@ export default function ChatView({
     }),
     [
       assistantDeliveryMode,
+      computerControlMode,
+      composerDraft.computerControlGeneration,
       enableComputerControl,
       envMode,
       interactionMode,
@@ -7584,7 +7604,14 @@ export default function ChatView({
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
-      setComposerDraftComputerControl(activeThread.id, queuedTurn.enableComputerControl === true);
+      setComposerDraftComputerControlMode(
+        activeThread.id,
+        resolveComputerControlMode(
+          queuedTurn.computerControlMode,
+          queuedTurn.enableComputerControl,
+        ),
+        { generation: queuedTurn.computerControlGeneration ?? 0 },
+      );
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();
@@ -7603,7 +7630,7 @@ export default function ChatView({
       scheduleComposerFocus,
       setDraftThreadContext,
       setRestoredQueuedSourceProposedPlan,
-      setComposerDraftComputerControl,
+      setComposerDraftComputerControlMode,
       setComposerDraftInteractionMode,
       setComposerDraftModelSelection,
       setComposerDraftPrompt,
@@ -7748,6 +7775,7 @@ export default function ChatView({
     const selectedModelSelectionForSend = dispatchSettingsForSend.modelSelection;
     const providerOptionsForDispatchForSend = dispatchSettingsForSend.providerOptions;
     const enableComputerControlForSend = dispatchSettingsForSend.enableComputerControl;
+    const computerControlSequenceForSend = computerControlChangeSequence.current;
     const runtimeModeForSend = dispatchSettingsForSend.runtimeMode;
     let interactionModeForSend = dispatchSettingsForSend.interactionMode;
     const envModeForSend = dispatchSettingsForSend.envMode;
@@ -7821,6 +7849,8 @@ export default function ChatView({
             // composer settings by construction.
             ...queuedPlanFollowUpDispatchFields(dispatchSettingsForSend),
           });
+          if (dispatchSettingsForSend.computerControlMode === "request")
+            setComposerDraftComputerControlMode(activeThread.id, "off");
           return true;
         }
         clearComposerInput(activeThread.id);
@@ -8162,6 +8192,8 @@ export default function ChatView({
           sourceProposedPlanForSend,
         ),
       });
+      if (dispatchSettingsForSend.computerControlMode === "request")
+        setComposerDraftComputerControlMode(activeThread.id, "off");
       return true;
     }
     const threadIdForSend = activeThread.id;
@@ -8934,6 +8966,14 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
+      if (queuedChatTurn === null && dispatchSettingsForSend.computerControlMode === "request") {
+        const draft = useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
+        if (
+          draft?.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForSend
+        )
+          setComposerDraftComputerControlMode(threadIdForSend, "off");
+      }
       if (
         shouldResumeSettledLocalThread &&
         currentActiveGitBranchForSend !== null &&
@@ -9495,6 +9535,7 @@ export default function ChatView({
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
+    const computerControlSequenceForSend = computerControlChangeSequence.current;
     const dispatchPlanFollowUpTurn = async () => {
       // The follow-up decides its own interaction mode; everything else replays
       // the queued turn's frozen settings, or the live ones for a direct submit.
@@ -9539,6 +9580,14 @@ export default function ChatView({
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
+      if (!queuedTurn && planDispatchSettings.computerControlMode === "request") {
+        const draft = useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
+        if (
+          draft?.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForSend
+        )
+          setComposerDraftComputerControlMode(threadIdForSend, "off");
+      }
       // Steers on providers without native mid-turn steering interrupt the live
       // turn before re-dispatching; hold queued auto-dispatch through that gap
       // so it can't race the steer. The live session provider decides the
@@ -9620,6 +9669,7 @@ export default function ChatView({
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
       const messageCreatedAt = new Date().toISOString();
+      const computerControlSequenceForEdit = computerControlChangeSequence.current;
       const editedTextWithOriginalContext = appendOriginalComposerPromptBlocks({
         editedPrompt: text,
         originalPrompt: originalMessage.text,
@@ -9648,6 +9698,12 @@ export default function ChatView({
           ...editAndResendDispatchFields(turnDispatchSettings),
           createdAt: messageCreatedAt,
         });
+        if (
+          turnDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForEdit
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         return true;
       })()
         .catch((err: unknown) => {
@@ -9672,6 +9728,7 @@ export default function ChatView({
       selectedPromptEffort,
       selectedProvider,
       setThreadError,
+      setComposerDraftComputerControlMode,
       turnDispatchSettings,
     ],
   );
@@ -9930,10 +9987,8 @@ export default function ChatView({
     const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
     // The implementation thread inherits the composer's current settings and
     // always starts in build mode — the plan has already been agreed.
-    const implementationDispatchSettings: TurnDispatchSettings = {
-      ...turnDispatchSettings,
-      interactionMode: "default",
-    };
+    const computerControlSequenceForImplementation = computerControlChangeSequence.current;
+    const implementationDispatchSettings = planImplementationDispatchSettings(turnDispatchSettings);
     const sourceProposedPlan = buildSourceProposedPlanReference({
       threadId: activeThread.id,
       proposedPlan: activeProposedPlan,
@@ -9986,6 +10041,16 @@ export default function ChatView({
         });
       })
       .then(() => {
+        if (implementationDispatchSettings.computerControlMode === "chat") {
+          setComposerDraftComputerControlMode(nextThreadId, "chat", {
+            generation: implementationDispatchSettings.computerControlGeneration ?? 0,
+          });
+        } else if (
+          implementationDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForImplementation
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         // The turn RPC resolved for a thread this view never made active, so
         // arm the watchdog marker with that exact thread id before navigation.
         markPendingTurnDispatch(nextThreadId);
@@ -10041,6 +10106,7 @@ export default function ChatView({
     selectedProvider,
     syncServerShellSnapshot,
     selectedModel,
+    setComposerDraftComputerControlMode,
     turnDispatchSettings,
   ]);
 
@@ -11592,7 +11658,8 @@ export default function ChatView({
     computerControlAvailable,
     computerControlSupported: computerAvailability?.kind !== "unsupported-platform",
     computerControlDisabledReason,
-    onComputerControlChange: handleComputerControlChange,
+    computerControlMode,
+    onComputerControlModeChange: handleComputerControlModeChange,
     contextWindow: runtimeUsageContextWindow,
     cumulativeCostUsd: activeCumulativeCostUsd,
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,

@@ -1302,6 +1302,9 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ComputerControlMode = Schema.Literals(["off", "request", "chat"]);
+export type ComputerControlMode = typeof ComputerControlMode.Type;
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
@@ -1317,6 +1320,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
+  computerControlMode: Schema.optional(ComputerControlMode),
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   reviewTarget: Schema.optional(ProviderReviewTarget),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   dispatchMode: Schema.optional(TurnDispatchMode).pipe(
@@ -1359,6 +1364,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
+  computerControlMode: Schema.optional(ComputerControlMode),
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   reviewTarget: Schema.optional(ProviderReviewTarget),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   dispatchMode: Schema.optional(TurnDispatchMode).pipe(
@@ -1402,6 +1409,8 @@ const ThreadDispatchQueuedTurnCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
+  computerControlMode: Schema.optional(ComputerControlMode),
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   reviewTarget: Schema.optional(ProviderReviewTarget),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   dispatchMode: Schema.optional(TurnDispatchMode).pipe(
@@ -1463,6 +1472,8 @@ const ThreadMessageEditAndResendCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
+  computerControlMode: Schema.optional(ComputerControlMode),
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -2004,6 +2015,8 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
+  computerControlMode: Schema.optional(ComputerControlMode),
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   reviewTarget: Schema.optional(ProviderReviewTarget),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   dispatchMode: TurnDispatchMode.pipe(Schema.withDecodingDefault(() => DEFAULT_TURN_DISPATCH_MODE)),
@@ -2098,6 +2111,8 @@ export const ThreadMessageEditResendRequestedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
+  computerControlMode: Schema.optional(ComputerControlMode),
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
