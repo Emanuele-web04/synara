@@ -211,6 +211,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
   sourceProposedPlan: Schema.optionalKey(PersistedSourceProposedPlanReference),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -231,6 +232,7 @@ const PersistedQueuedComposerPlanFollowUp = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 
@@ -293,6 +295,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  enableComputerControl: Schema.optionalKey(Schema.Boolean),
 });
 
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
@@ -659,6 +662,7 @@ function normalizePersistedQueuedTurns(
     const runtimeMode = Schema.is(RuntimeMode)(candidate.runtimeMode)
       ? candidate.runtimeMode
       : null;
+    const enableComputerControl = candidate.enableComputerControl === true;
     if (
       id.length === 0 ||
       createdAt.length === 0 ||
@@ -747,6 +751,7 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        enableComputerControl,
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
         interactionMode,
@@ -776,6 +781,7 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        enableComputerControl,
         runtimeMode,
       });
       seenIds.add(id);
@@ -993,6 +999,12 @@ function normalizePersistedDraftsByThreadId(
     const interactionMode = Schema.is(ProviderInteractionMode)(draftCandidate.interactionMode)
       ? draftCandidate.interactionMode
       : null;
+    // Tri-state: only an explicit boolean is a recorded choice; anything else
+    // means the chat follows the new-chat default.
+    const enableComputerControl =
+      typeof draftCandidate.enableComputerControl === "boolean"
+        ? draftCandidate.enableComputerControl
+        : undefined;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -1069,7 +1081,8 @@ function normalizePersistedDraftsByThreadId(
       restoredSourceProposedPlan === null &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      enableComputerControl === undefined
     ) {
       continue;
     }
@@ -1091,6 +1104,7 @@ function normalizePersistedDraftsByThreadId(
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
     };
   }
 
@@ -1192,6 +1206,7 @@ export function partializeComposerDraftStoreState(
           ...(queuedTurn.providerOptionsForDispatch
             ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
             : {}),
+          enableComputerControl: queuedTurn.enableComputerControl === true,
           ...(queuedTurn.sourceProposedPlan
             ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
             : {}),
@@ -1215,6 +1230,7 @@ export function partializeComposerDraftStoreState(
         ...(queuedTurn.providerOptionsForDispatch
           ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
           : {}),
+        enableComputerControl: queuedTurn.enableComputerControl === true,
         runtimeMode: queuedTurn.runtimeMode,
       });
     }
@@ -1238,7 +1254,8 @@ export function partializeComposerDraftStoreState(
       draft.restoredSourceProposedPlan == null &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.enableComputerControl === undefined
     ) {
       continue;
     }
@@ -1389,6 +1406,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.enableComputerControl !== undefined
+        ? { enableComputerControl: draft.enableComputerControl }
+        : {}),
     };
     persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
   }
@@ -1574,5 +1594,9 @@ export function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    enableComputerControl:
+      typeof persistedDraft.enableComputerControl === "boolean"
+        ? persistedDraft.enableComputerControl
+        : undefined,
   };
 }

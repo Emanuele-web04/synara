@@ -39,6 +39,8 @@ import {
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
@@ -128,6 +130,12 @@ type ForeignConversationState = ToolSurfaceCounters & {
 
 type AntigravitySessionContext = ToolSurfaceCounters & {
   session: ProviderSession;
+  /**
+   * Antigravity leases per prepared turn, not at session start, so the start
+   * input is long gone by then. Keep the shared capability projection so the
+   * turn lease derives from the same facts as a session-start lease.
+   */
+  readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   harnessPolicyDelivered?: boolean;
   readonly lifecycleGeneration?: string;
@@ -1986,6 +1994,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         };
         const context: AntigravitySessionContext = {
           session,
+          gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
@@ -2103,6 +2112,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
+          context.gatewayCapabilityInput,
         );
         const gatewayBootstrapToken = gatewaySessionLease?.issueStdioBootstrapToken?.();
         if (gatewaySessionLease && !gatewayBootstrapToken) {

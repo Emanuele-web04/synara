@@ -38,4 +38,5 @@ export * from "./project";
 export * from "./studio";
 export * from "./filesystem";
 export * from "./device";
+export * from "./computer";
 export * from "./rpc";
