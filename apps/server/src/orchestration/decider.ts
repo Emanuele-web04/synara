@@ -1781,6 +1781,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? { providerOptions: command.providerOptions }
           : {}),
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+        ...(command.enableComputerControl !== undefined
+          ? { enableComputerControl: command.enableComputerControl }
+          : {}),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -1860,6 +1863,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { providerOptions: command.providerOptions }
             : {}),
           ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+          ...(command.enableComputerControl !== undefined
+            ? { enableComputerControl: command.enableComputerControl }
+            : {}),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
           dispatchMode: command.dispatchMode ?? "queue",
           dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2186,6 +2192,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.providerOptions !== undefined
             ? { providerOptions: command.providerOptions }
+            : {}),
+          ...(command.enableComputerControl !== undefined
+            ? { enableComputerControl: command.enableComputerControl }
             : {}),
           ...(command.assistantDeliveryMode !== undefined
             ? { assistantDeliveryMode: command.assistantDeliveryMode }

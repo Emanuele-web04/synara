@@ -1788,6 +1788,7 @@ export function makeDevinAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
+            input,
           );
 
           yield* Effect.addFinalizer(() =>

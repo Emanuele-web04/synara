@@ -32,6 +32,7 @@ export type ProjectionPendingInteraction = typeof ProjectionPendingInteraction.T
 
 export const ListProjectionPendingInteractionsInput = Schema.Struct({
   threadId: ThreadId,
+  unsettledOnly: Schema.optional(Schema.Boolean),
 });
 
 export const ProjectionPendingInteractionCounts = Schema.Struct({
