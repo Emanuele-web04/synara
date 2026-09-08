@@ -1246,7 +1246,8 @@ export function partializeComposerDraftStoreState(
       draft.restoredSourceProposedPlan == null &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.enableComputerControl === undefined
     ) {
       continue;
     }

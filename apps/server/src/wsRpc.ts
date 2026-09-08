@@ -70,6 +70,7 @@ import { DeviceService } from "./device/Services/DeviceService";
 import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
 import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
 import { ComputerService } from "./computer/Services/ComputerService";
+import { ComputerEventInterests } from "./computer/computerEventInterests.ts";
 import { makeWsComputerHandlers } from "./computer/wsComputerHandlers";
 import { makeComputerFrameRouteLayer } from "./computer/computerFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
@@ -383,6 +384,8 @@ const makeWsRpcHandlersLayer = () =>
       // with the same unsupported-platform answer the backend would give.
       const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
       const computerService = Option.getOrUndefined(yield* Effect.serviceOption(ComputerService));
+      const computerHandlers = makeWsComputerHandlers(computerService);
+      const computerInterests = new ComputerEventInterests();
       const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
         homeDir: config.homeDir,
         fileSystem,
@@ -2095,7 +2098,11 @@ const makeWsRpcHandlersLayer = () =>
                 ),
           ),
 
-        ...makeWsComputerHandlers(computerService),
+        ...computerHandlers,
+        [COMPUTER_WS_METHODS.getThreadState]: (input, { clientId }) => {
+          computerInterests.watch(clientId, input.threadId);
+          return computerHandlers[COMPUTER_WS_METHODS.getThreadState](input);
+        },
         [COMPUTER_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -2106,9 +2113,16 @@ const makeWsRpcHandlersLayer = () =>
                   Stream.callback<ComputerEvent>((queue) =>
                     Effect.gen(function* () {
                       const unsubscribe = computerService.manager.onEvent((event) => {
+                        if (!computerInterests.accepts(clientId, event)) return;
                         Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
                       });
-                      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+                      yield* Effect.addFinalizer(() =>
+                        Effect.sync(() => {
+                          unsubscribe();
+                          // Interests survive stream retries on the same socket.
+                          // The bounded cache expires disconnected clients.
+                        }),
+                      );
                     }),
                   ),
                   { label: "computer.events" },
