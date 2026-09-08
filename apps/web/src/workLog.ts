@@ -2296,7 +2296,10 @@ function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): numb
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;
 
-function areTimelineEntriesOrdered(entries: ReadonlyArray<TimelineEntry>, compare: TimelineComparator): boolean {
+function areTimelineEntriesOrdered(
+  entries: ReadonlyArray<TimelineEntry>,
+  compare: TimelineComparator,
+): boolean {
   for (let index = 1; index < entries.length; index += 1) {
     if (compare(entries[index - 1]!, entries[index]!) > 0) {
       return false;
@@ -2305,7 +2308,10 @@ function areTimelineEntriesOrdered(entries: ReadonlyArray<TimelineEntry>, compar
   return true;
 }
 
-function sortedTimelineEntries(entries: TimelineEntry[], compare: TimelineComparator): TimelineEntry[] {
+function sortedTimelineEntries(
+  entries: TimelineEntry[],
+  compare: TimelineComparator,
+): TimelineEntry[] {
   return areTimelineEntriesOrdered(entries, compare) ? entries : entries.toSorted(compare);
 }
 
@@ -2416,8 +2422,9 @@ export function deriveTimelineEntries(
   const userStarts: string[] = [];
   const messageOrder = new Map<string, number>();
   const turnOrder = new Map<string, number>();
-  const messagesOrdered = messages.every((message, index) =>
-    index === 0 || messages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
+  const messagesOrdered = messages.every(
+    (message, index) =>
+      index === 0 || messages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
   );
   const orderedMessages = messagesOrdered
     ? messages
@@ -2430,9 +2437,12 @@ export function deriveTimelineEntries(
   }
   const orderByEntry = new Map<TimelineEntry, number>();
   for (const entry of [...messageRows, ...proposedPlanRows, ...workRows]) {
-    const knownOrder = entry.kind === "message" || entry.kind === "message-segment"
-      ? messageOrder.get(entry.message.id)
-      : turnOrder.get((entry.kind === "work" ? entry.entry.turnId : entry.proposedPlan.turnId) ?? "");
+    const knownOrder =
+      entry.kind === "message" || entry.kind === "message-segment"
+        ? messageOrder.get(entry.message.id)
+        : turnOrder.get(
+            (entry.kind === "work" ? entry.entry.turnId : entry.proposedPlan.turnId) ?? "",
+          );
     if (knownOrder !== undefined) {
       orderByEntry.set(entry, knownOrder);
       continue;
