@@ -745,7 +745,7 @@ export function buildThemeCssVariables(
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
     "--app-sidebar-backdrop-filter":
-      material === "translucent" ? "blur(3px) saturate(130%)" : "none",
+      material === "translucent" ? "blur(4px) saturate(130%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.

@@ -407,7 +407,7 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  --app-sidebar-backdrop-filter: blur(3px) saturate(130%);
+  --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
@@ -519,7 +519,7 @@
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(3px) saturate(130%);
+    --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
     /* Deepened toward black before thinning: a dense charcoal glass that still lets
        the desktop bleed through rather than a thin dark tint. */
     --app-sidebar-surface: color-mix(
