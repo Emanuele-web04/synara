@@ -1,10 +1,83 @@
 import { describe, expect, it } from "vitest";
+import {
+  markdownFilePathHref,
+  resolveMarkdownFileLinkTarget,
+  rewriteMarkdownFileUriHref,
+} from "../markdown-links";
 
 import {
   resolveDockFileOpenTarget,
   resolveScratchPreviewFileOpenTarget,
+  resolveWorkspaceDirectoryOpenTarget,
   resolveWorkspaceFileOpenTarget,
 } from "./workspaceFileOpener";
+
+describe("resolveWorkspaceDirectoryOpenTarget", () => {
+  it.each([
+    ["docs/", "/Users/dev/project", "docs"],
+    ["./docs/", "/Users/dev/project", "docs"],
+    ["./docs/./guide/", "/Users/dev/project", "docs/guide"],
+    ["docs/#L12C3", "/Users/dev/project", "docs"],
+    ["C:\\Users\\Dev\\Projects", "c:/users/dev/projects/", ""],
+    ["C:/", "c:\\", ""],
+    ["//server/share/project/", "\\\\SERVER\\SHARE\\Project", ""],
+    ["file://server/share/project/docs/", "\\\\SERVER\\SHARE\\Project", "docs"],
+  ])("routes Markdown directory %s to its Explorer target", (href, cwd, expected) => {
+    const target = resolveMarkdownFileLinkTarget(rewriteMarkdownFileUriHref(href) ?? href, cwd);
+    expect(target).not.toBeNull();
+    expect(resolveWorkspaceDirectoryOpenTarget(target!, cwd)).toBe(expected);
+  });
+
+  it("preserves encoded filename characters through file-URI directory links", () => {
+    const cwd = "\\\\SERVER\\share\\project";
+    const href = markdownFilePathHref("//server/share/project/space %20 #hash?/guide/");
+    const target = resolveMarkdownFileLinkTarget(rewriteMarkdownFileUriHref(href)!, cwd);
+    expect(resolveWorkspaceDirectoryOpenTarget(target!, cwd)).toBe("space %20 #hash?/guide");
+  });
+
+  it.each(["../outside/", "docs/../../outside/", "./docs/../outside/"])(
+    "does not turn traversal in %s into a directory reveal",
+    (href) => {
+      const cwd = "/Users/dev/project";
+      const target = resolveMarkdownFileLinkTarget(href, cwd);
+      expect(target === null || resolveWorkspaceDirectoryOpenTarget(target, cwd) === null).toBe(
+        true,
+      );
+    },
+  );
+
+  it("preserves POSIX case-sensitive containment and protocol-relative web links", () => {
+    expect(
+      resolveWorkspaceDirectoryOpenTarget("/Users/dev/Project/", "/Users/dev/project"),
+    ).toBeNull();
+    expect(
+      resolveMarkdownFileLinkTarget("//example.com/docs/", "\\\\server\\share\\project"),
+    ).toBeNull();
+  });
+
+  it("recognizes the workspace root across Windows separator and casing differences", () => {
+    expect(
+      resolveWorkspaceDirectoryOpenTarget("C:\\Users\\Dev\\Projects", "c:/users/dev/projects/"),
+    ).toBe("");
+  });
+
+  it("recognizes the POSIX workspace root", () => {
+    expect(resolveWorkspaceDirectoryOpenTarget("/Users/dev/project/", "/Users/dev/project")).toBe(
+      "",
+    );
+  });
+
+  it("maps explicit in-workspace directory references to Explorer paths", () => {
+    expect(resolveWorkspaceDirectoryOpenTarget("docs/", "/repo/app")).toBe("docs");
+    expect(resolveWorkspaceDirectoryOpenTarget("C:\\Repo\\App\\Src\\", "c:/repo/app")).toBe("Src");
+  });
+
+  it("leaves file-shaped and out-of-workspace references to file opening", () => {
+    expect(resolveWorkspaceDirectoryOpenTarget("README.md", "/repo/app")).toBeNull();
+    expect(resolveWorkspaceDirectoryOpenTarget("/repo/app/src/page.tsx", "/repo/app")).toBeNull();
+    expect(resolveWorkspaceDirectoryOpenTarget("/repo/other/", "/repo/app")).toBeNull();
+  });
+});
 
 describe("resolveWorkspaceFileOpenTarget", () => {
   it("passes workspace-relative paths through unchanged", () => {
