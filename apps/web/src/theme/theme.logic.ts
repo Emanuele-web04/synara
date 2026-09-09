@@ -93,7 +93,6 @@ export interface ThemeDerivedTokens {
   iconPrimary: string;
   iconSecondary: string;
   iconTertiary: string;
-  sidebarSelectedBackground: string;
   simpleScrim: string;
   textAccent: string;
   textButtonPrimary: string;
@@ -786,7 +785,8 @@ export function buildThemeCssVariables(
     "--sidebar": readCodexVariable("--color-background-surface"),
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
-    "--sidebar-selected": readCodexVariable("--color-background-sidebar-selected"),
+    // Selected sidebar row shares the user-message bubble gray so it pairs with the theme.
+    "--sidebar-selected": chatCodeSurface,
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
@@ -904,7 +904,6 @@ function buildCodexCssVariables(
     "--color-background-elevated-secondary": derivedTokens.elevatedSecondary,
     "--color-background-elevated-secondary-opaque": derivedTokens.elevatedSecondaryOpaque,
     "--color-background-panel": panelBackground,
-    "--color-background-sidebar-selected": derivedTokens.sidebarSelectedBackground,
     "--color-background-surface": theme.theme.surface,
     "--color-background-surface-under": theme.surfaceUnder,
     // The user message bubble has always reused the subtle secondary surface
@@ -1116,9 +1115,6 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     iconPrimary: theme.theme.ink,
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
-    // Selected sidebar row: the same themed ink wash as hover/secondary surfaces,
-    // one step stronger so the selection reads over the hover state.
-    sidebarSelectedBackground: formatRgba(theme.wash, 0.07 + theme.contrast * 0.03),
     simpleScrim: formatRgba(BLACK, 0.08 + theme.contrast * 0.04),
     textAccent: theme.theme.accent,
     textButtonPrimary: theme.theme.surface,
@@ -1172,8 +1168,6 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
-    // Selected sidebar row: themed ink wash, one step above hover (see light).
-    sidebarSelectedBackground: formatRgba(theme.wash, 0.1 + theme.contrast * 0.04),
     simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
     // Codex brightens dark accent affordances through the same focus mix used
     // for the border, rather than using the raw accent directly.
