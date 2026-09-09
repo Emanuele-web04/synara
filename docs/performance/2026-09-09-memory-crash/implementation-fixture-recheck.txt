@@ -1,0 +1,506 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/persistence/Migrations.test.ts "src/persistence/Migrations/099_InvalidateProjectionThreadsCursor.test.ts" src/orchestration/Layers/messageTextChunks.test.ts
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server
+
+stdout | src/persistence/Migrations.test.ts > managed attachment migration after private migration 54 > keeps a private database that already recorded old migration 54 compatible
+[01:18:29.461] ERROR (#68): Error [AssertionError]: expected [ { migration_id: 56, …(1) }, …(44) ] to deeply equal [ { migration_id: 55, …(1) }, …(44) ]
+    at Array.<anonymous> (/Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server/src/persistence/Migrations.test.ts:308:14) {
+  actual: [
+    [Object: null prototype] {
+      migration_id: 56,
+      name: 'CommandReceiptFingerprints'
+    },
+    [Object: null prototype] {
+      migration_id: 57,
+      name: 'ThreadScopedProjectionMessageIdentity'
+    },
+    [Object: null prototype] {
+      migration_id: 58,
+      name: 'ThreadScopedPendingApprovalIdentity'
+    },
+    [Object: null prototype] {
+      migration_id: 59,
+      name: 'ProviderSessionLifecycleGeneration'
+    },
+    [Object: null prototype] {
+      migration_id: 60,
+      name: 'PendingApprovalLifecycleGeneration'
+    },
+    [Object: null prototype] {
+      migration_id: 61,
+      name: 'PendingApprovalSettlementState'
+    },
+    [Object: null prototype] {
+      migration_id: 62,
+      name: 'PendingInteractionSettlementParity'
+    },
+    [Object: null prototype] {
+      migration_id: 63,
+      name: 'ProjectionMessageCausalSequence'
+    },
+    [Object: null prototype] {
+      migration_id: 64,
+      name: 'DurableProviderCommandDeliveryCutover'
+    },
+    [Object: null prototype] {
+      migration_id: 65,
+      name: 'DurableQueuedTurnPromotions'
+    },
+    [Object: null prototype] {
+      migration_id: 66,
+      name: 'DurableProviderRuntimeEvents'
+    },
+    [Object: null prototype] {
+      migration_id: 67,
+      name: 'ProviderDeliveryReconciliation'
+    },
+    [Object: null prototype] {
+      migration_id: 68,
+      name: 'GitHandoffOperations'
+    },
+    [Object: null prototype] {
+      migration_id: 69,
+      name: 'ProjectPullRequestPins'
+    },
+    [Object: null prototype] {
+      migration_id: 70,
+      name: 'AgentGatewayOperations'
+    },
+    [Object: null prototype] {
+      migration_id: 71,
+      name: 'ProjectionThreadsGatewayProvenance'
+    },
+    [Object: null prototype] {
+      migration_id: 72,
+      name: 'AgentGatewayOperationRetention'
+    },
+    [Object: null prototype] {
+      migration_id: 73,
+      name: 'OperationalDiagnostics'
+    },
+    [Object: null prototype] {
+      migration_id: 74,
+      name: 'ExternalMcpIntegrations'
+    },
+    [Object: null prototype] {
+      migration_id: 75,
+      name: 'ExternalMcpActiveCapacity'
+    },
+    [Object: null prototype] {
+      migration_id: 76,
+      name: 'ExternalMcpHardening'
+    },
+    [Object: null prototype] {
+      migration_id: 77,
+      name: 'ExternalMcpCompensatingCapacity'
+    },
+    [Object: null prototype] {
+      migration_id: 78,
+      name: 'ExternalMcpLiveTurnCapacity'
+    },
+    [Object: null prototype] { migration_id: 79, name: 'Spaces' },
+    [Object: null prototype] {
+      migration_id: 80,
+      name: 'ExternalMcpProjectScope'
+    },
+    [Object: null prototype] {
+      migration_id: 81,
+      name: 'AutomationProposals'
+    },
+    [Object: null prototype] {
+      migration_id: 82,
+      name: 'AutomationMemory'
+    },
+    [Object: null prototype] {
+      migration_id: 83,
+      name: 'AutomationHeartbeatEligibility'
+    },
+    [Object: null prototype] {
+      migration_id: 84,
+      name: 'AutomationNotificationPolicy'
+    },
+    [Object: null prototype] {
+      migration_id: 85,
+      name: 'AutomationSettings'
+    },
+    [Object: null prototype] {
+      migration_id: 86,
+      name: 'NormalizeStudioThreadWorkspaces'
+    },
+    [Object: null prototype] {
+      migration_id: 87,
+      name: 'DropUnusedOrchestrationEventIndexes'
+    },
+    [Object: null prototype] {
+      migration_id: 88,
+      name: 'ProjectionThreadsSettledAt'
+    },
+    [Object: null prototype] {
+      migration_id: 89,
+      name: 'RecoverRetentionHiddenThreads'
+    },
+    [Object: null prototype] {
+      migration_id: 90,
+      name: 'ProjectionThreadMessageTextSegments'
+    },
+    [Object: null prototype] {
+      migration_id: 91,
+      name: 'AutomationFailureTolerance'
+    },
+    [Object: null prototype] {
+      migration_id: 92,
+      name: 'BackfillAutomationRunThreadSource'
+    },
+    [Object: null prototype] {
+      migration_id: 93,
+      name: 'BackfillMaxIterationsDisabledReason'
+    },
+    [Object: null prototype] {
+      migration_id: 94,
+      name: 'ProjectionThreadsGoal'
+    },
+    [Object: null prototype] {
+      migration_id: 95,
+      name: 'ProjectionThreadsGoalTiming'
+    },
+    [Object: null prototype] {
+      migration_id: 96,
+      name: 'ProjectionThreadsGoalAchievements'
+    },
+    [Object: null prototype] {
+      migration_id: 97,
+      name: 'ProjectionThreadsSidechatLifecycle'
+    },
+    [Object: null prototype] {
+      migration_id: 98,
+      name: 'MigrateKiloToOpenCode'
+    },
+    [Object: null prototype] {
+      migration_id: 99,
+      name: 'InvalidateProjectionThreadsCursor'
+    },
+    [Object: null prototype] {
+      migration_id: 100,
+      name: 'MessageTextChunks'
+    }
+  ],
+  expected: [
+    { migration_id: 55, name: 'ManagedAttachments' },
+    { migration_id: 56, name: 'CommandReceiptFingerprints' },
+    { migration_id: 57, name: 'ThreadScopedProjectionMessageIdentity' },
+    { migration_id: 58, name: 'ThreadScopedPendingApprovalIdentity' },
+    { migration_id: 59, name: 'ProviderSessionLifecycleGeneration' },
+    { migration_id: 60, name: 'PendingApprovalLifecycleGeneration' },
+    { migration_id: 61, name: 'PendingApprovalSettlementState' },
+    { migration_id: 62, name: 'PendingInteractionSettlementParity' },
+    { migration_id: 63, name: 'ProjectionMessageCausalSequence' },
+    { migration_id: 64, name: 'DurableProviderCommandDeliveryCutover' },
+    { migration_id: 65, name: 'DurableQueuedTurnPromotions' },
+    { migration_id: 66, name: 'DurableProviderRuntimeEvents' },
+    { migration_id: 67, name: 'ProviderDeliveryReconciliation' },
+    { migration_id: 68, name: 'GitHandoffOperations' },
+    { migration_id: 69, name: 'ProjectPullRequestPins' },
+    { migration_id: 70, name: 'AgentGatewayOperations' },
+    { migration_id: 71, name: 'ProjectionThreadsGatewayProvenance' },
+    { migration_id: 72, name: 'AgentGatewayOperationRetention' },
+    { migration_id: 73, name: 'OperationalDiagnostics' },
+    { migration_id: 74, name: 'ExternalMcpIntegrations' },
+    { migration_id: 75, name: 'ExternalMcpActiveCapacity' },
+    { migration_id: 76, name: 'ExternalMcpHardening' },
+    { migration_id: 77, name: 'ExternalMcpCompensatingCapacity' },
+    { migration_id: 78, name: 'ExternalMcpLiveTurnCapacity' },
+    { migration_id: 79, name: 'Spaces' },
+    { migration_id: 80, name: 'ExternalMcpProjectScope' },
+    { migration_id: 81, name: 'AutomationProposals' },
+    { migration_id: 82, name: 'AutomationMemory' },
+    { migration_id: 83, name: 'AutomationHeartbeatEligibility' },
+    { migration_id: 84, name: 'AutomationNotificationPolicy' },
+    { migration_id: 85, name: 'AutomationSettings' },
+    { migration_id: 86, name: 'NormalizeStudioThreadWorkspaces' },
+    { migration_id: 87, name: 'DropUnusedOrchestrationEventIndexes' },
+    { migration_id: 88, name: 'ProjectionThreadsSettledAt' },
+    { migration_id: 89, name: 'RecoverRetentionHiddenThreads' },
+    { migration_id: 90, name: 'ProjectionThreadMessageTextSegments' },
+    { migration_id: 91, name: 'AutomationFailureTolerance' },
+    { migration_id: 92, name: 'BackfillAutomationRunThreadSource' },
+    { migration_id: 93, name: 'BackfillMaxIterationsDisabledReason' },
+    { migration_id: 94, name: 'ProjectionThreadsGoal' },
+    { migration_id: 95, name: 'ProjectionThreadsGoalTiming' },
+    { migration_id: 96, name: 'ProjectionThreadsGoalAchievements' },
+    { migration_id: 97, name: 'ProjectionThreadsSidechatLifecycle' },
+    { migration_id: 98, name: 'MigrateKiloToOpenCode' },
+    { migration_id: 99, name: 'InvalidateProjectionThreadsCursor' }
+  ],
+  showDiff: true,
+  operator: 'deepStrictEqual',
+  [cause]: undefined
+}
+
+stdout | src/persistence/Migrations.test.ts > Spaces migration after the private migration 70 collision > reconciles the tracker and preserves pre-existing Spaces data
+[01:18:29.519] ERROR (#88): Error [AssertionError]: expected [ [ 72, …(1) ], …(28) ] to deeply equal [ [ 71, …(1) ], [ 72, …(1) ], …(28) ]
+    at Array.<anonymous> (/Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server/src/persistence/Migrations.test.ts:544:14) {
+  actual: [
+    [ 72, 'AgentGatewayOperationRetention' ],
+    [ 73, 'OperationalDiagnostics' ],
+    [ 74, 'ExternalMcpIntegrations' ],
+    [ 75, 'ExternalMcpActiveCapacity' ],
+    [ 76, 'ExternalMcpHardening' ],
+    [ 77, 'ExternalMcpCompensatingCapacity' ],
+    [ 78, 'ExternalMcpLiveTurnCapacity' ],
+    [ 79, 'Spaces' ],
+    [ 80, 'ExternalMcpProjectScope' ],
+    [ 81, 'AutomationProposals' ],
+    [ 82, 'AutomationMemory' ],
+    [ 83, 'AutomationHeartbeatEligibility' ],
+    [ 84, 'AutomationNotificationPolicy' ],
+    [ 85, 'AutomationSettings' ],
+    [ 86, 'NormalizeStudioThreadWorkspaces' ],
+    [ 87, 'DropUnusedOrchestrationEventIndexes' ],
+    [ 88, 'ProjectionThreadsSettledAt' ],
+    [ 89, 'RecoverRetentionHiddenThreads' ],
+    [ 90, 'ProjectionThreadMessageTextSegments' ],
+    [ 91, 'AutomationFailureTolerance' ],
+    [ 92, 'BackfillAutomationRunThreadSource' ],
+    [ 93, 'BackfillMaxIterationsDisabledReason' ],
+    [ 94, 'ProjectionThreadsGoal' ],
+    [ 95, 'ProjectionThreadsGoalTiming' ],
+    [ 96, 'ProjectionThreadsGoalAchievements' ],
+    [ 97, 'ProjectionThreadsSidechatLifecycle' ],
+    [ 98, 'MigrateKiloToOpenCode' ],
+    [ 99, 'InvalidateProjectionThreadsCursor' ],
+    [ 100, 'MessageTextChunks' ]
+  ],
+  expected: [
+    [ 71, 'ProjectionThreadsGatewayProvenance' ],
+    [ 72, 'AgentGatewayOperationRetention' ],
+    [ 73, 'OperationalDiagnostics' ],
+    [ 74, 'ExternalMcpIntegrations' ],
+    [ 75, 'ExternalMcpActiveCapacity' ],
+    [ 76, 'ExternalMcpHardening' ],
+    [ 77, 'ExternalMcpCompensatingCapacity' ],
+    [ 78, 'ExternalMcpLiveTurnCapacity' ],
+    [ 79, 'Spaces' ],
+    [ 80, 'ExternalMcpProjectScope' ],
+    [ 81, 'AutomationProposals' ],
+    [ 82, 'AutomationMemory' ],
+    [ 83, 'AutomationHeartbeatEligibility' ],
+    [ 84, 'AutomationNotificationPolicy' ],
+    [ 85, 'AutomationSettings' ],
+    [ 86, 'NormalizeStudioThreadWorkspaces' ],
+    [ 87, 'DropUnusedOrchestrationEventIndexes' ],
+    [ 88, 'ProjectionThreadsSettledAt' ],
+    [ 89, 'RecoverRetentionHiddenThreads' ],
+    [ 90, 'ProjectionThreadMessageTextSegments' ],
+    [ 91, 'AutomationFailureTolerance' ],
+    [ 92, 'BackfillAutomationRunThreadSource' ],
+    [ 93, 'BackfillMaxIterationsDisabledReason' ],
+    [ 94, 'ProjectionThreadsGoal' ],
+    [ 95, 'ProjectionThreadsGoalTiming' ],
+    [ 96, 'ProjectionThreadsGoalAchievements' ],
+    [ 97, 'ProjectionThreadsSidechatLifecycle' ],
+    [ 98, 'MigrateKiloToOpenCode' ],
+    [ 99, 'InvalidateProjectionThreadsCursor' ],
+    [ 100, 'MessageTextChunks' ]
+  ],
+  showDiff: true,
+  operator: 'deepStrictEqual',
+  [cause]: undefined
+}
+
+stdout | src/persistence/Migrations.test.ts > Spaces migration after the private migration 70 collision > upgrades the previous Spaces-at-74 lineage without losing data
+[01:18:29.522] ERROR (#89): Error [AssertionError]: expected [ …(25) ] to deeply equal [ [ 75, …(1) ], …(25) ]
+    at Array.<anonymous> (/Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server/src/persistence/Migrations.test.ts:670:14) {
+  actual: [
+    [ 76, 'ExternalMcpHardening' ],
+    [ 77, 'ExternalMcpCompensatingCapacity' ],
+    [ 78, 'ExternalMcpLiveTurnCapacity' ],
+    [ 79, 'Spaces' ],
+    [ 80, 'ExternalMcpProjectScope' ],
+    [ 81, 'AutomationProposals' ],
+    [ 82, 'AutomationMemory' ],
+    [ 83, 'AutomationHeartbeatEligibility' ],
+    [ 84, 'AutomationNotificationPolicy' ],
+    [ 85, 'AutomationSettings' ],
+    [ 86, 'NormalizeStudioThreadWorkspaces' ],
+    [ 87, 'DropUnusedOrchestrationEventIndexes' ],
+    [ 88, 'ProjectionThreadsSettledAt' ],
+    [ 89, 'RecoverRetentionHiddenThreads' ],
+    [ 90, 'ProjectionThreadMessageTextSegments' ],
+    [ 91, 'AutomationFailureTolerance' ],
+    [ 92, 'BackfillAutomationRunThreadSource' ],
+    [ 93, 'BackfillMaxIterationsDisabledReason' ],
+    [ 94, 'ProjectionThreadsGoal' ],
+    [ 95, 'ProjectionThreadsGoalTiming' ],
+    [ 96, 'ProjectionThreadsGoalAchievements' ],
+    [ 97, 'ProjectionThreadsSidechatLifecycle' ],
+    [ 98, 'MigrateKiloToOpenCode' ],
+    [ 99, 'InvalidateProjectionThreadsCursor' ],
+    [ 100, 'MessageTextChunks' ]
+  ],
+  expected: [
+    [ 75, 'ExternalMcpActiveCapacity' ],
+    [ 76, 'ExternalMcpHardening' ],
+    [ 77, 'ExternalMcpCompensatingCapacity' ],
+    [ 78, 'ExternalMcpLiveTurnCapacity' ],
+    [ 79, 'Spaces' ],
+    [ 80, 'ExternalMcpProjectScope' ],
+    [ 81, 'AutomationProposals' ],
+    [ 82, 'AutomationMemory' ],
+    [ 83, 'AutomationHeartbeatEligibility' ],
+    [ 84, 'AutomationNotificationPolicy' ],
+    [ 85, 'AutomationSettings' ],
+    [ 86, 'NormalizeStudioThreadWorkspaces' ],
+    [ 87, 'DropUnusedOrchestrationEventIndexes' ],
+    [ 88, 'ProjectionThreadsSettledAt' ],
+    [ 89, 'RecoverRetentionHiddenThreads' ],
+    [ 90, 'ProjectionThreadMessageTextSegments' ],
+    [ 91, 'AutomationFailureTolerance' ],
+    [ 92, 'BackfillAutomationRunThreadSource' ],
+    [ 93, 'BackfillMaxIterationsDisabledReason' ],
+    [ 94, 'ProjectionThreadsGoal' ],
+    [ 95, 'ProjectionThreadsGoalTiming' ],
+    [ 96, 'ProjectionThreadsGoalAchievements' ],
+    [ 97, 'ProjectionThreadsSidechatLifecycle' ],
+    [ 98, 'MigrateKiloToOpenCode' ],
+    [ 99, 'InvalidateProjectionThreadsCursor' ],
+    [ 100, 'MessageTextChunks' ]
+  ],
+  showDiff: true,
+  operator: 'deepStrictEqual',
+  [cause]: undefined
+}
+
+ ❯ src/persistence/Migrations.test.ts (19 tests | 3 failed) 282ms
+     × keeps a private database that already recorded old migration 54 compatible 31ms
+     × reconciles the tracker and preserves pre-existing Spaces data 27ms
+     × upgrades the previous Spaces-at-74 lineage without losing data 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/persistence/Migrations.test.ts > managed attachment migration after private migration 54 > keeps a private database that already recorded old migration 54 compatible
+AssertionError: expected [ { migration_id: 56, …(1) }, …(44) ] to deeply equal [ { migration_id: 55, …(1) }, …(44) ]
+
+- Expected
++ Received
+
+@@ -1,11 +1,7 @@
+  [
+    {
+-     "migration_id": 55,
+-     "name": "ManagedAttachments",
+-   },
+-   {
+      "migration_id": 56,
+      "name": "CommandReceiptFingerprints",
+    },
+    {
+      "migration_id": 57,
+@@ -176,7 +172,11 @@
+      "name": "MigrateKiloToOpenCode",
+    },
+    {
+      "migration_id": 99,
+      "name": "InvalidateProjectionThreadsCursor",
++   },
++   {
++     "migration_id": 100,
++     "name": "MessageTextChunks",
+    },
+  ]
+
+ ❯ Array.<anonymous> src/persistence/Migrations.test.ts:308:14
+    306|
+    307|       const tracker = yield* trackerRows(sql);
+    308|       assert.deepStrictEqual(tracker.slice(-45), [
+       |              ^
+    309|         { migration_id: 55, name: "ManagedAttachments" },
+    310|         { migration_id: 56, name: "CommandReceiptFingerprints" },
+ ❯ next ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:1264:25
+ ❯ Object.~effect/Effect/evaluate ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/core.ts:531:30
+ ❯ FiberImpl.runLoop ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:626:39
+ ❯ runLoop ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:587:22
+ ❯ evaluate ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:904:12
+ ❯ MixedScheduler.runTasks ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/Scheduler.ts:156:16
+ ❯ runTasks ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/Scheduler.ts:145:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/persistence/Migrations.test.ts > Spaces migration after the private migration 70 collision > reconciles the tracker and preserves pre-existing Spaces data
+AssertionError: expected [ [ 72, …(1) ], …(28) ] to deeply equal [ [ 71, …(1) ], [ 72, …(1) ], …(28) ]
+
+- Expected
++ Received
+
+@@ -1,11 +1,7 @@
+  [
+    [
+-     71,
+-     "ProjectionThreadsGatewayProvenance",
+-   ],
+-   [
+      72,
+      "AgentGatewayOperationRetention",
+    ],
+    [
+      73,
+
+ ❯ Array.<anonymous> src/persistence/Migrations.test.ts:544:14
+    542|
+    543|       const tracker = yield* trackerRows(sql);
+    544|       assert.deepStrictEqual(
+       |              ^
+    545|         tracker.slice(-29).map((row) => [row.migration_id, row.name]),
+    546|         [
+ ❯ next ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:1264:25
+ ❯ Object.~effect/Effect/evaluate ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/core.ts:531:30
+ ❯ FiberImpl.runLoop ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:626:39
+ ❯ runLoop ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:587:22
+ ❯ evaluate ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:904:12
+ ❯ MixedScheduler.runTasks ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/Scheduler.ts:156:16
+ ❯ runTasks ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/Scheduler.ts:145:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/persistence/Migrations.test.ts > Spaces migration after the private migration 70 collision > upgrades the previous Spaces-at-74 lineage without losing data
+AssertionError: expected [ …(25) ] to deeply equal [ [ 75, …(1) ], …(25) ]
+
+- Expected
++ Received
+
+@@ -1,11 +1,7 @@
+  [
+    [
+-     75,
+-     "ExternalMcpActiveCapacity",
+-   ],
+-   [
+      76,
+      "ExternalMcpHardening",
+    ],
+    [
+      77,
+
+ ❯ Array.<anonymous> src/persistence/Migrations.test.ts:670:14
+    668|
+    669|       const tracker = yield* trackerRows(sql);
+    670|       assert.deepStrictEqual(
+       |              ^
+    671|         tracker.slice(-25).map((row) => [row.migration_id, row.name]),
+    672|         [
+ ❯ next ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:1264:25
+ ❯ Object.~effect/Effect/evaluate ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/core.ts:531:30
+ ❯ FiberImpl.runLoop ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:626:39
+ ❯ runLoop ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:587:22
+ ❯ evaluate ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/internal/effect.ts:904:12
+ ❯ MixedScheduler.runTasks ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/Scheduler.ts:156:16
+ ❯ runTasks ../../node_modules/.bun/effect@https+++pkg.pr.new+Effect-TS+effect-smol+effect@8881a9b/node_modules/effect/src/Scheduler.ts:145:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  3 failed | 24 passed (27)
+   Start at  01:18:28
+   Duration  2.40s (transform 476ms, setup 0ms, import 1.07s, tests 1.14s, environment 0ms)
+
+error: script "test" exited with code 1

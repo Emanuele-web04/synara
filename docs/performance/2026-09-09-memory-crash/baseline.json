@@ -1,0 +1,494 @@
+{
+  "node": "v26.8.1",
+  "sqlite": "3.53.4",
+  "platform": "darwin",
+  "arch": "arm64",
+  "rowsPerTable": 6000,
+  "bodyBytes": 16384,
+  "warmupsPerProcess": 1,
+  "samples": [
+    {
+      "repeat": 0,
+      "name": "listThreadMessageRows",
+      "rows": 2000,
+      "sha256": "ded0ef3bc7d992560c86d309b11e6c6f6ade576d0f76d9114798f8d33a5b5b8c",
+      "elapsedMs": 43.66179199999999,
+      "cpuMs": 46.278,
+      "memoryBefore": {
+        "rss": 423559168,
+        "heapTotal": 40517632,
+        "heapUsed": 4772304,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 593117184,
+        "heapTotal": 106315776,
+        "heapUsed": 40028024,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 579216,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE (subquery-2)",
+        "CO-ROUTINE (subquery-4)",
+        "SEARCH projection_thread_messages USING INDEX sqlite_autoindex_projection_thread_messages_1 (thread_id=?)",
+        "LIST SUBQUERY 1",
+        "SCAN projection_threads",
+        "USE TEMP B-TREE FOR LAST 4 TERMS OF ORDER BY",
+        "SCAN (subquery-4)",
+        "SCAN (subquery-2)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 0,
+      "name": "listThreadMessageRowsByThread",
+      "rows": 2000,
+      "sha256": "ded0ef3bc7d992560c86d309b11e6c6f6ade576d0f76d9114798f8d33a5b5b8c",
+      "elapsedMs": 43.76329100000001,
+      "cpuMs": 46.246,
+      "memoryBefore": {
+        "rss": 423739392,
+        "heapTotal": 40517632,
+        "heapUsed": 4772032,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 593297408,
+        "heapTotal": 106315776,
+        "heapUsed": 40027752,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 579392,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "CO-ROUTINE (subquery-3)",
+        "SEARCH projection_thread_messages USING INDEX sqlite_autoindex_projection_thread_messages_1 (thread_id=?)",
+        "USE TEMP B-TREE FOR LAST 4 TERMS OF ORDER BY",
+        "SCAN (subquery-3)",
+        "SCAN (subquery-1)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 0,
+      "name": "listThreadActivityRows",
+      "rows": 500,
+      "sha256": "3839361fa6d96fa1b92000b9fff7d1af74664406f894370c8a9471c270a099bf",
+      "elapsedMs": 19.146333,
+      "cpuMs": 20.709,
+      "memoryBefore": {
+        "rss": 248659968,
+        "heapTotal": 15351808,
+        "heapUsed": 4780840,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 268353536,
+        "heapTotal": 31342592,
+        "heapUsed": 13496096,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 262064,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE ranked",
+        "CO-ROUTINE (subquery-7)",
+        "SEARCH projection_thread_activities USING INDEX idx_projection_thread_activities_thread_rank_desc (thread_id=?)",
+        "LIST SUBQUERY 3",
+        "SCAN projection_threads",
+        "SCAN (subquery-7)",
+        "SCAN ranked",
+        "CORRELATED SCALAR SUBQUERY 5",
+        "SEARCH later USING INDEX idx_projection_thread_activities_thread_sequence (thread_id=?)",
+        "CORRELATED SCALAR SUBQUERY 2",
+        "SEARCH provider_runtime_events USING INDEX provider_events_identity (event_id=? AND thread_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 0,
+      "name": "listThreadActivityRowsByThread",
+      "rows": 2000,
+      "sha256": "ea4ecb4c9cad51b166930b18ed37ae602268927b819cdc9126cf4cf533de1d95",
+      "elapsedMs": 176.678875,
+      "cpuMs": 176.108,
+      "memoryBefore": {
+        "rss": 328105984,
+        "heapTotal": 40517632,
+        "heapUsed": 4784920,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 398196736,
+        "heapTotal": 106577920,
+        "heapUsed": 39298448,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 388864,
+      "fsWriteOperations": 0,
+      "plan": [
+        "MATERIALIZE ranked",
+        "CO-ROUTINE (subquery-15)",
+        "SEARCH projection_thread_activities USING INDEX idx_projection_thread_activities_thread_rank_desc (thread_id=?)",
+        "SCAN (subquery-15)",
+        "SCAN ranked",
+        "SCALAR SUBQUERY 8",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 9",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 10",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 11",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "CORRELATED SCALAR SUBQUERY 3",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (turn_id=?)",
+        "SCALAR SUBQUERY 12",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "CORRELATED SCALAR SUBQUERY 4",
+        "SCAN ranked",
+        "CORRELATED SCALAR SUBQUERY 13",
+        "SEARCH later USING INDEX idx_projection_thread_activities_thread_sequence (thread_id=?)",
+        "CORRELATED SCALAR SUBQUERY 7",
+        "SEARCH provider_runtime_events USING INDEX provider_events_identity (event_id=? AND thread_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 1,
+      "name": "listThreadActivityRowsByThread",
+      "rows": 2000,
+      "sha256": "ea4ecb4c9cad51b166930b18ed37ae602268927b819cdc9126cf4cf533de1d95",
+      "elapsedMs": 177.51183299999997,
+      "cpuMs": 177.567,
+      "memoryBefore": {
+        "rss": 327974912,
+        "heapTotal": 40517632,
+        "heapUsed": 4784848,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 397983744,
+        "heapTotal": 106577920,
+        "heapUsed": 39298376,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 388656,
+      "fsWriteOperations": 0,
+      "plan": [
+        "MATERIALIZE ranked",
+        "CO-ROUTINE (subquery-15)",
+        "SEARCH projection_thread_activities USING INDEX idx_projection_thread_activities_thread_rank_desc (thread_id=?)",
+        "SCAN (subquery-15)",
+        "SCAN ranked",
+        "SCALAR SUBQUERY 8",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 9",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 10",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 11",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "CORRELATED SCALAR SUBQUERY 3",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (turn_id=?)",
+        "SCALAR SUBQUERY 12",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "CORRELATED SCALAR SUBQUERY 4",
+        "SCAN ranked",
+        "CORRELATED SCALAR SUBQUERY 13",
+        "SEARCH later USING INDEX idx_projection_thread_activities_thread_sequence (thread_id=?)",
+        "CORRELATED SCALAR SUBQUERY 7",
+        "SEARCH provider_runtime_events USING INDEX provider_events_identity (event_id=? AND thread_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 1,
+      "name": "listThreadActivityRows",
+      "rows": 500,
+      "sha256": "3839361fa6d96fa1b92000b9fff7d1af74664406f894370c8a9471c270a099bf",
+      "elapsedMs": 19.436875,
+      "cpuMs": 21.119,
+      "memoryBefore": {
+        "rss": 248578048,
+        "heapTotal": 15351808,
+        "heapUsed": 4780912,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 268320768,
+        "heapTotal": 31342592,
+        "heapUsed": 13496168,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 262032,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE ranked",
+        "CO-ROUTINE (subquery-7)",
+        "SEARCH projection_thread_activities USING INDEX idx_projection_thread_activities_thread_rank_desc (thread_id=?)",
+        "LIST SUBQUERY 3",
+        "SCAN projection_threads",
+        "SCAN (subquery-7)",
+        "SCAN ranked",
+        "CORRELATED SCALAR SUBQUERY 5",
+        "SEARCH later USING INDEX idx_projection_thread_activities_thread_sequence (thread_id=?)",
+        "CORRELATED SCALAR SUBQUERY 2",
+        "SEARCH provider_runtime_events USING INDEX provider_events_identity (event_id=? AND thread_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 1,
+      "name": "listThreadMessageRowsByThread",
+      "rows": 2000,
+      "sha256": "ded0ef3bc7d992560c86d309b11e6c6f6ade576d0f76d9114798f8d33a5b5b8c",
+      "elapsedMs": 46.246792,
+      "cpuMs": 48.805,
+      "memoryBefore": {
+        "rss": 423624704,
+        "heapTotal": 40517632,
+        "heapUsed": 4772032,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 593313792,
+        "heapTotal": 106315776,
+        "heapUsed": 40027752,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 579408,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "CO-ROUTINE (subquery-3)",
+        "SEARCH projection_thread_messages USING INDEX sqlite_autoindex_projection_thread_messages_1 (thread_id=?)",
+        "USE TEMP B-TREE FOR LAST 4 TERMS OF ORDER BY",
+        "SCAN (subquery-3)",
+        "SCAN (subquery-1)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 1,
+      "name": "listThreadMessageRows",
+      "rows": 2000,
+      "sha256": "ded0ef3bc7d992560c86d309b11e6c6f6ade576d0f76d9114798f8d33a5b5b8c",
+      "elapsedMs": 44.36,
+      "cpuMs": 47.087,
+      "memoryBefore": {
+        "rss": 423706624,
+        "heapTotal": 40517632,
+        "heapUsed": 4772304,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 593084416,
+        "heapTotal": 106053632,
+        "heapUsed": 40028024,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 579184,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE (subquery-2)",
+        "CO-ROUTINE (subquery-4)",
+        "SEARCH projection_thread_messages USING INDEX sqlite_autoindex_projection_thread_messages_1 (thread_id=?)",
+        "LIST SUBQUERY 1",
+        "SCAN projection_threads",
+        "USE TEMP B-TREE FOR LAST 4 TERMS OF ORDER BY",
+        "SCAN (subquery-4)",
+        "SCAN (subquery-2)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 2,
+      "name": "listThreadMessageRows",
+      "rows": 2000,
+      "sha256": "ded0ef3bc7d992560c86d309b11e6c6f6ade576d0f76d9114798f8d33a5b5b8c",
+      "elapsedMs": 43.476958999999994,
+      "cpuMs": 45.824,
+      "memoryBefore": {
+        "rss": 423510016,
+        "heapTotal": 40517632,
+        "heapUsed": 4772232,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 593084416,
+        "heapTotal": 106315776,
+        "heapUsed": 40027952,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 579184,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE (subquery-2)",
+        "CO-ROUTINE (subquery-4)",
+        "SEARCH projection_thread_messages USING INDEX sqlite_autoindex_projection_thread_messages_1 (thread_id=?)",
+        "LIST SUBQUERY 1",
+        "SCAN projection_threads",
+        "USE TEMP B-TREE FOR LAST 4 TERMS OF ORDER BY",
+        "SCAN (subquery-4)",
+        "SCAN (subquery-2)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 2,
+      "name": "listThreadMessageRowsByThread",
+      "rows": 2000,
+      "sha256": "ded0ef3bc7d992560c86d309b11e6c6f6ade576d0f76d9114798f8d33a5b5b8c",
+      "elapsedMs": 47.264416,
+      "cpuMs": 49.871,
+      "memoryBefore": {
+        "rss": 423788544,
+        "heapTotal": 40517632,
+        "heapUsed": 4772032,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 593379328,
+        "heapTotal": 106315776,
+        "heapUsed": 40027752,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 579472,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "CO-ROUTINE (subquery-3)",
+        "SEARCH projection_thread_messages USING INDEX sqlite_autoindex_projection_thread_messages_1 (thread_id=?)",
+        "USE TEMP B-TREE FOR LAST 4 TERMS OF ORDER BY",
+        "SCAN (subquery-3)",
+        "SCAN (subquery-1)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 2,
+      "name": "listThreadActivityRows",
+      "rows": 500,
+      "sha256": "3839361fa6d96fa1b92000b9fff7d1af74664406f894370c8a9471c270a099bf",
+      "elapsedMs": 19.063125000000007,
+      "cpuMs": 20.819,
+      "memoryBefore": {
+        "rss": 248856576,
+        "heapTotal": 15351808,
+        "heapUsed": 4780840,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 268566528,
+        "heapTotal": 31342592,
+        "heapUsed": 13496096,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 262272,
+      "fsWriteOperations": 0,
+      "plan": [
+        "CO-ROUTINE ranked",
+        "CO-ROUTINE (subquery-7)",
+        "SEARCH projection_thread_activities USING INDEX idx_projection_thread_activities_thread_rank_desc (thread_id=?)",
+        "LIST SUBQUERY 3",
+        "SCAN projection_threads",
+        "SCAN (subquery-7)",
+        "SCAN ranked",
+        "CORRELATED SCALAR SUBQUERY 5",
+        "SEARCH later USING INDEX idx_projection_thread_activities_thread_sequence (thread_id=?)",
+        "CORRELATED SCALAR SUBQUERY 2",
+        "SEARCH provider_runtime_events USING INDEX provider_events_identity (event_id=? AND thread_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "repeat": 2,
+      "name": "listThreadActivityRowsByThread",
+      "rows": 2000,
+      "sha256": "ea4ecb4c9cad51b166930b18ed37ae602268927b819cdc9126cf4cf533de1d95",
+      "elapsedMs": 178.68287500000002,
+      "cpuMs": 180.684,
+      "memoryBefore": {
+        "rss": 328007680,
+        "heapTotal": 40517632,
+        "heapUsed": 4784848,
+        "external": 2507349,
+        "arrayBuffers": 143737
+      },
+      "memoryAfter": {
+        "rss": 398098432,
+        "heapTotal": 106577920,
+        "heapUsed": 39298376,
+        "external": 2561133,
+        "arrayBuffers": 143753
+      },
+      "peakRssKiB": 388768,
+      "fsWriteOperations": 0,
+      "plan": [
+        "MATERIALIZE ranked",
+        "CO-ROUTINE (subquery-15)",
+        "SEARCH projection_thread_activities USING INDEX idx_projection_thread_activities_thread_rank_desc (thread_id=?)",
+        "SCAN (subquery-15)",
+        "SCAN ranked",
+        "SCALAR SUBQUERY 8",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 9",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 10",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "SCALAR SUBQUERY 11",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "CORRELATED SCALAR SUBQUERY 3",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (turn_id=?)",
+        "SCALAR SUBQUERY 12",
+        "BLOOM FILTER ON ranked (activity_rank=?)",
+        "SEARCH ranked USING AUTOMATIC PARTIAL COVERING INDEX (activity_rank=?)",
+        "CORRELATED SCALAR SUBQUERY 4",
+        "SCAN ranked",
+        "CORRELATED SCALAR SUBQUERY 13",
+        "SEARCH later USING INDEX idx_projection_thread_activities_thread_sequence (thread_id=?)",
+        "CORRELATED SCALAR SUBQUERY 7",
+        "SEARCH provider_runtime_events USING INDEX provider_events_identity (event_id=? AND thread_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    }
+  ]
+}

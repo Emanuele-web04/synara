@@ -1,0 +1,47 @@
+Provider regression suite
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/CodexAdapter.test.ts src/provider/Layers/ClaudeAdapter.test.ts src/provider/Layers/CursorAdapter.test.ts src/provider/Layers/DevinAdapter.test.ts src/provider/Layers/DroidAdapter.test.ts src/provider/Layers/GrokAdapter.test.ts src/provider/Layers/AntigravityAdapter.test.ts src/provider/Layers/AntigravityAdapter.output.test.ts src/provider/Layers/OpenCodeAdapter.test.ts src/provider/Layers/PiAdapter.test.ts src/provider/Layers/PiAdapter.lifecycle.test.ts src/provider/Layers/ProviderService.test.ts src/provider/acp src/provider/boundedCallbackIngress.test.ts src/provider/providerRuntimeEventIngress.test.ts src/provider/providerRuntimeEventPump.test.ts src/provider/openCodeMessageState.test.ts src/provider/providerAdapterConformance.test.ts src/provider/opencodeRuntime.test.ts src/codexAppServerManager.test.ts src/codexAppServerTransport.test.ts
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server
+
+
+ Test Files  43 passed | 1 skipped (44)
+      Tests  1065 passed | 5 skipped (1070)
+   Start at  23:33:23
+   Duration  36.79s (transform 1.19s, setup 0ms, import 6.23s, tests 28.03s, environment 2ms)
+
+
+Isolated health regression
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/ProviderHealth.test.ts -t "queues another bounded refresh" --testTimeout "5000" --hookTimeout "5000"
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 91 skipped (92)
+   Start at  23:33:55
+   Duration  5.06s (transform 317ms, setup 0ms, import 501ms, tests 4.50s, environment 0ms)
+
+
+Formatting
+$ oxfmt
+Finished in 647ms on 3076 files using 18 threads.
+
+Lint
+  9 |     <div className="overflow-hidden rounded-lg ring-1 ring-black/5 sm:rounded-xl dark:ring-white/10">
+ 10 |       {/* eslint-disable-next-line @next/next/no-img-element */}
+    :          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 11 |       <img
+    `----
+
+Found 528 warnings and 0 errors.
+Finished in 135ms on 2871 files with 149 rules using 18 threads.
+
+Typecheck
+@synara/web:typecheck: src/lib/projectScriptKeybindings.ts(25,26): suggestion TS377112: This input is already assignable to the schema's Encoded type. Use `decodeOption` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownOption`. effect(preferTypedSchemaDecoder)
+@synara/cli:typecheck: cache bypass, force executing 299332e3ec67262b
+@synara/cli:typecheck: $ node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo
+
+ Tasks:    7 successful, 7 total
+Cached:    0 cached, 7 total
+  Time:    6.515s 
+

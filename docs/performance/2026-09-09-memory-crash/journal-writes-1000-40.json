@@ -1,0 +1,8 @@
+{
+  "events": 1000,
+  "deltaBytes": 40,
+  "walBytesTotal": 27245592,
+  "walBytesPerEvent": 27246,
+  "walBytesAppendOnlyLastSample": 27241472,
+  "msPerEvent": 0.105
+}

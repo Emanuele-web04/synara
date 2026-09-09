@@ -1045,8 +1045,31 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         `;
       }
 
+      yield* sql`DELETE FROM message_text_segments`;
+      for (const index of [0, 2_004]) {
+        yield* sql`
+          INSERT INTO message_text_segments (
+            thread_id, message_id, sequence, started_at, ended_at, text
+          ) VALUES (
+            ${threadId}, ${`message-${index}`}, ${index},
+            '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z', ${`segment ${index}`}
+          )
+        `;
+      }
+      // Providers can reuse a message id in another thread. Its segments must
+      // never be joined to the retained message in this thread.
+      yield* sql`
+        INSERT INTO message_text_segments (
+          thread_id, message_id, sequence, started_at, ended_at, text
+        ) VALUES (
+          'other-segment-owner', 'message-2004', 2004,
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z', 'other thread text'
+        )
+      `;
+
       const cappedDetail = yield* snapshotQuery.getThreadDetailById(threadId);
       const exportDetail = yield* snapshotQuery.getThreadDetailForExportById(threadId);
+      const bulk = yield* snapshotQuery.getSnapshot();
 
       assert.isTrue(Option.isSome(cappedDetail));
       assert.isTrue(Option.isSome(exportDetail));
@@ -1058,6 +1081,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(exportMessages.length, messageCount);
       assert.equal(exportMessages[0]?.text, "message 0");
       assert.equal(exportMessages.at(-1)?.text, "message 2004");
+      assert.equal(cappedMessages.at(-1)?.textSegments?.[0]?.text, "segment 2004");
+      assert.equal(exportMessages[0]?.textSegments?.[0]?.text, "segment 0");
+      assert.equal(exportMessages.at(-1)?.textSegments?.[0]?.text, "segment 2004");
+      assert.equal(cappedMessages.at(-1)?.textSegments?.length, 1);
+      assert.equal(bulk.threads[0]?.messages.length, 2_000);
+      assert.equal(bulk.threads[0]?.messages.at(-1)?.textSegments?.[0]?.text, "segment 2004");
+      assert.equal(bulk.threads[0]?.messages.at(-1)?.textSegments?.length, 1);
+      yield* sql`DELETE FROM message_text_segments`;
     }),
   );
 

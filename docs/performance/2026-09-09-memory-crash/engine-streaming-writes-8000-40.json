@@ -1,0 +1,21 @@
+{
+  "messageBytes": 8000,
+  "chunkBytes": 40,
+  "deltas": 200,
+  "walBytes": 15956792,
+  "walMiB": 15.22,
+  "amplification": 1994.6,
+  "msPerDelta": 0.393,
+  "frames": 3873,
+  "distinctPages": 69,
+  "windowDistinctPagesTotal": 138,
+  "pageSize": 4096,
+  "checkpointPagesEstimateMiB": 0.54,
+  "dbBytes": 741376,
+  "rows": [
+    { "table": "events", "rows": 202, "bytes": 47418 },
+    { "table": "receipts", "rows": 202, "bytes": 2929 },
+    { "table": "messages", "rows": 1, "bytes": 8000 },
+    { "table": "segments", "rows": 1, "bytes": 8000 }
+  ]
+}

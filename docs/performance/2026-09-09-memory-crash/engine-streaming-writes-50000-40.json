@@ -1,0 +1,15 @@
+{
+  "messageBytes": 50000,
+  "chunkBytes": 40,
+  "deltas": 1250,
+  "walBytes": 161050832,
+  "walMiB": 153.59,
+  "amplification": 3221,
+  "msPerDelta": 0.396,
+  "frames": 39090,
+  "distinctPages": 315,
+  "windowDistinctPagesTotal": 2527,
+  "pageSize": 4096,
+  "checkpointPagesEstimateMiB": 9.87,
+  "dbBytes": 741376
+}

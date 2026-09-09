@@ -37,6 +37,9 @@ import {
 } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { orchestrationMessageFromStoredMessage } from "../../persistence/projectionThreadMessageRow.ts";
 import {
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
   type ManagedAttachmentPrincipal,
@@ -157,6 +160,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const managedAttachments = yield* ManagedAttachmentRepository;
+  const messageRepository = yield* ProjectionThreadMessageRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
@@ -483,19 +487,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     thread: OrchestrationReadModel["threads"][number],
   ): OrchestrationReadModel => {
     const existingThread = model.threads.find((entry) => entry.id === thread.id);
-    const mergedThread =
-      existingThread && existingThread.messages.length > 0
-        ? {
-            ...thread,
-            messages: existingThread.messages,
-          }
-        : thread;
+    // The command cache may contain only deltas received since a restart.
+    // Durable detail includes the complete text, now including pending chunks.
+    // Overlaying that detail with a partial cache would truncate completion.
     const hasThread = existingThread !== undefined;
     return {
       ...model,
       threads: hasThread
-        ? model.threads.map((entry) => (entry.id === thread.id ? mergedThread : entry))
-        : [...model.threads, mergedThread],
+        ? model.threads.map((entry) => (entry.id === thread.id ? thread : entry))
+        : [...model.threads, thread],
     };
   };
 
@@ -538,11 +538,37 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           : Effect.succeed(commandReadModel);
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":
-      case "thread.message.assistant.complete":
       case "thread.approval.respond":
       case "thread.user-input.respond":
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+      case "thread.message.assistant.complete":
+        // Read the exact message, including a resumed message older than the
+        // transcript window. This avoids loading a whole thread to finalize it.
+        return messageRepository
+          .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
+          .pipe(
+            Effect.map((message) => {
+              const thread = commandReadModel.threads.find(
+                (entry) => entry.id === command.threadId,
+              );
+              if (!thread) return commandReadModel;
+              return overlayThread(commandReadModel, {
+                ...thread,
+                messages: Option.isSome(message)
+                  ? [orchestrationMessageFromStoredMessage(message.value)]
+                  : [],
+              });
+            }),
+            Effect.mapError(
+              (error) =>
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: `Failed to load the complete assistant message: ${error.message}`,
+                }),
+            ),
+          );
       default:
         return Effect.succeed(commandReadModel);
     }
@@ -1538,4 +1564,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 export const OrchestrationEngineLive = Layer.effect(
   OrchestrationEngineService,
   makeOrchestrationEngine,
-).pipe(Layer.provideMerge(ManagedAttachmentRepositoryLive));
+).pipe(
+  Layer.provide(ProjectionThreadMessageRepositoryLive),
+  Layer.provideMerge(ManagedAttachmentRepositoryLive),
+);

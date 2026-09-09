@@ -1,0 +1,10 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/persistence src/orchestration/Layers/OrchestrationEngine.test.ts src/orchestration/Layers/ProjectionPipeline.test.ts src/orchestration/Layers/ProjectionSnapshotQuery.test.ts src/orchestration/Layers/messageTextChunks.test.ts src/provider/Layers/ClaudeAdapter.test.ts src/provider/Layers/CursorAdapter.test.ts src/provider/Layers/GrokAdapter.test.ts src/provider/Layers/DroidAdapter.test.ts src/provider/Layers/DevinAdapter.test.ts src/provider/Layers/PiAdapter.test.ts src/provider/Layers/PiAdapter.lifecycle.test.ts src/provider/Layers/OpenCodeAdapter.test.ts src/provider/providerAdapterConformance.test.ts src/provider/snapshotProviderTurns.test.ts src/provider/openCodeMessageState.test.ts
+
+ RUN  v4.1.10 /Users/emanueledipietro/.codex/worktrees/b388/synara/apps/server
+
+
+ Test Files  68 passed (68)
+      Tests  733 passed (733)
+   Start at  01:20:53
+   Duration  27.64s (transform 1.26s, setup 0ms, import 11.14s, tests 12.57s, environment 2ms)
+

@@ -1,0 +1,51 @@
+{
+  "environment": {
+    "node": "v26.8.1",
+    "os": "darwin 25.6.0",
+    "cpu": "Apple M5 Pro",
+    "totalMemoryBytes": 51539607552,
+    "sqlite": [
+      {
+        "version": "3.53.4"
+      }
+    ]
+  },
+  "workload": {
+    "messageBytes": 200000,
+    "chunkBytes": 40,
+    "threadCount": 1,
+    "transactions": 5000,
+    "checkpoint": "disabled during measurement; setup WAL truncated",
+    "timerYieldEveryChunks": 100
+  },
+  "streamingWalBytes": 1411219512,
+  "finalWalBytes": 1411512032,
+  "streamMs": 2660.116958,
+  "streamingReadMs": 0.027833000000100583,
+  "completionMs": 3.2883750000000873,
+  "eventLoopDelayMs": {
+    "max": 10.567679,
+    "p99": 10.518527
+  },
+  "memoryBefore": {
+    "rss": 181764096,
+    "heapTotal": 118325248,
+    "heapUsed": 64907032,
+    "external": 4705056,
+    "arrayBuffers": 278362
+  },
+  "memoryAfter": {
+    "rss": 280379392,
+    "heapTotal": 194428928,
+    "heapUsed": 156631280,
+    "external": 4716075,
+    "arrayBuffers": 278650
+  },
+  "sampledPeakRss": 276135936,
+  "sampledPeakHeapUsed": 153499744,
+  "hashes": {
+    "src/orchestration/Layers/ProjectionPipeline.ts": "e68f959aff973e8f97e44ef0a7dd1290858e3017159b803a5bb450a5ccf48ad0",
+    "src/persistence/Layers/ProjectionThreadMessages.ts": "39ea5df75488728de4f077d7d729867aa18e7d1ae96ccabcc4435f2d2caedb45",
+    "src/persistence/Migrations.ts": "a52033fce18642f86cd8d96619b7b56f00b91ff53f6f3b3378eb695ae2c675aa"
+  }
+}
