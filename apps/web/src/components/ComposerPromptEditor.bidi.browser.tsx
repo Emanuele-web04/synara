@@ -81,7 +81,7 @@ describe("ComposerPromptEditor bidi ownership", () => {
     expect(snapshot.blocks[0]?.computedDirection).toBe("rtl");
     expect(snapshot.blocks[0]?.text).toBe("سطر عربي\nEnglish line");
 
-    await userEvent.keyboard("{Control>}z{/Control}");
+    await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
     await expect
       .poll(() => composerDirectionSnapshot().blocks[0]?.text)
       .not.toBe("سطر عربي\nEnglish line");

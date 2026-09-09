@@ -153,6 +153,70 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("MessagesTimeline", () => {
+  it("opts interleaved assistant segments into block direction", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "segment-bidi",
+            kind: "message-segment",
+            sequence: 1,
+            segmentIndex: 0,
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("segment-bidi"),
+              role: "assistant",
+              streaming: true,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              text: "مرحبا",
+              textSegments: [
+                {
+                  startedAt: "2026-03-17T19:12:28.000Z",
+                  endedAt: "2026-03-17T19:12:28.000Z",
+                  sequence: 1,
+                  text: "مرحبا",
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-chat-find-segment-index="0"');
+    expect(markup).toContain('<p dir="auto">مرحبا</p>');
+  });
+
+  it.each(["assistant", "user"] as const)(
+    "opts %s prose into independent block direction",
+    async (role) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          timelineEntries={[
+            {
+              id: "bidi-message",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              message: {
+                id: MessageId.makeUnsafe("bidi-message"),
+                role,
+                text: "مرحبا بالعالم\n\nEnglish follows",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                streaming: false,
+              },
+            },
+          ]}
+        />,
+      );
+      expect(markup).toContain('data-direction-mode="auto-blocks"');
+      expect(markup).toContain('<p dir="auto">مرحبا بالعالم</p>');
+      expect(markup).toContain('<p dir="auto">English follows</p>');
+    },
+  );
+
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
   it("renders an accent deep link to the immediate fork source", async () => {
@@ -209,7 +273,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "context-restart-entry",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Native session history was unavailable, so the model continued from a recap.",
+              label: "The session's history was lost, so the model continues from a summary.",
               tone: "error",
               activityKind: "provider.context.changed",
               providerContextLifecycle: {
@@ -219,7 +283,7 @@ describe("MessagesTimeline", () => {
                 sessionRestarted: true,
                 recapInjected: true,
                 recapCharacters: 4_200,
-                recapPreview: "Bounded recap preview",
+                recapPreview: "Bounded summary preview",
                 recapPreviewTruncated: true,
               },
             },
@@ -228,10 +292,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain("history was lost, so the model continues from a summary.");
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
-    expect(markup).not.toContain("Bounded recap preview");
+    expect(markup).not.toContain("Bounded summary preview");
   });
 
   it("keeps small transcripts on the simple non-virtualized path", async () => {
@@ -1052,6 +1116,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+    expect(markup).toContain('<bdi class="chat-markdown-technical-isolate" dir="ltr">');
     expect(markup).toContain("/central-icons-reversed/console.svg");
     expect(markup).toContain("yoo what&#x27;s ");
     expect(markup).toContain("<strong>bold</strong>");

@@ -745,18 +745,20 @@ export function buildThemeCssVariables(
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
     "--app-sidebar-backdrop-filter":
-      material === "translucent" ? "blur(8px) saturate(135%)" : "none",
+      material === "translucent" ? "blur(4px) saturate(130%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    // Translucent light mode raises the white share above the old 48% so the
-    // frost doesn't read grey; dark keeps the raw surface thinned over the vibrancy.
+    // Translucent shell: a sheer fill so the desktop clearly shows through, paired
+    // with a very light blur that only takes the edge off the backdrop. Dark themes
+    // deepen the fill toward black and keep it denser so the sidebar reads as
+    // charcoal glass. Keep in sync with the `:root` / `.dark` fallbacks in index.css.
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
-          ? `color-mix(in srgb, ${sidebarSurface} 56%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 68%, transparent)`
+          ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 80%, black) 72%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurface} 38%, transparent)`
         : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.
@@ -786,6 +788,8 @@ export function buildThemeCssVariables(
     "--sidebar": readCodexVariable("--color-background-surface"),
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
+    // Selected sidebar row shares the user-message bubble gray so it pairs with the theme.
+    "--sidebar-selected": chatCodeSurface,
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
@@ -1089,9 +1093,9 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.1 + theme.contrast * 0.12),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.06),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.18 + theme.contrast * 0.14),
-    buttonSecondaryBackground: formatRgba(theme.ink, 0.04),
+    buttonSecondaryBackground: formatRgba(theme.ink, 0.03),
     buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.04),
+    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.03),
     buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.01 + theme.contrast * 0.02),
     buttonTertiaryBackground: formatRgba(theme.ink, 0),
     buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.16 + theme.contrast * 0.08),

@@ -20,7 +20,10 @@ vi.mock("../hooks/useTheme", () => ({
 }));
 
 import ChatMarkdown from "./ChatMarkdown";
-import { WorkspaceFileOpenerContext } from "../lib/workspaceFileOpener";
+import {
+  resolveWorkspaceDirectoryOpenTarget,
+  WorkspaceFileOpenerContext,
+} from "../lib/workspaceFileOpener";
 
 function installNativeApi(api: NativeApi): () => void {
   const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
@@ -57,12 +60,39 @@ afterEach(() => {
   restoreNativeApi = undefined;
 });
 
-describe("ChatMarkdown file context menu", () => {
+const modes = ["off", "auto-blocks"] as const;
+
+describe.each(modes)("File context menu (%s)", (directionMode) => {
+  it.each([
+    ["docs/", "/Users/tester/project", "docs"],
+    ["./docs/", "/Users/tester/project", "docs"],
+    ["file://server/share/project/SRC/", "\\\\SERVER\\SHARE\\Project", "SRC"],
+  ])("preserves directory target %s through Markdown rendering", async (href, cwd, expected) => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown
+          directionMode={directionMode}
+          text={`[folder](${href})`}
+          cwd={cwd}
+          isStreaming={false}
+        />
+      </WorkspaceFileOpenerContext.Provider>,
+    );
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    // A regression to a plain link must fail the assertion, not navigate the test runner.
+    click.preventDefault();
+    screen.getByRole("link", { name: "folder" }).element().dispatchEvent(click);
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(resolveWorkspaceDirectoryOpenTarget(openFile.mock.calls[0]![0], cwd)).toBe(expected);
+  });
+
   it("opens a collapsed relative chip from the file the agent actually edited", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
+          directionMode={directionMode}
           text="See `.../scripts/delete_uploadthing.py`."
           cwd="/Users/tester/synara-issue-793"
           isStreaming={false}
@@ -89,6 +119,7 @@ describe("ChatMarkdown file context menu", () => {
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
+          directionMode={directionMode}
           text="See `references/uploadthing.md`."
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
@@ -123,6 +154,7 @@ describe("ChatMarkdown file context menu", () => {
       <QueryClientProvider client={makeQueryClient()}>
         <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
           <ChatMarkdown
+            directionMode={directionMode}
             text="See `src/index.ts`."
             cwd="/Users/tester/project"
             isStreaming={false}
@@ -152,6 +184,7 @@ describe("ChatMarkdown file context menu", () => {
     await render(
       <QueryClientProvider client={makeQueryClient()}>
         <ChatMarkdown
+          directionMode={directionMode}
           text="See `scripts/upsert_pr_proof.py`."
           cwd="/Users/tester/Documents/Synara/thread"
           isStreaming={false}
@@ -182,6 +215,7 @@ describe("ChatMarkdown file context menu", () => {
     const screen = await render(
       <QueryClientProvider client={makeQueryClient()}>
         <ChatMarkdown
+          directionMode={directionMode}
           text="See `src/index.ts`, `docs/readme.md`, and `src/index.ts` again."
           cwd="/Users/tester/project"
           isStreaming={false}
@@ -208,6 +242,7 @@ describe("ChatMarkdown file context menu", () => {
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
+          directionMode={directionMode}
           text={`Dir: \`${absoluteDir}\``}
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
@@ -229,6 +264,7 @@ describe("ChatMarkdown file context menu", () => {
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
+          directionMode={directionMode}
           text="[docs/example.md](file:///Users/tester/external-tool/docs/example.md)"
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
@@ -250,6 +286,7 @@ describe("ChatMarkdown file context menu", () => {
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <ChatMarkdown
+          directionMode={directionMode}
           text="See `/Users/tester/external-tool/docs/example.md`."
           cwd="/Users/tester/chat-workspace"
           isStreaming={false}
@@ -269,6 +306,7 @@ describe("ChatMarkdown file context menu", () => {
   it("opens the shared file menu with a position-free absolute path", async () => {
     const screen = await render(
       <ChatMarkdown
+        directionMode={directionMode}
         text="[Download video](/repo/output/video.mp4:42)"
         cwd="/repo"
         isStreaming={false}

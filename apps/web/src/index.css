@@ -407,8 +407,8 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 68%, transparent);
+  --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -417,7 +417,7 @@
   --popover-foreground: var(--color-neutral-800);
   --primary: var(--color-neutral-900);
   --primary-foreground: var(--color-white);
-  --secondary: --alpha(var(--color-black) / 4%);
+  --secondary: --alpha(var(--color-black) / 3%);
   --secondary-foreground: var(--color-neutral-800);
   --muted: --alpha(var(--color-black) / 4%);
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
@@ -460,6 +460,7 @@
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: var(--secondary);
   --sidebar-accent-active: var(--secondary);
+  --sidebar-selected: var(--secondary);
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
@@ -514,11 +515,18 @@
     --sidebar-primary-foreground: var(--primary-foreground);
     --sidebar-accent: var(--secondary);
     --sidebar-accent-active: var(--secondary);
+    --sidebar-selected: var(--secondary);
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
+    --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
+    /* Deepened toward black before thinning: a dense charcoal glass that still lets
+       the desktop bleed through rather than a thin dark tint. */
+    --app-sidebar-surface: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--card) 80%, var(--color-black)) 72%,
+      transparent
+    );
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
@@ -700,8 +708,8 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown[data-direction-mode="auto-blocks"] ul,
 .chat-markdown[data-direction-mode="auto-blocks"] ol {
-  padding-left: 0;
-  padding-inline-start: 1.25rem;
+  /* Sibling items can resolve in opposite directions; each side needs a gutter. */
+  padding-inline: 1.25rem;
 }
 
 .chat-markdown ul ul {
@@ -866,6 +874,34 @@ label:has(> select#reasoning-effort) select {
   padding-right: 0;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
+}
+
+/* Reset physical continuation edges before applying source-order logical edges.
+   Keep the shared/default rendering unchanged outside transcript opt-in. */
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match {
+  padding-inline: 0.2em;
+  border-radius: 0.45em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .thread-marker-highlight {
+  padding-inline: 0.12em;
+  border-radius: 0.22em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-before,
+.chat-markdown[data-direction-mode="auto-blocks"]
+  .thread-marker-highlight.thread-marker-continues-before {
+  padding-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-after,
+.chat-markdown[data-direction-mode="auto-blocks"]
+  .thread-marker-highlight.thread-marker-continues-after {
+  padding-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
 }
 
 .chat-markdown .thread-marker-underline {
@@ -1136,10 +1172,10 @@ label:has(> select#reasoning-effort) select {
   border: 0;
   border-radius: 0;
   background: transparent !important;
-  padding: 1rem;
+  padding: var(--editor-file-padding, 1rem);
   font-family: var(--font-chat-code-family);
   font-size: var(--app-font-size-chat-code, 12px);
-  line-height: 1.65;
+  line-height: var(--editor-file-line-height, 1.65);
   tab-size: 2;
 }
 
@@ -1224,6 +1260,45 @@ label:has(> select#reasoning-effort) select {
    in content space and therefore scroll with the lines. */
 .editor-file-viewer {
   position: relative;
+  --editor-file-padding: 1rem;
+  --editor-file-line-height: 1.65;
+}
+
+.editor-file-viewer__change-gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+}
+
+.editor-file-viewer__change-gutter[data-subtle="true"] {
+  opacity: 0.6;
+}
+
+.editor-file-viewer__change-bar {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 3px;
+  border-radius: 1px;
+  background: var(--success);
+}
+
+.editor-file-viewer__change-bar[data-change="modified"] {
+  background: var(--info);
+}
+
+.editor-file-viewer__change-notch {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-left: 5px solid var(--destructive);
 }
 
 /* Hover affordance painted over the line-number gutter: an opaque surface strip
@@ -2997,4 +3072,9 @@ diffs-container {
   background-clip: text;
   -webkit-background-clip: text;
   animation: ultrathink-rainbow 10s linear infinite;
+}
+
+/* Expanded document panes retain a readable line length while using more space. */
+[data-dock-maximized="true"] .editor-markdown-preview__body {
+  max-width: 1120px;
 }

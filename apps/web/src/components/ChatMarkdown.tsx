@@ -7,6 +7,7 @@ import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
+import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import React, {
   Children,
   createContext,
@@ -119,6 +120,7 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
+  wikiLinkRoot?: string | undefined;
   /**
    * Assigns native bidi ownership to transcript markdown blocks. Defaults to
    * off so non-transcript ChatMarkdown consumers retain their current layout.
@@ -279,7 +281,14 @@ function applyNestedBidiOwners(node: BidiHastNode): void {
   if (node.type === "element" && node.tagName) {
     if (NESTED_BIDI_OWNER_TAGS.has(node.tagName)) {
       setNodeDirection(node, "auto");
-    } else if (node.tagName === "pre") {
+    } else if (
+      node.tagName === "pre" ||
+      node.tagName === "table" ||
+      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex"))
+    ) {
+      // Tables keep source column order even inside RTL owners. Math also needs
+      // a DOM boundary: CSS isolation alone does not exclude its Latin text
+      // from the enclosing block's native first-strong scan.
       setNodeDirection(node, "ltr");
     }
   }
@@ -677,14 +686,24 @@ function looksLikeInlineMath(content: string): boolean {
   if (INLINE_MATH_HINT_REGEX.test(trimmed)) {
     return true;
   }
-  return /^[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
+  return /^(?:\d+(?:\.\d+)?)?[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
 }
 
 // Reject obvious literal/currency dollars before searching for a closing math delimiter.
 function canOpenInlineMath(value: string, index: number): boolean {
   const next = value[index + 1];
-  if (!next || /\s|\d/.test(next)) {
+  if (!next || /\s/.test(next)) {
     return false;
+  }
+  if (/\d/.test(next)) {
+    const closingIndex = findInlineMathClosingDollar(value, index + 1);
+    if (closingIndex === -1 || /\d/.test(value[closingIndex + 1] ?? "")) {
+      return false;
+    }
+    // A numeric prefix can be a coefficient. Require a complete expression
+    // on this line; do not pair prices across lines or consume `$5-$10`.
+    const content = value.slice(index + 1, closingIndex);
+    return !/[\r\n]/.test(content) && looksLikeInlineMath(content);
   }
   return true;
 }
@@ -705,6 +724,16 @@ function findInlineMathClosingDollar(value: string, index: number): number {
       cursor += 2;
       continue;
     }
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    if (linkEnd !== -1) {
+      // Dollars in Markdown links/images cannot close preceding literal text.
+      // Dollar-free [f](x) remains valid inside a TeX expression.
+      if (value.slice(cursor, linkEnd).includes("$")) {
+        return -1;
+      }
+      cursor = linkEnd;
+      continue;
+    }
     if (value[cursor] === "$") {
       return canCloseInlineMath(value, cursor) ? cursor : -1;
     }
@@ -713,7 +742,7 @@ function findInlineMathClosingDollar(value: string, index: number): number {
   return -1;
 }
 
-function protectLiteralDollarsInPlainText(value: string): string {
+function protectLiteralDollarsInMarkdownLinks(value: string): string {
   let result = "";
   let cursor = 0;
 
@@ -721,6 +750,16 @@ function protectLiteralDollarsInPlainText(value: string): string {
     if (value[cursor] === "\\" && value[cursor + 1] === "$") {
       result += ESCAPED_DOLLAR_PLACEHOLDER;
       cursor += 2;
+      continue;
+    }
+
+    // Scan links and math together: splitting at every `[` breaks TeX such as
+    // \left[...\right] before its closing dollars can be found. A math span is
+    // consumed whole below, so brackets inside it never enter link detection.
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    if (linkEnd !== -1) {
+      result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
+      cursor = linkEnd;
       continue;
     }
 
@@ -812,6 +851,8 @@ function findMarkdownParenEnd(value: string, startIndex: number): number {
 }
 
 function findInlineMarkdownLinkEnd(value: string, index: number): number {
+  const wikiLink = matchWikiLinkAt(value, index);
+  if (wikiLink) return index + wikiLink[0].length;
   const bracketStart = value[index] === "!" && value[index + 1] === "[" ? index + 1 : index;
   if (value[bracketStart] !== "[") {
     return -1;
@@ -824,38 +865,6 @@ function findInlineMarkdownLinkEnd(value: string, index: number): number {
 
   const parenEnd = findMarkdownParenEnd(value, bracketEnd + 1);
   return parenEnd === -1 ? -1 : parenEnd + 1;
-}
-
-function protectLiteralDollarsInMarkdownLinks(value: string): string {
-  let result = "";
-  let cursor = 0;
-
-  while (cursor < value.length) {
-    const isLinkStart =
-      value[cursor] === "[" || (value[cursor] === "!" && value[cursor + 1] === "[");
-    if (!isLinkStart) {
-      const nextLinkStart = value.indexOf("[", cursor);
-      const nextImageStart = value.indexOf("![", cursor);
-      const candidates = [nextLinkStart, nextImageStart].filter((candidate) => candidate >= 0);
-      const nextIndex = candidates.length > 0 ? Math.min(...candidates) : value.length;
-      result += protectLiteralDollarsInPlainText(value.slice(cursor, nextIndex));
-      cursor = nextIndex;
-      continue;
-    }
-
-    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
-    if (linkEnd === -1) {
-      result += protectLiteralDollarsInPlainText(value[cursor] ?? "");
-      cursor += 1;
-      continue;
-    }
-
-    // Inline links are parsed after math, so protect route params like `_chat.$threadId.tsx`.
-    result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
-    cursor = linkEnd;
-  }
-
-  return result;
 }
 
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
@@ -1392,7 +1401,7 @@ const MARKDOWN_COMPONENTS: Components = {
         <OpenableFileChip
           targetPath={targetPath}
           theme={resolvedTheme}
-          label={nodeToPlainText(children)}
+          label={usesAutomaticBlockDirection ? <bdi dir="auto">{children}</bdi> : children}
           {...(restoredHref ? { href: restoredHref } : {})}
         />
       </TechnicalBidiIsolate>
@@ -1585,6 +1594,7 @@ function ChatMarkdown({
   text,
   cwd,
   directionMode: directionModeProp,
+  wikiLinkRoot,
   isStreaming: isStreamingProp,
   className: classNameProp,
   style,
@@ -1678,8 +1688,12 @@ function ChatMarkdown({
         rangeDecorationRemarkPlugin,
       ];
     }
-    return [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin];
-  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]);
+    return [
+      ...MARKDOWN_REMARK_PLUGINS,
+      [remarkWikiLinks, { root: wikiLinkRoot ?? cwd }],
+      rangeDecorationRemarkPlugin,
+    ];
+  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin, wikiLinkRoot, cwd]);
   const rehypePlugins = useMemo<MarkdownRehypePlugins>(() => {
     const basePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
     return usesAutomaticBlockDirection ? [...basePlugins, rehypeBidiBlockDirection] : basePlugins;
