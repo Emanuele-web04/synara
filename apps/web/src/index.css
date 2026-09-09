@@ -520,13 +520,7 @@
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(3px) saturate(130%);
-    /* Lifted toward white before thinning so the dark shell reads as light
-       frosted glass rather than a dark tint over the desktop. */
-    --app-sidebar-surface: color-mix(
-      in srgb,
-      color-mix(in srgb, var(--card) 82%, var(--color-white)) 30%,
-      transparent
-    );
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 28%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
