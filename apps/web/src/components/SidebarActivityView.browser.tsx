@@ -5,13 +5,13 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import { hasUnseenCompletion, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -66,6 +66,20 @@ function makeThread(
   };
 }
 
+function makeRunningThread(index: number, turnId: string): SidebarThreadSummary {
+  return makeThread(index, {
+    hasLiveTailWork: true,
+    latestTurn: {
+      turnId,
+      state: "running",
+      requestedAt: "2026-08-02T10:01:00.000Z",
+      startedAt: "2026-08-02T10:01:00.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    } as SidebarThreadSummary["latestTurn"],
+  });
+}
+
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
@@ -111,9 +125,178 @@ function renderActivity(input: {
   );
 }
 
+function StatefulReadOrderActivity({
+  initialThreads,
+}: {
+  initialThreads: readonly SidebarThreadSummary[];
+}) {
+  const [threads, setThreads] = useState(initialThreads);
+  const [activeThreadId, setActiveThreadId] = useState<ThreadId | null>(null);
+  const [settledOverrideByThreadId, setSettledOverrideByThreadId] = useState<
+    ReadonlyMap<ThreadId, boolean>
+  >(() => new Map());
+  const markRead = (threadId: ThreadId, completedAt?: string) => {
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === threadId && thread.latestTurn?.completedAt === completedAt
+          ? { ...thread, lastVisitedAt: new Date().toISOString() }
+          : thread,
+      ),
+    );
+  };
+
+  return (
+    <SidebarActivityView
+      threads={threads}
+      projectById={new Map([[PROJECT_A, makeProject(PROJECT_A, "Project A")]])}
+      activeThreadId={activeThreadId}
+      pinnedThreadIdSet={new Set()}
+      settledOverrideByThreadId={settledOverrideByThreadId}
+      threadsHydrated
+      prByThreadId={new Map()}
+      onVisibleThreadIdsChange={() => {}}
+      resolveThreadStatus={(thread) =>
+        hasUnseenCompletion(thread)
+          ? {
+              label: "Completed",
+              colorClass: "text-emerald-600",
+              dotClass: "bg-emerald-500",
+              pulse: false,
+            }
+          : null
+      }
+      onOpenThread={(threadId) => {
+        const thread = threads.find((candidate) => candidate.id === threadId);
+        setActiveThreadId(threadId);
+        markRead(threadId, thread?.latestTurn?.completedAt ?? undefined);
+      }}
+      onSetThreadSettled={(threadId, settled) => {
+        setSettledOverrideByThreadId((current) => {
+          const next = new Map(current);
+          next.set(threadId, settled);
+          return next;
+        });
+      }}
+      onToggleThreadPinned={() => {}}
+      onArchiveThread={() => {}}
+      onMarkThreadRead={markRead}
+      onRenameThread={() => {}}
+      onThreadRenamePointerUp={() => {}}
+      onThreadContextMenu={() => {}}
+      onProjectContextMenu={() => {}}
+      renderThreadHoverCard={() => null}
+      onCreateChat={() => {}}
+      onAddProject={() => {}}
+    />
+  );
+}
+
+function renderedActivityThreadIds(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-testid^='activity-thread-']"))
+    .map((element) => element.dataset.testid)
+    .filter((testId): testId is string => testId !== undefined)
+    .map((testId) => testId.replace("activity-thread-", ""));
+}
+
 describe("SidebarActivityView", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps an opened unread completion ahead of running work until another thread opens", async () => {
+    const unread = makeThread(500, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const running = makeRunningThread(501, "activity-turn-running");
+    const mounted = await render(<StatefulReadOrderActivity initialThreads={[running, unread]} />);
+
+    expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+    expect(
+      page
+        .getByTestId(`activity-thread-${unread.id}`)
+        .element()
+        .parentElement?.querySelector('[aria-label="Unread completion"]'),
+    ).not.toBeNull();
+
+    await page.getByTestId(`activity-thread-${unread.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+      expect(
+        page
+          .getByTestId(`activity-thread-${unread.id}`)
+          .element()
+          .parentElement?.querySelector('[aria-label="Unread completion"]'),
+      ).toBeNull();
+    });
+
+    await page.getByTestId(`activity-thread-${running.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([running.id, unread.id]);
+    });
+    await mounted.unmount();
+  });
+
+  it("preserves the same read-order hold for keyboard activation in project grouping", async () => {
+    const unread = makeThread(510, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const running = makeRunningThread(511, "activity-turn-project-running");
+    const mounted = await render(<StatefulReadOrderActivity initialThreads={[running, unread]} />);
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Project" }).click();
+    await userEvent.keyboard("{Escape}");
+    const unreadRow = page.getByTestId(`activity-thread-${unread.id}`).element();
+    unreadRow.focus();
+    await userEvent.keyboard("{Enter}");
+
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+      expect(unreadRow.parentElement?.querySelector('[aria-label="Unread completion"]')).toBeNull();
+    });
+    await mounted.unmount();
+  });
+
+  it("releases the read-order hold when the opened thread is explicitly marked done", async () => {
+    const unread = makeThread(520, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const running = makeRunningThread(521, "activity-turn-done-running");
+    const mounted = await render(<StatefulReadOrderActivity initialThreads={[running, unread]} />);
+
+    await page.getByTestId(`activity-thread-${unread.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([unread.id, running.id]);
+    });
+
+    const unreadRow = page.getByTestId(`activity-thread-${unread.id}`).element();
+    unreadRow.parentElement?.querySelector<HTMLButtonElement>('button[aria-label="Done"]')?.click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([running.id, unread.id]);
+    });
+    await mounted.unmount();
+  });
+
+  it("releases the read-order hold when all activity is explicitly marked read", async () => {
+    const openedUnread = makeThread(530, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const backgroundUnread = makeThread(529, {
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const running = makeRunningThread(531, "activity-turn-mark-all-running");
+    const mounted = await render(
+      <StatefulReadOrderActivity initialThreads={[running, backgroundUnread, openedUnread]} />,
+    );
+
+    await page.getByTestId(`activity-thread-${openedUnread.id}`).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()).toEqual([
+        openedUnread.id,
+        backgroundUnread.id,
+        running.id,
+      ]);
+    });
+
+    await page.getByRole("button", { name: "Activity options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+    await vi.waitFor(() => {
+      expect(renderedActivityThreadIds()[0]).toBe(running.id);
+      expect(document.querySelector('[aria-label="Unread completion"]')).toBeNull();
+    });
+    await mounted.unmount();
   });
 
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {
