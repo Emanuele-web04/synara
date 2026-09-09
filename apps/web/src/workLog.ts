@@ -21,7 +21,7 @@ import {
   stripTrailingToolExitCode,
   summarizeToolRawOutput,
 } from "@synara/shared/toolOutputSummary";
-import { pluralize } from "@synara/shared/text";
+import { pluralize, stripTerminalControlSequences } from "@synara/shared/text";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
@@ -602,7 +602,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
-    const detail = stripTrailingExitCode(payload.detail).output;
+    const detail = stripTrailingExitCode(stripTerminalControlSequences(payload.detail)).output;
     if (detail) {
       entry.detail = detail;
     }
@@ -610,11 +610,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const outputDetail =
     activity.kind === "provider.event.unmapped" ? null : summarizeToolPayloadOutput(payload);
   if (outputDetail && (!entry.detail || toolStatus === "failed")) {
-    entry.detail = outputDetail;
+    entry.detail = stripTerminalControlSequences(outputDetail);
   }
   const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
   if (collabTaskOutputDetail) {
-    entry.detail = collabTaskOutputDetail;
+    entry.detail = stripTerminalControlSequences(collabTaskOutputDetail);
   }
   const nativeEventType =
     payload && typeof payload.nativeEventType === "string" && payload.nativeEventType.length > 0
@@ -1576,7 +1576,7 @@ function asTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const trimmed = value.trim();
+  const trimmed = stripTerminalControlSequences(value).trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 

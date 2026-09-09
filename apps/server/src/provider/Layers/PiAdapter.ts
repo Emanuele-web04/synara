@@ -39,6 +39,7 @@ import {
   spawnProcess as spawnPlatformProcess,
   type RuntimeSpawnOptions,
 } from "@synara/shared/processRuntime";
+import { stripTerminalControlSequences } from "@synara/shared/text";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
@@ -512,7 +513,7 @@ function toMessage(cause: unknown, fallback: string): string {
 }
 
 function trimToUndefined(value: string | null | undefined): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
+  const trimmed = typeof value === "string" ? stripTerminalControlSequences(value).trim() : "";
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
@@ -1559,8 +1560,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     // pending user-input flow; terminal/TUI-only APIs remain no-op by design.
     const makePiExtensionUIContext = (context: PiSessionContext): ExtensionUIContext => {
       const unsupportedWarnings = new Set<string>();
-      const statusTexts = new Map<string, string>();
-      let workingMessage: string | undefined;
       const warnUnsupported = (method: string) => {
         if (unsupportedWarnings.has(method)) return;
         unsupportedWarnings.add(method);
@@ -1578,21 +1577,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           },
         } satisfies ProviderRuntimeEvent);
       };
-      const emitPluginProgress = (summary: string) => {
-        const normalized = trimToUndefined(summary);
-        if (!normalized) return;
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "tool.progress",
-          payload: { toolName: "Pi plugin", summary: normalized },
-          raw: {
-            source: "pi.sdk.event",
-            method: "extension/ui-progress",
-            payload: { summary: normalized },
-          },
-        } satisfies ProviderRuntimeEvent);
-      };
-
       const uiContext: ExtensionUIContext = {
         async select(title, options, opts) {
           const questionId = "selection";
@@ -1659,29 +1643,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             } satisfies ProviderRuntimeEvent);
             return;
           }
-          emitPluginProgress(normalized);
+          // Informational notifications are terminal UI chrome, not transcript
+          // content. Warning/error notifications remain visible as warnings.
         },
         onTerminalInput() {
           warnUnsupported("onTerminalInput");
           return () => undefined;
         },
-        setStatus(key, text) {
-          const normalizedKey = trimToUndefined(key) ?? "status";
-          const normalizedText = trimToUndefined(text);
-          if (!normalizedText) {
-            statusTexts.delete(normalizedKey);
-            return;
-          }
-          if (statusTexts.get(normalizedKey) === normalizedText) return;
-          statusTexts.set(normalizedKey, normalizedText);
-          emitPluginProgress(`${normalizedKey}: ${normalizedText}`);
-        },
-        setWorkingMessage(message) {
-          const normalizedMessage = trimToUndefined(message);
-          if (!normalizedMessage || normalizedMessage === workingMessage) return;
-          workingMessage = normalizedMessage;
-          emitPluginProgress(normalizedMessage);
-        },
+        // Pi extensions use status and working-message callbacks for terminal
+        // chrome. Synara has its own working header; neither belongs in the
+        // transcript as a fake tool call.
+        setStatus() {},
+        setWorkingMessage() {},
         setWorkingVisible() {},
         setWorkingIndicator() {},
         setHiddenThinkingLabel() {},
@@ -1694,9 +1667,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         setHeader() {
           warnUnsupported("setHeader");
         },
-        setTitle(title) {
-          if (title) emitPluginProgress(title);
-        },
+        // The browser owns document/thread chrome; do not turn terminal title
+        // changes into transcript rows.
+        setTitle() {},
         async custom() {
           warnUnsupported("custom");
           return undefined as never;
@@ -2457,7 +2430,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
+                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input and warning/error notifications are supported; terminal status, widgets, and editor hooks are ignored.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,

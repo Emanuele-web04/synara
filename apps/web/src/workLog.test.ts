@@ -25,6 +25,26 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("strips terminal formatting from persisted provider activity details", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-plugin-status",
+          kind: "tool.updated",
+          summary: "Pi plugin",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "MCP tool call",
+            detail: "\u001b[38;2;215;119;87mTransmuting...\u001b[0m",
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Transmuting...");
+  });
+
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [

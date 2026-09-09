@@ -215,6 +215,22 @@ async function expectNextTurn(
   expect(completions(events).filter((event) => event.turnId === previous)).toHaveLength(1);
 }
 
+it("does not turn extension footer status into transcript tool progress", async () => {
+  responses("success");
+  captured.extensions.push((pi) => {
+    pi.on("agent_start", (_event, context) => {
+      context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠠\u001b[0m caveman level: FULL");
+      context.ui.setStatus("caveman", "\u001b[38;2;215;119;87m⠔\u001b[0m caveman level: FULL");
+    });
+  });
+
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "tool.progress")).toHaveLength(0);
+  });
+});
+
 it("keeps one turn through a real SDK retry and settles text, reasoning and usage once", async () => {
   const calls = responses("error", "success");
   await withAdapter(async (adapter, events) => {

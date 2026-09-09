@@ -4,7 +4,12 @@
 // Depends on: Vitest and text helpers
 
 import { describe, expect, it } from "vitest";
-import { pluralize, splitsSurrogatePair, unicodeSafeEndOffset } from "./text";
+import {
+  pluralize,
+  splitsSurrogatePair,
+  stripTerminalControlSequences,
+  unicodeSafeEndOffset,
+} from "./text";
 
 describe("UTF-16 boundaries", () => {
   const text = "a📌b";
@@ -21,6 +26,20 @@ describe("UTF-16 boundaries", () => {
     expect(unicodeSafeEndOffset(text, 2)).toBe(1);
     expect(unicodeSafeEndOffset(text, 3)).toBe(3);
     expect(unicodeSafeEndOffset(text, text.length)).toBe(text.length);
+  });
+});
+
+describe("stripTerminalControlSequences", () => {
+  it("removes ANSI color and cursor sequences while preserving text", () => {
+    expect(
+      stripTerminalControlSequences("\u001b[38;2;215;119;87mTransmuting...\u001b[0m\u001b[?25l"),
+    ).toBe("Transmuting...");
+  });
+
+  it("cleans CSI sequences that lost their escape prefix", () => {
+    expect(stripTerminalControlSequences("[38;2;215;119;87mCaveman level: FULL[0m")).toBe(
+      "Caveman level: FULL",
+    );
   });
 });
 
