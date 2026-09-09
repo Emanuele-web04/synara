@@ -2906,24 +2906,46 @@ const make = Effect.gen(function* () {
       });
     });
 
+  // Processed journal rows are acknowledged once per drained page rather than
+  // once per event: the durable cursor moves in one transaction through every
+  // row the worker completed, which removes a commit (and its consumer,
+  // open-turn and index page writes) from every streamed token. The cursor is
+  // flushed before anything reads or moves it out of band (quarantine,
+  // dead-lettering, the page-progress check) and when ingestion stops. A crash
+  // between processing and the flush replays at most one page; every replayed
+  // command is idempotent by command id and by the message text watermark.
+  let pendingAckedSequence: number | null = null;
+
+  const flushRuntimeCursor = Effect.suspend(() => {
+    const throughSequence = pendingAckedSequence;
+    if (throughSequence === null) return Effect.void;
+    pendingAckedSequence = null;
+    return runtimeEvents
+      .advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.flatMap((advanced) =>
+          advanced
+            ? Effect.void
+            : Effect.die(
+                new Error(
+                  `Provider runtime cursor could not advance through event ${throughSequence}`,
+                ),
+              ),
+        ),
+      );
+  });
+
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime"
       ? processRuntimeEvent(input.event, input.sequence).pipe(
           Effect.andThen(
-            runtimeEvents.advanceConsumerCursor({
-              consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
-              eventSequence: input.sequence,
-              updatedAt: new Date().toISOString(),
+            Effect.sync(() => {
+              pendingAckedSequence = Math.max(pendingAckedSequence ?? 0, input.sequence);
             }),
-          ),
-          Effect.flatMap((advanced) =>
-            advanced
-              ? Effect.void
-              : Effect.die(
-                  new Error(
-                    `Provider runtime cursor could not advance through event ${input.sequence}`,
-                  ),
-                ),
           ),
         )
       : processDomainEvent(input.event);
@@ -2949,6 +2971,7 @@ const make = Effect.gen(function* () {
     // assistant output — for at least a minute. Quarantine this deterministically
     // unreplayable row immediately, exactly as the poison gate eventually would,
     // and keep the accepted event available in the retained diagnostic tail.
+    yield* flushRuntimeCursor;
     const advanced = yield* runtimeEvents
       .advanceConsumerCursor({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -3030,6 +3053,17 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processInputSafely, {
     capacity: PROVIDER_RUNTIME_INGESTION_CAPACITY,
   });
+  // Registered after the worker so it runs before the worker's own finalizer
+  // (LIFO): rows the worker already completed are acknowledged on shutdown.
+  yield* Effect.addFinalizer(() =>
+    flushRuntimeCursor.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider runtime cursor flush failed during shutdown", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    ),
+  );
   const runtimeJournalDrainLock = yield* Semaphore.make(1);
 
   // A deterministically failing row would otherwise pin the single global
@@ -3041,6 +3075,7 @@ const make = Effect.gen(function* () {
   const poisonGate = makeRuntimeJournalPoisonGate();
 
   const deadLetterPoisonHeadRow = Effect.gen(function* () {
+    yield* flushRuntimeCursor;
     const cursor = yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
     if (!poisonGate.noteBlockedDrain(cursor, Date.now())) return false;
     const highWater = yield* runtimeEvents.getHighWaterSequence;
@@ -3099,6 +3134,7 @@ const make = Effect.gen(function* () {
             }),
           );
           yield* worker.drain;
+          yield* flushRuntimeCursor;
           if (runtimeJournalPageBlocked) {
             // Either the poison threshold was reached and the head row was
             // skipped (loop again from the fresh cursor), or the drain yields

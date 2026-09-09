@@ -50,39 +50,76 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
       Effect.mapError(toPersistenceSqlError("MessageTextChunks.hasApplied")),
     );
 
+  // One read per delta replaces the previous unconditional upsert. Every column
+  // listed in an UPDATE's SET clause forces SQLite to rewrite the indexes that
+  // contain it, even when the value is unchanged, so the streaming hot path
+  // only touches the columns that actually changed for this delta. None of the
+  // always-written columns (updated_at, is_streaming, text_event_sequence,
+  // text/text_json) are indexed.
+  const readMessageState = (event: MessageEvent) =>
+    sql<{
+      readonly textEventSequence: number;
+      readonly turnId: string | null;
+      readonly role: string;
+      readonly source: string;
+      readonly hasBody: number;
+    }>`
+    SELECT
+      text_event_sequence AS "textEventSequence",
+      turn_id AS "turnId",
+      role,
+      source,
+      (text <> '' OR text_json IS NOT NULL) AS "hasBody"
+    FROM projection_thread_messages
+    WHERE thread_id = ${event.payload.threadId} AND message_id = ${event.payload.messageId}
+  `.pipe(Effect.map((rows) => rows[0]));
+
   const append = (event: MessageEvent) =>
     Effect.gen(function* () {
       const p = event.payload;
-      if (yield* hasApplied(event)) return;
-      // A resumed/imported body must leave the frequently updated metadata row.
-      // Its prefix belongs to the full message, not to a newly opened segment.
-      yield* sql`
-      INSERT INTO message_text_chunks (thread_id, message_id, event_sequence, segment_sequence, text_json, updated_at)
-      SELECT thread_id, message_id, -1, NULL, COALESCE(text_json, json_quote(text)), updated_at
-      FROM projection_thread_messages
-      WHERE thread_id = ${p.threadId} AND message_id = ${p.messageId} AND (text <> '' OR text_json IS NOT NULL)
-      ON CONFLICT (thread_id, message_id, event_sequence) DO NOTHING
-    `;
-      yield* sql`
-      INSERT INTO projection_thread_messages
-        (thread_id, message_id, turn_id, role, text, attachments_json, skills_json, mentions_json,
-         dispatch_mode, dispatch_origin, is_streaming, source, sequence, created_at, updated_at, text_event_sequence)
-      VALUES (${p.threadId}, ${p.messageId}, ${p.turnId ?? null}, ${p.role}, '',
-        ${p.attachments !== undefined ? JSON.stringify(p.attachments) : null},
-        ${p.skills !== undefined ? JSON.stringify(p.skills) : null},
-        ${p.mentions !== undefined ? JSON.stringify(p.mentions) : null},
-        ${p.dispatchMode ?? null}, ${p.dispatchOrigin ?? null}, 1, ${p.source}, ${event.sequence}, ${p.createdAt}, ${p.updatedAt}, ${event.sequence})
-      ON CONFLICT (thread_id, message_id) DO UPDATE SET
-        turn_id = COALESCE(projection_thread_messages.turn_id, excluded.turn_id), role = excluded.role,
-        text = '', text_json = NULL, attachments_json = COALESCE(excluded.attachments_json, projection_thread_messages.attachments_json),
-        skills_json = COALESCE(excluded.skills_json, projection_thread_messages.skills_json),
-        mentions_json = COALESCE(excluded.mentions_json, projection_thread_messages.mentions_json),
-        dispatch_mode = COALESCE(excluded.dispatch_mode, projection_thread_messages.dispatch_mode),
-        dispatch_origin = COALESCE(excluded.dispatch_origin, projection_thread_messages.dispatch_origin),
-        is_streaming = 1, source = excluded.source,
-        sequence = COALESCE(projection_thread_messages.sequence, excluded.sequence),
-        updated_at = excluded.updated_at, text_event_sequence = excluded.text_event_sequence
-    `;
+      const state = yield* readMessageState(event);
+      if (state !== undefined && state.textEventSequence >= event.sequence) return;
+      if (state === undefined) {
+        yield* sql`
+        INSERT INTO projection_thread_messages
+          (thread_id, message_id, turn_id, role, text, attachments_json, skills_json, mentions_json,
+           dispatch_mode, dispatch_origin, is_streaming, source, sequence, created_at, updated_at, text_event_sequence)
+        VALUES (${p.threadId}, ${p.messageId}, ${p.turnId ?? null}, ${p.role}, '',
+          ${p.attachments !== undefined ? JSON.stringify(p.attachments) : null},
+          ${p.skills !== undefined ? JSON.stringify(p.skills) : null},
+          ${p.mentions !== undefined ? JSON.stringify(p.mentions) : null},
+          ${p.dispatchMode ?? null}, ${p.dispatchOrigin ?? null}, 1, ${p.source}, ${event.sequence}, ${p.createdAt}, ${p.updatedAt}, ${event.sequence})
+      `;
+      } else {
+        if (state.hasBody === 1) {
+          // A resumed/imported body must leave the frequently updated metadata
+          // row. Its prefix belongs to the full message, not to a newly opened
+          // segment.
+          yield* sql`
+          INSERT INTO message_text_chunks (thread_id, message_id, event_sequence, segment_sequence, text_json, updated_at)
+          SELECT thread_id, message_id, -1, NULL, COALESCE(text_json, json_quote(text)), updated_at
+          FROM projection_thread_messages
+          WHERE thread_id = ${p.threadId} AND message_id = ${p.messageId}
+          ON CONFLICT (thread_id, message_id, event_sequence) DO NOTHING
+        `;
+        }
+        yield* sql`
+        UPDATE projection_thread_messages
+        SET updated_at = ${p.updatedAt},
+          is_streaming = 1,
+          text_event_sequence = ${event.sequence}
+          ${state.hasBody === 1 ? sql`, text = '', text_json = NULL` : sql``}
+          ${state.turnId === null && p.turnId !== undefined ? sql`, turn_id = ${p.turnId}` : sql``}
+          ${state.role !== p.role ? sql`, role = ${p.role}` : sql``}
+          ${state.source !== p.source ? sql`, source = ${p.source}` : sql``}
+          ${p.attachments !== undefined ? sql`, attachments_json = ${JSON.stringify(p.attachments)}` : sql``}
+          ${p.skills !== undefined ? sql`, skills_json = ${JSON.stringify(p.skills)}` : sql``}
+          ${p.mentions !== undefined ? sql`, mentions_json = ${JSON.stringify(p.mentions)}` : sql``}
+          ${p.dispatchMode !== undefined ? sql`, dispatch_mode = ${p.dispatchMode}` : sql``}
+          ${p.dispatchOrigin !== undefined ? sql`, dispatch_origin = ${p.dispatchOrigin}` : sql``}
+        WHERE thread_id = ${p.threadId} AND message_id = ${p.messageId}
+      `;
+      }
       const current = yield* sql<{ sequence: number | null }>`
       SELECT MAX(sequence) AS sequence FROM message_text_segments WHERE thread_id = ${p.threadId} AND message_id = ${p.messageId}
     `;
