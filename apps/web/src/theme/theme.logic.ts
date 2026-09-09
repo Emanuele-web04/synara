@@ -1116,9 +1116,9 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     iconPrimary: theme.theme.ink,
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
-    // Selected sidebar row: a thin wash of the theme accent instead of neutral
-    // ink, so the selection follows the theme rather than reading as a fixed gray.
-    sidebarSelectedBackground: formatRgba(theme.accent, 0.12 + theme.contrast * 0.04),
+    // Selected sidebar row: the same themed ink wash as hover/secondary surfaces,
+    // one step stronger so the selection reads over the hover state.
+    sidebarSelectedBackground: formatRgba(theme.wash, 0.07 + theme.contrast * 0.03),
     simpleScrim: formatRgba(BLACK, 0.08 + theme.contrast * 0.04),
     textAccent: theme.theme.accent,
     textButtonPrimary: theme.theme.surface,
@@ -1172,10 +1172,8 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
-    // Selected sidebar row: accent-tinted (see the light derivation). Dark uses the
-    // same brightened focus mix as text-accent so the tint stays visible over the
-    // frosted sidebar.
-    sidebarSelectedBackground: formatRgba(focusBase, 0.16 + theme.contrast * 0.06),
+    // Selected sidebar row: themed ink wash, one step above hover (see light).
+    sidebarSelectedBackground: formatRgba(theme.wash, 0.1 + theme.contrast * 0.04),
     simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
     // Codex brightens dark accent affordances through the same focus mix used
     // for the border, rather than using the raw accent directly.
