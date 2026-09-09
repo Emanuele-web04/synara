@@ -6,9 +6,11 @@
 import * as FS from "node:fs";
 import * as Path from "node:path";
 
+import type { DesktopCustomTitleBarMode } from "@synara/contracts";
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 import {
   defaultCustomTitleBarPreference,
-  resolveCustomTitleBarActive,
+  resolveDesktopCustomTitleBarMode,
   supportsCustomTitleBar,
 } from "@synara/shared/desktopTitleBar";
 
@@ -48,33 +50,64 @@ export function writeCustomTitleBarPreference(filePath: string, enabled: boolean
 export function resolveDesktopCustomTitleBarState(input: {
   readonly platform: string;
   readonly preference: boolean | null;
-  readonly active: boolean;
+  readonly activeMode: DesktopCustomTitleBarMode;
 }): {
   readonly supported: boolean;
   readonly preference: boolean;
   readonly active: boolean;
   readonly restartRequired: boolean;
+  readonly mode: DesktopCustomTitleBarMode;
 } {
   const supported = supportsCustomTitleBar(input.platform);
   const preference = supported
     ? (input.preference ?? defaultCustomTitleBarPreference(input.platform))
     : false;
-  const active = supported ? input.active : false;
+  const mode = supported ? input.activeMode : "native-frame";
+  const active = supported && mode !== "native-frame";
   return {
     supported,
     preference,
     active,
     restartRequired: supported && preference !== active,
+    mode,
   };
 }
 
-export function resolveDesktopTitleBarFrameOptions(input: {
+export type DesktopTitleBarWindowOptions =
+  | { readonly frame: false }
+  | {
+      readonly titleBarStyle: "hidden";
+      readonly titleBarOverlay: { readonly color: string; readonly height: number };
+    }
+  | Record<string, never>;
+
+export interface DesktopTitleBarConfiguration {
+  readonly mode: DesktopCustomTitleBarMode;
+  readonly windowOptions: DesktopTitleBarWindowOptions;
+}
+
+export function resolveDesktopTitleBarConfiguration(input: {
   readonly platform: NodeJS.Platform;
   readonly preference: boolean | null;
-}): { frame: false } | Record<string, never> {
-  const active = resolveCustomTitleBarActive({
+}): DesktopTitleBarConfiguration {
+  const mode = resolveDesktopCustomTitleBarMode({
     platform: input.platform,
     preference: input.preference,
   });
-  return active ? { frame: false } : {};
+  if (mode === "native-overlay") {
+    return {
+      mode,
+      windowOptions: {
+        titleBarStyle: "hidden",
+        titleBarOverlay: {
+          color: "#00000000",
+          height: CHAT_SURFACE_HEADER_HEIGHT_PX,
+        },
+      },
+    };
+  }
+  if (mode === "renderer") {
+    return { mode, windowOptions: { frame: false } };
+  }
+  return { mode, windowOptions: {} };
 }

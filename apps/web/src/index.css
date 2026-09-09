@@ -2572,6 +2572,15 @@ diffs-container {
   padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
 }
 
+/* Windows Electron: clear the native caption controls using Chromium's live
+   Window Controls Overlay geometry, including page zoom and DPI changes. */
+:root[data-runtime="electron"] .desktop-top-bar-native-window-controls-gutter {
+  padding-right: max(
+    0.75rem,
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+  ) !important;
+}
+
 /* Electron: continuous macOS-style corners (do not stack with corner-shape). */
 :root[data-runtime="electron"] .chat-composer-shell,
 :root[data-runtime="electron"] .chat-composer-surface,

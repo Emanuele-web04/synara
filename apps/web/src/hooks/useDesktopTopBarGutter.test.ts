@@ -6,8 +6,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DESKTOP_TOP_BAR_NATIVE_WINDOW_CONTROLS_GUTTER_CLASS,
+  DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS,
+  resolveDesktopTopBarWindowControlsGutterClass,
   shouldReserveDesktopTopBarTrafficLightGutter,
-  shouldReserveDesktopTopBarWindowControlsGutter,
 } from "./useDesktopTopBarGutter";
 
 describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
@@ -69,31 +71,40 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
   });
 });
 
-describe("shouldReserveDesktopTopBarWindowControlsGutter", () => {
+describe("resolveDesktopTopBarWindowControlsGutterClass", () => {
   it("never reserves a gutter outside Electron", () => {
     expect(
-      shouldReserveDesktopTopBarWindowControlsGutter({
+      resolveDesktopTopBarWindowControlsGutterClass({
         isElectron: false,
-        customTitleBarActive: true,
+        customTitleBarMode: "native-overlay",
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("never reserves a gutter when the live window still has a native frame", () => {
     expect(
-      shouldReserveDesktopTopBarWindowControlsGutter({
+      resolveDesktopTopBarWindowControlsGutterClass({
         isElectron: true,
-        customTitleBarActive: false,
+        customTitleBarMode: "native-frame",
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
-  it("reserves a gutter when the frameless custom title bar is active", () => {
+  it("uses OS geometry for native overlay controls", () => {
     expect(
-      shouldReserveDesktopTopBarWindowControlsGutter({
+      resolveDesktopTopBarWindowControlsGutterClass({
         isElectron: true,
-        customTitleBarActive: true,
+        customTitleBarMode: "native-overlay",
       }),
-    ).toBe(true);
+    ).toBe(DESKTOP_TOP_BAR_NATIVE_WINDOW_CONTROLS_GUTTER_CLASS);
+  });
+
+  it("keeps the fixed renderer-control gutter on Linux", () => {
+    expect(
+      resolveDesktopTopBarWindowControlsGutterClass({
+        isElectron: true,
+        customTitleBarMode: "renderer",
+      }),
+    ).toBe(DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS);
   });
 });

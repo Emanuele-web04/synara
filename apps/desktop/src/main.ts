@@ -38,6 +38,7 @@ import type {
 import * as Effect from "effect/Effect";
 import type {
   DesktopAppIcon,
+  DesktopCustomTitleBarMode,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -250,7 +251,7 @@ import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
   readCustomTitleBarPreference,
   resolveDesktopCustomTitleBarState,
-  resolveDesktopTitleBarFrameOptions,
+  resolveDesktopTitleBarConfiguration,
   writeCustomTitleBarPreference,
 } from "./desktopCustomTitleBar";
 import {
@@ -375,8 +376,8 @@ const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
-/** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
-let customTitleBarActive = false;
+/** Which caption-control implementation the live BrowserWindow was created with. */
+let desktopCustomTitleBarMode: DesktopCustomTitleBarMode = "native-frame";
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -4697,11 +4698,12 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS keeps native traffic lights inset into the renderer's top chrome. Windows and
-// Linux can use a frameless shell with renderer-owned minimize/maximize/close controls
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows uses
+// native controls over renderer chrome; Linux retains renderer-owned caption controls
 // (see Settings → Appearance → Use custom title bar). `frame` is fixed at construction.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
   if (process.platform === "darwin") {
+    desktopCustomTitleBarMode = "native-frame";
     return {
       titleBarStyle: "hiddenInset",
       // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
@@ -4711,19 +4713,19 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
     };
   }
   const preference = readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH);
-  const frameOptions = resolveDesktopTitleBarFrameOptions({
+  const configuration = resolveDesktopTitleBarConfiguration({
     platform: process.platform,
     preference,
   });
-  customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
-  return frameOptions;
+  desktopCustomTitleBarMode = configuration.mode;
+  return configuration.windowOptions;
 }
 
 function getDesktopCustomTitleBarState() {
   return resolveDesktopCustomTitleBarState({
     platform: process.platform,
     preference: readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH),
-    active: customTitleBarActive,
+    activeMode: desktopCustomTitleBarMode,
   });
 }
 

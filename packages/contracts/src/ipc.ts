@@ -555,12 +555,16 @@ export type DesktopQuitConfirmationResponse =
       readonly allow: boolean;
     };
 
-/** Windows/Linux frameless title bar preference vs the live BrowserWindow frame. */
+/** How the live desktop window supplies its caption controls. */
+export type DesktopCustomTitleBarMode = "native-frame" | "native-overlay" | "renderer";
+
+/** Windows/Linux custom title bar preference vs the live BrowserWindow chrome. */
 export interface DesktopCustomTitleBarState {
   supported: boolean;
   preference: boolean;
   active: boolean;
   restartRequired: boolean;
+  mode: DesktopCustomTitleBarMode;
 }
 
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark"]);

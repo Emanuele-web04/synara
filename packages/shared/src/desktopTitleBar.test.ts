@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultCustomTitleBarPreference,
   resolveCustomTitleBarActive,
+  resolveDesktopCustomTitleBarMode,
   supportsCustomTitleBar,
 } from "./desktopTitleBar";
 
@@ -12,6 +13,29 @@ describe("supportsCustomTitleBar", () => {
     expect(supportsCustomTitleBar("linux")).toBe(true);
     expect(supportsCustomTitleBar("darwin")).toBe(false);
     expect(supportsCustomTitleBar("freebsd")).toBe(false);
+  });
+});
+
+describe("resolveDesktopCustomTitleBarMode", () => {
+  it("uses native overlay controls on Windows when the custom title bar is active", () => {
+    expect(resolveDesktopCustomTitleBarMode({ platform: "win32", preference: true })).toBe(
+      "native-overlay",
+    );
+    expect(resolveDesktopCustomTitleBarMode({ platform: "win32", preference: null })).toBe(
+      "native-overlay",
+    );
+  });
+
+  it("keeps renderer controls on Linux and native frames elsewhere", () => {
+    expect(resolveDesktopCustomTitleBarMode({ platform: "linux", preference: true })).toBe(
+      "renderer",
+    );
+    expect(resolveDesktopCustomTitleBarMode({ platform: "linux", preference: false })).toBe(
+      "native-frame",
+    );
+    expect(resolveDesktopCustomTitleBarMode({ platform: "darwin", preference: true })).toBe(
+      "native-frame",
+    );
   });
 });
 

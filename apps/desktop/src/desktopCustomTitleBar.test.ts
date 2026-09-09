@@ -8,7 +8,7 @@ import {
   parseCustomTitleBarPreference,
   readCustomTitleBarPreference,
   resolveDesktopCustomTitleBarState,
-  resolveDesktopTitleBarFrameOptions,
+  resolveDesktopTitleBarConfiguration,
   writeCustomTitleBarPreference,
 } from "./desktopCustomTitleBar";
 
@@ -52,23 +52,33 @@ describe("custom title bar preference filesystem", () => {
   });
 });
 
-describe("resolveDesktopTitleBarFrameOptions", () => {
-  it("returns frameless options when the preference resolves active", () => {
-    expect(resolveDesktopTitleBarFrameOptions({ platform: "linux", preference: true })).toEqual({
-      frame: false,
-    });
-    expect(resolveDesktopTitleBarFrameOptions({ platform: "win32", preference: null })).toEqual({
-      frame: false,
+describe("resolveDesktopTitleBarConfiguration", () => {
+  it("uses Windows native controls over the existing 46px renderer header", () => {
+    expect(resolveDesktopTitleBarConfiguration({ platform: "win32", preference: null })).toEqual({
+      mode: "native-overlay",
+      windowOptions: {
+        titleBarStyle: "hidden",
+        titleBarOverlay: { color: "#00000000", height: 46 },
+      },
     });
   });
 
-  it("returns an empty object for native frames", () => {
-    expect(resolveDesktopTitleBarFrameOptions({ platform: "linux", preference: false })).toEqual(
-      {},
-    );
-    expect(resolveDesktopTitleBarFrameOptions({ platform: "darwin", preference: true })).toEqual(
-      {},
-    );
+  it("keeps the fully renderer-owned title bar on Linux", () => {
+    expect(resolveDesktopTitleBarConfiguration({ platform: "linux", preference: true })).toEqual({
+      mode: "renderer",
+      windowOptions: { frame: false },
+    });
+  });
+
+  it("returns native frame configuration when custom chrome is disabled or unsupported", () => {
+    expect(resolveDesktopTitleBarConfiguration({ platform: "linux", preference: false })).toEqual({
+      mode: "native-frame",
+      windowOptions: {},
+    });
+    expect(resolveDesktopTitleBarConfiguration({ platform: "darwin", preference: true })).toEqual({
+      mode: "native-frame",
+      windowOptions: {},
+    });
   });
 });
 
@@ -78,13 +88,30 @@ describe("resolveDesktopCustomTitleBarState", () => {
       resolveDesktopCustomTitleBarState({
         platform: "linux",
         preference: true,
-        active: false,
+        activeMode: "native-frame",
       }),
     ).toEqual({
       supported: true,
       preference: true,
       active: false,
       restartRequired: true,
+      mode: "native-frame",
+    });
+  });
+
+  it("reports Windows native overlay as an active custom title bar", () => {
+    expect(
+      resolveDesktopCustomTitleBarState({
+        platform: "win32",
+        preference: true,
+        activeMode: "native-overlay",
+      }),
+    ).toEqual({
+      supported: true,
+      preference: true,
+      active: true,
+      restartRequired: false,
+      mode: "native-overlay",
     });
   });
 
@@ -93,13 +120,14 @@ describe("resolveDesktopCustomTitleBarState", () => {
       resolveDesktopCustomTitleBarState({
         platform: "darwin",
         preference: true,
-        active: false,
+        activeMode: "native-overlay",
       }),
     ).toEqual({
       supported: false,
       preference: false,
       active: false,
       restartRequired: false,
+      mode: "native-frame",
     });
   });
 });

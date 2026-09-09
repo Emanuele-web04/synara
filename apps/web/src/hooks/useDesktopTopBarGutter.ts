@@ -7,11 +7,12 @@ import {
   DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
   resolveMacDesktopTopBarTrafficLightGutterCssPx,
 } from "@synara/shared/desktopChrome";
+import type { DesktopCustomTitleBarMode } from "@synara/contracts";
 import { useLayoutEffect } from "react";
 
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
-import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
+import { useDesktopCustomTitleBarMode } from "~/hooks/useDesktopCustomTitleBar";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 
@@ -104,10 +105,10 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
 }
 
 /**
- * Tailwind padding that clears the frameless caption-button cluster.
+ * Fixed Tailwind padding that clears the Linux renderer caption-button cluster.
  *
- * On Windows/Linux the Electron shell can be frameless (`frame: false`, see
- * apps/desktop main) and the renderer owns the minimize/maximize/close buttons.
+ * On Linux the Electron shell can be frameless (`frame: false`, see apps/desktop
+ * main) and the renderer owns the minimize/maximize/close buttons.
  * They are rendered ONCE as a viewport-fixed cluster pinned to the window's
  * top-right corner (see {@link DesktopWindowControls} mounted in the root route),
  * mirroring how macOS insets its traffic lights at the top-left.
@@ -123,34 +124,37 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
  * base and `sm:` variants are emitted so it also beats `sm:px-*`.
  */
 export const DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS = "pr-[138px]! sm:pr-[138px]!";
+export const DESKTOP_TOP_BAR_NATIVE_WINDOW_CONTROLS_GUTTER_CLASS =
+  "desktop-top-bar-native-window-controls-gutter";
 
 /**
- * Pure helper: should a top bar at the right edge of the desktop window reserve
- * space for the custom caption buttons? Unlike the macOS traffic lights (whose
- * column is usually owned by the sidebar), the caption cluster always floats at
- * the window's top-right, so every right-flush chrome surface reserves the gutter
- * whenever the live window is frameless.
+ * Resolve the right-edge gutter for the live caption-control owner. Windows uses
+ * Chromium's Window Controls Overlay geometry; Linux uses the fixed renderer
+ * cluster width; native-frame and browser windows reserve nothing.
  */
-export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
+export function resolveDesktopTopBarWindowControlsGutterClass(input: {
   isElectron: boolean;
-  customTitleBarActive: boolean;
-}): boolean {
-  return input.isElectron && input.customTitleBarActive;
+  customTitleBarMode: DesktopCustomTitleBarMode;
+}): string | null {
+  if (!input.isElectron || input.customTitleBarMode === "native-frame") {
+    return null;
+  }
+  return input.customTitleBarMode === "native-overlay"
+    ? DESKTOP_TOP_BAR_NATIVE_WINDOW_CONTROLS_GUTTER_CLASS
+    : DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS;
 }
 
 /**
- * React hook variant of {@link shouldReserveDesktopTopBarWindowControlsGutter}
+ * React hook variant of {@link resolveDesktopTopBarWindowControlsGutterClass}
  * that returns the gutter className (or `null` when no gutter is needed).
  *
  * Use this for any chrome surface whose top bar can sit flush against the window's
  * right edge: chat header, workspace header, plugin nav, the right dock header, etc.
  */
 export function useDesktopTopBarWindowControlsGutterClassName(): string | null {
-  const customTitleBarActive = useDesktopCustomTitleBarActive();
-  return shouldReserveDesktopTopBarWindowControlsGutter({
+  const customTitleBarMode = useDesktopCustomTitleBarMode();
+  return resolveDesktopTopBarWindowControlsGutterClass({
     isElectron,
-    customTitleBarActive,
-  })
-    ? DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS
-    : null;
+    customTitleBarMode,
+  });
 }

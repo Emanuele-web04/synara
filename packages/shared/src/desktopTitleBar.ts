@@ -1,7 +1,8 @@
 // FILE: desktopTitleBar.ts
-// Purpose: Resolve whether Electron should use a frameless custom title bar on
-//          Windows/Linux. Shared by the desktop main process and the web renderer.
-// Layer: Shared runtime utilities (no deps; safe to import from main + renderer)
+// Purpose: Resolve which Electron title-bar mode Windows/Linux should use.
+// Layer: Shared runtime utilities (type-only contract dep; safe in main + renderer)
+
+import type { DesktopCustomTitleBarMode } from "@synara/contracts";
 
 /**
  * Custom (frameless) title bars are supported on Windows and Linux. macOS keeps
@@ -35,4 +36,19 @@ export function resolveCustomTitleBarActive(input: {
     return defaultCustomTitleBarPreference(input.platform);
   }
   return input.preference;
+}
+
+/**
+ * Resolve the live caption-control owner for a supported custom title bar.
+ * Windows keeps native controls through Window Controls Overlay; Linux retains
+ * the existing renderer controls because desktop-environment support varies.
+ */
+export function resolveDesktopCustomTitleBarMode(input: {
+  readonly platform: string;
+  readonly preference: boolean | null;
+}): DesktopCustomTitleBarMode {
+  if (!resolveCustomTitleBarActive(input)) {
+    return "native-frame";
+  }
+  return input.platform === "win32" ? "native-overlay" : "renderer";
 }

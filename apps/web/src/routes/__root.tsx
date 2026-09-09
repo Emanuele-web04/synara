@@ -257,9 +257,9 @@ function RootRouteView() {
     [],
   );
 
-  // Single mount point for the Windows caption buttons. The cluster is pinned to the
-  // window's top-right corner (frameless Windows/Linux shell) and renders nothing on macOS
-  // or the web build, so it is safe to mount unconditionally here — including on
+  // Single mount point for Linux renderer caption buttons. Windows uses native overlay
+  // controls; macOS keeps native traffic lights. It is safe to mount this fallback
+  // unconditionally — including on
   // the pre-backend "connecting" screen, so the window stays closable before the
   // renderer connects. Top bars reserve space for it via
   // useDesktopTopBarWindowControlsGutterClassName().
