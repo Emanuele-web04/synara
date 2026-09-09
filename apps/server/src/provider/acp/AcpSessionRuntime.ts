@@ -25,6 +25,7 @@ import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts
 import * as AcpErrors from "./AcpErrors.ts";
 import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
+import { makeAcpNotificationDispatcher } from "./AcpNotificationDispatcher.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -643,29 +644,29 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     const logger = options.protocolLogging?.logger;
     return logger?.({ direction, stage, payload }) ?? Effect.void;
   };
-  let sessionUpdateTail = Promise.resolve();
-  const dispatchSessionUpdate = (params: Acp.SessionNotification) => {
-    const delivery = sessionUpdateTail.then(() =>
-      Effect.runPromise(logProtocol("incoming", "decoded", params)).then(() =>
-        Promise.all(sessionUpdateHandlers.map((handler) => runHandler(handler(params)))).then(
-          () => undefined,
-        ),
+  let connection: Acp.ClientConnection | undefined;
+  let transportFailure: Error | undefined;
+  const callbackAbort = new AbortController();
+  const sessionUpdates = makeAcpNotificationDispatcher<Acp.SessionNotification>({
+    maxCount: ACP_MAX_PENDING_NOTIFICATIONS_TOTAL,
+    maxBytes: 32 * 1024 * 1024,
+    deliver: (params, signal) =>
+      Effect.runPromise(logProtocol("incoming", "decoded", params), { signal }).then(() =>
+        Promise.all(
+          sessionUpdateHandlers.map((handler) => Effect.runPromise(handler(params), { signal })),
+        ).then(() => undefined),
       ),
-    );
-    sessionUpdateTail = delivery.catch(() => undefined);
-    return delivery;
-  };
-  const awaitSessionUpdateDrain = async () => {
-    let observed: Promise<void>;
-    do {
-      observed = sessionUpdateTail;
-      await observed;
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    } while (observed !== sessionUpdateTail);
-  };
+    onOverflow: (error) => {
+      transportFailure = error;
+      callbackAbort.abort(error);
+      connection?.close(error);
+    },
+  });
+  const dispatchSessionUpdate = sessionUpdates.dispatch;
+  const awaitSessionUpdateDrain = sessionUpdates.drain;
 
   const runHandler = <A>(effect: Effect.Effect<A, AcpErrors.AcpError>): Promise<A> =>
-    Effect.runPromise(effect).catch((error) => {
+    Effect.runPromise(effect, { signal: callbackAbort.signal }).catch((error) => {
       if (error instanceof AcpErrors.AcpRequestError) {
         throw new acpSdk.RequestError(error.code, error.errorMessage, error.data);
       }
@@ -775,13 +776,27 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         () => undefined,
       ),
     );
-  let connection: Acp.ClientConnection | undefined;
-  const getConnection = () =>
-    (connection ??= clientApp.connect(acpSdk.ndJsonStream(output, input)));
+  yield* Scope.addFinalizer(
+    runtimeScope,
+    Effect.gen(function* () {
+      sessionUpdates.close();
+      callbackAbort.abort();
+      connection?.close();
+      yield* Queue.shutdown(outgoing);
+    }),
+  );
+  const getConnection = () => {
+    if (transportFailure) throw transportFailure;
+    if (callbackAbort.signal.aborted) throw new Error("ACP runtime closed");
+    return (connection ??= clientApp.connect(acpSdk.ndJsonStream(output, input)));
+  };
   const fromPromise = <A>(
     thunk: (signal: AbortSignal) => Promise<A>,
   ): Effect.Effect<A, AcpErrors.AcpError> =>
-    Effect.tryPromise({ try: thunk, catch: (error) => officialSdkError(acpSdk, error) });
+    Effect.tryPromise({
+      try: thunk,
+      catch: (error) => officialSdkError(acpSdk, transportFailure ?? error),
+    });
   const request = <Method extends Acp.AgentRequestMethod>(
     method: Method,
     payload: Acp.AgentRequestParamsByMethod[Method],
@@ -1234,6 +1249,13 @@ const makeAcpSessionRuntime = (
         yield* Ref.set(acceptingSessionUpdatesRef, false);
         return pendingEvents.length;
       });
+
+    yield* Effect.addFinalizer(() =>
+      clearSessionEpoch().pipe(
+        Effect.andThen(Ref.set(toolCallsRef, new Map())),
+        Effect.andThen(Queue.shutdown(eventQueue)),
+      ),
+    );
 
     const setSessionEpoch = (
       sessionId: string,

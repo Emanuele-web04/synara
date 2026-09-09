@@ -61,6 +61,8 @@ export const ProjectionThreadMessageSegmentDbRow = Schema.Struct({
   startedAt: IsoDateTime,
   endedAt: IsoDateTime,
   text: Schema.String,
+  textChunks: Schema.optional(Schema.fromJsonString(Schema.Array(Schema.String))),
+  encodedText: Schema.optional(Schema.NullOr(Schema.fromJsonString(Schema.String))),
 });
 export type ProjectionThreadMessageSegmentDbRow = typeof ProjectionThreadMessageSegmentDbRow.Type;
 

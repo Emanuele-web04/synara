@@ -4,6 +4,16 @@
 // Exports: command parsing plus resolved terminal presentation metadata for web/server consumers.
 
 export const GENERIC_TERMINAL_THREAD_TITLE = "New terminal";
+export const DOCK_TERMINAL_SCOPE_PREFIX = "dock-terminal:";
+
+export function dockTerminalScopeId(hostThreadId: string): string {
+  return `${DOCK_TERMINAL_SCOPE_PREFIX}${hostThreadId}`;
+}
+
+export function terminalScopeIdsForThread(hostThreadId: string): readonly string[] {
+  return [hostThreadId, dockTerminalScopeId(hostThreadId)];
+}
+
 export type TerminalCliKind = "codex" | "claude" | "antigravity";
 export type TerminalIconKey = "terminal" | "openai" | "claude" | "antigravity";
 export type TerminalActivityState = "running" | "attention" | "review";
