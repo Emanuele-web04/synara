@@ -1012,7 +1012,7 @@ const make = Effect.gen(function* () {
     readonly clearFreshSessionTranscript: boolean;
     readonly clearRollbackTranscript: boolean;
     readonly completeDurablePriorTranscript: boolean;
-    readonly lifecycleEvidence: ProviderContextLifecycleEvidence | null;
+    lifecycleEvidence: ProviderContextLifecycleEvidence | null;
     readonly lifecycleEvidenceCreatedAt: string;
     readonly interruptEscalation?: PendingInterruptEscalation;
   };
@@ -2148,7 +2148,7 @@ const make = Effect.gen(function* () {
     const hasPendingPriorTranscriptBootstrap =
       hasPendingFreshSessionTranscriptBootstrap ||
       hasPendingRollbackTranscriptBootstrap ||
-      priorEscalationEvidence?.recapText != null;
+      (input.dispatchMode !== "steer" && priorEscalationEvidence?.recapText != null);
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
@@ -2437,11 +2437,11 @@ const make = Effect.gen(function* () {
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
+      // Only Codex awaits a provider turn/start acknowledgement. The other
+      // adapters enqueue/fork prompts or launch a process before acceptance;
+      // their matching terminal success confirms that recovery was consumed.
       const tracksEscalationAcceptance =
-        interruptEscalation !== undefined &&
-        (selectedProvider === "droid" ||
-          selectedProvider === "opencode" ||
-          selectedProvider === "devin");
+        interruptEscalation !== undefined && selectedProvider !== "codex";
       pendingContextBootstrapAttempt =
         tracksDroidContextAcceptance || tracksDurableContextAcceptance || tracksEscalationAcceptance
           ? {
@@ -2589,6 +2589,9 @@ const make = Effect.gen(function* () {
         completeInterruptEscalation(input.threadId, interruptEscalation);
       }
       if (pendingContextBootstrapAttempt) {
+        // Claude can replace recovery evidence while retrying a stale resume.
+        // Refresh it before reconciling a terminal event that preceded send's return.
+        pendingContextBootstrapAttempt.lifecycleEvidence = providerContextLifecycleEvidence;
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
         if (terminalEvent?.turnId === sentTurn.turnId) {
@@ -2621,7 +2624,9 @@ const make = Effect.gen(function* () {
         );
       }
     }
-    if (input.reviewTarget !== undefined || input.dispatchMode === "steer") {
+    // A native steer belongs to the still-pending recovery turn; its terminal
+    // event, not the steering acknowledgement, retires escalation evidence.
+    if (input.reviewTarget !== undefined) {
       completeInterruptEscalation(input.threadId, interruptEscalation);
     }
     if (handoffBootstrapText && thread.handoff !== null && input.reviewTarget === undefined) {
