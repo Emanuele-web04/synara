@@ -4655,9 +4655,9 @@ describe("ProviderCommandReactor", () => {
           turnId,
         });
         await waitFor(async () => (await readContextActivities(harness)).length === 1);
-        expect((await readContextActivities(harness))[0]?.payload?.restartReason).not.toBe(
-          "interrupt-escalation",
-        );
+        expect((await readContextActivities(harness))[0]).not.toMatchObject({
+          payload: { restartReason: "interrupt-escalation" },
+        });
       },
     );
 
