@@ -68,10 +68,15 @@ function parseFileUrlHref(
 // the renderer's existing URL sanitization boundary.
 export function markdownFilePathHref(path: string): string {
   const normalized = path.replaceAll("\\", "/");
-  const encoded = normalized.split("/").map((segment, index) =>
-    index === 0 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
-  ).join("/");
-  return encoded.startsWith("//") ? `file:${encoded}` : `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
+  const encoded = normalized
+    .split("/")
+    .map((segment, index) =>
+      index === 0 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
+    )
+    .join("/");
+  return encoded.startsWith("//")
+    ? `file:${encoded}`
+    : `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
 }
 
 export function rewriteMarkdownFileUriHref(href: string | undefined): string | null {

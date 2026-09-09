@@ -204,6 +204,12 @@ export function RightDock(props: RightDockProps) {
   const maximized = !isMobile && props.state.open && expandedKey === expansionKey;
   const [expandedWidth, setExpandedWidth] = useState(0);
   useLayoutEffect(() => {
+    if (maximized && props.state.panes.length === 0) {
+      setExpandedKey(null);
+      props.onCollapse();
+    }
+  }, [maximized, props.state.panes.length, props.onCollapse]);
+  useLayoutEffect(() => {
     if (!maximized) return;
     const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
     const shell = wrapper?.parentElement;
@@ -334,10 +340,7 @@ export function RightDock(props: RightDockProps) {
                   icon={props.paneIconOverrides?.[pane.id]}
                   active={pane.id === props.state.activePaneId}
                   onSelect={onSelectPane ? () => onSelectPane(pane.id) : undefined}
-                  onClose={() => {
-                    props.onClosePane(pane.id);
-                    if (maximized && props.state.panes.length === 1) props.onCollapse();
-                  }}
+                  onClose={() => props.onClosePane(pane.id)}
                 />
               ))}
             </div>
@@ -369,7 +372,8 @@ export function RightDock(props: RightDockProps) {
                 </ComposerPickerMenuPopup>
               </Menu>
             ) : null}
-            {!isMobile && (maximized || activePane?.kind === "file" || activePane?.kind === "explorer") ? (
+            {!isMobile &&
+            (maximized || activePane?.kind === "file" || activePane?.kind === "explorer") ? (
               <IconButton
                 variant="chrome"
                 size="icon-xs"

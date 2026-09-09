@@ -1,4 +1,3 @@
-import { remarkWikiLinks } from "../lib/remarkWikiLinks";
 // FILE: ChatMarkdown.tsx
 // Purpose: Renders assistant and plan markdown with syntax highlighting and local file links.
 // Layer: Web chat presentation component
@@ -8,6 +7,7 @@ import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
+import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import React, {
   Children,
   createContext,
@@ -791,6 +791,8 @@ function findMarkdownParenEnd(value: string, startIndex: number): number {
 }
 
 function findInlineMarkdownLinkEnd(value: string, index: number): number {
+  const wikiLink = matchWikiLinkAt(value, index);
+  if (wikiLink) return index + wikiLink[0].length;
   const bracketStart = value[index] === "!" && value[index + 1] === "[" ? index + 1 : index;
   if (value[bracketStart] !== "[") {
     return -1;

@@ -299,7 +299,8 @@ export function closePaneInState(
     paneId,
   );
   return {
-    // An open dock with no panes is the launcher state.
+    // An open dock with no panes is the launcher state. Closing the final tab
+    // returns to that launcher instead of collapsing the entire dock.
     open: state.open,
     panes: nextPanes,
     activePaneId: nextActiveId,

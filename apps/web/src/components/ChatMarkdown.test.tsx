@@ -641,11 +641,21 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
 describe("workspace Wiki links", () => {
   it.each([
     ["/vault/root #1", "/vault/root%20%231/My%20%2520%20note.md", "/vault/root #1/My %20 note.md"],
-    ["C:\\Users\\me\\vault", "C:/Users/me/vault/My%20%2520%20note.md", "C:/Users/me/vault/My %20 note.md"],
-    ["\\\\server\\share\\vault", "//server/share/vault/My%20%2520%20note.md", "//server/share/vault/My %20 note.md"],
+    [
+      "C:\\Users\\me\\vault",
+      "C:/Users/me/vault/My%20%2520%20note.md",
+      "C:/Users/me/vault/My %20 note.md",
+    ],
+    [
+      "\\\\server\\share\\vault",
+      "//server/share/vault/My%20%2520%20note.md",
+      "//server/share/vault/My %20 note.md",
+    ],
   ])("opens encoded file paths under %s", async (root, href, target) => {
     const { default: ChatMarkdown } = await import("./ChatMarkdown");
-    const markup = renderWithQueryClient(<ChatMarkdown text="[[My %20 note|Read note]]" cwd={root} wikiLinkRoot={root} />);
+    const markup = renderWithQueryClient(
+      <ChatMarkdown text="[[My %20 note|Read note]]" cwd={root} wikiLinkRoot={root} />,
+    );
     expect(markup).toContain(`href="${href}"`);
     expect(markup).toContain(`title="${target}"`);
     expect(markup).not.toContain('target="_blank"');
@@ -655,6 +665,10 @@ describe("workspace Wiki links", () => {
     "Before [[note|Alias]] after",
     "Escaped \\* and &amp; Before [[note]] after",
     "First line\nBefore [[note]] after",
+    "First line\r\nBefore [[note]] after",
+    "> First line\r\n> [[note]] after",
+    "> First line\n> [[note]] after",
+    "- First line\n  [[note]] after",
     "[[note]] &amp; \\* after",
     "[[note|after]]",
     "[[note|Label &amp; after]]",
@@ -663,21 +677,60 @@ describe("workspace Wiki links", () => {
     const { default: ChatMarkdown } = await import("./ChatMarkdown");
     const startOffset = text.indexOf("after");
     const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("wiki-marker"), messageId: MessageId.makeUnsafe("assistant-1"),
-      startOffset, endOffset: startOffset + 5, selectedText: "after", style: "underline", color: "blue",
-      label: null, done: false, createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+      id: ThreadMarkerId.makeUnsafe("wiki-marker"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset: startOffset + 5,
+      selectedText: "after",
+      style: "underline",
+      color: "blue",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
     };
-    const markup = renderWithQueryClient(<ChatMarkdown text={text} cwd="/vault" findQuery="after" findActiveRange={{startOffset, endOffset: startOffset + 5}} markers={[marker]} />);
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={text}
+        cwd="/vault"
+        findQuery="after"
+        findActiveRange={{ startOffset, endOffset: startOffset + 5 }}
+        markers={[marker]}
+      />,
+    );
     expect(markup).toContain('data-thread-marker-id="wiki-marker"');
     expect(markup).toContain(`data-chat-find-start="${startOffset}"`);
     expect(markup).toContain('data-chat-find-match="active"');
   });
 
   it("leaves escaped syntax, embeds, and unsupported headings literal", async () => {
-    const markup = await renderMarkdown("\\[\\[escaped]] ![[embed]] [[note#Heading]] [[#Heading]] `[[code]]`", "/vault");
+    const markup = await renderMarkdown(
+      "\\[\\[escaped]] ![[embed]] [[note#Heading]] [[#Heading]] `[[code]]`",
+      "/vault",
+    );
     expect(markup).toContain("[[escaped]]");
     expect(markup).toContain("![[embed]]");
     expect(markup).toContain("[[note#Heading]]");
-    expect(markup).not.toContain('href=');
+    expect(markup).not.toContain("href=");
   });
+});
+
+it.each(["> First line\n> [[note|Read note]] after", "- First line\n  [[note|Read note]] after"])(
+  "opens Wiki links on Markdown continuation lines: %s",
+  async (text) => {
+    const markup = await renderMarkdown(text, "/vault");
+    expect(markup).toContain('href="/vault/note.md"');
+    expect(markup).toContain("Read note");
+  },
+);
+
+it("keeps dollar filenames separate from math and rejects escaped delimiters", async () => {
+  const text = String.raw`Use $PATH: [[notes/$threadId.tsx|Route]]. Formula $2x[0]$; \[\[literal\]\]. [[foo\]] [[note\|alias]]`;
+  const markup = await renderMarkdown(text, "/vault");
+  expect(markup).toContain('href="/vault/notes/$threadId.tsx"');
+  expect(markup.match(/class="katex"/g)).toHaveLength(1);
+  expect(markup).toContain("[[literal]]");
+  expect(markup).not.toContain("foo.md");
+  expect(markup).not.toContain("alias.md");
+  expect(markup.match(/href=/g)).toHaveLength(1);
 });

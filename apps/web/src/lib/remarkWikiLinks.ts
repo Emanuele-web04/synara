@@ -42,7 +42,65 @@ function isEscaped(raw: string, index: number): boolean {
   return slashCount % 2 === 1;
 }
 
-function splitWikiLinks(node: Text, source: string, root: string | undefined): RootContent[] | null {
+// Shared with dollar protection so filenames cannot be consumed as TeX before
+// the Markdown parser and this transformer get to see them.
+export function matchWikiLinkAt(source: string, index: number): RegExpExecArray | null {
+  if (!source.startsWith("[[", index) || source[index - 1] === "!" || isEscaped(source, index))
+    return null;
+  const pattern = /\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/y;
+  pattern.lastIndex = index;
+  const match = pattern.exec(source);
+  if (!match || /\\[\[\]|]/.test(match[0])) return null;
+  return match;
+}
+
+// mdast omits blockquote/list continuation prefixes from displayed text. Split
+// these multiline nodes at source line boundaries before calculating offsets.
+function splitContinuationLines(
+  node: Text,
+  raw: string,
+  source: string,
+  root: string | undefined,
+): RootContent[] | null {
+  const rawLines = raw.split("\n");
+  const displayLines = node.value.split("\n");
+  if (rawLines.length < 2 || rawLines.length !== displayLines.length) return null;
+  const parts: RootContent[] = [];
+  let point = node.position!.start;
+  let changed = false;
+  for (let index = 0; index < rawLines.length; index++) {
+    const sourceLine = rawLines[index]!;
+    const line = sourceLine.endsWith("\r") ? sourceLine.slice(0, -1) : sourceLine;
+    const display = displayLines[index]!;
+    const decoded = decodeString(line);
+    if (!decoded.endsWith(display)) return null;
+    const prefixLength = decoded.length - display.length;
+    if (!/^[ \t>]*$/.test(line.slice(0, prefixLength))) return null;
+    const lineStart = advancePoint(point, line.slice(0, prefixLength));
+    const lineEnd = advancePoint(point, line);
+    const lineNode: Text = {
+      type: "text",
+      value: display,
+      position: { start: lineStart, end: lineEnd },
+    };
+    const replacement = splitWikiLinks(lineNode, source, root);
+    changed ||= replacement !== null;
+    parts.push(...(replacement ?? [lineNode]));
+    point = lineEnd;
+    if (index < rawLines.length - 1) {
+      const end = advancePoint(point, sourceLine.endsWith("\r") ? "\r\n" : "\n");
+      parts.push({ type: "text", value: "\n", position: { start: point, end } });
+      point = end;
+    }
+  }
+  return changed ? parts : null;
+}
+
+function splitWikiLinks(
+  node: Text,
+  source: string,
+  root: string | undefined,
+): RootContent[] | null {
   const start = node.position?.start;
   const endOffset = node.position?.end.offset;
   if (start?.offset === undefined || endOffset === undefined || !node.value.includes("[[")) {
@@ -51,12 +109,14 @@ function splitWikiLinks(node: Text, source: string, root: string | undefined): R
   const raw = source.slice(start.offset, endOffset);
   // Custom Markdown transforms may have already rewritten this node. Leave it
   // alone when its source no longer describes the displayed text reliably.
-  if (decodeString(raw) !== node.value) return null;
+  if (decodeString(raw) !== node.value) return splitContinuationLines(node, raw, source, root);
   const parts: RootContent[] = [];
   let cursor = 0;
   let point = start;
-  for (const match of raw.matchAll(/\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/g)) {
-    if (raw[match.index - 1] === "!" || isEscaped(raw, match.index)) continue;
+  for (let index = raw.indexOf("[["); index !== -1; index = raw.indexOf("[[", index + 2)) {
+    const match = matchWikiLinkAt(raw, index);
+    if (!match) continue;
+    index += match[0].length - 2;
     const target = decodeString(match[1]!).trim();
     // Basic file links only. Heading/block navigation is not implemented by
     // the workspace viewer, so keep that syntax visibly literal.
@@ -70,7 +130,10 @@ function splitWikiLinks(node: Text, source: string, root: string | undefined): R
     point = advancePoint(point, before);
     const linkEnd = advancePoint(point, match[0]);
     const label = match[2] ?? match[1]!;
-    const labelStart = advancePoint(point, match[0].slice(0, match[2] === undefined ? 2 : match[0].indexOf("|") + 1));
+    const labelStart = advancePoint(
+      point,
+      match[0].slice(0, match[2] === undefined ? 2 : match[0].indexOf("|") + 1),
+    );
     parts.push({
       type: "link",
       url: markdownFilePathHref(absolutePath),
@@ -96,7 +159,10 @@ export function remarkWikiLinks(options: { root?: string | undefined } = {}) {
         let replacement: RootContent[] | null = null;
         if (node.type === "text") {
           replacement = splitWikiLinks(node, source, options.root);
-        } else if (!["link", "linkReference", "code", "inlineCode", "html"].includes(node.type) && "children" in node) {
+        } else if (
+          !["link", "linkReference", "code", "inlineCode", "html"].includes(node.type) &&
+          "children" in node
+        ) {
           walk(node as { children: RootContent[] });
         }
         if (replacement && !children) children = parent.children.slice(0, index);

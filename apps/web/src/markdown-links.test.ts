@@ -169,7 +169,6 @@ describe("extractAbsoluteFilesystemPaths", () => {
   });
 });
 
-
 describe("markdownFilePathHref", () => {
   it.each([
     "/vault/space %20 #hash?.md",
