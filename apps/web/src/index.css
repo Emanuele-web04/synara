@@ -520,7 +520,13 @@
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(3px) saturate(130%);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 28%, transparent);
+    /* Deepened toward black before thinning: a dense charcoal glass that still lets
+       the desktop bleed through rather than a thin dark tint. */
+    --app-sidebar-surface: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--card) 70%, var(--color-black)) 72%,
+      transparent
+    );
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
