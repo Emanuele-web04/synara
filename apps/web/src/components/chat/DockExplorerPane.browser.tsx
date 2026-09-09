@@ -115,10 +115,13 @@ it("clears an existing search when the workspace root is revealed", async () => 
 
 it("ignores a pending directory reveal after a newer root request", async () => {
   const cwd = "c:/repo/app";
-  const pending = Promise.withResolvers<{ entries: ProjectFileSystemEntry[] }>();
+  let resolveListing!: (result: { entries: ProjectFileSystemEntry[] }) => void;
+  const pending = new Promise<{ entries: ProjectFileSystemEntry[] }>((resolve) => {
+    resolveListing = resolve;
+  });
   const listDirectories = vi
     .fn<NativeApi["projects"]["listDirectories"]>()
-    .mockReturnValue(pending.promise);
+    .mockReturnValue(pending);
   await renderExplorer(cwd, listDirectories);
   const search = page.getByPlaceholder("Search files");
   await search.fill("before first reveal");
@@ -127,7 +130,7 @@ it("ignores a pending directory reveal after a newer root request", async () => 
   await search.fill("before root reveal");
   requestExplorerReveal(threadId, "");
   await expect.element(search).toHaveValue("");
-  pending.resolve({ entries: [directory("src")] });
+  resolveListing({ entries: [directory("src")] });
 
   await expect.element(page.getByTitle("src", { exact: true })).toBeVisible();
   await expect
