@@ -22,21 +22,21 @@ Environment: Apple M5 Pro, 48 GiB, Darwin 25.6.0, Node v26.8.1, SQLite 3.53.4, V
 
 Chunks are 40 ASCII bytes. Setup WAL is truncated before measurement. Autocheckpoint is disabled so growing WAL length captures this fixture's WAL output. These numbers do **not** measure SSD writes or estimate checkpoint/OS amplification. Engine writes include orchestration events, receipts and projections; provider runtime-journal writes and provider processes are outside this fixture.
 
-| Workload | Samples per version | Before WAL (MiB) | After WAL (MiB) | Reduction |
-|---|---:|---:|---:|---:|
-| 8,000 B × 1 thread(s) | 1 | 15.27 | 14.90 | 2.44% |
-| 50,000 B × 1 thread(s) | 1 | 155.01 | 99.42 | 35.86% |
-| 200,000 B × 1 thread(s) | 3 | 1,346.27 | 402.48 | 70.10% |
-| 50,000 B × 4 thread(s) | 1 | 633.79 | 420.95 | 33.58% |
+| Workload                | Samples per version | Before WAL (MiB) | After WAL (MiB) | Reduction |
+| ----------------------- | ------------------: | ---------------: | --------------: | --------: |
+| 8,000 B × 1 thread(s)   |                   1 |            15.27 |           14.90 |     2.44% |
+| 50,000 B × 1 thread(s)  |                   1 |           155.01 |           99.42 |    35.86% |
+| 200,000 B × 1 thread(s) |                   3 |         1,346.27 |          402.48 |    70.10% |
+| 50,000 B × 4 thread(s)  |                   1 |           633.79 |          420.95 |    33.58% |
 
 The four-thread case interleaves commands through the serial engine. It does not run four real providers. A further final-only 400,000-byte run wrote 808.09 MiB: approximately twice the 200,000-byte result, consistent with eliminating growing-body rewrite amplification. Substantial per-command transaction/index overhead remains.
 
-| Workload | Before streaming (ms) | After streaming (ms) | Before completion (ms) | After completion (ms) |
-|---|---:|---:|---:|---:|
-| 8,000 B × 1 thread(s) | 91.2 | 89.1 | 2.60 | 2.17 |
-| 50,000 B × 1 thread(s) | 513.4 | 471.2 | 2.80 | 3.83 |
-| 200,000 B × 1 thread(s) | 2651.2 | 1738.1 | 3.26 | 11.97 |
-| 50,000 B × 4 thread(s) | 1866.4 | 1842.0 | 5.67 | 13.23 |
+| Workload                | Before streaming (ms) | After streaming (ms) | Before completion (ms) | After completion (ms) |
+| ----------------------- | --------------------: | -------------------: | ---------------------: | --------------------: |
+| 8,000 B × 1 thread(s)   |                  91.2 |                 89.1 |                   2.60 |                  2.17 |
+| 50,000 B × 1 thread(s)  |                 513.4 |                471.2 |                   2.80 |                  3.83 |
+| 200,000 B × 1 thread(s) |                2651.2 |               1738.1 |                   3.26 |                 11.97 |
+| 50,000 B × 4 thread(s)  |                1866.4 |               1842.0 |                   5.67 |                 13.23 |
 
 For 200,000 bytes, streaming median improved 34.44% across three samples. Baseline range: 2629.6–2660.1 ms; final range: 1679.6–2006.2 ms. Single-sample timing differences for other workloads are directional only. Completion costs more because it reconstructs durable text; that cost occurs once rather than on every delta.
 
@@ -48,11 +48,11 @@ Sampled engine-process peak RSS median: 263.34 → 262.11 MiB. Sampled peak JS h
 
 Fresh process per mode/sample, three samples each, forced GC, 200 distinct tool-part objects containing 256 KiB ASCII output each. Both modes retain the identical data shape and byte counts; randomized bodies differ across processes. Baseline keys use the previous `JSON.stringify` behavior; optimized keys call the actual production function.
 
-| Metric (median) | Before | After |
-|---|---:|---:|
-| Retained snapshot-key heap | 50.13 MiB | 0.14 MiB |
-| Retained parts plus keys | 100.19 MiB | 50.20 MiB |
-| Create 200 keys | 8.18 ms | 24.65 ms |
+| Metric (median)            |     Before |     After |
+| -------------------------- | ---------: | --------: |
+| Retained snapshot-key heap |  50.13 MiB |  0.14 MiB |
+| Retained parts plus keys   | 100.19 MiB | 50.20 MiB |
+| Create 200 keys            |    8.18 ms |  24.65 ms |
 
 This removes 49.99 MiB of duplicate retention in this collection (99.71%). Hashing adds 16.47 ms for these 200 large snapshots. These are collection-level measurements, not a whole-app or SDK RAM reduction.
 
