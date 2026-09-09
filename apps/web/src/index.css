@@ -407,8 +407,8 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 68%, transparent);
+  --app-sidebar-backdrop-filter: blur(6px) saturate(140%);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 52%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -460,6 +460,7 @@
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: var(--secondary);
   --sidebar-accent-active: var(--secondary);
+  --sidebar-selected: color-mix(in srgb, var(--info) 14%, transparent);
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
@@ -514,11 +515,12 @@
     --sidebar-primary-foreground: var(--primary-foreground);
     --sidebar-accent: var(--secondary);
     --sidebar-accent-active: var(--secondary);
+    --sidebar-selected: color-mix(in srgb, var(--info) 14%, transparent);
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
+    --app-sidebar-backdrop-filter: blur(6px) saturate(140%);
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 40%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
