@@ -173,6 +173,61 @@ $$
     expect(markup).not.toContain("CHATMARKDOWNLITERALDOLLARPLACEHOLDER");
   });
 
+  it.each([
+    ["Use $PATH and [route](/src/$id.tsx).", "Use $PATH and", "/src/$id.tsx"],
+    ["Price $5/month; [plan](/pricing/$tier).", "Price $5/month;", "/pricing/$tier"],
+    [
+      "Use $threadId with [_chat.$threadId.tsx](/src/_chat.$threadId.tsx:42).",
+      "Use $threadId with",
+      "/src/_chat.$threadId.tsx:42",
+    ],
+  ])("keeps literal dollars before Markdown links: %s", async (text, literal, href) => {
+    const markup = await renderMarkdown(text);
+
+    expect(markup).toContain(literal);
+    expect(markup).toContain(`href="${href}"`);
+    expect(markup).not.toContain('class="katex"');
+  });
+
+  it("keeps literal dollars before Markdown images without consuming their URLs", async () => {
+    const markup = await renderMarkdown(
+      "Use $ASSET for ![preview](https://example.com/assets/$variant.png).",
+    );
+
+    expect(markup).toContain("Use $ASSET for");
+    expect(markup).toContain('src="https://example.com/assets/$variant.png"');
+    expect(markup).not.toContain('class="katex"');
+  });
+
+  it("preserves bracketed TeX that also resembles a dollar-free Markdown link", async () => {
+    const markup = await renderMarkdown("Math $[f](x)$ and $2[f](x)$.");
+
+    expect(markup.match(/class="katex"/g) ?? []).toHaveLength(2);
+    expect(markup).not.toContain("katex-error");
+    expect(markup).not.toContain('href="x"');
+  });
+
+  it.each([
+    ["$x[0]+y[", "$x[0]+y[1]$"],
+    ["$$\n\\left[x[0]", "$$\n\\left[x[0]\\right]\n$$"],
+  ])(
+    "renders partial and completed bracketed formulas beside links: %s",
+    async (partial, complete) => {
+      const prefix = "Use $PATH and [route](/src/$id.tsx).\n\n";
+      const partialMarkup = await renderMarkdown(prefix + partial);
+      const completeMarkup = await renderMarkdown(prefix + complete + "\n\n**Still prose.**");
+
+      expect(partialMarkup).not.toContain('class="katex"');
+      expect(completeMarkup.match(/class="katex"/g) ?? []).toHaveLength(1);
+      expect(completeMarkup).toContain("<strong>Still prose.</strong>");
+      for (const markup of [partialMarkup, completeMarkup]) {
+        expect(markup).toContain("Use $PATH and");
+        expect(markup).toContain('href="/src/$id.tsx"');
+        expect(markup).not.toContain("katex-error");
+      }
+    },
+  );
+
   it("does not turn ordinary dollar text or escaped dollars into math", async () => {
     const markup = await renderMarkdown(
       "It costs $5 to $10 per seat. Escape \\$E=mc^2\\$ when you want literal TeX.",
@@ -376,7 +431,7 @@ $$
   it("keeps marker offsets aligned when an escaped dollar precedes the marker", async () => {
     // `\$` is two raw characters that render as one `$`; the dollar-protection transform must stay
     // length-preserving or every offset after it shifts and the marker wraps the wrong substring.
-    const text = "Cost is \\$5 here. Highlight this phrase.";
+    const text = "Cost is \\$5 here. Use $PATH and [route](/src/$id.tsx). Highlight this phrase.";
     const startOffset = text.indexOf("Highlight");
     const selectedText = "Highlight this phrase";
     const marker: ThreadMarker = {
@@ -397,6 +452,8 @@ $$
     expect(markup).toContain('data-thread-marker-id="marker-escaped-dollar"');
     expect(markup).toContain(">Highlight this phrase</span>");
     expect(markup).toContain("Cost is $5 here.");
+    expect(markup).toContain("Use $PATH and");
+    expect(markup).toContain('href="/src/$id.tsx"');
     expect(markup).not.toContain('class="katex"');
   });
 

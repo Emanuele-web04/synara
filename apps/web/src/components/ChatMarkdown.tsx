@@ -662,6 +662,16 @@ function findInlineMathClosingDollar(value: string, index: number): number {
       cursor += 2;
       continue;
     }
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    if (linkEnd !== -1) {
+      // Dollars in Markdown links/images cannot close preceding literal text.
+      // Dollar-free [f](x) remains valid inside a TeX expression.
+      if (value.slice(cursor, linkEnd).includes("$")) {
+        return -1;
+      }
+      cursor = linkEnd;
+      continue;
+    }
     if (value[cursor] === "$") {
       return canCloseInlineMath(value, cursor) ? cursor : -1;
     }
