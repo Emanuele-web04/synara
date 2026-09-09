@@ -1,0 +1,7 @@
+{
+  "events": 1000,
+  "pageSize": 128,
+  "walBytesTotal": 21856632,
+  "walBytesPerEvent": 21857,
+  "msPerEvent": 0.073
+}
