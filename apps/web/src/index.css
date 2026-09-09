@@ -4,15 +4,11 @@
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
-  /* Always-on status spinners (sidebar running-thread glyph) rotate in discrete
-     steps (~18 fps) instead of a continuous 60 fps spin. The desktop shell is a
-     transparent window over macOS vibrancy and the sidebar surface carries a
-     backdrop-filter, so EVERY presented frame re-blurs the whole sidebar in the
-     GPU process and re-composites the vibrancy in WindowServer — a 12px spinner
-     at 60 fps kept the GPU process at ~18% CPU / +100MB and the renderer at ~9%.
-     Fewer frames is the only lever that cuts all of that; at this size the 15°
-     steps are visually indistinguishable from a smooth spin. */
-  --animate-spin-stepped: spin-stepped 1.3s steps(24, end) infinite;
+  /* Status spinners and shimmer labels share 50ms steps (20 fps), aligned by
+     animationTimelineSync. Matching both cadence and phase lets their redraws
+     share frames instead of repeatedly recompositing the translucent sidebar
+     and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
+  --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
   --font-sans: var(--font-ui-family);
   --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
@@ -411,8 +407,8 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 68%, transparent);
+  --app-sidebar-backdrop-filter: blur(6px) saturate(140%);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 52%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -464,6 +460,7 @@
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: var(--secondary);
   --sidebar-accent-active: var(--secondary);
+  --sidebar-selected: color-mix(in srgb, var(--info) 14%, transparent);
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
@@ -518,11 +515,12 @@
     --sidebar-primary-foreground: var(--primary-foreground);
     --sidebar-accent: var(--secondary);
     --sidebar-accent-active: var(--secondary);
+    --sidebar-selected: color-mix(in srgb, var(--info) 14%, transparent);
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
+    --app-sidebar-backdrop-filter: blur(6px) saturate(140%);
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 40%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
@@ -1111,10 +1109,10 @@ label:has(> select#reasoning-effort) select {
   border: 0;
   border-radius: 0;
   background: transparent !important;
-  padding: 1rem;
+  padding: var(--editor-file-padding, 1rem);
   font-family: var(--font-chat-code-family);
   font-size: var(--app-font-size-chat-code, 12px);
-  line-height: 1.65;
+  line-height: var(--editor-file-line-height, 1.65);
   tab-size: 2;
 }
 
@@ -1199,6 +1197,45 @@ label:has(> select#reasoning-effort) select {
    in content space and therefore scroll with the lines. */
 .editor-file-viewer {
   position: relative;
+  --editor-file-padding: 1rem;
+  --editor-file-line-height: 1.65;
+}
+
+.editor-file-viewer__change-gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+}
+
+.editor-file-viewer__change-gutter[data-subtle="true"] {
+  opacity: 0.6;
+}
+
+.editor-file-viewer__change-bar {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 3px;
+  border-radius: 1px;
+  background: var(--success);
+}
+
+.editor-file-viewer__change-bar[data-change="modified"] {
+  background: var(--info);
+}
+
+.editor-file-viewer__change-notch {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-left: 5px solid var(--destructive);
 }
 
 /* Hover affordance painted over the line-number gutter: an opaque surface strip
@@ -2283,15 +2320,11 @@ label:has(> select#reasoning-effort) select {
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
-  /* Local deviation from the vendored utility: the sweep is duty-cycled with a stepped
-     timing function instead of `linear`. A `background-position` animation on a
-     `background-clip: text` element cannot run on the compositor, so every animation
-     frame re-rasterizes the label and — because the "Working…" line sits under the
-     composer's backdrop blur — re-blurs the glass. At 120 Hz that is ~240 repaints per
-     2 s cycle; 60 steps keep 30 hops/s (video-smooth on a label this small) and measured
-     ~-6 CPU points (renderer + GPU process) on the transcript perf harness while
-     streaming. `--shimmer-timing` lets a caller restore `linear` where the hop would show. */
-  animation: tw-shimmer var(--shimmer-duration, 2s) var(--shimmer-timing, steps(60)) infinite;
+  /* Animating a clipped text background repaints the label and its overlapping
+     composer blur. The default 2000ms / 40 steps shares the spinner's 50ms cadence;
+     status labels also use animationTimelineSync so those steps land together.
+     Custom durations/timings can opt out of that shared cadence. */
+  animation: tw-shimmer var(--shimmer-duration, 2s) var(--shimmer-timing, steps(40, end)) infinite;
 
   @variant dark {
     --_highlight: var(
@@ -2976,4 +3009,9 @@ diffs-container {
   background-clip: text;
   -webkit-background-clip: text;
   animation: ultrathink-rainbow 10s linear infinite;
+}
+
+/* Expanded document panes retain a readable line length while using more space. */
+[data-dock-maximized="true"] .editor-markdown-preview__body {
+  max-width: 1120px;
 }

@@ -9,6 +9,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -739,7 +740,7 @@ describe("Codex app-server teardown", () => {
     expect(manager.hasSession(threadId)).toBe(false);
   });
 
-  it("releases the session lease once when the app-server exits spontaneously", () => {
+  it("releases the session lease once when the app-server exits spontaneously", async () => {
     class FakeCodexChild extends EventEmitter {
       readonly pid = 5252;
       exitCode: number | null = null;
@@ -749,7 +750,12 @@ describe("Codex app-server teardown", () => {
       readonly stderr = new PassThrough();
     }
     const child = new FakeCodexChild();
-    const manager = new CodexAppServerManager();
+    const teardownProcessTree = vi.fn(async () => ({
+      escalated: false,
+      signalErrors: [],
+      capturedBeforeRootExit: false,
+    }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
     const threadId = asThreadId("thread-codex-spontaneous-exit");
     const revokeSessionToken = vi.fn();
     const gatewaySessionLease = acquireAgentGatewaySessionLease(
@@ -793,11 +799,14 @@ describe("Codex app-server teardown", () => {
     internals.sessions.set(threadId, context);
     internals.attachProcessListeners(context);
 
+    child.exitCode = 1;
     child.emit("exit", 1, null);
     child.emit("exit", 1, null);
 
     expect(revokeSessionToken).toHaveBeenCalledOnce();
     expect(manager.hasSession(threadId)).toBe(false);
+    await vi.waitFor(() => expect(internals.sessions.has(threadId)).toBe(false));
+    expect(teardownProcessTree).toHaveBeenCalledOnce();
   });
 });
 
@@ -1349,18 +1358,39 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("repairs stale real files in Synara's Codex home overlay", async () => {
+  it("keeps Codex SQLite state out of Synara's Codex home overlay", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    const lstatOrUndefined = (target: string) => {
+      try {
+        return lstatSync(target);
+      } catch {
+        return undefined;
+      }
+    };
     try {
-      const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
-      writeFileSync(sourceMemoryPath, "fresh-source-db", "utf8");
+      writeFileSync(path.join(tempDir, "history.jsonl"), "", "utf8");
+      const sourceSqliteEntries = [
+        "state_5.sqlite",
+        "state_5.sqlite-wal",
+        "state_5.sqlite-shm",
+        "memories_1.sqlite",
+      ];
+      for (const entry of sourceSqliteEntries) {
+        writeFileSync(path.join(tempDir, entry), "source-db", "utf8");
+      }
 
       const overlayHome = path.join(runtimeHome, "codex-home-overlay");
-      const overlayMemoryPath = path.join(overlayHome, "memories_1.sqlite");
       mkdirSync(overlayHome, { recursive: true });
-      writeFileSync(overlayMemoryPath, "stale-overlay-db", "utf8");
+      // Links left behind by releases that mirrored SQLite state per file,
+      // including a WAL sidecar whose source Codex has since checkpointed away.
+      const legacyLinks = ["state_5.sqlite", "thread_history_1.sqlite-wal"];
+      for (const entry of legacyLinks) {
+        symlinkSync(path.join(tempDir, entry), path.join(overlayHome, entry), "file");
+      }
+      const staleOverlayDbPath = path.join(overlayHome, "memories_1.sqlite");
+      writeFileSync(staleOverlayDbPath, "stale-overlay-db", "utf8");
 
       const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
@@ -1369,8 +1399,17 @@ describe("buildCodexProcessEnv", () => {
       });
 
       expect(env.CODEX_HOME).toBe(overlayHome);
-      expect(lstatSync(overlayMemoryPath).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(overlayMemoryPath)).toBe(sourceMemoryPath);
+      expect(env.CODEX_SQLITE_HOME).toBe(tempDir);
+      for (const entry of [...sourceSqliteEntries, ...legacyLinks]) {
+        if (entry === "memories_1.sqlite") continue;
+        expect(lstatOrUndefined(path.join(overlayHome, entry))).toBeUndefined();
+      }
+      // A regular database file in the overlay is not Synara's to destroy.
+      expect(lstatSync(staleOverlayDbPath).isSymbolicLink()).toBe(false);
+      expect(readFileSync(staleOverlayDbPath, "utf8")).toBe("stale-overlay-db");
+      const overlayHistoryPath = path.join(overlayHome, "history.jsonl");
+      expect(lstatSync(overlayHistoryPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(overlayHistoryPath)).toBe(path.join(tempDir, "history.jsonl"));
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
@@ -1885,15 +1924,32 @@ describe("startSession", () => {
       "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/resume.";
 
     try {
-      await expect(
-        manager.startSession({
+      const startError = await manager
+        .startSession({
           threadId: asThreadId("thread-synthetic-root-cause"),
           provider: "codex",
           runtimeMode: "full-access",
           cwd,
           resumeCursor: { threadId: "provider-thread" },
+        })
+        .catch((error: unknown) => error);
+      expect(startError).toBeInstanceOf(Error);
+      expect(startError).toMatchObject({
+        message: expectedMessage,
+        cause: expect.objectContaining({
+          message: "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216).",
         }),
-      ).rejects.toThrow(expectedMessage);
+      });
+
+      const errorSurface: string[] = [];
+      const seenErrors = new Set<Error>();
+      let currentError: unknown = startError;
+      while (currentError instanceof Error && !seenErrors.has(currentError)) {
+        seenErrors.add(currentError);
+        errorSurface.push(currentError.message);
+        currentError = currentError.cause;
+      }
+      expect(errorSurface.join("\n")).not.toContain(fake.historySentinel);
 
       expect(fake.oversizedResponseCount).toBe(1);
       expect(events.filter((event) => event.kind === "error")).toEqual([
@@ -1916,6 +1972,51 @@ describe("startSession", () => {
       await manager.stopAll();
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  it("keeps failed fork cleanup visible after an oversized historical response", async () => {
+    const fake = createSyntheticCodexAppServer({ forceFullHistoryResponse: true });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-cleanup-"));
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const threadId = asThreadId("thread-synthetic-fork-cleanup");
+    teardownProcessTree
+      .mockRejectedValueOnce(new Error("rootExited=false; surviving fork process remains"))
+      .mockResolvedValueOnce({
+        escalated: true,
+        signalErrors: [],
+      });
+
+    try {
+      const error = await manager
+        .forkThread({
+          sourceThreadId: asThreadId("thread-synthetic-fork-source"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId,
+          runtimeMode: "full-access",
+          cwd,
+        })
+        .catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message: expect.stringContaining("Failed to prove Codex app-server process-tree exit"),
+      });
+      expect(fake.oversizedResponseCount).toBe(1);
+      expect(manager.hasSession(threadId)).toBe(false);
+      expect(
+        (
+          manager as unknown as {
+            sessions: Map<ThreadId, { terminalFailure?: { message: string } }>;
+          }
+        ).sessions.get(threadId)?.terminalFailure?.message,
+      ).toBe(
+        "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/fork.",
+      );
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+    expect(teardownProcessTree).toHaveBeenCalledTimes(2);
   });
 
   it("emits session/started after any successful thread open", () => {
