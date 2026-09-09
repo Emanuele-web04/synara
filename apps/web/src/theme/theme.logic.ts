@@ -751,15 +751,11 @@ export function buildThemeCssVariables(
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
     // Translucent shell: a sheer fill so the desktop clearly shows through, paired
-    // with a very light blur that only takes the edge off the backdrop. Dark themes
-    // lift the fill toward white first so the sidebar reads as light frosted glass
-    // instead of a dark tint. Keep in sync with the `:root` / `.dark` fallbacks in
-    // index.css.
+    // with a very light blur that only takes the edge off the backdrop. Keep in
+    // sync with the `:root` / `.dark` fallbacks in index.css.
     "--app-sidebar-surface":
       material === "translucent"
-        ? variant === "dark"
-          ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 82%, white) 30%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 38%, transparent)`
+        ? `color-mix(in srgb, ${sidebarSurface} ${variant === "dark" ? 28 : 38}%, transparent)`
         : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.
