@@ -22,7 +22,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -50,6 +50,8 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { resolveCodexGeneratedImagesRoot } from "../../codexGeneratedImages.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -227,7 +229,10 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProviderRuntimeEventRepository,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProviderRuntimeEventRepository
+    | ProjectionSnapshotQuery,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -248,12 +253,16 @@ describe("ProviderRuntimeIngestion", () => {
       await runtime.dispose();
     }
     runtime = null;
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  async function createHarness(options?: { readonly startIngestion?: boolean }) {
+  async function createHarness(options?: {
+    readonly startIngestion?: boolean;
+    readonly projectKind?: "studio";
+  }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -277,6 +286,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
     const runtimeEventRepository = await runtime.runPromise(
       Effect.service(ProviderRuntimeEventRepository),
@@ -300,6 +310,7 @@ describe("ProviderRuntimeIngestion", () => {
         commandId: CommandId.makeUnsafe("cmd-provider-project-create"),
         projectId: asProjectId("project-1"),
         title: "Provider Project",
+        ...(options?.projectKind ? { kind: options.projectKind } : {}),
         workspaceRoot,
         defaultModelSelection: {
           provider: "codex",
@@ -354,6 +365,8 @@ describe("ProviderRuntimeIngestion", () => {
 
     return {
       engine,
+      snapshotQuery,
+      workspaceRoot,
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
@@ -1820,6 +1833,148 @@ describe("ProviderRuntimeIngestion", () => {
     expect(assistantMessage?.text).toBe("Inspection complete.");
     expect(thread.messages.some((message) => message.text.includes(imagePath))).toBe(false);
   });
+
+  it.each([
+    { name: "live image view", itemType: "image_view", replay: false, generated: false },
+    {
+      name: "misclassified legacy image view",
+      itemType: "image_generation",
+      replay: true,
+      generated: false,
+    },
+    {
+      name: "explicit legacy generation",
+      itemType: "image_generation",
+      replay: true,
+      generated: true,
+    },
+  ] as const)(
+    "handles $name at the Studio output boundary",
+    async ({ itemType, replay, generated }) => {
+      vi.stubEnv("SYNARA_HOME", makeTempDir("synara-image-provenance-"));
+      const harness = await createHarness({ projectKind: "studio", startIngestion: !replay });
+      const sourceRoot = resolveCodexGeneratedImagesRoot();
+      fs.mkdirSync(sourceRoot, { recursive: true });
+      const imagePath = path.join(sourceRoot, "inspection 100%.png");
+      // All cases use a real file inside the allowlist, so a rejected copy cannot
+      // pass merely because the source was missing or outside a trusted root.
+      fs.writeFileSync(imagePath, "generated image fixture");
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-studio-provenance");
+      const createdAt = new Date().toISOString();
+      const events: ProviderRuntimeEvent[] = [
+        {
+          type: "turn.started",
+          eventId: asEventId("studio-start"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          payload: {},
+        },
+        {
+          type: "item.completed",
+          eventId: asEventId("studio-image"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          itemId: asItemId("studio-image"),
+          payload: {
+            itemType,
+            status: "completed",
+            title: "Image",
+            detail: imagePath,
+            // Intentionally unmarked: ingestion must derive provenance from raw
+            // generation evidence, never from the path or artifact shape alone.
+            data: { kind: "codex.generated_image", path: imagePath, callId: "studio-image" },
+          },
+          raw: {
+            source: "codex.app-server.notification",
+            method: generated ? "image_generation_end" : "item/completed",
+            payload: generated ? {} : { item: { type: "imageView", path: imagePath } },
+          },
+        },
+        {
+          type: "item.completed",
+          eventId: asEventId("studio-answer"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          itemId: asItemId("studio-answer"),
+          payload: { itemType: "assistant_message", status: "completed" },
+        },
+        {
+          type: "turn.completed",
+          eventId: asEventId("studio-end"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          payload: { state: "completed" },
+        },
+      ];
+      for (const event of events) {
+        if (replay) await Effect.runPromise(harness.runtimeEventRepository.append(event));
+        else harness.emit(event);
+      }
+      if (replay) await harness.startIngestion();
+      const thread = await waitForThread(harness.engine, (entry) =>
+        entry.activities.some((activity) => activity.id === "studio-end"),
+      );
+      // Read the database projection used by recovery, rather than inspecting
+      // only the event object or the ingestion instance's pending-image cache.
+      const persisted = await Effect.runPromise(
+        harness.snapshotQuery.listGeneratedImageActivitiesByTurn(threadId, turnId),
+      );
+      const recoveredPaths = collectPersistedGeneratedImagePaths(persisted);
+      const imagesDir = path.join(harness.workspaceRoot, "Outbox", "Images");
+      const copiedFiles = fs.existsSync(imagesDir) ? fs.readdirSync(imagesDir) : [];
+      if (generated) {
+        expect(copiedFiles).toHaveLength(1);
+        const copiedPath = path.join(imagesDir, copiedFiles[0]!);
+        expect(fs.readFileSync(copiedPath, "utf8")).toBe("generated image fixture");
+        expect(recoveredPaths).toEqual([copiedPath]);
+        expect(persisted).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "tool.completed",
+              payload: expect.objectContaining({
+                data: expect.objectContaining({ origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN }),
+              }),
+            }),
+            expect.objectContaining({
+              kind: "studio.outputs.captured",
+              payload: expect.objectContaining({
+                data: expect.objectContaining({
+                  generatedImage: expect.objectContaining({
+                    origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+                    fullPath: copiedPath,
+                  }),
+                }),
+              }),
+            }),
+          ]),
+        );
+        expect(thread.messages.some((message) => message.text.includes("![Generated image]"))).toBe(
+          true,
+        );
+      } else {
+        expect(copiedFiles).toEqual([]);
+        expect(recoveredPaths).toEqual([]);
+        expect(
+          thread.activities.some((activity) => activity.kind === "studio.outputs.captured"),
+        ).toBe(false);
+        expect(
+          thread.messages.every(
+            (message) =>
+              !message.text.includes("![Generated image]") && !message.text.includes(imagePath),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
 
   it("prefers a persisted Studio copy over its provider-home image source", () => {
     expect(

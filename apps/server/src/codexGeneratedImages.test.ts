@@ -119,6 +119,50 @@ describe("generatedImagePathFromRuntimeEvent", () => {
     assert.strictEqual(markTrustedCodexGeneratedImageRuntimeEvent(event), event);
   });
 
+  it.each(["codex/event/image_generation_end", "image_generation_end"])(
+    "accepts an unmarked legacy artifact proved only by method %s",
+    (method) => {
+      const imagePath = "/codex-home/generated_images/thread-1/legacy-method.png";
+      const event = makeImageGenerationCompletedEvent({
+        data: { kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND, path: imagePath },
+        raw: { source: "codex.app-server.notification", method, payload: {} },
+      });
+
+      assert.equal(generatedImagePathFromRuntimeEvent(event), imagePath);
+      const marked = markTrustedCodexGeneratedImageRuntimeEvent(event);
+      if (marked.type !== "item.completed") assert.fail("Expected a completed item");
+      assert.equal(
+        (marked.payload.data as { origin?: unknown }).origin,
+        CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+      );
+      assert.equal((event.payload as { data: { origin?: unknown } }).data.origin, undefined);
+    },
+  );
+
+  it.each([true, false])(
+    "rejects non-Codex artifacts even with legacy proof (marked: %s)",
+    (marked) => {
+      const event = {
+        ...makeImageGenerationCompletedEvent({
+          data: {
+            kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+            path: "/tmp/other-provider.png",
+            ...(marked ? { origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN } : {}),
+          },
+          raw: {
+            source: "codex.app-server.notification",
+            method: "image_generation_end",
+            payload: {},
+          },
+        }),
+        provider: "claudeAgent",
+      } as ProviderRuntimeEvent;
+
+      assert.equal(generatedImagePathFromRuntimeEvent(event), undefined);
+      assert.strictEqual(markTrustedCodexGeneratedImageRuntimeEvent(event), event);
+    },
+  );
+
   it("rejects unmarked artifacts without explicit legacy evidence", () => {
     const event = makeImageGenerationCompletedEvent({
       data: {
