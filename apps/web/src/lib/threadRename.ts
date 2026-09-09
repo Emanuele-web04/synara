@@ -136,6 +136,16 @@ export async function dispatchThreadRename(input: {
         commandId: newCommandId(),
         threadId: input.threadId,
         title: trimmed,
+        manualTitlePinned: true,
+      });
+    } else {
+      // Draft promotion sets the user-authored title at creation; pin it so
+      // automatic refresh (#1041) cannot overwrite an explicit user title.
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: input.threadId,
+        manualTitlePinned: true,
       });
     }
   } else {
@@ -144,6 +154,7 @@ export async function dispatchThreadRename(input: {
       commandId: newCommandId(),
       threadId: input.threadId,
       title: trimmed,
+      manualTitlePinned: true,
     });
   }
 
