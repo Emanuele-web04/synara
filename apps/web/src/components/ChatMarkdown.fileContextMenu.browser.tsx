@@ -20,7 +20,10 @@ vi.mock("../hooks/useTheme", () => ({
 }));
 
 import ChatMarkdown from "./ChatMarkdown";
-import { WorkspaceFileOpenerContext } from "../lib/workspaceFileOpener";
+import {
+  resolveWorkspaceDirectoryOpenTarget,
+  WorkspaceFileOpenerContext,
+} from "../lib/workspaceFileOpener";
 
 function installNativeApi(api: NativeApi): () => void {
   const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
@@ -58,6 +61,25 @@ afterEach(() => {
 });
 
 describe("ChatMarkdown file context menu", () => {
+  it.each([
+    ["docs/", "/Users/tester/project", "docs"],
+    ["./docs/", "/Users/tester/project", "docs"],
+    ["file://server/share/project/SRC/", "\\\\SERVER\\SHARE\\Project", "SRC"],
+  ])("preserves directory target %s through Markdown rendering", async (href, cwd, expected) => {
+    const openFile = vi.fn().mockReturnValue(true);
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <ChatMarkdown text={`[folder](${href})`} cwd={cwd} isStreaming={false} />
+      </WorkspaceFileOpenerContext.Provider>,
+    );
+    screen
+      .getByRole("link", { name: "folder" })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(resolveWorkspaceDirectoryOpenTarget(openFile.mock.calls[0]![0], cwd)).toBe(expected);
+  });
+
   it("opens a collapsed relative chip from the file the agent actually edited", async () => {
     const openFile = vi.fn().mockReturnValue(true);
     const screen = await render(

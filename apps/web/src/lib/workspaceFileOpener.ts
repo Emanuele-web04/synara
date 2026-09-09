@@ -12,8 +12,8 @@
 import { isSupportedLocalPreviewFilePath } from "@synara/shared/localPreviewFiles";
 import {
   isLocalAbsolutePath,
-  isWindowsAbsolutePath,
   isWorkspaceRelativePathSafe,
+  localPathsEqual,
   workspaceRelativePathOf,
 } from "@synara/shared/path";
 import { isScratchWorkspacePath } from "@synara/shared/threadWorkspace";
@@ -63,19 +63,6 @@ function resolveSynaraPublicAssetOpenTarget(path: string, workspaceRoot: string 
   return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
 }
 
-function normalizeComparableLocalPath(path: string): string {
-  return path.trim().replaceAll("\\", "/").replace(TRAILING_PATH_SEPARATOR_PATTERN, "");
-}
-
-function localPathsEqual(left: string, right: string): boolean {
-  const normalizedLeft = normalizeComparableLocalPath(left);
-  const normalizedRight = normalizeComparableLocalPath(right);
-  const compareCaseInsensitively = isWindowsAbsolutePath(left) && isWindowsAbsolutePath(right);
-  return compareCaseInsensitively
-    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
-    : normalizedLeft === normalizedRight;
-}
-
 /**
  * Maps directory references that can be identified without a filesystem probe
  * to the workspace-relative path expected by the Explorer. The workspace root
@@ -96,13 +83,20 @@ export function resolveWorkspaceDirectoryOpenTarget(
   if (withoutPosition.length === 0) {
     return null;
   }
-  if (localPathsEqual(withoutPosition, workspaceRoot)) {
+  // Relative Markdown links can retain harmless "." segments after cwd is
+  // joined. Keep ".." intact so the containment checks still reject traversal.
+  const directoryPath = withoutPosition
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment !== ".")
+    .join("/");
+  if (localPathsEqual(directoryPath, workspaceRoot)) {
     return "";
   }
   if (!TRAILING_PATH_SEPARATOR_PATTERN.test(withoutPosition)) {
     return null;
   }
-  const withoutTrailingSeparators = withoutPosition.replace(TRAILING_PATH_SEPARATOR_PATTERN, "");
+  const withoutTrailingSeparators = directoryPath.replace(TRAILING_PATH_SEPARATOR_PATTERN, "");
   if (isWorkspaceRelativePathSafe(withoutTrailingSeparators)) {
     return withoutTrailingSeparators.replaceAll("\\", "/");
   }

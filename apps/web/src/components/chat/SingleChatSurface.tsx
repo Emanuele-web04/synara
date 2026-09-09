@@ -581,7 +581,7 @@ export function SingleChatSurface(props: {
   // the React Query cache and the matching Shiki highlighter loads, so the
   // preview paints instantly on click.
   const prefetchOpenerFile = (path: string) => {
-    if (!workspaceRoot) {
+    if (!workspaceRoot || resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot) !== null) {
       return;
     }
     const relativePath = resolveWorkspaceFileOpenTarget(path, workspaceRoot);
@@ -591,17 +591,15 @@ export function SingleChatSurface(props: {
   };
   // Chat surface: file references open in the right-dock file pane, while the
   // workspace root and explicit directory references open in Explorer.
-  // References outside the workspace report unhandled so chips fall back to
-  // the external editor.
+  // Other references retain the existing dock file preview and external-editor
+  // fallback behavior.
   const dockFileOpener: WorkspaceFileOpener = {
     openFile: (path) => {
       const directoryPath = resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot);
       if (directoryPath !== null) {
         requestImmediateDockHydration("explorer");
         openPane(props.threadId, { kind: "explorer" });
-        if (directoryPath.length > 0) {
-          requestExplorerReveal(props.threadId, directoryPath);
-        }
+        requestExplorerReveal(props.threadId, directoryPath);
         return true;
       }
       // In-workspace references map to relative paths for the file-read RPC;
