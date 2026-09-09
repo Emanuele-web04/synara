@@ -815,10 +815,18 @@ const make = Effect.gen(function* () {
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
-  // Interrupt escalation settled the turn by stopping the runtime. Remember
-  // that until the next turn so a consequential context loss can name the
-  // cause instead of a generic fresh-session reason.
-  const interruptEscalatedThreadIds = new Set<string>();
+  // Keep observed context loss until recovery is accepted: a failed dispatch
+  // can leave a replacement runtime alive without its previous history.
+  type PendingInterruptEscalation = { evidence: ProviderContextLifecycleEvidence | null };
+  const pendingInterruptEscalations = new Map<string, PendingInterruptEscalation>();
+  const completeInterruptEscalation = (
+    threadId: string,
+    escalation: PendingInterruptEscalation | undefined,
+  ) => {
+    if (escalation && pendingInterruptEscalations.get(threadId) === escalation) {
+      pendingInterruptEscalations.delete(threadId);
+    }
+  };
   // Retry state keeps only the bounded derived record; the full recap text is
   // never retained here after the provider turn has been accepted.
   const pendingProviderContextLifecycleActivities = new Map<
@@ -1006,6 +1014,7 @@ const make = Effect.gen(function* () {
     readonly completeDurablePriorTranscript: boolean;
     readonly lifecycleEvidence: ProviderContextLifecycleEvidence | null;
     readonly lifecycleEvidenceCreatedAt: string;
+    readonly interruptEscalation?: PendingInterruptEscalation;
   };
   const pendingContextBootstrapAttempts = new Map<string, PendingContextBootstrapAttempt>();
   // Explicit stop resets context once: the next successful session start must
@@ -1074,6 +1083,7 @@ const make = Effect.gen(function* () {
     if (event.type !== "turn.completed" || event.payload.state !== "completed") {
       return;
     }
+    completeInterruptEscalation(threadId, attempt.interruptEscalation);
     // Retain the bounded, idempotent evidence before retiring bootstrap state.
     // Persistence retries independently so a marker write cannot block queue
     // draining after the provider has already accepted this turn.
@@ -1400,7 +1410,7 @@ const make = Effect.gen(function* () {
       // thread while the first is still running.
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
       clearPendingContextBootstraps(threadId);
-      interruptEscalatedThreadIds.delete(threadId);
+      pendingInterruptEscalations.delete(threadId);
       const lifecyclePrefix = `${threadId}:`;
       for (const activityKey of pendingProviderContextLifecycleActivities.keys()) {
         if (activityKey.startsWith(lifecyclePrefix)) {
@@ -2127,6 +2137,8 @@ const make = Effect.gen(function* () {
         issue: providerPromptOverflowIssue(goalPromptOverheadChars),
       });
     }
+    const interruptEscalation = pendingInterruptEscalations.get(input.threadId);
+    const priorEscalationEvidence = interruptEscalation?.evidence;
     const hasPendingFreshSessionTranscriptBootstrap = freshSessionContextBootstrapThreadIds.has(
       input.threadId,
     );
@@ -2134,7 +2146,9 @@ const make = Effect.gen(function* () {
       input.threadId,
     );
     const hasPendingPriorTranscriptBootstrap =
-      hasPendingFreshSessionTranscriptBootstrap || hasPendingRollbackTranscriptBootstrap;
+      hasPendingFreshSessionTranscriptBootstrap ||
+      hasPendingRollbackTranscriptBootstrap ||
+      priorEscalationEvidence?.recapText != null;
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
@@ -2207,8 +2221,7 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
-    const interruptedEscalationPending = interruptEscalatedThreadIds.has(input.threadId);
-    const restartReason: ProviderContextLifecycleReason = interruptedEscalationPending
+    const restartReason: ProviderContextLifecycleReason = interruptEscalation
       ? "interrupt-escalation"
       : nativeResumeFailed
         ? "native-resume-failed"
@@ -2223,18 +2236,21 @@ const make = Effect.gen(function* () {
       !shouldBootstrapHandoff &&
       !shouldBootstrapSidechatContext &&
       priorTranscriptMessages.length > 0 &&
-      (priorTranscriptBootstrapText !== null || (nativeSessionRestarted && !nativeResumeSucceeded))
+      (priorTranscriptBootstrapText !== null ||
+        (nativeSessionRestarted && !nativeResumeSucceeded) ||
+        priorEscalationEvidence != null)
         ? {
-            nativeHistory: nativeResumeSucceeded ? "available" : "unavailable",
+            nativeHistory:
+              priorEscalationEvidence?.nativeHistory ??
+              (nativeResumeSucceeded ? "available" : "unavailable"),
             recapText: priorTranscriptBootstrapText,
             reason: restartReason,
-            sessionRestarted: nativeSessionRestarted,
+            sessionRestarted:
+              nativeSessionRestarted || priorEscalationEvidence?.sessionRestarted === true,
           }
         : null;
-    // Consume the escalation marker on the next turn whether or not a
-    // consequential context-loss activity is emitted (clean resumes stay quiet).
-    if (interruptedEscalationPending) {
-      interruptEscalatedThreadIds.delete(input.threadId);
+    if (interruptEscalation && providerContextLifecycleEvidence !== null) {
+      interruptEscalation.evidence = providerContextLifecycleEvidence;
     }
     // The guards above make the three bootstrap flavors mutually exclusive, so
     // a turn carries at most one context block.
@@ -2421,8 +2437,13 @@ const make = Effect.gen(function* () {
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
+      const tracksEscalationAcceptance =
+        interruptEscalation !== undefined &&
+        (selectedProvider === "droid" ||
+          selectedProvider === "opencode" ||
+          selectedProvider === "devin");
       pendingContextBootstrapAttempt =
-        tracksDroidContextAcceptance || tracksDurableContextAcceptance
+        tracksDroidContextAcceptance || tracksDurableContextAcceptance || tracksEscalationAcceptance
           ? {
               clearSidechat:
                 sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null,
@@ -2436,6 +2457,7 @@ const make = Effect.gen(function* () {
                 tracksDurableContextAcceptance && hasPendingFreshSessionTranscriptBootstrap,
               lifecycleEvidence: providerContextLifecycleEvidence,
               lifecycleEvidenceCreatedAt: input.createdAt,
+              ...(interruptEscalation ? { interruptEscalation } : {}),
             }
           : undefined;
       if (pendingContextBootstrapAttempt) {
@@ -2471,9 +2493,12 @@ const make = Effect.gen(function* () {
           providerContextLifecycleEvidence = {
             nativeHistory: "unavailable",
             recapText: retryBootstrapText,
-            reason: "native-resume-failed",
+            reason: interruptEscalation ? "interrupt-escalation" : "native-resume-failed",
             sessionRestarted: !preserveActiveRuntime,
           };
+          if (interruptEscalation) {
+            interruptEscalation.evidence = providerContextLifecycleEvidence;
+          }
           const retryNormalizedInput = finalizeProviderInput(
             retryBootstrapText !== null
               ? {
@@ -2560,6 +2585,9 @@ const make = Effect.gen(function* () {
         ),
       );
       startedTurn = sentTurn;
+      if (!pendingContextBootstrapAttempt) {
+        completeInterruptEscalation(input.threadId, interruptEscalation);
+      }
       if (pendingContextBootstrapAttempt) {
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
@@ -2592,6 +2620,9 @@ const make = Effect.gen(function* () {
           }),
         );
       }
+    }
+    if (input.reviewTarget !== undefined || input.dispatchMode === "steer") {
+      completeInterruptEscalation(input.threadId, interruptEscalation);
     }
     if (handoffBootstrapText && thread.handoff !== null && input.reviewTarget === undefined) {
       yield* orchestrationEngine.dispatch({
@@ -3674,10 +3705,10 @@ const make = Effect.gen(function* () {
           ? `${result.detail} Stopping the provider session to settle the turn.`
           : `${result.outcome.detail}\nStopping the provider session to settle the turn.`;
       yield* reportInterruptFailure(detail, "uncertain");
-      interruptEscalatedThreadIds.add(input.threadId);
       return yield* processThreadSessionStop({
         threadId: input.threadId,
         createdAt: input.createdAt,
+        interruptEscalated: true,
       });
     }
 
@@ -4226,6 +4257,7 @@ const make = Effect.gen(function* () {
   const processThreadSessionStop = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
+    readonly interruptEscalated?: boolean;
   }) {
     const thread = yield* resolveThread(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -4265,6 +4297,11 @@ const make = Effect.gen(function* () {
       }
     }
     clearPendingContextBootstraps(thread.id);
+    if (input.interruptEscalated) {
+      pendingInterruptEscalations.set(thread.id, { evidence: null });
+    } else {
+      pendingInterruptEscalations.delete(thread.id);
+    }
     suppressContextBootstrapOnNextStartThreadIds.add(thread.id);
     const stoppedProvider = Schema.is(ProviderKind)(thread.session?.providerName)
       ? thread.session.providerName
