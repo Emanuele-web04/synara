@@ -1,4 +1,9 @@
-import { isLocalAbsolutePath, isWorkspaceRelativePathSafe } from "@synara/shared/path";
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  localPathsEqual,
+  workspaceRelativePathOf,
+} from "@synara/shared/path";
 
 import { resolvePathLinkTarget } from "./terminal-links";
 
@@ -286,7 +291,24 @@ export function resolveMarkdownFileLinkTarget(
     return null;
   }
 
-  if (!isLikelyPathCandidate(decodedPath)) return null;
+  const pathWithoutPosition = decodedPath.replace(POSITION_SUFFIX_PATTERN, "");
+  const isExplicitRelativeDirectory =
+    /[\\/]$/.test(pathWithoutPosition) &&
+    isWorkspaceRelativePathSafe(pathWithoutPosition.replace(/[\\/]+$/, ""));
+  // Rewritten file URIs can contain forward-slash UNC paths. Use workspace
+  // containment to distinguish these from protocol-relative web links.
+  const isWorkspacePath =
+    cwd !== undefined &&
+    (localPathsEqual(pathWithoutPosition, cwd) ||
+      workspaceRelativePathOf(pathWithoutPosition, cwd) !== null);
+  if (
+    !fileUrlTarget &&
+    !isLikelyPathCandidate(decodedPath) &&
+    !isExplicitRelativeDirectory &&
+    !isWorkspacePath
+  ) {
+    return null;
+  }
 
   const pathWithPosition = appendLineColumnFromHash(decodedPath, decodedHash);
   if (!isRelativePath(pathWithPosition)) {
