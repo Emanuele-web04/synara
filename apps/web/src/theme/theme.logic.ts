@@ -93,6 +93,7 @@ export interface ThemeDerivedTokens {
   iconPrimary: string;
   iconSecondary: string;
   iconTertiary: string;
+  sidebarSelectedBackground: string;
   simpleScrim: string;
   textAccent: string;
   textButtonPrimary: string;
@@ -745,18 +746,18 @@ export function buildThemeCssVariables(
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
     "--app-sidebar-backdrop-filter":
-      material === "translucent" ? "blur(8px) saturate(135%)" : "none",
+      material === "translucent" ? "blur(6px) saturate(140%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    // Translucent light mode raises the white share above the old 48% so the
-    // frost doesn't read grey; dark keeps the raw surface thinned over the vibrancy.
+    // Translucent shell: thin fill so the desktop shows through, with a light blur
+    // that softens the backdrop without smearing away its detail.
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
-          ? `color-mix(in srgb, ${sidebarSurface} 56%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 68%, transparent)`
+          ? `color-mix(in srgb, ${sidebarSurface} 40%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurface} 52%, transparent)`
         : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.
@@ -786,6 +787,7 @@ export function buildThemeCssVariables(
     "--sidebar": readCodexVariable("--color-background-surface"),
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
+    "--sidebar-selected": readCodexVariable("--color-background-sidebar-selected"),
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
@@ -836,6 +838,9 @@ export function buildResolvedThemeTokens(
   };
 }
 
+/** How far the subtle-wash ink leans toward the accent (0 = neutral ink). */
+const WASH_ACCENT_SHARE = 0.4;
+
 function buildComputedTheme(theme: ChromeTheme, variant: ThemeVariant) {
   const contrast = normalizeContrastStrength(theme.contrast, variant);
   const surface = parseHexColor(theme.surface);
@@ -851,6 +856,11 @@ function buildComputedTheme(theme: ChromeTheme, variant: ThemeVariant) {
     surfaceUnder: buildSurfaceUnder(theme, surface, ink, variant),
     theme,
     variant,
+    // Ink pulled toward the accent. The low-alpha washes behind tool calls, work
+    // entries, thinking blocks, hover rows and secondary buttons are painted with
+    // this instead of raw ink, so they carry the theme's hue instead of reading
+    // as one identical neutral gray across every pack. Alpha values are unchanged.
+    wash: mixRgb(ink, parseHexColor(theme.accent), WASH_ACCENT_SHARE),
   };
 }
 
@@ -895,6 +905,7 @@ function buildCodexCssVariables(
     "--color-background-elevated-secondary": derivedTokens.elevatedSecondary,
     "--color-background-elevated-secondary-opaque": derivedTokens.elevatedSecondaryOpaque,
     "--color-background-panel": panelBackground,
+    "--color-background-sidebar-selected": derivedTokens.sidebarSelectedBackground,
     "--color-background-surface": theme.theme.surface,
     "--color-background-surface-under": theme.surfaceUnder,
     // The user message bubble has always reused the subtle secondary surface
@@ -1089,23 +1100,26 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.1 + theme.contrast * 0.12),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.06),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.18 + theme.contrast * 0.14),
-    buttonSecondaryBackground: formatRgba(theme.ink, 0.04),
-    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.04),
-    buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.01 + theme.contrast * 0.02),
+    buttonSecondaryBackground: formatRgba(theme.wash, 0.04),
+    buttonSecondaryBackgroundActive: formatRgba(theme.wash, 0.03 + theme.contrast * 0.02),
+    buttonSecondaryBackgroundHover: formatRgba(theme.wash, 0.04),
+    buttonSecondaryBackgroundInactive: formatRgba(theme.wash, 0.01 + theme.contrast * 0.02),
     buttonTertiaryBackground: formatRgba(theme.ink, 0),
-    buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.16 + theme.contrast * 0.08),
-    buttonTertiaryBackgroundHover: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
+    buttonTertiaryBackgroundActive: formatRgba(theme.wash, 0.16 + theme.contrast * 0.08),
+    buttonTertiaryBackgroundHover: formatRgba(theme.wash, 0.08 + theme.contrast * 0.04),
     controlBackground: formatRgba(controlBase, 0.96),
     controlBackgroundOpaque: formatOpaqueRgb(controlBase),
     elevatedPrimary: formatRgba(elevatedPrimaryBase, 0.96),
     elevatedPrimaryOpaque: formatOpaqueRgb(elevatedPrimaryBase),
-    elevatedSecondary: formatRgba(theme.ink, 0.04),
+    elevatedSecondary: formatRgba(theme.wash, 0.04),
     elevatedSecondaryOpaque: formatOpaqueRgb(elevatedSecondaryBase),
     iconAccent: theme.theme.accent,
     iconPrimary: theme.theme.ink,
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
+    // Selected sidebar row: a thin wash of the theme accent instead of neutral
+    // ink, so the selection follows the theme rather than reading as a fixed gray.
+    sidebarSelectedBackground: formatRgba(theme.accent, 0.12 + theme.contrast * 0.04),
     simpleScrim: formatRgba(BLACK, 0.08 + theme.contrast * 0.04),
     textAccent: theme.theme.accent,
     textButtonPrimary: theme.theme.surface,
@@ -1138,18 +1152,18 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
-    buttonSecondaryBackground: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.09 + theme.contrast * 0.05),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.06 + theme.contrast * 0.03),
-    buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.03),
+    buttonSecondaryBackground: formatRgba(theme.wash, 0.04 + theme.contrast * 0.02),
+    buttonSecondaryBackgroundActive: formatRgba(theme.wash, 0.09 + theme.contrast * 0.05),
+    buttonSecondaryBackgroundHover: formatRgba(theme.wash, 0.06 + theme.contrast * 0.03),
+    buttonSecondaryBackgroundInactive: formatRgba(theme.wash, 0.02 + theme.contrast * 0.03),
     buttonTertiaryBackground: formatRgba(theme.ink, 0.02 + theme.contrast * 0.015),
-    buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
-    buttonTertiaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.03),
+    buttonTertiaryBackgroundActive: formatRgba(theme.wash, 0.07 + theme.contrast * 0.05),
+    buttonTertiaryBackgroundHover: formatRgba(theme.wash, 0.05 + theme.contrast * 0.03),
     controlBackground: formatRgba(controlBase, 0.96),
     controlBackgroundOpaque: formatOpaqueRgb(controlBase),
     elevatedPrimary: formatRgba(elevatedPrimaryBase, 0.96),
     elevatedPrimaryOpaque: formatOpaqueRgb(elevatedPrimaryBase),
-    elevatedSecondary: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
+    elevatedSecondary: formatRgba(theme.wash, 0.02 + theme.contrast * 0.02),
     elevatedSecondaryOpaque: mixHex(
       theme.theme.surface,
       theme.theme.ink,
@@ -1159,6 +1173,10 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
+    // Selected sidebar row: accent-tinted (see the light derivation). Dark uses the
+    // same brightened focus mix as text-accent so the tint stays visible over the
+    // frosted sidebar.
+    sidebarSelectedBackground: formatRgba(focusBase, 0.16 + theme.contrast * 0.06),
     simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
     // Codex brightens dark accent affordances through the same focus mix used
     // for the border, rather than using the raw accent directly.
