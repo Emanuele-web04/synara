@@ -7,84 +7,46 @@
       "streamingWalBytes": {
         "beforeMedian": 16010352,
         "afterMedian": 15618952,
-        "beforeRange": [
-          16010352,
-          16010352
-        ],
-        "afterRange": [
-          15618952,
-          15618952
-        ],
+        "beforeRange": [16010352, 16010352],
+        "afterRange": [15618952, 15618952],
         "reductionPercent": 2.4446682996101523
       },
       "finalWalBytes": {
         "beforeMedian": 16109232,
         "afterMedian": 15759032,
-        "beforeRange": [
-          16109232,
-          16109232
-        ],
-        "afterRange": [
-          15759032,
-          15759032
-        ],
+        "beforeRange": [16109232, 16109232],
+        "afterRange": [15759032, 15759032],
         "reductionPercent": 2.173908725133513
       },
       "streamMs": {
         "beforeMedian": 91.17216600000006,
         "afterMedian": 89.08799999999997,
-        "beforeRange": [
-          91.17216600000006,
-          91.17216600000006
-        ],
-        "afterRange": [
-          89.08799999999997,
-          89.08799999999997
-        ],
+        "beforeRange": [91.17216600000006, 91.17216600000006],
+        "afterRange": [89.08799999999997, 89.08799999999997],
         "reductionPercent": 2.2859674080794505
       },
       "completionMs": {
         "beforeMedian": 2.5966249999999036,
         "afterMedian": 2.174541999999974,
-        "beforeRange": [
-          2.5966249999999036,
-          2.5966249999999036
-        ],
-        "afterRange": [
-          2.174541999999974,
-          2.174541999999974
-        ],
+        "beforeRange": [2.5966249999999036, 2.5966249999999036],
+        "afterRange": [2.174541999999974, 2.174541999999974],
         "reductionPercent": 16.25506185914197
       },
       "sampledPeakRss": {
         "beforeMedian": 183762944,
         "afterMedian": 187318272,
-        "beforeRange": [
-          183762944,
-          183762944
-        ],
-        "afterRange": [
-          187318272,
-          187318272
-        ],
+        "beforeRange": [183762944, 183762944],
+        "afterRange": [187318272, 187318272],
         "reductionPercent": -1.9347360912981455
       },
       "sampledPeakHeapUsed": {
         "beforeMedian": 85744600,
         "afterMedian": 68378528,
-        "beforeRange": [
-          85744600,
-          85744600
-        ],
-        "afterRange": [
-          68378528,
-          68378528
-        ],
+        "beforeRange": [85744600, 85744600],
+        "afterRange": [68378528, 68378528],
         "reductionPercent": 20.253254432349095
       },
-      "finalSnapshotReadMs": [
-        2.4732500000000073
-      ]
+      "finalSnapshotReadMs": [2.4732500000000073]
     },
     {
       "messageBytes": 50000,
@@ -93,84 +55,46 @@
       "streamingWalBytes": {
         "beforeMedian": 162542272,
         "afterMedian": 104248392,
-        "beforeRange": [
-          162542272,
-          162542272
-        ],
-        "afterRange": [
-          104248392,
-          104248392
-        ],
+        "beforeRange": [162542272, 162542272],
+        "afterRange": [104248392, 104248392],
         "reductionPercent": 35.86382747252358
       },
       "finalWalBytes": {
         "beforeMedian": 162698832,
         "afterMedian": 104656272,
-        "beforeRange": [
-          162698832,
-          162698832
-        ],
-        "afterRange": [
-          104656272,
-          104656272
-        ],
+        "beforeRange": [162698832, 162698832],
+        "afterRange": [104656272, 104656272],
         "reductionPercent": 35.67484737690065
       },
       "streamMs": {
         "beforeMedian": 513.44575,
         "afterMedian": 471.1843329999999,
-        "beforeRange": [
-          513.44575,
-          513.44575
-        ],
-        "afterRange": [
-          471.1843329999999,
-          471.1843329999999
-        ],
+        "beforeRange": [513.44575, 513.44575],
+        "afterRange": [471.1843329999999, 471.1843329999999],
         "reductionPercent": 8.230941048786566
       },
       "completionMs": {
         "beforeMedian": 2.798041000000012,
         "afterMedian": 3.8291249999999764,
-        "beforeRange": [
-          2.798041000000012,
-          2.798041000000012
-        ],
-        "afterRange": [
-          3.8291249999999764,
-          3.8291249999999764
-        ],
+        "beforeRange": [2.798041000000012, 2.798041000000012],
+        "afterRange": [3.8291249999999764, 3.8291249999999764],
         "reductionPercent": -36.85021055802827
       },
       "sampledPeakRss": {
         "beforeMedian": 217923584,
         "afterMedian": 217169920,
-        "beforeRange": [
-          217923584,
-          217923584
-        ],
-        "afterRange": [
-          217169920,
-          217169920
-        ],
+        "beforeRange": [217923584, 217923584],
+        "afterRange": [217169920, 217169920],
         "reductionPercent": 0.3458386587474626
       },
       "sampledPeakHeapUsed": {
         "beforeMedian": 105578544,
         "afterMedian": 107047496,
-        "beforeRange": [
-          105578544,
-          105578544
-        ],
-        "afterRange": [
-          107047496,
-          107047496
-        ],
+        "beforeRange": [105578544, 105578544],
+        "afterRange": [107047496, 107047496],
         "reductionPercent": -1.3913357244252202
       },
-      "finalSnapshotReadMs": [
-        2.657749999999851
-      ]
+      "finalSnapshotReadMs": [2.657749999999851]
     },
     {
       "messageBytes": 200000,
@@ -179,86 +103,46 @@
       "streamingWalBytes": {
         "beforeMedian": 1411668592,
         "afterMedian": 422032232,
-        "beforeRange": [
-          1411219512,
-          1411915792
-        ],
-        "afterRange": [
-          421995152,
-          422378312
-        ],
+        "beforeRange": [1411219512, 1411915792],
+        "afterRange": [421995152, 422378312],
         "reductionPercent": 70.10401489473671
       },
       "finalWalBytes": {
         "beforeMedian": 1411961112,
         "afterMedian": 423297072,
-        "beforeRange": [
-          1411512032,
-          1412208312
-        ],
-        "afterRange": [
-          423259992,
-          423643152
-        ],
+        "beforeRange": [1411512032, 1412208312],
+        "afterRange": [423259992, 423643152],
         "reductionPercent": 70.02062816018973
       },
       "streamMs": {
         "beforeMedian": 2651.182541,
         "afterMedian": 1738.072333,
-        "beforeRange": [
-          2629.6013749999997,
-          2660.116958
-        ],
-        "afterRange": [
-          1679.6488329999997,
-          2006.1816669999998
-        ],
+        "beforeRange": [2629.6013749999997, 2660.116958],
+        "afterRange": [1679.6488329999997, 2006.1816669999998],
         "reductionPercent": 34.44161968777841
       },
       "completionMs": {
         "beforeMedian": 3.262917000000016,
         "afterMedian": 11.973583999999846,
-        "beforeRange": [
-          3.0307910000001357,
-          3.2883750000000873
-        ],
-        "afterRange": [
-          11.7765830000003,
-          13.634167000000161
-        ],
+        "beforeRange": [3.0307910000001357, 3.2883750000000873],
+        "afterRange": [11.7765830000003, 13.634167000000161],
         "reductionPercent": -266.9595028007083
       },
       "sampledPeakRss": {
         "beforeMedian": 276135936,
         "afterMedian": 274841600,
-        "beforeRange": [
-          273367040,
-          276496384
-        ],
-        "afterRange": [
-          271548416,
-          275382272
-        ],
+        "beforeRange": [273367040, 276496384],
+        "afterRange": [271548416, 275382272],
         "reductionPercent": 0.46873145840749975
       },
       "sampledPeakHeapUsed": {
         "beforeMedian": 153109416,
         "afterMedian": 156065144,
-        "beforeRange": [
-          153085784,
-          153499744
-        ],
-        "afterRange": [
-          147479840,
-          156093992
-        ],
+        "beforeRange": [153085784, 153499744],
+        "afterRange": [147479840, 156093992],
         "reductionPercent": -1.930467816558062
       },
-      "finalSnapshotReadMs": [
-        5.445999999999913,
-        4.918625000000247,
-        5.592083999999886
-      ]
+      "finalSnapshotReadMs": [5.445999999999913, 4.918625000000247, 5.592083999999886]
     },
     {
       "messageBytes": 50000,
@@ -267,84 +151,46 @@
       "streamingWalBytes": {
         "beforeMedian": 664572512,
         "afterMedian": 441396232,
-        "beforeRange": [
-          664572512,
-          664572512
-        ],
-        "afterRange": [
-          441396232,
-          441396232
-        ],
+        "beforeRange": [664572512, 664572512],
+        "afterRange": [441396232, 441396232],
         "reductionPercent": 33.58193063513286
       },
       "finalWalBytes": {
         "beforeMedian": 665161672,
         "afterMedian": 443081312,
-        "beforeRange": [
-          665161672,
-          665161672
-        ],
-        "afterRange": [
-          443081312,
-          443081312
-        ],
+        "beforeRange": [665161672, 665161672],
+        "afterRange": [443081312, 443081312],
         "reductionPercent": 33.38742584674963
       },
       "streamMs": {
         "beforeMedian": 1866.445083,
         "afterMedian": 1841.956917,
-        "beforeRange": [
-          1866.445083,
-          1866.445083
-        ],
-        "afterRange": [
-          1841.956917,
-          1841.956917
-        ],
+        "beforeRange": [1866.445083, 1866.445083],
+        "afterRange": [1841.956917, 1841.956917],
         "reductionPercent": 1.3120217799625498
       },
       "completionMs": {
         "beforeMedian": 5.671249999999873,
         "afterMedian": 13.232458000000406,
-        "beforeRange": [
-          5.671249999999873,
-          5.671249999999873
-        ],
-        "afterRange": [
-          13.232458000000406,
-          13.232458000000406
-        ],
+        "beforeRange": [5.671249999999873, 5.671249999999873],
+        "afterRange": [13.232458000000406, 13.232458000000406],
         "reductionPercent": -133.32524575712063
       },
       "sampledPeakRss": {
         "beforeMedian": 267386880,
         "afterMedian": 270041088,
-        "beforeRange": [
-          267386880,
-          267386880
-        ],
-        "afterRange": [
-          270041088,
-          270041088
-        ],
+        "beforeRange": [267386880, 267386880],
+        "afterRange": [270041088, 270041088],
         "reductionPercent": -0.9926470588235293
       },
       "sampledPeakHeapUsed": {
         "beforeMedian": 148343048,
         "afterMedian": 152228424,
-        "beforeRange": [
-          148343048,
-          148343048
-        ],
-        "afterRange": [
-          152228424,
-          152228424
-        ],
+        "beforeRange": [148343048, 148343048],
+        "afterRange": [152228424, 152228424],
         "reductionPercent": -2.6191830708507484
       },
-      "finalSnapshotReadMs": [
-        5.588166999999885
-      ]
+      "finalSnapshotReadMs": [5.588166999999885]
     }
   ],
   "openCodeKeys": {
