@@ -4572,7 +4572,7 @@ export default function Sidebar() {
             <ThreadPrStatusBadge
               pr={leadingPr}
               onOpen={openPrLink}
-              className="pointer-events-auto absolute left-1.5 top-1/2 z-30 h-5 w-6 -translate-y-1/2"
+              className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
             />
           ) : null}
           <div
@@ -4731,7 +4731,7 @@ export default function Sidebar() {
           <ThreadPrStatusBadge
             pr={leadingPr}
             onOpen={openPrLink}
-            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 h-5 w-6 -translate-y-1/2"
+            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
           />
         ) : null}
         <Tooltip>
