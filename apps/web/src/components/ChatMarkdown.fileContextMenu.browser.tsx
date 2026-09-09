@@ -72,10 +72,10 @@ describe("ChatMarkdown file context menu", () => {
         <ChatMarkdown text={`[folder](${href})`} cwd={cwd} isStreaming={false} />
       </WorkspaceFileOpenerContext.Provider>,
     );
-    screen
-      .getByRole("link", { name: "folder" })
-      .element()
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    // A regression to a plain link must fail the assertion, not navigate the test runner.
+    click.preventDefault();
+    screen.getByRole("link", { name: "folder" }).element().dispatchEvent(click);
     expect(openFile).toHaveBeenCalledOnce();
     expect(resolveWorkspaceDirectoryOpenTarget(openFile.mock.calls[0]![0], cwd)).toBe(expected);
   });
