@@ -524,7 +524,7 @@
        the desktop bleed through rather than a thin dark tint. */
     --app-sidebar-surface: color-mix(
       in srgb,
-      color-mix(in srgb, var(--card) 70%, var(--color-black)) 72%,
+      color-mix(in srgb, var(--card) 80%, var(--color-black)) 72%,
       transparent
     );
     --color-background-button-secondary-hover: var(--secondary);
