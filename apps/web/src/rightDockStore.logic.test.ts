@@ -315,14 +315,14 @@ describe("empty launcher state", () => {
     });
   });
 
-  it("collapses the dock after the final pane closes", () => {
+  it("returns to the launcher after the final pane closes", () => {
     const open = openPaneInState(createDefaultRightDockState(), {
       paneId: "browser-1",
       kind: "browser",
     });
 
     expect(closePaneInState(open, "browser-1")).toEqual({
-      open: false,
+      open: true,
       panes: [],
       activePaneId: null,
     });

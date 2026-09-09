@@ -151,3 +151,73 @@ it("keeps the whole dock maximized across selecting, opening and closing documen
     .element(screen.getByRole("button", { name: "Restore panel", exact: true }))
     .toBeVisible();
 });
+
+it("restores host accessibility on resize, thread changes, collapse and final close", async () => {
+  await page.viewport(1280, 800);
+  const { useState } = await import("react");
+  const { ChatPaneDropOverlay } = await import("../chat-drop-overlay/ChatPaneDropOverlay");
+  const { RouteInsetSurface } = await import("../RouteInsetSurface");
+  const { closePaneInState, createDefaultRightDockState, openPaneInState } = await import("../../rightDockStore.logic");
+  const initial = openPaneInState(createDefaultRightDockState(), { paneId: "note", kind: "file", filePath: "note.md" });
+  function Harness() {
+    const [state, setState] = useState(initial);
+    const [thread, setThread] = useState("a");
+    const [width, setWidth] = useState(1000);
+    return <>
+      <button onClick={() => setWidth(900)}>Resize host</button>
+      <button onClick={() => setThread(thread === "a" ? "b" : "a")}>Switch thread</button>
+      <button onClick={() => setState(initial)}>Reopen</button>
+      <div data-testid="host" className="flex h-dvh min-h-0 min-w-0 overflow-hidden" style={{ width }}>
+        <ChatPaneDropOverlay onDrop={() => {}} className="flex h-full min-h-0 min-w-0 flex-1">
+          <RouteInsetSurface surfaceClassName="bg-background">
+            <input aria-label="Chat composer" defaultValue="Retained draft" />
+            <div className="drag-region">Chat header</div>
+          </RouteInsetSurface>
+        </ChatPaneDropOverlay>
+        <RightDock state={state} motionKey={thread} minWidth={300} defaultWidth="500px"
+          shouldAcceptWidth={() => true} addMenuKinds={[]} paneLabelOverrides={{note: "note.md"}}
+          onClosePane={(id) => setState(s => closePaneInState(s, id))}
+          onCollapse={() => setState(s => ({...s, open: false}))}
+          onOpenChange={(open) => setState(s => ({...s, open}))}
+          onAddPane={() => {}} renderPane={() => <input aria-label="Document draft" defaultValue="Saved document" />} />
+      </div>
+    </>;
+  }
+  const screen = await render(<Harness />);
+  const chat = document.querySelector<HTMLInputElement>('[aria-label="Chat composer"]')!;
+  const host = document.querySelector<HTMLElement>('[data-testid="host"]')!;
+  const covered = host.firstElementChild as HTMLElement;
+  const dock = host.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
+  const draft = document.querySelector<HTMLInputElement>('[aria-label="Document draft"]')!;
+  await screen.getByRole("button", {name: "Maximize panel", exact: true}).click();
+  expect(covered.inert).toBe(true);
+  expect(covered.style.visibility).toBe("hidden");
+  chat.focus();
+  expect(document.activeElement).not.toBe(chat);
+  await screen.getByRole("button", {name: "Resize host", exact: true}).click();
+  await expect.poll(() => dock.getBoundingClientRect().width).toBe(900);
+  expect(document.querySelector('[aria-label="Document draft"]')).toBe(draft);
+  await screen.getByRole("button", {name: "Switch thread", exact: true}).click();
+  expect(covered.inert).toBe(false);
+  expect(covered.style.visibility).toBe("");
+  await screen.getByRole("button", {name: "Maximize panel", exact: true}).click();
+  await screen.getByRole("button", {name: "Collapse panel", exact: true}).click();
+  expect(covered.inert).toBe(false);
+  expect(covered.style.visibility).toBe("");
+  await screen.getByRole("button", {name: "Reopen", exact: true}).click();
+  await screen.getByRole("button", {name: "Maximize panel", exact: true}).click();
+  await screen.getByRole("button", {name: "Close note.md", exact: true}).click();
+  expect(covered.inert).toBe(false);
+  expect(covered.style.visibility).toBe("");
+  await expect.poll(() => host.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!.getBoundingClientRect().width).toBe(0);
+  expect(document.querySelector('[aria-label="Chat composer"]')).toBe(chat);
+  expect(chat.value).toBe("Retained draft");
+  chat.focus();
+  expect(document.activeElement).toBe(chat);
+  await screen.getByRole("button", {name: "Reopen", exact: true}).click();
+  await screen.getByRole("button", {name: "Maximize panel", exact: true}).click();
+  await page.viewport(600, 800);
+  await expect.poll(() => covered.inert).toBe(false);
+  expect(covered.style.visibility).toBe("");
+  await page.viewport(1280, 800);
+});

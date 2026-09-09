@@ -48,7 +48,7 @@ function parseFileUrlHref(
     const parsed = new URL(href);
     if (parsed.protocol.toLowerCase() !== "file:") return null;
 
-    const rawPath = parsed.pathname;
+    const rawPath = parsed.hostname ? `//${parsed.hostname}${parsed.pathname}` : parsed.pathname;
     if (rawPath.length === 0) return null;
 
     // Browser URL parser encodes "C:/foo" as "/C:/foo" for file URLs.
@@ -61,6 +61,17 @@ function parseFileUrlHref(
   } catch {
     return null;
   }
+}
+
+// Encode literal filesystem names before Markdown treats percent/hash/query
+// characters as URL syntax. File URIs also preserve Windows drive paths through
+// the renderer's existing URL sanitization boundary.
+export function markdownFilePathHref(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  const encoded = normalized.split("/").map((segment, index) =>
+    index === 0 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
+  ).join("/");
+  return encoded.startsWith("//") ? `file:${encoded}` : `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
 }
 
 export function rewriteMarkdownFileUriHref(href: string | undefined): string | null {

@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import {
   type DockPaneRuntimeMode,
   EMPTY_PANE_ID_SET,
@@ -199,7 +200,8 @@ export function RightDock(props: RightDockProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const expansionKey = props.motionKey ?? "dock";
-  const maximized = props.state.open && expandedKey === expansionKey;
+  const isMobile = useIsMobile();
+  const maximized = !isMobile && props.state.open && expandedKey === expansionKey;
   const [expandedWidth, setExpandedWidth] = useState(0);
   useLayoutEffect(() => {
     if (!maximized) return;
@@ -332,7 +334,10 @@ export function RightDock(props: RightDockProps) {
                   icon={props.paneIconOverrides?.[pane.id]}
                   active={pane.id === props.state.activePaneId}
                   onSelect={onSelectPane ? () => onSelectPane(pane.id) : undefined}
-                  onClose={() => props.onClosePane(pane.id)}
+                  onClose={() => {
+                    props.onClosePane(pane.id);
+                    if (maximized && props.state.panes.length === 1) props.onCollapse();
+                  }}
                 />
               ))}
             </div>
@@ -364,7 +369,7 @@ export function RightDock(props: RightDockProps) {
                 </ComposerPickerMenuPopup>
               </Menu>
             ) : null}
-            {maximized || activePane?.kind === "file" || activePane?.kind === "explorer" ? (
+            {!isMobile && (maximized || activePane?.kind === "file" || activePane?.kind === "explorer") ? (
               <IconButton
                 variant="chrome"
                 size="icon-xs"

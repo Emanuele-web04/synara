@@ -299,8 +299,8 @@ export function closePaneInState(
     paneId,
   );
   return {
-    // Closing the final tab returns the available space to the chat.
-    open: state.open && nextPanes.length > 0,
+    // An open dock with no panes is the launcher state.
+    open: state.open,
     panes: nextPanes,
     activePaneId: nextActiveId,
   };

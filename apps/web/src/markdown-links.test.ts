@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   extractAbsoluteFilesystemPaths,
+  markdownFilePathHref,
   resolveMarkdownFileLinkTarget,
   resolveUniqueAbsoluteSuffixTarget,
   rewriteMarkdownFileUriHref,
@@ -165,5 +166,18 @@ describe("extractAbsoluteFilesystemPaths", () => {
         "Created global copy at /Users/tester/.agents/skills/annotate-pr for every project.",
       ),
     ).toEqual(["/Users/tester/.agents/skills/annotate-pr"]);
+  });
+});
+
+
+describe("markdownFilePathHref", () => {
+  it.each([
+    "/vault/space %20 #hash?.md",
+    "C:/Users/me/space %20 #hash?.md",
+    "//server/share/space %20 #hash?.md",
+  ])("round-trips literal path characters in %s", (path) => {
+    const href = markdownFilePathHref(path);
+    expect(resolveMarkdownFileLinkTarget(href)).toBe(path);
+    expect(resolveMarkdownFileLinkTarget(rewriteMarkdownFileUriHref(href)!)).toBe(path);
   });
 });

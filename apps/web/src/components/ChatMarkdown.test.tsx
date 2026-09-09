@@ -512,3 +512,47 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
   expect(markup).toContain("<code>[[literal|text]]</code>");
   expect(markup).not.toContain("[[03-Resources");
 });
+
+describe("workspace Wiki links", () => {
+  it.each([
+    ["/vault/root #1", "/vault/root%20%231/My%20%2520%20note.md", "/vault/root #1/My %20 note.md"],
+    ["C:\\Users\\me\\vault", "C:/Users/me/vault/My%20%2520%20note.md", "C:/Users/me/vault/My %20 note.md"],
+    ["\\\\server\\share\\vault", "//server/share/vault/My%20%2520%20note.md", "//server/share/vault/My %20 note.md"],
+  ])("opens encoded file paths under %s", async (root, href, target) => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(<ChatMarkdown text="[[My %20 note|Read note]]" cwd={root} wikiLinkRoot={root} />);
+    expect(markup).toContain(`href="${href}"`);
+    expect(markup).toContain(`title="${target}"`);
+    expect(markup).not.toContain('target="_blank"');
+  });
+
+  it.each([
+    "Before [[note|Alias]] after",
+    "Escaped \\* and &amp; Before [[note]] after",
+    "First line\nBefore [[note]] after",
+    "[[note]] &amp; \\* after",
+    "[[note|after]]",
+    "[[note|Label &amp; after]]",
+    "Cost \\$5 [[note]] after",
+  ])("keeps find and marker source offsets in %s", async (text) => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const startOffset = text.indexOf("after");
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("wiki-marker"), messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset, endOffset: startOffset + 5, selectedText: "after", style: "underline", color: "blue",
+      label: null, done: false, createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = renderWithQueryClient(<ChatMarkdown text={text} cwd="/vault" findQuery="after" findActiveRange={{startOffset, endOffset: startOffset + 5}} markers={[marker]} />);
+    expect(markup).toContain('data-thread-marker-id="wiki-marker"');
+    expect(markup).toContain(`data-chat-find-start="${startOffset}"`);
+    expect(markup).toContain('data-chat-find-match="active"');
+  });
+
+  it("leaves escaped syntax, embeds, and unsupported headings literal", async () => {
+    const markup = await renderMarkdown("\\[\\[escaped]] ![[embed]] [[note#Heading]] [[#Heading]] `[[code]]`", "/vault");
+    expect(markup).toContain("[[escaped]]");
+    expect(markup).toContain("![[embed]]");
+    expect(markup).toContain("[[note#Heading]]");
+    expect(markup).not.toContain('href=');
+  });
+});

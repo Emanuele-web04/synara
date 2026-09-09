@@ -1316,7 +1316,7 @@ const MARKDOWN_COMPONENTS: Components = {
       <OpenableFileChip
         targetPath={targetPath}
         theme={resolvedTheme}
-        label={nodeToPlainText(children)}
+        label={children}
         {...(restoredHref ? { href: restoredHref } : {})}
       />
     );
