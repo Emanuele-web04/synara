@@ -7,6 +7,7 @@ import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
+import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import React, {
   Children,
   createContext,
@@ -119,6 +120,7 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
+  wikiLinkRoot?: string | undefined;
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
@@ -789,6 +791,8 @@ function findMarkdownParenEnd(value: string, startIndex: number): number {
 }
 
 function findInlineMarkdownLinkEnd(value: string, index: number): number {
+  const wikiLink = matchWikiLinkAt(value, index);
+  if (wikiLink) return index + wikiLink[0].length;
   const bracketStart = value[index] === "!" && value[index + 1] === "[" ? index + 1 : index;
   if (value[bracketStart] !== "[") {
     return -1;
@@ -1312,7 +1316,7 @@ const MARKDOWN_COMPONENTS: Components = {
       <OpenableFileChip
         targetPath={targetPath}
         theme={resolvedTheme}
-        label={nodeToPlainText(children)}
+        label={children}
         {...(restoredHref ? { href: restoredHref } : {})}
       />
     );
@@ -1483,6 +1487,7 @@ const MARKDOWN_COMPONENTS: Components = {
 function ChatMarkdown({
   text,
   cwd,
+  wikiLinkRoot,
   isStreaming: isStreamingProp,
   className: classNameProp,
   style,
@@ -1574,8 +1579,12 @@ function ChatMarkdown({
         rangeDecorationRemarkPlugin,
       ];
     }
-    return [...MARKDOWN_REMARK_PLUGINS, rangeDecorationRemarkPlugin];
-  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin]);
+    return [
+      ...MARKDOWN_REMARK_PLUGINS,
+      [remarkWikiLinks, { root: wikiLinkRoot ?? cwd }],
+      rangeDecorationRemarkPlugin,
+    ];
+  }, [composerChipsRemarkPlugin, rangeDecorationRemarkPlugin, wikiLinkRoot, cwd]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
