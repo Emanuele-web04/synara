@@ -133,7 +133,10 @@ import {
   saveConfirmedCustomBinaryPaths,
 } from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
-import { isScrollContainerNearBottom } from "../chat-scroll";
+import {
+  getScrollContainerDistanceFromBottom,
+  isScrollContainerNearBottom,
+} from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
@@ -1217,6 +1220,44 @@ function makeAutomationSetupBubble(role: "user" | "assistant", text: string): Ch
     streaming: false,
     source: "native",
   };
+}
+
+interface PendingTranscriptScrollGesture {
+  container: HTMLElement;
+  distanceFromBottom?: number;
+  scrollTop: number;
+  wasFollowing: boolean;
+  keyboard?: boolean;
+}
+
+function didPendingKeyboardGestureMoveUp(origin: PendingTranscriptScrollGesture): boolean {
+  return (
+    origin.container.scrollTop < origin.scrollTop - 1 ||
+    (origin.distanceFromBottom !== undefined &&
+      getScrollContainerDistanceFromBottom(origin.container) > origin.distanceFromBottom + 1)
+  );
+}
+
+function nestedScrollableCanHandleKeyboardScroll(
+  target: Element,
+  container: HTMLElement,
+  upward: boolean,
+): boolean {
+  let element: HTMLElement | null =
+    target instanceof HTMLElement ? target : target.parentElement;
+  while (element && element !== container) {
+    const overflowY = window.getComputedStyle(element).overflowY;
+    if (
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+      element.scrollHeight > element.clientHeight + 1
+    ) {
+      return upward
+        ? element.scrollTop > 1
+        : getScrollContainerDistanceFromBottom(element) > 1;
+    }
+    element = element.parentElement;
+  }
+  return false;
 }
 
 export default function ChatView({
@@ -5294,12 +5335,7 @@ export default function ChatView({
     isUserScrollDetachedRef.current = detached;
     setIsUserScrollDetached(detached);
   }, []);
-  const pendingScrollGestureRef = useRef<{
-    container: HTMLElement;
-    scrollTop: number;
-    wasFollowing: boolean;
-    keyboard?: boolean;
-  } | null>(null);
+  const pendingScrollGestureRef = useRef<PendingTranscriptScrollGesture | null>(null);
   const pendingScrollGestureFrameRef = useRef<number | null>(null);
   const cancelPendingScrollGesture = useCallback(() => {
     const frameId = pendingScrollGestureFrameRef.current;
@@ -5387,8 +5423,8 @@ export default function ChatView({
       const pending = pendingScrollGestureRef.current;
       if (pending?.keyboard && container === pending.container) {
         // Native key scrolling can begin after keyup and after multiple frames.
-        if (container.scrollTop >= pending.scrollTop || isScrollContainerNearBottom(container, 1))
-          return;
+        const movedUp = didPendingKeyboardGestureMoveUp(pending);
+        if (!movedUp || isScrollContainerNearBottom(container, 1)) return;
         pendingScrollGestureRef.current = null;
       }
       if (!isAtEnd && !isUserScrollDetachedRef.current) {
@@ -5578,6 +5614,7 @@ export default function ChatView({
         event.key === "PageUp" ||
         event.key === "Home" ||
         (event.key === " " && event.shiftKey);
+      if (nestedScrollableCanHandleKeyboardScroll(event.target, container, upward)) return;
       if (upward) {
         if (container.scrollTop <= 0) return;
         const pending = pendingScrollGestureRef.current;
@@ -5586,6 +5623,7 @@ export default function ChatView({
             ? pending
             : {
                 container,
+                distanceFromBottom: getScrollContainerDistanceFromBottom(container),
                 scrollTop: container.scrollTop,
                 wasFollowing: isAtEndRef.current && !isUserScrollDetachedRef.current,
                 keyboard: true,
@@ -5609,7 +5647,7 @@ export default function ChatView({
       const check = () => {
         pendingScrollGestureFrameRef.current = null;
         if (pendingScrollGestureRef.current !== origin) return;
-        const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
+        const movedUp = didPendingKeyboardGestureMoveUp(origin);
         if (!movedUp && performance.now() < deadline) {
           pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
           return;
