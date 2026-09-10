@@ -91,7 +91,7 @@ import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
-import { RotateCcwIcon } from "../lib/icons";
+import { ResetIcon } from "../lib/icons";
 import {
   cn,
   getNavigatorPlatform,
@@ -342,6 +342,7 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
       ? ["Automatically open simulator"]
@@ -1166,6 +1167,15 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
+          settingKey: "composerEffortSlider",
+          title: "Effort slider",
+          description:
+            "Once a chat has started, show reasoning effort as a slider in the composer's model menu, with fast mode and the model list alongside it. New chats keep the separate model and effort pickers.",
+          resetLabel: "effort slider",
+          ariaLabel: "Show effort slider in the composer",
+        })}
+
+        {renderBooleanSettingRow({
           settingKey: "autoOpenDevicePane",
           title: "Automatically open simulator",
           description:
@@ -1299,7 +1309,7 @@ function SettingsRouteView() {
                     disabled={changedSettingLabels.length === 0}
                     onClick={() => void restoreDefaults()}
                   >
-                    <RotateCcwIcon className="size-3.5" />
+                    <ResetIcon className="size-3.5" />
                     Restore defaults
                   </Button>
                 </div>
