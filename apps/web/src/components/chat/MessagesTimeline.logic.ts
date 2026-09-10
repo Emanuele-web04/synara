@@ -214,6 +214,7 @@ interface TimelineDiffMessage {
 }
 
 export type MessagesTimelineRow =
+  | Extract<TimelineEntry, { kind: "async-question" }>
   | {
       kind: "work";
       id: string;
@@ -620,6 +621,12 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "async-question") {
+      flushPendingWorkGroup({ attachToPreviousAssistant: false });
+      nextRows.push(timelineEntry);
+      continue;
+    }
+
     if (timelineEntry.kind === "work") {
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
@@ -858,7 +865,7 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
-      if (prev.kind === "proposed-plan") {
+      if (prev.kind === "proposed-plan" || prev.kind === "async-question") {
         // The plan card stays visible, but it should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
         continue;
@@ -1169,6 +1176,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   if (a.kind !== b.kind || a.id !== b.id) return false;
 
   switch (a.kind) {
+    case "async-question":
+      return a.activity === (b as typeof a).activity;
     case "working":
       return a.createdAt === (b as typeof a).createdAt;
 

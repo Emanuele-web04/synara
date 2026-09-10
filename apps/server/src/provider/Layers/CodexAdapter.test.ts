@@ -771,6 +771,33 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("emits async questions only on completion, without a blocking request", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const questions = [
+        { title: "Which interaction triggers it?", options: ["Scrolling", "Switching tabs"] },
+        { title: "Anything else?", options: null },
+      ];
+      const event: ProviderEvent = {
+        id: asEventId("evt-async-start"), kind: "notification", provider: "codex",
+        createdAt: new Date().toISOString(), method: "item/started",
+        threadId: asThreadId("thread-1"), turnId: asTurnId("turn-1"),
+        itemId: asItemId("question-1"),
+        payload: { item: { type: "agentMessage", id: "question-1", delivery: "async", questions } },
+      };
+      lifecycleManager.emit("event", event);
+      lifecycleManager.emit("event", { ...event, id: asEventId("evt-async-complete"), method: "item/completed" });
+      const result = yield* Fiber.join(firstEventFiber);
+      assert.equal(result._tag, "Some");
+      if (result._tag !== "Some") return;
+      assert.equal(result.value.type, "item.completed");
+      if (result.value.type !== "item.completed") return;
+      assert.deepEqual(result.value.payload.asyncQuestions, questions);
+      assert.equal(result.value.requestId, undefined);
+    }),
+  );
+
   it.effect("keeps inspected images out of generated output artifacts", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

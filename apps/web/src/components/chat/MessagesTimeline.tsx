@@ -74,6 +74,7 @@ import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { AsyncUserInputCard, type RespondToAsyncUserInput } from "./AsyncUserInputCard";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -475,6 +476,7 @@ interface MessagesTimelineProps {
   /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
   isTemporaryThread?: boolean;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
+  onRespondToAsyncUserInput?: RespondToAsyncUserInput;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
@@ -540,6 +542,7 @@ interface MessagesTimelineProps {
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  onRespondToAsyncUserInput,
   hasMessages,
   isWorking,
   workingLabel: workingLabelProp,
@@ -934,6 +937,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
+      onRespondToAsyncUserInput,
       crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
@@ -953,6 +957,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       toolGroupSummaryOverrides,
     }),
     [
+      onRespondToAsyncUserInput,
       crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
@@ -1468,6 +1473,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
+      {row.kind === "async-question" ? (
+        <AsyncUserInputCard
+          key={row.activity.id}
+          activity={row.activity}
+          {...(onRespondToAsyncUserInput ? { onRespond: onRespondToAsyncUserInput } : {})}
+        />
+      ) : null}
       {row.kind === "work" &&
         (() => {
           const groupId = row.id;

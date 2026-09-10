@@ -37,6 +37,38 @@ import {
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 describe("store event reducer", () => {
+  it.each(["revert", "rollback"] as const)("reopens only removed async replies after %s", (removal) => {
+    const createdAt = "2026-09-10T12:00:00.000Z";
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const cards = ["kept-answer", "removed-answer"].map((messageId) => makeActivity({
+      id: `question-${messageId}`, kind: "user-input.async", turnId,
+      payload: {
+        questions: [{ title: "Which interaction?", options: null }],
+        response: { answers: ["Tabs"], messageId },
+      },
+    }));
+    const state = makeState(makeThread({
+      messages: [
+        { id: MessageId.makeUnsafe("kept-answer"), role: "user", text: "Tabs", turnId, createdAt, streaming: false },
+        { id: MessageId.makeUnsafe("removed-answer"), role: "user", text: "Tabs", turnId: TurnId.makeUnsafe("turn-2"), createdAt, streaming: false },
+      ],
+      activities: cards,
+      turnDiffSummaries: [{ turnId, completedAt: createdAt, status: "ready", files: [], checkpointTurnCount: 1 }],
+    }));
+    const event = removal === "revert"
+      ? makeDomainEvent("thread.reverted", { threadId: ThreadId.makeUnsafe("thread-1"), turnCount: 1 })
+      : makeDomainEvent("thread.conversation-rolled-back", {
+          threadId: ThreadId.makeUnsafe("thread-1"), messageId: MessageId.makeUnsafe("removed-answer"),
+          numTurns: 1, removedTurnIds: [TurnId.makeUnsafe("turn-2")],
+        });
+    const thread = threadsOf(applyOrchestrationEvents(state, [event]))[0]!;
+    expect(thread.activities.find((activity) => activity.id === cards[0]!.id)?.payload).toEqual(cards[0]!.payload);
+    expect(thread.activities.find((activity) => activity.id === cards[1]!.id)?.payload).toEqual({
+      questions: [{ title: "Which interaction?", options: null }],
+    });
+    expect(thread.messages.map((message) => message.id)).toEqual(["kept-answer"]);
+  });
+
   it("hydrates and removes Spaces while clearing matching project assignments", () => {
     const spaceId = SpaceId.makeUnsafe("space-work");
     let state = applyOrchestrationEvents(makeState(makeThread()), [

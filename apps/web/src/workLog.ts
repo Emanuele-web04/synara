@@ -40,6 +40,7 @@ import {
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
+import { type AsyncUserInputActivity } from "@synara/shared/asyncUserInput";
 
 export type WorkLogRequestKind = ApprovalRequestKind;
 
@@ -202,6 +203,7 @@ export function isProviderFileEditWorkLogEntry(
 }
 
 export type TimelineEntry =
+  | { id: string; kind: "async-question"; createdAt: string; activity: AsyncUserInputActivity }
   | {
       id: string;
       kind: "message";
@@ -306,6 +308,7 @@ export function deriveWorkLogEntries(
     )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
+    .filter((activity) => activity.kind !== "user-input.async")
     .filter(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
@@ -2347,6 +2350,7 @@ export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
+  asyncQuestions: readonly AsyncUserInputActivity[] = [],
 ): TimelineEntry[] {
   const proposedPlanTurnIds = new Set(
     proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
@@ -2413,6 +2417,14 @@ export function deriveTimelineEntries(
       sortedTimelineEntries(messageRows),
       sortedTimelineEntries(proposedPlanRows),
     ),
-    sortedTimelineEntries(workRows),
+    sortedTimelineEntries([
+      ...workRows,
+      ...asyncQuestions.map((activity): TimelineEntry => ({
+        id: activity.id,
+        kind: "async-question",
+        createdAt: activity.createdAt,
+        activity,
+      })),
+    ]),
   );
 }

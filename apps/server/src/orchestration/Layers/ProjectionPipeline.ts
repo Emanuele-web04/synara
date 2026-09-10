@@ -1,4 +1,5 @@
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
+import { reopenAsyncUserInputAfterMessageRemoval } from "@synara/shared/asyncUserInput";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -1416,6 +1417,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
         case "thread.reverted":
         case "thread.conversation-rolled-back": {
+          if (event.type === "thread.conversation-rolled-back" && event.payload.numTurns === 0) {
+            return;
+          }
           const existingRows = yield* projectionThreadActivityRepository.listByThreadId({
             threadId: event.payload.threadId,
           });
@@ -1435,13 +1439,39 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   existingRows,
                   new Set(event.payload.removedTurnIds ?? []),
                 );
+          // Message projection runs first. Read only response IDs here rather than
+          // loading the full transcript again to find replies removed by rollback.
+          const removedResponses = keptRows.some((row) => row.kind === "user-input.async")
+            ? yield* sql<{ readonly messageId: string }>`
+                SELECT json_extract(activity.payload_json, '$.response.messageId') AS "messageId"
+                FROM projection_thread_activities AS activity
+                WHERE activity.thread_id = ${event.payload.threadId}
+                  AND activity.kind = 'user-input.async'
+                  AND json_type(activity.payload_json, '$.response.messageId') = 'text'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM projection_thread_messages AS message
+                    WHERE message.thread_id = activity.thread_id
+                      AND message.message_id = json_extract(activity.payload_json, '$.response.messageId')
+                  )
+              `.pipe(
+                Effect.mapError(toPersistenceSqlError("ProjectionPipeline.removedAsyncResponses:query")),
+              )
+            : [];
+          const reconciledRows = reopenAsyncUserInputAfterMessageRemoval(
+            keptRows,
+            new Set(removedResponses.map((row) => row.messageId)),
+          );
           if (keptRows.length === existingRows.length) {
+            yield* Effect.forEach(
+              reconciledRows.filter((row, index) => row !== keptRows[index]),
+              projectionThreadActivityRepository.upsert,
+            );
             return;
           }
           yield* projectionThreadActivityRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
-          yield* Effect.forEach(keptRows, projectionThreadActivityRepository.upsert);
+          yield* Effect.forEach(reconciledRows, projectionThreadActivityRepository.upsert);
           return;
         }
 

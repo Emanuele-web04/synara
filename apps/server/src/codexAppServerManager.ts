@@ -569,6 +569,8 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+
+When \`request_user_input_async\` is available, use it to ask for missing context or preferences while continuing independent work. The user can answer the inline question later, including after this turn ends. A pending question is not an answer or approval. If the tool is unavailable, ask in ordinary text.
 </collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}\n\n${SYNARA_GATEWAY_HARNESS_POLICY}`;
 
 // Maps Synara's simple runtime toggle to Codex thread-level permission overrides.
@@ -1435,11 +1437,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Session is missing provider resume thread id.");
     }
 
-    const response = await this.sendRequest(context, "turn/steer", {
-      threadId: providerThreadId,
-      input: turnInput,
-      expectedTurnId: activeTurnId,
-    });
+    let response: unknown;
+    try {
+      response = await this.sendRequest(context, "turn/steer", {
+        threadId: providerThreadId,
+        input: turnInput,
+        expectedTurnId: activeTurnId,
+      });
+    } catch (error) {
+      // The turn may finish between our live-state check and Codex accepting the
+      // steer. Only this explicit rejection proves the input was not submitted;
+      // a timeout or transport failure must never trigger a duplicate send.
+      if (error instanceof Error && error.message === "turn/steer failed: no active turn to steer") {
+        return this.sendTurn(input);
+      }
+      throw error;
+    }
 
     const turnIdRaw = this.readString(this.readObject(response), "turnId");
     if (!turnIdRaw) {

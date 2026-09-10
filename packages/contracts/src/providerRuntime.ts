@@ -13,6 +13,7 @@ import {
   TurnId,
 } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
+import { AsyncUserInputQuestions } from "./asyncUserInput";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -428,6 +429,7 @@ export type TurnDiffUpdatedPayload = typeof TurnDiffUpdatedPayload.Type;
 
 export const ItemLifecyclePayload = Schema.Struct({
   itemType: CanonicalItemType,
+  asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
   // Free-form body (e.g. raw tool output), which legitimately carries leading

@@ -11,6 +11,7 @@ import {
   EventId,
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
   THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
@@ -31,6 +32,10 @@ import {
   resolveTailUserMessageEditTarget,
 } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
+import {
+  formatAsyncUserInputResponse,
+  isAsyncUserInputActivity,
+} from "@synara/shared/asyncUserInput";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
@@ -1770,6 +1775,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      const asyncResponse = command.asyncUserInputResponse;
+      const asyncQuestion = asyncResponse
+        ? targetThread.activities.find((activity) => activity.id === asyncResponse.activityId)
+        : undefined;
+      if (asyncResponse) {
+        if (
+          (targetThread.session?.providerName ?? targetThread.modelSelection.provider) !== "codex" ||
+          (command.modelSelection ?? targetThread.modelSelection).provider !== "codex" ||
+          !asyncQuestion || !isAsyncUserInputActivity(asyncQuestion) ||
+          asyncQuestion.payload.response ||
+          asyncResponse.answers.length !== asyncQuestion.payload.questions.length ||
+          command.sourceProposedPlan || command.reviewTarget ||
+          command.message.attachments.length > 0
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "This Codex question is unavailable, already answered, or has incomplete answers.",
+          });
+        }
+      }
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
         // it was recorded; checked here so it holds inside the serialized dispatch.
@@ -1795,9 +1820,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+        command.resumePrecondition === undefined && !asyncResponse
+          ? command.runtimeMode
+          : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined
+        command.resumePrecondition === undefined && !asyncResponse
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
@@ -1816,7 +1843,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         sourceProposedPlan && sourceThread
           ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
           : null;
-      const dispatchMode = command.dispatchMode ?? "queue";
+      const dispatchMode = asyncResponse ? "steer" : (command.dispatchMode ?? "queue");
+      const messageText = asyncResponse && asyncQuestion && isAsyncUserInputActivity(asyncQuestion)
+        ? formatAsyncUserInputResponse(asyncQuestion.payload.questions, asyncResponse.answers)
+        : command.message.text;
+      if (messageText.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The question and answer exceed the maximum message length.",
+        });
+      }
       if (sourceProposedPlan && !sourcePlan) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1841,7 +1877,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.message.messageId,
           role: "user",
-          text: command.message.text,
+          text: messageText,
           attachments: command.message.attachments,
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
@@ -1918,6 +1954,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               createdAt: command.createdAt,
             },
           },
+        ];
+      }
+      if (asyncResponse && asyncQuestion && isAsyncUserInputActivity(asyncQuestion)) {
+        return [
+          userMessageEvent,
+          {
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.activity-appended",
+            payload: {
+              threadId: command.threadId,
+              activity: {
+                ...asyncQuestion,
+                payload: {
+                  questions: asyncQuestion.payload.questions,
+                  response: { answers: asyncResponse.answers, messageId: command.message.messageId },
+                },
+              },
+            },
+          },
+          queuedEvent,
         ];
       }
       return [userMessageEvent, queuedEvent];
@@ -2619,11 +2680,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.activity.append": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      // Replayed item completions must never reopen an already-submitted question.
+      const activity = isAsyncUserInputActivity(command.activity)
+        ? thread.activities.find((entry) => entry.id === command.activity.id) ?? command.activity
+        : command.activity;
       const requestId =
         typeof command.activity.payload === "object" &&
         command.activity.payload !== null &&
@@ -2643,7 +2708,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.activity-appended",
         payload: {
           threadId: command.threadId,
-          activity: command.activity,
+          activity,
         },
       };
     }

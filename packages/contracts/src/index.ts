@@ -1,4 +1,5 @@
 export * from "./auth";
+export * from "./asyncUserInput";
 export * from "./automation";
 export * from "./baseSchemas";
 export * from "./browserAutomationBounds";

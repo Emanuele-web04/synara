@@ -8,6 +8,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { reopenAsyncUserInputAfterMessageRemoval } from "@synara/shared/asyncUserInput";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -1584,7 +1585,15 @@ function applyOrchestrationEvent(
             thread.proposedPlans,
             retainedTurnIds,
           );
-          const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+          const retainedMessageIds = new Set(messages.map((message) => message.id));
+          const activities = reopenAsyncUserInputAfterMessageRemoval(
+            retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds),
+            new Set(
+              thread.messages
+                .filter((message) => !retainedMessageIds.has(message.id))
+                .map((message) => message.id),
+            ),
+          );
           const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
 
           return {
@@ -1647,8 +1656,16 @@ function applyOrchestrationEvent(
           const proposedPlans = thread.proposedPlans.filter(
             (plan) => plan.turnId === null || !removedTurnIds.has(plan.turnId),
           );
-          const activities = thread.activities.filter(
-            (activity) => activity.turnId === null || !removedTurnIds.has(activity.turnId),
+          const retainedMessageIds = new Set(rollback.messages.map((message) => message.id));
+          const activities = reopenAsyncUserInputAfterMessageRemoval(
+            thread.activities.filter(
+              (activity) => activity.turnId === null || !removedTurnIds.has(activity.turnId),
+            ),
+            new Set(
+              thread.messages
+                .filter((message) => !retainedMessageIds.has(message.id))
+                .map((message) => message.id),
+            ),
           );
           const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
 

@@ -510,6 +510,8 @@ import {
 } from "./chat/threadFind.logic";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
+import { isAsyncUserInputActivity } from "@synara/shared/asyncUserInput";
+import type { RespondToAsyncUserInput } from "./chat/AsyncUserInputCard";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -3481,14 +3483,44 @@ export default function ChatView({
     );
     return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
   }, [activeThread?.messages, optimisticUserMessages]);
+  const asyncQuestions = useMemo(
+    () => (activeThread?.activities ?? []).filter(isAsyncUserInputActivity),
+    [activeThread?.activities],
+  );
+  const asyncResponseThreadId = activeThread?.id;
+  const asyncResponseRuntimeMode = activeThread?.runtimeMode;
+  const asyncResponseInteractionMode = activeThread?.interactionMode;
+  const onRespondToAsyncUserInput = useCallback<RespondToAsyncUserInput>(async (response) => {
+    const api = readNativeApi();
+    if (!api || !asyncResponseThreadId || !asyncResponseRuntimeMode || !asyncResponseInteractionMode || isSidechatExpired) {
+      throw new Error("This conversation is unavailable. Reconnect and try again.");
+    }
+    await api.orchestration.dispatchCommand({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+      threadId: asyncResponseThreadId,
+      asyncUserInputResponse: response,
+      message: {
+        messageId: MessageId.makeUnsafe(crypto.randomUUID()),
+        role: "user",
+        text: response.answers.join("\n\n"),
+        attachments: [],
+      },
+      dispatchMode: "steer",
+      runtimeMode: asyncResponseRuntimeMode,
+      interactionMode: asyncResponseInteractionMode,
+      createdAt: new Date().toISOString(),
+    });
+  }, [asyncResponseThreadId, asyncResponseRuntimeMode, asyncResponseInteractionMode, isSidechatExpired]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
         timelineMessages,
         activeThread?.proposedPlans ?? [],
         agentActivityTimelineState.timelineWorkEntries,
+        asyncQuestions,
       ),
-    [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
+    [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages, asyncQuestions],
   );
   const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
     () => new Set(optimisticUserMessages.map((message) => message.id)),
@@ -12683,6 +12715,7 @@ export default function ChatView({
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
+                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}

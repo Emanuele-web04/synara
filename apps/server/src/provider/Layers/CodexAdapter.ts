@@ -7,6 +7,7 @@
  * @module CodexAdapterLive
  */
 import {
+  AsyncUserInputQuestions,
   type ChatAttachment,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -862,6 +863,8 @@ function withMinimalRawPayload(
   };
 }
 
+const isAsyncUserInputQuestions = Schema.is(AsyncUserInputQuestions);
+
 function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -875,6 +878,14 @@ function mapItemLifecycle(
   }
 
   const itemType = toCanonicalItemType(source.type ?? source.kind);
+  const asyncQuestions =
+    itemType === "assistant_message" && isAsyncUserInputQuestions(source.questions)
+      ? source.questions
+      : undefined;
+  // Async questions arrive as complete agent messages, with no pending RPC to answer.
+  if (asyncQuestions && lifecycle !== "item.completed") {
+    return undefined;
+  }
   if (itemType === "unknown" && lifecycle !== "item.updated") {
     return undefined;
   }
@@ -913,6 +924,7 @@ function mapItemLifecycle(
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
+      ...(asyncQuestions ? { asyncQuestions } : {}),
       ...(status ? { status } : {}),
       ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
       ...(generatedImageReference

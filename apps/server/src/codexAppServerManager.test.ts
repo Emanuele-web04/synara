@@ -2156,6 +2156,35 @@ describe("sendTurn", () => {
 });
 
 describe("steerTurn", () => {
+  it("starts a turn when a late answer arrives after the originating turn ended", async () => {
+    const { manager, sendRequest } = createSendTurnHarness();
+    sendRequest.mockResolvedValueOnce({ turn: { id: "answer-turn" } });
+    await manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" });
+    expect(sendRequest).toHaveBeenCalledWith(expect.anything(), "turn/start", expect.objectContaining({
+      input: [{ type: "text", text: "My answer", text_elements: [] }],
+    }));
+  });
+
+  it("safely starts a turn if Codex explicitly rejects a steer after turn completion", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockRejectedValueOnce(new Error("turn/steer failed: no active turn to steer"));
+    sendRequest.mockResolvedValueOnce({ turn: { id: "answer-turn" } });
+    const result = await manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" });
+    expect(result.turnId).toBe("answer-turn");
+    expect(sendRequest.mock.calls.map((call) => call[1])).toEqual(["turn/steer", "turn/start"]);
+  });
+
+  it("does not resend an answer after ambiguous delivery failure", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockRejectedValueOnce(new Error("Timed out waiting for turn/steer."));
+    await expect(manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" })).rejects.toThrow("Timed out");
+    expect(sendRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("steers the active Codex turn when the session is already running", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
     context.session.status = "running";

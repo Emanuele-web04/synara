@@ -1,4 +1,5 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
+import { reopenAsyncUserInputAfterMessageRemoval } from "@synara/shared/asyncUserInput";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -1329,7 +1330,15 @@ export function projectEvent(
             thread.proposedPlans,
             retainedTurnIds,
           ).slice(-200);
-          const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+          const retainedMessageIds = new Set(messages.map((message) => message.id));
+          const activities = reopenAsyncUserInputAfterMessageRemoval(
+            retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds),
+            new Set(
+              thread.messages
+                .filter((message) => !retainedMessageIds.has(message.id))
+                .map((message) => message.id),
+            ),
+          );
 
           const latestCheckpoint = checkpoints.at(-1) ?? null;
           const latestTurn =
@@ -1386,8 +1395,16 @@ export function projectEvent(
           const proposedPlans = thread.proposedPlans
             .filter((plan) => plan.turnId === null || !rollback.removedTurnIds.has(plan.turnId))
             .slice(-200);
-          const activities = thread.activities.filter(
-            (activity) => activity.turnId === null || !rollback.removedTurnIds.has(activity.turnId),
+          const retainedMessageIds = new Set(rollback.messages.map((message) => message.id));
+          const activities = reopenAsyncUserInputAfterMessageRemoval(
+            thread.activities.filter(
+              (activity) => activity.turnId === null || !rollback.removedTurnIds.has(activity.turnId),
+            ),
+            new Set(
+              thread.messages
+                .filter((message) => !retainedMessageIds.has(message.id))
+                .map((message) => message.id),
+            ),
           );
           const latestCheckpoint = checkpoints.at(-1) ?? null;
 

@@ -529,12 +529,19 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.fork.create":
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
       case "thread.turn.start":
+        if (command.asyncUserInputResponse) {
+          return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+        }
         return command.sourceProposedPlan
           ? loadThreadDetailForDecider(
               command,
               commandReadModel,
               command.sourceProposedPlan.threadId,
             )
+          : Effect.succeed(commandReadModel);
+      case "thread.activity.append":
+        return command.activity.kind === "user-input.async"
+          ? loadThreadDetailForDecider(command, commandReadModel, command.threadId)
           : Effect.succeed(commandReadModel);
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":

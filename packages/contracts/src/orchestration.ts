@@ -12,6 +12,7 @@ import {
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
+import { AsyncUserInputResponse } from "./asyncUserInput";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -1378,6 +1379,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
   threadId: ThreadId,
+  asyncUserInputResponse: Schema.optional(AsyncUserInputResponse),
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
@@ -1419,6 +1421,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
   threadId: ThreadId,
+  asyncUserInputResponse: Schema.optional(AsyncUserInputResponse),
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),

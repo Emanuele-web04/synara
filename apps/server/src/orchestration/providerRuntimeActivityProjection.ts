@@ -1,4 +1,5 @@
 import {
+  CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND,
   ApprovalRequestId,
   EventId,
   isToolLifecycleItemType,
@@ -550,6 +551,23 @@ export function projectProviderRuntimeActivities(
     typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
       ? { sequence: sessionSequence }
       : {};
+  if (
+    event.provider === "codex" &&
+    event.type === "item.completed" &&
+    event.payload.asyncQuestions &&
+    event.itemId
+  ) {
+    return [{
+      id: EventId.makeUnsafe(`codex-async-question:${event.threadId}:${event.itemId}`),
+      createdAt: event.createdAt,
+      tone: "info",
+      kind: CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND,
+      summary: "Question from Codex",
+      payload: toActivityPayload({ questions: event.payload.asyncQuestions }),
+      turnId: toTurnId(event.turnId) ?? null,
+      ...maybeSequence,
+    }];
+  }
   // Codex and Antigravity only render completed reasoning items with a readable summary.
   // Empty starts/completions are private/encrypted reasoning boundaries, not
   // transcript rows. Waiting for the authoritative completion also avoids

@@ -1313,6 +1313,11 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
   const retainedIds = new Set(activities.slice(dropCount).map((activity) => activity.id));
   const pendingRequestIds = pendingInteractionRequestIds(activities);
   for (const activity of activities) {
+    // These are durable transcript cards, including submitted answers, not transient work logs.
+    if (activity.kind === "user-input.async") {
+      retainedIds.add(activity.id);
+      continue;
+    }
     const requestId = activityRequestId(activity);
     if (
       requestId !== null &&

@@ -15,6 +15,19 @@ import {
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
 
+it("retains pending and submitted async questions beyond the activity cap", () => {
+  const cards = [
+    makeActivity({ id: "async-pending", kind: "user-input.async", sequence: 1 }),
+    makeActivity({ id: "async-answered", kind: "user-input.async", sequence: 2,
+      payload: { response: { answers: ["Tabs"], messageId: "answer" } } }),
+  ];
+  const activities = normalizeActivities([
+    ...cards,
+    ...Array.from({ length: 2200 }, (_, index) => makeActivity({ id: `work-${index}`, sequence: index + 10 })),
+  ]);
+  expect(activities.filter((activity) => activity.kind === "user-input.async")).toEqual(cards);
+});
+
 type ThreadActivity = Thread["activities"][number];
 
 interface FoldStep {

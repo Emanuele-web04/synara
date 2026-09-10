@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./asyncUserInput": {
+      "types": "./src/asyncUserInput.ts",
+      "import": "./src/asyncUserInput.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"

@@ -620,6 +620,27 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("preserves async question association through the client command boundary", () =>
+  Effect.gen(function* () {
+    const response = { activityId: "codex-async-question:thread:item", answers: ["Switching tabs"] };
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "answer-question",
+      threadId: "thread-1",
+      message: { messageId: "answer-1", role: "user", text: "Switching tabs", attachments: [] },
+      asyncUserInputResponse: response,
+      dispatchMode: "steer",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-09-10T12:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.turn.start");
+    if (command.type === "thread.turn.start") {
+      assert.deepEqual(command.asyncUserInputResponse, response);
+    }
+  }),
+);
+
 it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", () =>
   Effect.gen(function* () {
     // dispatchOrigin is server-assigned (automation engine only). The client command

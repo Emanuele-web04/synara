@@ -100,6 +100,7 @@ interface ChatTranscriptPaneProps {
   scrollButtonVisible: boolean;
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
+  onRespondToAsyncUserInput?: ComponentProps<typeof MessagesTimeline>["onRespondToAsyncUserInput"];
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
@@ -114,6 +115,7 @@ interface ChatTranscriptPaneProps {
 }
 
 export function ChatTranscriptPane({
+  onRespondToAsyncUserInput,
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
@@ -240,6 +242,7 @@ export function ChatTranscriptPane({
           />
         ) : (
           <MessagesTimeline
+            {...(onRespondToAsyncUserInput ? { onRespondToAsyncUserInput } : {})}
             key={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}

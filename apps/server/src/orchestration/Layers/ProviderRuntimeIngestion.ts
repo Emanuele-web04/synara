@@ -233,7 +233,7 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
     // apply fallback completion text; image_generation completion scans
     // thread.messages to attach the generated-image reference.
     return (
-      event.payload.itemType === "assistant_message" ||
+      (event.payload.itemType === "assistant_message" && !event.payload.asyncQuestions) ||
       generatedImagePathFromRuntimeEvent(event) !== undefined
     );
   }
@@ -323,7 +323,8 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     case "item.updated":
     case "item.completed": {
       const itemType = event.payload.itemType;
-      return itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning";
+      return event.payload.asyncQuestions !== undefined ||
+        (itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning");
     }
     case "runtime.warning":
     case "user-input.requested":
@@ -2478,7 +2479,8 @@ const make = Effect.gen(function* () {
       }
 
       const assistantCompletion =
-        event.type === "item.completed" && event.payload.itemType === "assistant_message"
+        event.type === "item.completed" && event.payload.itemType === "assistant_message" &&
+          !event.payload.asyncQuestions
           ? {
               fallbackText: event.payload.detail,
             }
