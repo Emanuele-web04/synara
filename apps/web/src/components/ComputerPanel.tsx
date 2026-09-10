@@ -174,6 +174,7 @@ export default function ComputerPanel(props: {
 
   const sendInput = useCallback(
     (send: () => Promise<ComputerActionResult>) => {
+      clickSequence.flush();
       inputQueue.push(async () => {
         const result = await send();
         setInputError(null);
@@ -185,7 +186,7 @@ export default function ComputerPanel(props: {
         setInputWarning(computerDeliveryWarning(result));
       });
     },
-    [inputQueue],
+    [inputQueue, clickSequence],
   );
 
   const region = useMemo(() => computerStreamRegion(screenSize), [screenSize]);

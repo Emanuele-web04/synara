@@ -6,6 +6,11 @@ export function createComputerClickSequence(delayMs = 500) {
     pending = undefined;
   };
   return {
+    flush() {
+      const previous = pending;
+      clear();
+      previous?.send(1);
+    },
     click(detail: number, send: (count: 1 | 2) => void) {
       if (pending) {
         const previous = pending;

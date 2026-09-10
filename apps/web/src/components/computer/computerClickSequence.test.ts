@@ -3,6 +3,21 @@ import { createComputerClickSequence } from "./computerClickSequence";
 
 afterEach(() => vi.useRealTimers());
 
+it("flushes a pending click before keyboard input without recursive or timer duplication", () => {
+  vi.useFakeTimers();
+  const clicks = createComputerClickSequence();
+  const sent: string[] = [];
+  const sendInput = (value: string) => {
+    clicks.flush();
+    sent.push(value);
+  };
+  clicks.click(1, (count) => sendInput(`click:${count}`));
+  sendInput("key:a");
+  clicks.flush();
+  vi.runAllTimers();
+  expect(sent).toEqual(["click:1", "key:a"]);
+});
+
 it("sends a double click atomically without waiting for a first RPC", () => {
   vi.useFakeTimers();
   const clicks = createComputerClickSequence();

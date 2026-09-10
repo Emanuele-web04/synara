@@ -29,7 +29,10 @@ describe("WsConnectionSessions", () => {
       const key = await Effect.runPromise(Scope.provide(sessions.register(OWNER_SESSION), scope));
       const readIdentity = (key: string) =>
         Effect.runPromise(
-          provideWsConnectionSession(Effect.service(CurrentWsConnectionSession), sessions.lookup(key)),
+          provideWsConnectionSession(
+            Effect.service(CurrentWsConnectionSession),
+            sessions.lookup(key),
+          ),
         );
       const original = (await readIdentity(key))!;
       interests.watch(original, "thread");
