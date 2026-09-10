@@ -381,7 +381,7 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
-  --radius-user-message: 0.8rem;
+  --radius-user-message: 1rem;
   --font-ui-family: var(
     --theme-font-ui-family,
     -apple-system,
