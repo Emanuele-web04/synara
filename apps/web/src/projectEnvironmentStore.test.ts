@@ -1,5 +1,5 @@
 import { ProjectId } from "@synara/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { assert, beforeEach, describe, expect, it } from "vitest";
 
 import { useProjectEnvironmentStore } from "./projectEnvironmentStore";
 
@@ -29,10 +29,13 @@ describe("project environment preferences", () => {
     setProjectEnvMode(PROJECT_A, "local");
     setProjectEnvMode(PROJECT_B, "worktree");
     const { name, storage } = useProjectEnvironmentStore.persist.getOptions();
-    const saved = await storage!.getItem(name);
+    assert(name);
+    assert(storage);
+    const saved = await storage.getItem(name);
+    assert(saved);
 
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
-    await storage!.setItem(name, saved!);
+    await storage.setItem(name, saved);
     await useProjectEnvironmentStore.persist.rehydrate();
 
     expect(useProjectEnvironmentStore.getState().envModeByProjectId).toEqual({

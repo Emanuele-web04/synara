@@ -7281,9 +7281,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe(
-        "worktree",
-      );
+      expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe("worktree");
 
       let previousDraftId = newThreadId;
       for (const expectedMode of ["worktree", "local"] as const) {
