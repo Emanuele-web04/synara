@@ -644,10 +644,12 @@ export const ProjectPicker = memo(function ProjectPicker({
           ) : null}
         </div>
       )}
-      <ComboboxPopup align={align} side={side} className="p-0">
+      {/* Width lives on the popup so the shell always fills it: the surface grows to a wide
+          trigger (`--anchor-width`) and never leaves an empty strip beside the rows. */}
+      <ComboboxPopup align={align} side={side} className="min-w-60 p-0">
         <PickerPanelShell
           variant="plain"
-          widthClassName="w-60"
+          widthClassName="w-full"
           searchInput={
             <ComboboxInput
               inputClassName={PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME}
