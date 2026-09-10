@@ -3504,6 +3504,50 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities, undefined)[0]?.detail).toBeUndefined();
   });
 
+  it("renders Cursor ACP subagent task rows with the description heading and prompt", () => {
+    // Shape emitted by AcpRuntimeModel for Cursor's `Task` tool (kind "agent").
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-task-start",
+        createdAt: "2026-09-10T21:26:57.180Z",
+        kind: "tool.started",
+        summary: "Explore composer model/effort UI",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Explore composer model/effort UI",
+          data: {
+            toolCallId: "toolu_012fsSN5hrdndPjxoWQjZswu",
+            kind: "agent",
+            tool: "task",
+            prompt: "Explore the Synara web app and report back with file paths.",
+            rawInput: {
+              _toolName: "task",
+              description: "Explore composer model/effort UI",
+              prompt: "Explore the Synara web app and report back with file paths.",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        itemType: "collab_agent_tool_call",
+        toolCallId: "toolu_012fsSN5hrdndPjxoWQjZswu",
+        toolTitle: "Explore composer model/effort UI",
+        subagentAction: expect.objectContaining({
+          tool: "task",
+          prompt: "Explore the Synara web app and report back with file paths.",
+        }),
+        liveActivity: expect.objectContaining({ state: "running_tool" }),
+      }),
+    ]);
+    expect(entries[0]?.subagents).toBeUndefined();
+    expect(entries[0]?.detail).toBeUndefined();
+  });
+
   it("uses completed generic agent task output instead of truncated task wrapper text", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

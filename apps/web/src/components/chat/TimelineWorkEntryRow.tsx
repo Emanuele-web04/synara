@@ -557,7 +557,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   );
   const liveActivityNowMs = useLiveActivityNow(workEntry.liveActivity);
   const liveActivityMetaText = workEntry.liveActivity
-    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs)
+    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
+        subagent: workEntry.itemType === "collab_agent_tool_call",
+      })
     : null;
 
   // A created-automation row renders as its own card instead of a tool-call line.
