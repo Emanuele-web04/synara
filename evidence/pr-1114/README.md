@@ -20,6 +20,9 @@ guest pages.
 | `10-cookie-after-restart.png` | Session cookie absent after restart — see below. |
 | `live-interaction-flow.mp4` | 65s recording: unlock vault → open in-window popup → submit login → save prompt → Save → vault lists the new login. |
 | `session-restore-gate.log` | `Secure session restoration is unavailable` — the `safeStorage` backend on this Linux box is `basic_text`, so session-cookie restore is gated off by design (mirrors the repo's `session-restore-smoke.ts` production gate). |
+| `agent-e2e-run.gif` / `agent-e2e-run.mp4` | End-to-end agent run: OpenCode `muse-spark-1.3-contributor-free` driving the embedded browser on real apple.com — built a 20-item shopping bag (2 accessory lines × qty 10, badge 20, total $940.00) via `browser_*` tools, verified by re-querying the live page. |
+| `agent-floating-apple.png` / `agent-floating-apple-2.png` | Agent-controlled browser visible in the floating preview while the agent browsed product pages. |
+| `agent-final-report.png` | The agent's final report in the transcript (checks, limitations, proof screenshots) with the live bag page in the floating preview. |
 
 Verified via API state (not just screenshots): `vault.snapshot()` reported the
 pending prompt and saved credentials; `reveal` denied while locked and with a
