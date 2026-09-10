@@ -371,7 +371,7 @@ describe("WsTransport", () => {
     await expect(
       runProjectProvisionStream(
         {
-          [WS_METHODS.projectsProvisionFromGitHub]: () => Stream.make(phase, completed),
+          [WS_METHODS.projectsProvisionFromRepository]: () => Stream.make(phase, completed),
         },
         { repository: "openai/codex" },
       ),

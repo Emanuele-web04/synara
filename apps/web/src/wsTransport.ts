@@ -31,8 +31,8 @@ import {
   type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
   type GitWorktreeSetupProgressEvent,
-  type GitHubProjectProvisionProgressEvent,
-  type GitHubProjectProvisionResult,
+  type ProjectProvisionProgressEvent,
+  type ProjectProvisionResult,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -863,7 +863,7 @@ export class WsTransport {
       if (method === WS_METHODS.gitCreateDetachedWorktree) {
         return (await this.runWorktreeSetupStream(client, params, abortScope.signal)) as T;
       }
-      if (method === WS_METHODS.projectsProvisionFromGitHub) {
+      if (method === WS_METHODS.projectsProvisionFromRepository) {
         return (await this.runProjectProvisionStream(client, params, abortScope.signal)) as T;
       }
 
@@ -2010,12 +2010,12 @@ export class WsTransport {
     client: RpcClientInstance,
     params: unknown,
     signal?: AbortSignal,
-  ): Promise<GitHubProjectProvisionResult> {
-    let result: GitHubProjectProvisionResult | null = null;
+  ): Promise<ProjectProvisionResult> {
+    let result: ProjectProvisionResult | null = null;
     await this.getClientRuntime(client).runPromise(
-      Stream.runForEach(client[WS_METHODS.projectsProvisionFromGitHub](params as never), (event) =>
+      Stream.runForEach(client[WS_METHODS.projectsProvisionFromRepository](params as never), (event) =>
         Effect.sync(() => {
-          const progressEvent = event as GitHubProjectProvisionProgressEvent;
+          const progressEvent = event as ProjectProvisionProgressEvent;
           this.emit(WS_CHANNELS.projectProvisionProgress, progressEvent);
           if (progressEvent.kind === "completed") {
             result = progressEvent.result;

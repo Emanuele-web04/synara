@@ -2,6 +2,8 @@ import { Effect, Layer } from "effect";
 
 import { GitCoreLive } from "./Layers/GitCore";
 import { GitHubCliLive } from "./Layers/GitHubCli";
+import { GitHostCliLive } from "./Layers/GitHostCli";
+import { GitLabCliLive } from "./Layers/GitLabCli";
 import { GitManagerLive } from "./Layers/GitManager";
 import { GitStatusBroadcasterLive } from "./Layers/GitStatusBroadcaster";
 import { CodexTextGenerationServiceLive } from "./Layers/CodexTextGeneration";
@@ -33,9 +35,14 @@ export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
   Layer.provide(ServerSettingsLive),
 );
 
-export const GitManagerLayerLive = GitManagerLive.pipe(
+export const GitHostCliLayerLive = GitHostCliLive.pipe(
   Layer.provideMerge(GitCoreLive),
   Layer.provideMerge(GitHubCliLive),
+  Layer.provideMerge(GitLabCliLive),
+);
+
+export const GitManagerLayerLive = GitManagerLive.pipe(
+  Layer.provideMerge(GitHostCliLayerLive),
   Layer.provideMerge(TextGenerationLayerLive),
 );
 
@@ -46,6 +53,8 @@ export const GitStatusBroadcasterLayerLive = GitStatusBroadcasterLive.pipe(
 export const GitLayerLive = Layer.mergeAll(
   GitCoreLive,
   GitHubCliLive,
+  GitLabCliLive,
+  GitHostCliLayerLive,
   GitManagerLayerLive,
   GitStatusBroadcasterLayerLive,
 );

@@ -1,28 +1,38 @@
 import { randomUUID } from "node:crypto";
 
 import type {
-  GitHubProjectProvisionInput,
-  GitHubProjectProvisionPhase,
-  GitHubProjectProvisionProgressEvent,
+  ProjectProvisionInput,
+  ProjectProvisionPhase,
+  ProjectProvisionProgressEvent,
 } from "@synara/contracts";
 import {
-  parseGitHubRepositoryInput,
-  parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
-} from "@synara/shared/githubRepository";
+  gitHostCliName,
+  gitHostDisplayName,
+  remoteUrlMatchesRepository,
+  type GitHostKind,
+} from "@synara/shared/gitHostRepository";
+import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
+import { parseGitLabRepositoryInput, parseGitLabRepositoryReference } from "@synara/shared/gitlabRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { Effect, FileSystem, Path, PlatformError, Schema, Semaphore } from "effect";
 
-import { GitCommandError, GitHubCliError } from "../git/Errors";
+import { GitCommandError, GitHostCliError } from "../git/Errors";
 import type { GitCoreShape } from "../git/Services/GitCore";
-import type { GitHubCliShape } from "../git/Services/GitHubCli";
+import type { GitHostCliRouterShape } from "../git/Services/GitHostCli";
 
 const CLONE_TIMEOUT_MS = 30 * 60 * 1_000;
 const CLONE_OUTPUT_LIMIT_BYTES = 2 * 1_024 * 1_024;
 const MAX_CLONE_PROGRESS_MESSAGE_LENGTH = 240;
+function repositoryHttpsUrl(host: GitHostKind, repository: string): string {
+  if (host === "github") return `https://github.com/${repository}`;
+  const parsed = parseGitLabRepositoryReference(repository);
+  return parsed ? `https://${parsed.host}/${parsed.fullPath}` : `https://${repository}`;
+}
+
 const CLONE_PROGRESS_LINE =
   /^(?:remote:\s*)?(?:Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files|Checking out files|Filtering content):/i;
 
-export const GitHubProjectProvisioningErrorCode = Schema.Literals([
+export const ProjectProvisioningErrorCode = Schema.Literals([
   "INVALID_REPOSITORY",
   "INVALID_DESTINATION",
   "DESTINATION_CONFLICT",
@@ -34,23 +44,23 @@ export const GitHubProjectProvisioningErrorCode = Schema.Literals([
   "DISK_FULL",
   "CLONE_FAILED",
 ]);
-export type GitHubProjectProvisioningErrorCode = typeof GitHubProjectProvisioningErrorCode.Type;
+export type ProjectProvisioningErrorCode = typeof ProjectProvisioningErrorCode.Type;
 
-export class GitHubProjectProvisioningError extends Schema.TaggedErrorClass<GitHubProjectProvisioningError>()(
-  "GitHubProjectProvisioningError",
+export class ProjectProvisioningError extends Schema.TaggedErrorClass<ProjectProvisioningError>()(
+  "ProjectProvisioningError",
   {
-    code: GitHubProjectProvisioningErrorCode,
+    code: ProjectProvisioningErrorCode,
     message: Schema.String,
     retryable: Schema.Boolean,
     cause: Schema.optional(Schema.Defect),
   },
 ) {}
 
-export interface GitHubProjectProvisioningProgressReporter {
-  readonly publish: (event: GitHubProjectProvisionProgressEvent) => Effect.Effect<void, never>;
+export interface ProjectProvisioningProgressReporter {
+  readonly publish: (event: ProjectProvisionProgressEvent) => Effect.Effect<void, never>;
 }
 
-export interface GitHubProjectCheckoutResult {
+export interface ProjectCheckoutResult {
   readonly operationId: string;
   readonly repository: string;
   readonly workspaceRoot: string;
@@ -58,28 +68,28 @@ export interface GitHubProjectCheckoutResult {
   readonly recoveryPath: string | null;
 }
 
-interface GitHubProjectProvisionerDependencies {
+interface ProjectProvisionerDependencies {
   readonly homeDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly git: GitCoreShape;
-  readonly github: GitHubCliShape;
+  readonly gitHost: GitHostCliRouterShape;
 }
 
-export interface GitHubProjectProvisioner {
+export interface ProjectProvisioner {
   readonly provisionCheckout: (
-    input: GitHubProjectProvisionInput,
-    reporter: GitHubProjectProvisioningProgressReporter,
-  ) => Effect.Effect<GitHubProjectCheckoutResult, GitHubProjectProvisioningError>;
+    input: ProjectProvisionInput,
+    reporter: ProjectProvisioningProgressReporter,
+  ) => Effect.Effect<ProjectCheckoutResult, ProjectProvisioningError>;
 }
 
 function provisioningError(
-  code: GitHubProjectProvisioningErrorCode,
+  code: ProjectProvisioningErrorCode,
   message: string,
   retryable: boolean,
   cause?: unknown,
-): GitHubProjectProvisioningError {
-  return new GitHubProjectProvisioningError({
+): ProjectProvisioningError {
+  return new ProjectProvisioningError({
     code,
     message,
     retryable,
@@ -98,7 +108,7 @@ function safeCloneProgressMessage(rawLine: string): string | null {
 
 function createCloneProgressChunkHandler(
   operationId: string,
-  reporter: GitHubProjectProvisioningProgressReporter,
+  reporter: ProjectProvisioningProgressReporter,
 ): (chunk: string) => void {
   let buffer = "";
   let lastMessage = "";
@@ -125,11 +135,13 @@ function createCloneProgressChunkHandler(
   };
 }
 
-function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
-  if (cause instanceof GitHubProjectProvisioningError) return cause;
+function classifyCloneFailure(host: GitHostKind, cause: unknown): ProjectProvisioningError {
+  if (cause instanceof ProjectProvisioningError) return cause;
+  const hostName = gitHostDisplayName(host);
+  const cliName = gitHostCliName(host);
 
   const detail =
-    cause instanceof GitHubCliError || cause instanceof GitCommandError
+    cause instanceof GitHostCliError || cause instanceof GitCommandError
       ? cause.detail
       : cause instanceof Error
         ? cause.message
@@ -138,10 +150,10 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
 
   const exceededConfiguredCloneTimeout =
     (cause instanceof GitCommandError &&
-      cause.operation === "clone public GitHub project" &&
+      cause.operation === "clone public project" &&
       lower.endsWith(" timed out.")) ||
-    (cause instanceof GitHubCliError &&
-      lower.includes("gh repo clone") &&
+    (cause instanceof GitHostCliError &&
+      lower.includes(`${cliName} repo clone`) &&
       lower.includes(" timed out."));
   if (exceededConfiguredCloneTimeout) {
     return provisioningError(
@@ -159,7 +171,7 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
   ) {
     return provisioningError(
       "REPOSITORY_NOT_FOUND",
-      "The GitHub repository was not found, or the current account cannot access it.",
+      `The ${hostName} repository was not found, or the current account cannot access it.`,
       false,
       cause,
     );
@@ -179,7 +191,7 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
   ) {
     return provisioningError(
       "AUTH_REQUIRED",
-      "GitHub authentication is required. Sign in with `gh auth login` or configure Git credentials, then retry.",
+      `${hostName} authentication is required. Sign in with \`${cliName} auth login\` or configure Git credentials, then retry.`,
       false,
       cause,
     );
@@ -194,7 +206,7 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
   ) {
     return provisioningError(
       "NETWORK_ERROR",
-      "Synara could not reach GitHub. Check the server's network connection and retry.",
+      `Synara could not reach ${hostName}. Check the server's network connection and retry.`,
       true,
       cause,
     );
@@ -217,13 +229,13 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
   }
   return provisioningError(
     "CLONE_FAILED",
-    "The GitHub repository could not be cloned. Check the repository and Git configuration, then retry.",
+    `The ${hostName} repository could not be cloned. Check the repository and Git configuration, then retry.`,
     true,
     cause,
   );
 }
 
-function classifyPromotionFailure(cause: unknown): GitHubProjectProvisioningError {
+function classifyPromotionFailure(cause: unknown): ProjectProvisioningError {
   const reason =
     cause instanceof PlatformError.PlatformError &&
     cause.reason instanceof PlatformError.SystemError
@@ -254,18 +266,18 @@ function classifyPromotionFailure(cause: unknown): GitHubProjectProvisioningErro
 }
 
 function publishPhase(
-  reporter: GitHubProjectProvisioningProgressReporter,
+  reporter: ProjectProvisioningProgressReporter,
   operationId: string,
-  phase: GitHubProjectProvisionPhase,
+  phase: ProjectProvisionPhase,
   message: string,
 ) {
   return reporter.publish({ operationId, kind: "phase", phase, message });
 }
 
-export const makeGitHubProjectProvisioner = Effect.fn(function* (
-  dependencies: GitHubProjectProvisionerDependencies,
-): Effect.fn.Return<GitHubProjectProvisioner> {
-  const { fileSystem, git, github, homeDir, path } = dependencies;
+export const makeProjectProvisioner = Effect.fn(function* (
+  dependencies: ProjectProvisionerDependencies,
+): Effect.fn.Return<ProjectProvisioner> {
+  const { fileSystem, git, gitHost, homeDir, path } = dependencies;
   const cloneSlots = yield* Semaphore.make(2);
   const lockIndex = yield* Semaphore.make(1);
   const destinationLocks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
@@ -301,7 +313,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
     expectedRepository: string,
   ) {
     const result = yield* git.execute({
-      operation: "verify GitHub project clone",
+      operation: "verify project clone",
       cwd: workspaceRoot,
       args: ["remote", "get-url", "origin"],
       allowNonZeroExit: true,
@@ -315,14 +327,13 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
         return false;
       }
       return yield* new GitCommandError({
-        operation: "verify GitHub project clone",
+        operation: "verify project clone",
         command: "git remote get-url origin",
         cwd: workspaceRoot,
         detail: detail || `git exited with code ${result.code}.`,
       });
     }
-    const actualRepository = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(result.stdout.trim());
-    return actualRepository?.toLowerCase() === expectedRepository.toLowerCase();
+    return remoteUrlMatchesRepository(result.stdout.trim(), expectedRepository);
   });
 
   const inspectExistingDestination = Effect.fnUntraced(function* (
@@ -358,31 +369,40 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
   });
 
   const cloneToStaging = Effect.fnUntraced(function* (
-    input: GitHubProjectProvisionInput,
+    input: ProjectProvisionInput,
     repository: string,
     parent: string,
     stagingPath: string,
-    reporter: GitHubProjectProvisioningProgressReporter,
+    reporter: ProjectProvisioningProgressReporter,
   ) {
     const publishChunk = createCloneProgressChunkHandler(input.operationId, reporter);
-    const githubCliReady = yield* github.getViewerLogin({ cwd: parent }).pipe(
-      Effect.as(true),
-      Effect.catch(() => Effect.succeed(false)),
-    );
+    const selection = yield* gitHost.forRepository(repository);
+    const cliReady = yield* selection.cli
+      .getViewerLogin({ cwd: parent, host: selection.host })
+      .pipe(
+        Effect.as(true),
+        Effect.catch(() => Effect.succeed(false)),
+      );
+    const cloneEnv = {
+      GCM_INTERACTIVE: "never",
+      GIT_TERMINAL_PROMPT: "0",
+      SSH_ASKPASS: "",
+      SSH_ASKPASS_REQUIRE: "never",
+    };
+    const httpsUrl = repositoryHttpsUrl(selection.kind, repository);
 
-    if (githubCliReady) {
-      yield* github.execute({
+    if (cliReady) {
+      yield* selection.cli.execute({
         cwd: parent,
-        args: ["repo", "clone", "--no-upstream", repository, stagingPath, "--", "--progress"],
+        args:
+          selection.kind === "github"
+            ? ["repo", "clone", "--no-upstream", repository, stagingPath, "--", "--progress"]
+            : // glab clones by project URL so a self-hosted instance needs no ambient host.
+              ["repo", "clone", httpsUrl, stagingPath, "--", "--progress"],
         timeoutMs: CLONE_TIMEOUT_MS,
         maxBufferBytes: CLONE_OUTPUT_LIMIT_BYTES,
         outputMode: "truncate",
-        env: {
-          GCM_INTERACTIVE: "never",
-          GIT_TERMINAL_PROMPT: "0",
-          SSH_ASKPASS: "",
-          SSH_ASKPASS_REQUIRE: "never",
-        },
+        env: cloneEnv,
         onStdoutChunk: publishChunk,
         onStderrChunk: publishChunk,
       });
@@ -391,11 +411,11 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
 
     // GitCore.execute owns the spawned process in an Effect Scope. Cancelling the
     // WebSocket request interrupts this Effect, closes that Scope, and terminates
-    // the fallback `git clone` process just like runProcess does for the gh path.
+    // the fallback `git clone` process just like runProcess does for the CLI path.
     yield* git.execute({
-      operation: "clone public GitHub project",
+      operation: "clone public project",
       cwd: parent,
-      args: ["clone", "--progress", "--", `https://github.com/${repository}.git`, stagingPath],
+      args: ["clone", "--progress", "--", `${httpsUrl}.git`, stagingPath],
       env: {
         GCM_INTERACTIVE: "never",
         GIT_ASKPASS: "",
@@ -411,14 +431,19 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
     });
   });
 
-  const provisionCheckout: GitHubProjectProvisioner["provisionCheckout"] = (input, reporter) =>
+  const provisionCheckout: ProjectProvisioner["provisionCheckout"] = (input, reporter) =>
     Effect.gen(function* () {
       yield* publishPhase(reporter, input.operationId, "validating", "Validating repository");
-      const repository = parseGitHubRepositoryInput(input.repository);
+      const repository =
+        input.host === "gitlab"
+          ? parseGitLabRepositoryInput(input.repository)
+          : parseGitHubRepositoryInput(input.repository);
       if (!repository) {
         return yield* provisioningError(
           "INVALID_REPOSITORY",
-          "Enter a GitHub repository as `owner/repository` or a GitHub.com repository URL.",
+          input.host === "gitlab"
+            ? "Enter a GitLab project as `group/project`, `host/group/project`, or a GitLab project URL."
+            : "Enter a GitHub repository as `owner/repository` or a GitHub.com repository URL.",
           false,
         );
       }
@@ -484,7 +509,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
             reporter,
             input.operationId,
             "resolving-access",
-            "Resolving GitHub access",
+            `Resolving ${gitHostDisplayName(input.host)} access`,
           );
           const stagingPath = path.join(
             parent,
@@ -503,7 +528,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
             if (!valid) {
               return yield* provisioningError(
                 "CLONE_FAILED",
-                "The cloned repository's origin does not match the requested GitHub repository.",
+                "The cloned repository's origin does not match the requested repository.",
                 false,
               );
             }
@@ -542,7 +567,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
           );
         }),
       );
-    }).pipe(Effect.mapError(classifyCloneFailure));
+    }).pipe(Effect.mapError((cause) => classifyCloneFailure(input.host, cause)));
 
   return { provisionCheckout };
 });

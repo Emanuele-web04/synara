@@ -1,19 +1,25 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CommandId, ProjectId, type GitHubProjectProvisionInput } from "@synara/contracts";
+import { CommandId, ProjectId, type ProjectProvisionInput } from "@synara/contracts";
 import { Deferred, Effect, Fiber, FileSystem, Path, PlatformError } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { GitCommandError, GitHubCliError } from "../git/Errors";
-import type { GitCoreShape } from "../git/Services/GitCore";
-import type { GitHubCliShape } from "../git/Services/GitHubCli";
-import {
-  GitHubProjectProvisioningError,
-  makeGitHubProjectProvisioner,
-} from "./githubProjectProvisioning";
+import { parseRepositoryReference } from "@synara/shared/gitHostRepository";
 
-function makeInput(destinationParent: string): GitHubProjectProvisionInput {
+import { GitCommandError, GitHostCliError } from "../git/Errors";
+import type { GitCoreShape } from "../git/Services/GitCore";
+import type { GitHostCliRouterShape, GitHostCliShape } from "../git/Services/GitHostCli";
+import {
+  ProjectProvisioningError,
+  makeProjectProvisioner,
+} from "./projectProvisioning";
+
+function makeInput(
+  destinationParent: string,
+  overrides: Partial<ProjectProvisionInput> = {},
+): ProjectProvisionInput {
   return {
     operationId: "operation-1",
+    host: "github",
     repository: "openai/codex",
     destinationParent,
     directoryName: "codex",
@@ -22,23 +28,56 @@ function makeInput(destinationParent: string): GitHubProjectProvisionInput {
     newProjectSpaceId: null,
     defaultModelSelection: { provider: "codex", model: "gpt-5" },
     createdAt: "2026-08-04T00:00:00.000Z",
+    ...overrides,
   };
 }
 
-function unavailableGitHubCli(): GitHubCliShape {
+/** Pure routing over one per-host fake; the provisioner never needs the real router. */
+function makeGitHostRouter(input: {
+  github?: GitHostCliShape;
+  gitlab?: GitHostCliShape;
+}): GitHostCliRouterShape {
+  const select = (repository: string) => {
+    const identity = parseRepositoryReference(repository);
+    const cli = identity?.kind === "gitlab" ? input.gitlab : input.github;
+    return cli
+      ? Effect.succeed({
+          kind: identity?.kind ?? ("github" as const),
+          host: identity?.host ?? "github.com",
+          cli,
+        })
+      : Effect.fail(
+          new GitHostCliError({
+            host: "gitlab",
+            operation: "forRepository",
+            detail: "No CLI fake for this host.",
+            reason: "not-installed",
+          }),
+        );
+  };
+  return {
+    forRepository: select,
+    forWorkspace: () => select("acme/app"),
+    forReference: () => select("acme/app"),
+    knownGitLabHosts: Effect.succeed(new Set<string>()),
+  } as unknown as GitHostCliRouterShape;
+}
+
+function unavailableGitHubCli(): GitHostCliShape {
   return {
     getViewerLogin: () =>
       Effect.fail(
-        new GitHubCliError({
+        new GitHostCliError({
+          host: "github",
           operation: "getViewerLogin",
           detail: "GitHub CLI is not installed.",
           reason: "not-installed",
         }),
       ),
-  } as unknown as GitHubCliShape;
+  } as unknown as GitHostCliShape;
 }
 
-describe("GitHub project provisioning", () => {
+describe("project provisioning", () => {
   it("uses authenticated GitHub CLI cloning without forcing SSH or HTTPS", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -48,7 +87,7 @@ describe("GitHub project provisioning", () => {
         const ghCalls: ReadonlyArray<string>[] = [];
         const github = {
           getViewerLogin: () => Effect.succeed("octocat"),
-          execute: (input: Parameters<GitHubCliShape["execute"]>[0]) =>
+          execute: (input: Parameters<GitHostCliShape["execute"]>[0]) =>
             Effect.gen(function* () {
               ghCalls.push(input.args);
               yield* fileSystem.makeDirectory(input.args[4] ?? "", { recursive: true });
@@ -60,7 +99,7 @@ describe("GitHub project provisioning", () => {
                 timedOut: false,
               };
             }),
-        } as unknown as GitHubCliShape;
+        } as unknown as GitHostCliShape;
         const git = {
           execute: () =>
             Effect.succeed({
@@ -69,12 +108,12 @@ describe("GitHub project provisioning", () => {
               stderr: "",
             }),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github,
+          gitHost: makeGitHostRouter({ github }),
         });
         return {
           provisioned: yield* provisioner.provisionCheckout(makeInput(parent), {
@@ -110,7 +149,7 @@ describe("GitHub project provisioning", () => {
           execute: (input: Parameters<GitCoreShape["execute"]>[0]) =>
             Effect.gen(function* () {
               calls.push(input.operation);
-              if (input.operation === "clone public GitHub project") {
+              if (input.operation === "clone public project") {
                 yield* fileSystem.makeDirectory(input.args.at(-1) ?? "", { recursive: true });
                 return { code: 0, stdout: "", stderr: "" };
               }
@@ -121,12 +160,12 @@ describe("GitHub project provisioning", () => {
               };
             }),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         const provisioned = yield* provisioner.provisionCheckout(makeInput(parent), {
           publish: () => Effect.void,
@@ -142,10 +181,10 @@ describe("GitHub project provisioning", () => {
     expect(result.provisioned.checkout).toBe("created");
     expect(result.provisioned.workspaceRoot).toMatch(/[/\\]codex$/);
     expect(result.entries).toEqual(["codex"]);
-    expect(result.calls).toEqual(["clone public GitHub project", "verify GitHub project clone"]);
+    expect(result.calls).toEqual(["clone public project", "verify project clone"]);
   });
 
-  it("reuses an existing checkout with the same GitHub origin", async () => {
+  it("reuses an existing checkout with the same origin", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -163,12 +202,12 @@ describe("GitHub project provisioning", () => {
             });
           },
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         return {
           provisioned: yield* provisioner.provisionCheckout(makeInput(parent), {
@@ -180,7 +219,7 @@ describe("GitHub project provisioning", () => {
     );
 
     expect(result.provisioned.checkout).toBe("reused");
-    expect(result.calls).toEqual(["verify GitHub project clone"]);
+    expect(result.calls).toEqual(["verify project clone"]);
   });
 
   it("reports a conflict for an existing directory that is not a Git checkout", async () => {
@@ -198,12 +237,12 @@ describe("GitHub project provisioning", () => {
               stderr: "fatal: not a git repository",
             }),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         return yield* provisioner
           .provisionCheckout(makeInput(parent), { publish: () => Effect.void })
@@ -226,19 +265,19 @@ describe("GitHub project provisioning", () => {
           execute: () =>
             Effect.fail(
               new GitCommandError({
-                operation: "verify GitHub project clone",
+                operation: "verify project clone",
                 command: "git remote get-url origin",
                 cwd: path.join(parent, "codex"),
                 detail: "connection reset",
               }),
             ),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         return yield* provisioner
           .provisionCheckout(makeInput(parent), { publish: () => Effect.void })
@@ -269,12 +308,12 @@ describe("GitHub project provisioning", () => {
               });
             }),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         const failure = yield* provisioner
           .provisionCheckout(makeInput(parent), { publish: () => Effect.void })
@@ -283,7 +322,7 @@ describe("GitHub project provisioning", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
-    expect(result.failure).toBeInstanceOf(GitHubProjectProvisioningError);
+    expect(result.failure).toBeInstanceOf(ProjectProvisioningError);
     expect(result.failure.code).toBe("NETWORK_ERROR");
     expect(result.entries).toEqual([]);
   });
@@ -305,12 +344,12 @@ describe("GitHub project provisioning", () => {
               }),
             ),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         return yield* provisioner
           .provisionCheckout(makeInput(parent), { publish: () => Effect.void })
@@ -339,12 +378,12 @@ describe("GitHub project provisioning", () => {
               }),
             ),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         return yield* provisioner
           .provisionCheckout(makeInput(parent), { publish: () => Effect.void })
@@ -366,7 +405,7 @@ describe("GitHub project provisioning", () => {
         const git = {
           execute: (input: Parameters<GitCoreShape["execute"]>[0]) =>
             Effect.gen(function* () {
-              if (input.operation === "clone public GitHub project") {
+              if (input.operation === "clone public project") {
                 yield* fileSystem.makeDirectory(input.args.at(-1) ?? "", { recursive: true });
                 return { code: 0, stdout: "", stderr: "" };
               }
@@ -388,12 +427,12 @@ describe("GitHub project provisioning", () => {
               }),
             ),
         } satisfies FileSystem.FileSystem;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem: fileSystemWithPromotionRace,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         return yield* provisioner
           .provisionCheckout(makeInput(parent), { publish: () => Effect.void })
@@ -421,12 +460,12 @@ describe("GitHub project provisioning", () => {
               return yield* Effect.never;
             }),
         } as unknown as GitCoreShape;
-        const provisioner = yield* makeGitHubProjectProvisioner({
+        const provisioner = yield* makeProjectProvisioner({
           homeDir: parent,
           fileSystem,
           path,
           git,
-          github: unavailableGitHubCli(),
+          gitHost: makeGitHostRouter({ github: unavailableGitHubCli() }),
         });
         const fiber = yield* provisioner
           .provisionCheckout(makeInput(parent), {

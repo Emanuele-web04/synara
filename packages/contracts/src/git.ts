@@ -137,10 +137,10 @@ export const GitStatusInput = Schema.Struct({
 });
 export type GitStatusInput = typeof GitStatusInput.Type;
 
-export const GitHubRepositoryInput = Schema.Struct({
+export const GitRepositoryInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
-export type GitHubRepositoryInput = typeof GitHubRepositoryInput.Type;
+export type GitRepositoryInput = typeof GitRepositoryInput.Type;
 
 const GIT_REV_MAX_LENGTH = 256;
 
@@ -440,21 +440,20 @@ export const GitStatusRemoteResult = Schema.Struct({
 });
 export type GitStatusRemoteResult = typeof GitStatusRemoteResult.Type;
 
-export const GitHubRepositoryResult = Schema.Struct({
-  repository: Schema.NullOr(
-    Schema.Struct({
-      nameWithOwner: TrimmedNonEmptyStringSchema,
-      url: TrimmedNonEmptyStringSchema,
-    }),
-  ),
-  repositories: Schema.Array(
-    Schema.Struct({
-      nameWithOwner: TrimmedNonEmptyStringSchema,
-      url: TrimmedNonEmptyStringSchema,
-    }),
-  ),
+/** `reference` is the canonical identity (`owner/repo` on GitHub, `host/group/project` on
+ * GitLab); `nameWithOwner` is the host-relative display path. */
+const GitRepositoryLink = Schema.Struct({
+  host: Schema.Literals(["github", "gitlab"]),
+  reference: TrimmedNonEmptyStringSchema,
+  nameWithOwner: TrimmedNonEmptyStringSchema,
+  url: TrimmedNonEmptyStringSchema,
 });
-export type GitHubRepositoryResult = typeof GitHubRepositoryResult.Type;
+
+export const GitRepositoryResult = Schema.Struct({
+  repository: Schema.NullOr(GitRepositoryLink),
+  repositories: Schema.Array(GitRepositoryLink),
+});
+export type GitRepositoryResult = typeof GitRepositoryResult.Type;
 
 export const GitStatusStreamEvent = Schema.Union([
   Schema.TaggedStruct("snapshot", {

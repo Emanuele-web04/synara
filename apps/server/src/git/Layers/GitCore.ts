@@ -34,7 +34,11 @@ import {
   type GitRecentCommit,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
-import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
+import {
+  parseGitRemoteUrl,
+  remoteUrlMatchesRepository,
+  type GitHostKind,
+} from "@synara/shared/gitHostRepository";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 
@@ -136,6 +140,14 @@ const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+// GitHub publishes PR heads under `refs/pull/<n>/head`; GitLab publishes MR heads under
+// `refs/merge-requests/<n>/head`. Both are fetchable read-only refs on the primary remote.
+function pullRequestHeadRef(host: GitHostKind, prNumber: number): string {
+  return host === "gitlab"
+    ? `refs/merge-requests/${prNumber}/head`
+    : `refs/pull/${prNumber}/head`;
+}
+
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -3417,7 +3429,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             "--quiet",
             "--no-tags",
             remoteName,
-            `+refs/pull/${input.prNumber}/head:refs/heads/${input.branch}`,
+            `+${pullRequestHeadRef(input.host, input.prNumber)}:refs/heads/${input.branch}`,
           ],
           {
             fallbackErrorMessage: "git fetch pull request branch failed",
@@ -3428,30 +3440,31 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const fetchPullRequestCommit: GitCoreShape["fetchPullRequestCommit"] = (input) =>
       Effect.gen(function* () {
         const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
-        if (input.expectedRepositoryNameWithOwner) {
+        if (input.expectedRepository) {
           const remoteUrl = yield* runGitStdout(
             "GitCore.fetchPullRequestCommit.remoteUrl",
             input.cwd,
             ["remote", "get-url", remoteName],
           );
-          const actualRepositoryNameWithOwner =
-            parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
-          if (
-            actualRepositoryNameWithOwner?.toLowerCase() !==
-            input.expectedRepositoryNameWithOwner.toLowerCase()
-          ) {
+          if (!remoteUrlMatchesRepository(remoteUrl, input.expectedRepository)) {
             return yield* createGitCommandError(
               "GitCore.fetchPullRequestCommit.remoteMismatch",
               input.cwd,
               ["remote", "get-url", remoteName],
-              `Pull request URL targets ${input.expectedRepositoryNameWithOwner}, but remote ${remoteName} targets ${actualRepositoryNameWithOwner ?? "a non-GitHub repository"}.`,
+              `Pull request URL targets ${input.expectedRepository}, but remote ${remoteName} targets ${parseGitRemoteUrl(remoteUrl)?.path ?? "an unknown repository"}.`,
             );
           }
         }
         yield* executeGit(
           "GitCore.fetchPullRequestCommit",
           input.cwd,
-          ["fetch", "--quiet", "--no-tags", remoteName, `refs/pull/${input.prNumber}/head`],
+          [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            remoteName,
+            pullRequestHeadRef(input.host, input.prNumber),
+          ],
           { fallbackErrorMessage: "git fetch pull request head failed" },
         );
         return yield* executeGit("GitCore.fetchPullRequestCommit.resolve", input.cwd, [

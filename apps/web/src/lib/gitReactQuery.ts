@@ -395,7 +395,7 @@ export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
   });
 }
 
-export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = true) {
+export function gitRepositoryQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
     queryKey: gitQueryKeys.githubRepository(cwd),
     queryFn: async () => {

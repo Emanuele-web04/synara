@@ -24,7 +24,7 @@ describe("fakeGitHubCli pull request surface", () => {
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const viewer = yield* service.getViewerLogin({ cwd: "/repo" });
+        const viewer = yield* service.getViewerLogin({ cwd: "/repo", host: "github.com" });
         const batch = yield* service.listRepositoryPullRequests({
           cwd: "/repo",
           repository: "acme/app",

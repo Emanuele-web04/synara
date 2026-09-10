@@ -1,8 +1,8 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import type { ExecuteGitInput, GitCoreShape } from "../git/Services/GitCore";
-import { resolveGitHubRepositories } from "./repositoryResolution";
+import type { ExecuteGitInput, GitCoreShape } from "./Services/GitCore";
+import { resolveRepositories } from "./repositoryResolution";
 
 function makeGit(input: {
   branchExitCode?: number;
@@ -53,7 +53,9 @@ function makeGit(input: {
   } as unknown as GitCoreShape;
 }
 
-describe("resolveGitHubRepositories", () => {
+const NO_GITLAB_HOSTS = { gitlabHosts: new Set<string>() };
+
+describe("resolveRepositories", () => {
   it("fails outside a repository before reading process-wide config", async () => {
     const calls: string[][] = [];
     const git = makeGit({
@@ -62,7 +64,7 @@ describe("resolveGitHubRepositories", () => {
       calls,
     });
 
-    await expect(Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project"))).rejects.toThrow(
+    await expect(Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS))).rejects.toThrow(
       "not a git repository",
     );
     expect(calls).toHaveLength(1);
@@ -74,7 +76,7 @@ describe("resolveGitHubRepositories", () => {
       configStderr: "fatal: not a git repository",
     });
 
-    await expect(Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project"))).rejects.toThrow(
+    await expect(Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS))).rejects.toThrow(
       "not a git repository",
     );
   });
@@ -91,12 +93,12 @@ describe("resolveGitHubRepositories", () => {
     });
 
     await expect(
-      Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project")),
+      Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS)),
     ).resolves.toEqual({
       authoritative: true,
       repositories: [
-        { nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" },
-        { nameWithOwner: "acme/other", url: "https://github.com/acme/other" },
+        { kind: "github", reference: "acme/widgets", nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" },
+        { kind: "github", reference: "acme/other", nameWithOwner: "acme/other", url: "https://github.com/acme/other" },
       ],
     });
     expect(calls).toHaveLength(2);
@@ -105,7 +107,7 @@ describe("resolveGitHubRepositories", () => {
 
   it("treats a repository with no matching config keys as authoritatively empty", async () => {
     await expect(
-      Effect.runPromise(resolveGitHubRepositories(makeGit({}), "/tmp/project")),
+      Effect.runPromise(resolveRepositories(makeGit({}), "/tmp/project", NO_GITLAB_HOSTS)),
     ).resolves.toEqual({ authoritative: true, repositories: [] });
   });
 
@@ -121,12 +123,12 @@ describe("resolveGitHubRepositories", () => {
     });
 
     await expect(
-      Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project")),
+      Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS)),
     ).resolves.toEqual({
       authoritative: true,
       repositories: [
-        { nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" },
-        { nameWithOwner: "acme/platform", url: "https://github.com/acme/platform" },
+        { kind: "github", reference: "acme/widgets", nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" },
+        { kind: "github", reference: "acme/platform", nameWithOwner: "acme/platform", url: "https://github.com/acme/platform" },
       ],
     });
     expect(calls).toEqual([
@@ -143,7 +145,7 @@ describe("resolveGitHubRepositories", () => {
       remoteStderr: "error: No such remote 'origin'",
     });
 
-    await expect(Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project"))).rejects.toThrow(
+    await expect(Effect.runPromise(resolveRepositories(git, "/tmp/project", NO_GITLAB_HOSTS))).rejects.toThrow(
       "No such remote",
     );
   });

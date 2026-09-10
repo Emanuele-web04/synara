@@ -86,7 +86,7 @@ import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitCreateDetachedWorktreeMutationOptions,
-  gitGithubRepositoryQueryOptions,
+  gitRepositoryQueryOptions,
   gitBranchesQueryOptions,
   gitStatusQueryOptions,
 } from "~/lib/gitReactQuery";
@@ -4692,7 +4692,7 @@ export default function ChatView({
     environmentPanelOpen,
   });
   const githubRepositoryQuery = useQuery(
-    gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
+    gitRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
   );
   const threadRecap = useThreadRecap({
     thread: activeThread,

@@ -290,8 +290,8 @@ export const PullRequestCommentInput = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
-  // GitHub rejects comment bodies past 65536 characters; enforcing it here keeps oversized
-  // payloads off the wire and out of subprocess plumbing entirely.
+  // GitHub rejects comment bodies past 65536 characters (GitLab's limit is larger); enforcing
+  // the tighter one here keeps oversized payloads off the wire and out of subprocess plumbing.
   body: TrimmedNonEmptyString.check(Schema.isMaxLength(65536)),
 });
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
@@ -330,7 +330,12 @@ export type PullRequestActionResult = typeof PullRequestActionResult.Type;
 export class PullRequestsUnavailableError extends Schema.TaggedErrorClass<PullRequestsUnavailableError>()(
   "PullRequestsUnavailableError",
   {
-    reason: Schema.Literals(["gh-not-installed", "gh-not-authenticated"]),
+    reason: Schema.Literals([
+      "gh-not-installed",
+      "gh-not-authenticated",
+      "glab-not-installed",
+      "glab-not-authenticated",
+    ]),
     message: TrimmedNonEmptyString,
   },
 ) {}

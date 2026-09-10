@@ -4,7 +4,7 @@
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type GitHubProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
+import { type ProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
@@ -165,7 +165,7 @@ export function CreateProjectDialog(props: {
     if (!props.open) return;
     const api = readNativeApi();
     if (!api) return;
-    return api.projects.onProvisionProgress((event: GitHubProjectProvisionProgressEvent) => {
+    return api.projects.onProvisionProgress((event: ProjectProvisionProgressEvent) => {
       if (event.operationId !== activeOperationIdRef.current) return;
       if (event.kind === "completed") {
         setProvisionProgress("Project added");

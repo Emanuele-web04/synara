@@ -850,7 +850,7 @@ describe("wsNativeApi", () => {
     const controller = new AbortController();
 
     await expect(
-      api.projects.provisionFromGitHub(input, { signal: controller.signal }),
+      api.projects.provisionFromRepository(input, { signal: controller.signal }),
     ).resolves.toEqual(result);
     emitPush(WS_CHANNELS.projectProvisionProgress, {
       operationId: input.operationId,
@@ -859,7 +859,7 @@ describe("wsNativeApi", () => {
       message: "Cloning openai/codex",
     });
 
-    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsProvisionFromGitHub, input, {
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsProvisionFromRepository, input, {
       timeoutMs: null,
       signal: controller.signal,
     });

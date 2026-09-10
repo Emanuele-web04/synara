@@ -65,9 +65,9 @@ import {
 } from "./device";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
-  GitHubProjectProvisionInput,
-  GitHubProjectProvisionProgressEvent,
-} from "./githubProjectProvisioning";
+  ProjectProvisionInput,
+  ProjectProvisionProgressEvent,
+} from "./projectProvisioning";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -80,8 +80,8 @@ import {
   GitCreateDetachedWorktreeInput,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
-  GitHubRepositoryInput,
-  GitHubRepositoryResult,
+  GitRepositoryInput,
+  GitRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitInitInput,
@@ -521,9 +521,9 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
   },
 );
 
-export const WsProjectsProvisionFromGitHubRpc = Rpc.make(WS_METHODS.projectsProvisionFromGitHub, {
-  payload: GitHubProjectProvisionInput,
-  success: GitHubProjectProvisionProgressEvent,
+export const WsProjectsProvisionFromRepositoryRpc = Rpc.make(WS_METHODS.projectsProvisionFromRepository, {
+  payload: ProjectProvisionInput,
+  success: ProjectProvisionProgressEvent,
   error: WsRpcError,
   stream: true,
 });
@@ -700,9 +700,9 @@ export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
   error: WsRpcError,
 });
 
-export const WsGitGithubRepositoryRpc = Rpc.make(WS_METHODS.gitGithubRepository, {
-  payload: GitHubRepositoryInput,
-  success: GitHubRepositoryResult,
+export const WsGitRepositoryRpc = Rpc.make(WS_METHODS.gitRepository, {
+  payload: GitRepositoryInput,
+  success: GitRepositoryResult,
   error: WsRpcError,
 });
 
@@ -1306,11 +1306,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
   WsSubscribeProjectDevServerEventsRpc,
-  WsProjectsProvisionFromGitHubRpc,
+  WsProjectsProvisionFromRepositoryRpc,
   WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
-  WsGitGithubRepositoryRpc,
+  WsGitRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
   WsGitBlameLineRpc,

@@ -36,6 +36,7 @@ import type {
   GitStatusResult,
   GitWorkingTreeDiffStatsResult,
 } from "@synara/contracts";
+import type { GitHostKind } from "@synara/shared/gitHostRepository";
 
 import type { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 
@@ -162,15 +163,17 @@ export interface GitSnapshotWorktreeInput {
 
 export interface GitFetchPullRequestBranchInput {
   cwd: string;
+  host: GitHostKind;
   prNumber: number;
   branch: string;
 }
 
 export interface GitFetchPullRequestCommitInput {
   cwd: string;
+  host: GitHostKind;
   prNumber: number;
-  /** When provided by a full PR URL, must match the remote used for the fetch. */
-  expectedRepositoryNameWithOwner?: string;
+  /** When provided by a full PR/MR URL, must match the remote used for the fetch. */
+  expectedRepository?: string;
 }
 
 export interface GitEnsureRemoteInput {
