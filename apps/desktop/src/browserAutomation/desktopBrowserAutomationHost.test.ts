@@ -1479,5 +1479,3 @@ describe("DesktopBrowserAutomationHost", () => {
     panelReveal.resolve();
   });
 });
-
-describe("snapshot target validity", () => {});
