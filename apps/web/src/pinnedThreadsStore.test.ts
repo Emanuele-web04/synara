@@ -30,11 +30,11 @@ describe("usePinnedThreadsStore", () => {
 
   it("reorders only the pinned ids in the current sidebar surface", () => {
     usePinnedThreadsStore.setState({
-      pinnedThreadIds: ["studio-1", "thread-1", "thread-2"].map(ThreadId.makeUnsafe),
+      pinnedThreadIds: ["studio-1", "thread-1", "thread-2"].map((id) => ThreadId.makeUnsafe(id)),
     });
 
     const changed = usePinnedThreadsStore.getState().movePinnedThread({
-      scopeThreadIds: ["thread-1", "thread-2"].map(ThreadId.makeUnsafe),
+      scopeThreadIds: ["thread-1", "thread-2"].map((id) => ThreadId.makeUnsafe(id)),
       activeThreadId: ThreadId.makeUnsafe("thread-2"),
       overThreadId: ThreadId.makeUnsafe("thread-1"),
     });

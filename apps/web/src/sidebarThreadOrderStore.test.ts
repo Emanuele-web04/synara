@@ -13,7 +13,7 @@ describe("useSidebarThreadOrderStore", () => {
 
   it("snapshots a scope and moves a thread", () => {
     const changed = useSidebarThreadOrderStore.getState().moveThread({
-      scopeThreadIds: ["thread-1", "thread-2", "thread-3"].map(ThreadId.makeUnsafe),
+      scopeThreadIds: ["thread-1", "thread-2", "thread-3"].map((id) => ThreadId.makeUnsafe(id)),
       activeThreadId: ThreadId.makeUnsafe("thread-3"),
       overThreadId: ThreadId.makeUnsafe("thread-1"),
     });
@@ -28,7 +28,7 @@ describe("useSidebarThreadOrderStore", () => {
 
   it("prunes threads that no longer exist", () => {
     useSidebarThreadOrderStore.setState({
-      orderedThreadIds: ["thread-2", "thread-1"].map(ThreadId.makeUnsafe),
+      orderedThreadIds: ["thread-2", "thread-1"].map((id) => ThreadId.makeUnsafe(id)),
     });
     useSidebarThreadOrderStore.getState().pruneThreads([ThreadId.makeUnsafe("thread-1")]);
     expect(useSidebarThreadOrderStore.getState().orderedThreadIds).toEqual(["thread-1"]);
