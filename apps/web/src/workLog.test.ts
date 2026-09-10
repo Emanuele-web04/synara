@@ -25,6 +25,60 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("strips terminal formatting from persisted provider activity details", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-plugin-status",
+          kind: "tool.updated",
+          summary: "Pi plugin",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "MCP tool call",
+            detail: "\u001b[38;2;215;119;87mTransmuting...\u001b[0m",
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Transmuting...");
+  });
+
+  it("preserves bracketed source text in provider activity details", () => {
+    const detail = "const first = items[0]; // [example]";
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "source-output",
+          kind: "tool.updated",
+          summary: "Read file",
+          payload: { detail },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe(detail);
+  });
+
+  it("cleans persisted notice messages without losing bracketed content", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-notice",
+          kind: "runtime.warning",
+          summary: "Pi extension",
+          payload: { message: "\u001b[31mEnabled [full] mode\u001b[0m" },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Enabled [full] mode");
+    expect(entry?.label).toBe("Pi extension");
+  });
+
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [

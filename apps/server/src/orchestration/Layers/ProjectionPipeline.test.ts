@@ -1,3 +1,5 @@
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -11,7 +13,7 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -39,6 +41,12 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
 import { runManagedAttachmentCleanupBatch } from "../../managedAttachmentCleanup.ts";
+
+const readProjectedMessage = (threadId: ThreadId, messageId: MessageId) =>
+  Effect.gen(function* () {
+    const repository = yield* ProjectionThreadMessageRepository;
+    return Option.getOrThrow(yield* repository.getByThreadAndMessageId({ threadId, messageId }));
+  }).pipe(Effect.provide(ProjectionThreadMessageRepositoryLive));
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -995,7 +1003,15 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-ide
           FROM projection_thread_messages
           WHERE message_id = ${messageId}
           ORDER BY thread_id ASC
-        `;
+        `.pipe(
+            Effect.flatMap((rows) =>
+              Effect.forEach(rows, (row) =>
+                readProjectedMessage(ThreadId.makeUnsafe(row.threadId), messageId).pipe(
+                  Effect.map((message) => ({ ...row, text: message.text })),
+                ),
+              ),
+            ),
+          );
         const expectedRows = [
           {
             threadId: firstThreadId,
@@ -3367,7 +3383,7 @@ it.layer(
       `;
       const streamed = streamedRows[0];
       assert.lengthOf(streamedRows, 1);
-      assert.equal(streamed?.text, deltas.join(""));
+      assert.equal((yield* readProjectedMessage(threadId, messageId)).text, deltas.join(""));
       assert.equal(streamed?.turnId, turnId);
       assert.equal(streamed?.dispatchOrigin, "agent");
       assert.isTrue(Boolean(streamed?.isStreaming));
@@ -3547,7 +3563,7 @@ it.layer(
         WHERE thread_id = ${threadId} AND message_id = ${messageId}
       `;
       assert.lengthOf(rows, 1);
-      assert.equal(rows[0]?.text, "first second third");
+      assert.equal((yield* readProjectedMessage(threadId, messageId)).text, "first second third");
     }),
   );
 });
@@ -4167,7 +4183,14 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const messageRows = yield* sql<{ readonly text: string }>`
         SELECT text FROM projection_thread_messages WHERE message_id = 'message-a'
       `;
-      assert.deepEqual(messageRows, [{ text: "hello world" }]);
+      assert.lengthOf(messageRows, 1);
+      assert.equal(
+        (yield* readProjectedMessage(
+          ThreadId.makeUnsafe("thread-a"),
+          MessageId.makeUnsafe("message-a"),
+        )).text,
+        "hello world",
+      );
 
       const stateRows = yield* sql<{
         readonly projector: string;
@@ -5660,3 +5683,94 @@ it.layer(
     }),
   );
 });
+
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-deferred-"))(
+  "OrchestrationProjectionPipeline deferred cursor",
+  (it) => {
+    it.effect(
+      "settles the deferred cursor inside the hot transaction only when it is caught up",
+      () =>
+        Effect.gen(function* () {
+          const projectionPipeline = yield* OrchestrationProjectionPipeline;
+          const eventStore = yield* OrchestrationEventStore;
+          const sql = yield* SqlClient.SqlClient;
+          const now = new Date().toISOString();
+          const threadId = ThreadId.makeUnsafe("thread-deferred-settle");
+          const cursorOf = (projector: string) =>
+            Effect.map(
+              sql<{ readonly sequence: number }>`
+            SELECT last_applied_sequence AS sequence FROM projection_state WHERE projector = ${projector}
+          `,
+              (rows) => rows[0]?.sequence ?? null,
+            );
+          const streamedDelta = (index: number, text: string) =>
+            eventStore.append({
+              type: "thread.message-sent",
+              eventId: EventId.makeUnsafe(`evt-deferred-settle-${index}`),
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: now,
+              commandId: CommandId.makeUnsafe(`cmd-deferred-settle-${index}`),
+              causationEventId: null,
+              correlationId: CommandId.makeUnsafe(`cmd-deferred-settle-${index}`),
+              metadata: {},
+              payload: {
+                threadId,
+                messageId: MessageId.makeUnsafe("message-deferred-settle"),
+                role: "assistant",
+                text,
+                turnId: null,
+                streaming: true,
+                createdAt: now,
+                updatedAt: now,
+              },
+            });
+
+          yield* projectionPipeline.bootstrap;
+          // A full pass brings both phase cursors to the same sequence.
+          const first = yield* streamedDelta(1, "one ");
+          yield* projectionPipeline.projectEvent(first);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), first.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            first.sequence,
+          );
+
+          // Caught up: a streamed delta has no deferred projector, so the hot
+          // transaction moves the deferred cursor itself and reports it settled.
+          const second = yield* streamedDelta(2, "two ");
+          const settled = yield* sql.withTransaction(
+            projectionPipeline.projectHotEventInCurrentTransaction(second),
+          );
+          assert.isTrue(settled.deferredPhaseSettled);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), second.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            second.sequence,
+          );
+
+          // Lagging (a failed or in-flight deferred catch-up): the hot transaction
+          // must leave the deferred cursor alone so the catch-up still replays.
+          yield* sql`
+        UPDATE projection_state SET last_applied_sequence = ${first.sequence}
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+      `;
+          const third = yield* streamedDelta(3, "three");
+          const notSettled = yield* sql.withTransaction(
+            projectionPipeline.projectHotEventInCurrentTransaction(third),
+          );
+          assert.isFalse(notSettled.deferredPhaseSettled);
+          assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), third.sequence);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            first.sequence,
+          );
+          yield* projectionPipeline.projectDeferredEvent(third);
+          assert.strictEqual(
+            yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
+            third.sequence,
+          );
+        }),
+    );
+  },
+);

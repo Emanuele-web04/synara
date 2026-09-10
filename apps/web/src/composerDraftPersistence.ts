@@ -1,3 +1,4 @@
+import { normalizePendingUserInputDrafts } from "./pendingUserInputRecovery";
 // FILE: composerDraftPersistence.ts
 // Purpose: Owns composer draft schema v6, migrations, partialization, merge normalization, and hydration.
 // Exports: Persist middleware transitions and persisted state type.
@@ -262,6 +263,7 @@ type PersistedComposerPromptHistorySavedDraft =
   typeof PersistedComposerPromptHistorySavedDraft.Type;
 
 const PersistedComposerThreadDraftState = Schema.Struct({
+  pendingUserInputDrafts: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: Schema.String,
   // Set only while composer prompt-history browsing is active: the user's real
   // draft snapshot, kept safe while `prompt` temporarily holds a recalled history entry.
@@ -932,6 +934,9 @@ function normalizePersistedDraftsByThreadId(
       continue;
     }
     const draftCandidate = draftValue as PersistedComposerThreadDraftState;
+    const pendingUserInputDrafts = normalizePendingUserInputDrafts(
+      draftCandidate.pendingUserInputDrafts,
+    );
     const promptCandidate = typeof draftCandidate.prompt === "string" ? draftCandidate.prompt : "";
     const promptHistorySavedDraft = normalizePersistedPromptHistorySavedDraft(
       draftCandidate.promptHistorySavedDraft,
@@ -1049,6 +1054,7 @@ function normalizePersistedDraftsByThreadId(
     const hasQueuedTurns = normalizedQueuedTurns.length > 0;
     const hasReferenceData = skills.length > 0 || mentions.length > 0;
     if (
+      Object.keys(pendingUserInputDrafts).length === 0 &&
       promptCandidate.length === 0 &&
       promptHistorySavedDraft === null &&
       attachments.length === 0 &&
@@ -1068,6 +1074,7 @@ function normalizePersistedDraftsByThreadId(
       continue;
     }
     nextDraftsByThreadId[threadId as ThreadId] = {
+      ...(Object.keys(pendingUserInputDrafts).length > 0 ? { pendingUserInputDrafts } : {}),
       prompt,
       ...(promptHistorySavedDraft !== null ? { promptHistorySavedDraft } : {}),
       attachments,
@@ -1216,6 +1223,7 @@ export function partializeComposerDraftStoreState(
     const hasQueuedTurns = persistedQueuedTurns.length > 0;
     const hasReferenceData = draft.skills.length > 0 || draft.mentions.length > 0;
     if (
+      Object.keys(draft.pendingUserInputDrafts ?? {}).length === 0 &&
       draft.prompt.length === 0 &&
       draft.promptHistorySavedDraft === null &&
       draft.persistedAttachments.length === 0 &&
@@ -1235,6 +1243,9 @@ export function partializeComposerDraftStoreState(
       continue;
     }
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
+      ...(Object.keys(draft.pendingUserInputDrafts ?? {}).length > 0
+        ? { pendingUserInputDrafts: draft.pendingUserInputDrafts }
+        : {}),
       prompt: draft.prompt,
       ...(draft.promptHistorySavedDraft !== null
         ? {
@@ -1532,6 +1543,13 @@ export function toHydratedThreadDraft(
   const activeProvider = normalizeProviderKind(persistedDraft.activeProvider) ?? null;
 
   return {
+    ...(persistedDraft.pendingUserInputDrafts
+      ? {
+          pendingUserInputDrafts: normalizePendingUserInputDrafts(
+            persistedDraft.pendingUserInputDrafts,
+          ),
+        }
+      : {}),
     prompt: persistedDraft.prompt,
     promptHistorySavedDraft: hydratePromptHistorySavedDraft(persistedDraft.promptHistorySavedDraft),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),

@@ -771,6 +771,40 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("keeps inspected images out of generated output artifacts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const payload = {
+        item: {
+          type: "imageView",
+          id: "view_1",
+          path: "/attachments/objects/upload.png",
+        },
+      };
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-image-view"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("view_1"),
+        payload,
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") return;
+      assert.equal(firstEvent.value.payload.itemType, "image_view");
+      assert.equal(firstEvent.value.payload.title, "Image view");
+      assert.deepStrictEqual(firstEvent.value.payload.data, payload);
+    }),
+  );
+
   it.effect("maps completed generated-image items to structured image artifacts", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -819,51 +853,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       };
       assert.equal(rawPayload.item?.result, undefined);
       assert.equal(rawPayload.item?.result_elided_for_relay, true);
-    }),
-  );
-
-  it.effect("maps completed image-view items without generating image artifacts", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-      const imagePath = "C:\\Users\\Test User\\QA 100%\\page.png";
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-image-view-complete"),
-        kind: "notification",
-        provider: "codex",
-        createdAt: new Date().toISOString(),
-        method: "item/completed",
-        threadId: asThreadId("thread-1"),
-        providerThreadId: "provider-thread-1",
-        turnId: asTurnId("turn-1"),
-        itemId: asItemId("image-view-1"),
-        payload: {
-          item: {
-            type: "imageView",
-            id: "image-view-1",
-            path: imagePath,
-          },
-        },
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "item.completed");
-      if (firstEvent.value.type !== "item.completed") {
-        return;
-      }
-      assert.equal(firstEvent.value.payload.itemType, "image_view");
-      assert.equal(firstEvent.value.payload.detail, imagePath);
-      assert.notDeepEqual(firstEvent.value.payload.data, {
-        kind: "codex.generated_image",
-        path: imagePath,
-        callId: "image-view-1",
-      });
     }),
   );
 

@@ -1653,10 +1653,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
           const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
-          const bubbleIsChipOnly =
-            showUserText &&
-            terminalContexts.length === 0 &&
-            hasOnlyInlineSkillChips(userMessageText, row.message.mentions ?? []);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           const isEditingThisMessage = editingUserMessageId === row.message.id;
           const isSubmittingThisEdit = submittingEditedUserMessageId === row.message.id;
@@ -1795,9 +1791,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
                         USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
                         userMessageBubbleBorderClass,
-                        bubbleIsChipOnly
-                          ? "py-0.5 px-3"
-                          : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+                        USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                       )}
                       data-chat-find-document-id={row.message.id}
                     >

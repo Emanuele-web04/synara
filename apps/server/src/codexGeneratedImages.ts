@@ -300,7 +300,7 @@ export function markTrustedCodexGeneratedImageRuntimeEvent(
     event.type !== "item.completed" ||
     event.payload.itemType !== "image_generation" ||
     !isCodexGeneratedImageArtifact(event.payload.data) ||
-    isTrustedCodexGeneratedImageArtifact(event.payload.data) ||
+    event.payload.data.origin !== undefined ||
     !legacyRuntimeEventProvesExplicitImageGeneration(event)
   ) {
     return event;

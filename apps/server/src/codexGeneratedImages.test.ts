@@ -49,6 +49,7 @@ describe("generatedImagePathFromRuntimeEvent", () => {
       generatedImagePathFromRuntimeEvent(event),
       "/codex-home/generated_images/thread-1/call-1.png",
     );
+    assert.strictEqual(markTrustedCodexGeneratedImageRuntimeEvent(event), event);
   });
 
   it("returns undefined when the artifact has the wrong kind", () => {
@@ -172,6 +173,24 @@ describe("generatedImagePathFromRuntimeEvent", () => {
     });
 
     assert.equal(generatedImagePathFromRuntimeEvent(event), undefined);
+  });
+
+  it("rejects an unknown explicit origin instead of replacing it", () => {
+    const event = makeImageGenerationCompletedEvent({
+      data: {
+        kind: CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+        origin: "unknown.producer",
+        path: "/tmp/unknown-origin.png",
+      },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "image_generation_end",
+        payload: {},
+      },
+    });
+
+    assert.equal(generatedImagePathFromRuntimeEvent(event), undefined);
+    assert.strictEqual(markTrustedCodexGeneratedImageRuntimeEvent(event), event);
   });
 });
 

@@ -4,6 +4,7 @@
 // Exports: deleteActiveThreadFromClient
 
 import type { ThreadId } from "@synara/contracts";
+import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
 
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
@@ -24,7 +25,9 @@ async function disposeThreadTerminalRuntimes(threadId: ThreadId): Promise<void> 
   try {
     const { terminalRuntimeRegistry } =
       await import("../components/terminal/terminalRuntimeRegistry");
-    terminalRuntimeRegistry.disposeThread(threadId);
+    for (const scopeId of terminalScopeIdsForThread(threadId)) {
+      terminalRuntimeRegistry.disposeThread(scopeId);
+    }
   } catch (error) {
     // A failed chunk fetch must not abort the delete sequence: the durable delete
     // already landed server-side and the server owns provider/terminal teardown.

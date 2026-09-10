@@ -304,8 +304,9 @@ export function EnvironmentPullRequestSection({
   const queryClient = useQueryClient();
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState<PullRequestMergeMethod | null>(null);
-  // Shares the cached git status the git block already fetches — no extra RPC.
-  const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
+  // Share the git block's cache, but revalidate stale status when this always-mounted
+  // panel opens so an earlier missing PR does not linger until the next polling tick.
+  const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd, enabled));
   const pr = gitStatus?.pr ?? null;
 
   const snapshotQuery = useQuery(
@@ -316,11 +317,10 @@ export function EnvironmentPullRequestSection({
     }),
   );
 
-  // The snapshot's own PR summary is fresher than the cached git status: prefer its
-  // title/number/url for display, and when it reports the PR merged/closed between
-  // git-status polls, show a state row instead of rendering stale "open" data.
+  // The snapshot can report a merge/close before git status catches up. Once git status
+  // also settles, prefer it over a cached open snapshot whose polling is now disabled.
   const livePr = snapshotQuery.data?.pullRequest ?? null;
-  const displayPr = livePr ?? pr;
+  const displayPr = pr?.state === "open" ? (livePr ?? pr) : pr;
 
   const pullRequestRepository = displayPr
     ? parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(displayPr.url)
@@ -342,7 +342,7 @@ export function EnvironmentPullRequestSection({
   });
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
 
-  if (!pr || pr.state !== "open" || !displayPr) {
+  if (!displayPr) {
     return null;
   }
 

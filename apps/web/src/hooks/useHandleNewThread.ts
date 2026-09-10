@@ -40,6 +40,7 @@ import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -82,6 +83,10 @@ export function useHandleNewThread() {
     }
 
     const entryPoint = options?.entryPoint ?? "chat";
+    const defaultEnvMode =
+      (entryPoint === "chat"
+        ? useProjectEnvironmentStore.getState().envModeByProjectId[projectId]
+        : undefined) ?? settings.defaultThreadEnvMode;
     if (entryPoint === "chat") {
       const draftStore = useComposerDraftStore.getState();
       const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");
@@ -103,7 +108,7 @@ export function useHandleNewThread() {
         worktreePath: options?.worktreePath ?? null,
         hasExplicitWorktreePath: options?.worktreePath !== undefined,
         fresh: options?.fresh === true,
-        envMode: options?.envMode ?? null,
+        envMode: options?.envMode ?? draftThread?.envMode ?? defaultEnvMode,
         serverCwd,
         providerStatuses,
         statusesReconciled: providerStatusesReconciled,
@@ -366,7 +371,12 @@ export function useHandleNewThread() {
         markTemporaryThread(threadId);
       }
       const createdAt = new Date().toISOString();
-      const draftSeed = createFreshDraftThreadSeed({ createdAt, entryPoint, options });
+      const draftSeed = createFreshDraftThreadSeed({
+        createdAt,
+        entryPoint,
+        options,
+        defaultEnvMode,
+      });
       const committed = await stageDraftNavigation({
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
