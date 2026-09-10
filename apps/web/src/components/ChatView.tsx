@@ -1,3 +1,6 @@
+import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputNotice";
+import { usePendingUserInputDrafts } from "./chat/usePendingUserInputDrafts";
+import { expiredUserInputDrafts } from "../pendingUserInputRecovery";
 import {
   type AutomationDefinition,
   type AutomationSchedule,
@@ -586,6 +589,7 @@ import {
   COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
+  COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
@@ -1527,10 +1531,6 @@ export default function ChatView({
   const [respondingUserInputRequestKeys, setRespondingUserInputRequestKeys] = useState<string[]>(
     [],
   );
-  const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
-    Record<string, Record<string, PendingUserInputDraftAnswer>>
-  >({});
-  const pendingUserInputAnswersByRequestIdRef = useRef(pendingUserInputAnswersByRequestId);
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
@@ -2881,6 +2881,16 @@ export default function ChatView({
       threadActivities,
       userInputResponseClaimReferenceAt,
     ],
+  );
+  const {
+    answers: pendingUserInputAnswersByRequestId,
+    answersRef: pendingUserInputAnswersByRequestIdRef,
+    setAnswers: setPendingUserInputAnswersByRequestId,
+    drafts: pendingUserInputDrafts,
+  } = usePendingUserInputDrafts(threadId, pendingUserInputs, activeThread?.pendingInteractions);
+  const expiredQuestionDrafts = useMemo(
+    () => expiredUserInputDrafts(pendingUserInputDrafts, threadActivities),
+    [pendingUserInputDrafts, threadActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingUserInputKey = activePendingUserInput
@@ -9223,6 +9233,8 @@ export default function ChatView({
     [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
   );
 
+  const userInputSubmissionsRef = useRef(new Set<string>());
+  const [userInputSubmissionVersion, setUserInputSubmissionVersion] = useState(0);
   const onRespondToUserInput = useCallback(
     async (
       requestId: ApprovalRequestId,
@@ -9232,6 +9244,10 @@ export default function ChatView({
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
       const requestKey = pendingRequestInstanceKey(requestId, lifecycleGeneration);
+      const submissionKey = `${activeThreadId}:${requestKey}`;
+      if (userInputSubmissionsRef.current.has(submissionKey)) return;
+      userInputSubmissionsRef.current.add(submissionKey);
+      setUserInputSubmissionVersion((version) => version + 1);
       const dispatchAnswers = hasCompletePendingUserInputAnswers(answers)
         ? answers
         : omitNullPendingUserInputAnswers(answers);
@@ -9239,23 +9255,37 @@ export default function ChatView({
       setRespondingUserInputRequestKeys((existing) =>
         existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
-      await api.orchestration
-        .dispatchCommand({
-          type: "thread.user-input.respond",
-          commandId: newCommandId(),
-          threadId: activeThreadId,
-          requestId,
-          answers: dispatchAnswers,
-          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
-          createdAt: new Date().toISOString(),
+      await Promise.resolve()
+        .then(async () => {
+          await api.orchestration.dispatchCommand({
+            type: "thread.user-input.respond",
+            commandId: newCommandId(),
+            threadId: activeThreadId,
+            requestId,
+            answers: dispatchAnswers,
+            ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+            createdAt: new Date().toISOString(),
+          });
+          // Refresh identities and settlement after command acceptance; acceptance
+          // alone does not mean Claude received the answer.
+          clearThreadDetailResumeCursor(activeThreadId);
+          await api.orchestration.subscribeThread(buildThreadSubscribeInput(activeThreadId));
         })
         .catch((err: unknown) => {
           setStoreThreadError(
             activeThreadId,
-            err instanceof Error ? err.message : "Failed to submit user input.",
+            describeErrorMessage(
+              err,
+              "Could not submit or refresh the answer. Your answers are saved.",
+            ),
+          );
+        })
+        .finally(() => {
+          userInputSubmissionsRef.current.delete(submissionKey);
+          setRespondingUserInputRequestKeys((existing) =>
+            existing.filter((key) => key !== requestKey),
           );
         });
-      setRespondingUserInputRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
     [activeThreadId, setStoreThreadError],
   );
@@ -9319,7 +9349,12 @@ export default function ChatView({
       setComposerTrigger(null);
       return nextDraftAnswer;
     },
-    [activePendingUserInput, activePendingUserInputKey],
+    [
+      activePendingUserInput,
+      activePendingUserInputKey,
+      pendingUserInputAnswersByRequestIdRef,
+      setPendingUserInputAnswersByRequestId,
+    ],
   );
 
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
@@ -9355,7 +9390,11 @@ export default function ChatView({
         cursorAdjacentToMention ? null : detectComposerTrigger(value, expandedCursor),
       );
     },
-    [activePendingUserInputKey],
+    [
+      activePendingUserInputKey,
+      pendingUserInputAnswersByRequestIdRef,
+      setPendingUserInputAnswersByRequestId,
+    ],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(
@@ -9413,6 +9452,8 @@ export default function ChatView({
       activePendingUserInputKey,
       onRespondToUserInput,
       setActivePendingUserInputQuestionIndex,
+      setPendingUserInputAnswersByRequestId,
+      pendingUserInputAnswersByRequestIdRef,
     ],
   );
 
@@ -10593,7 +10634,13 @@ export default function ChatView({
       });
       return nextCursor;
     },
-    [activePendingProgress?.activeQuestion, activePendingUserInputKey, setPrompt],
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInputKey,
+      setPrompt,
+      setPendingUserInputAnswersByRequestId,
+      pendingUserInputAnswersByRequestIdRef,
+    ],
   );
 
   const readComposerSnapshot = useCallback((): {
@@ -11612,7 +11659,12 @@ export default function ChatView({
     !showContainerChatWorkspacePicker &&
     !showEmptyLandingProjectPicker &&
     activeProjectDisplayName ? (
-      <span className="inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-full px-2 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] sm:max-w-64">
+      <span
+        className={cn(
+          "inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-full px-2 py-1 sm:max-w-64",
+          COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
+        )}
+      >
         <FolderClosed className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
@@ -11626,11 +11678,12 @@ export default function ChatView({
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
-      // United-but-not-fused tray sitting in normal flow directly above the composer at a
-      // narrower width (w-14/15): tinted, rounded on top only, flush against the input
-      // shell below. No overlap/underlay tricks — in dark mode a slice tucked behind the
-      // composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell mx-auto flex min-h-8 w-14/15 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      // Tray sitting in normal flow directly above the composer, full composer width so
+      // the project / environment / branch chips sit near the shell edges. Unfilled in
+      // both themes (chips float over the page), rounded on top only and flush against
+      // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
+      // behind the composer's translucent corners reads as a visible cut along the seam.
+      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
@@ -11640,6 +11693,7 @@ export default function ChatView({
           triggerClassName={cn(
             "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
             COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
           )}
           showResetToHome={Boolean(
             isStudioContainer ? resolvedThreadWorkingDirectory : resolvedThreadWorktreePath,
@@ -11664,6 +11718,7 @@ export default function ChatView({
           triggerClassName={cn(
             "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
             COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
           )}
           selectionMode="project"
           selectedProjectId={activeProject.id}
@@ -11708,11 +11763,11 @@ export default function ChatView({
           }
           aria-label="Temporary chat"
           className={cn(
-            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-2.5",
+            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 sm:px-2.5",
             COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
-            isThreadTemporary
-              ? "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]"
-              : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
+            isThreadTemporary &&
+              "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]",
           )}
         >
           <TemporaryThreadIcon className="size-3.5" />
@@ -11969,6 +12024,7 @@ export default function ChatView({
                 <div className="pb-2">
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}
+                    submissionVersion={userInputSubmissionVersion}
                     isResponding={activePendingIsResponding}
                     answers={activePendingDraftAnswers}
                     questionIndex={activePendingQuestionIndex}
@@ -11978,6 +12034,22 @@ export default function ChatView({
                     onCancel={onCancelActivePendingUserInput}
                   />
                 </div>
+              ) : null}
+              {expiredQuestionDrafts[0] &&
+              pendingUserInputs.length === 0 &&
+              !activePendingApproval ? (
+                <ComposerExpiredUserInputNotice
+                  threadId={threadId}
+                  requestKey={expiredQuestionDrafts[0][0]}
+                  draft={expiredQuestionDrafts[0][1]}
+                  onRestore={(nextPrompt) => {
+                    promptRef.current = nextPrompt;
+                    setComposerCursor(
+                      collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+                    );
+                    scheduleComposerFocus();
+                  }}
+                />
               ) : null}
               {emptyLandingControls}
             </div>

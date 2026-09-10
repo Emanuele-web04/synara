@@ -31,6 +31,7 @@ import {
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { ORCHESTRATION_EVENT_PUBSUB_CAPACITY } from "../orchestrationAdmission.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 /**
@@ -768,6 +769,50 @@ describe("OrchestrationEngine", () => {
     ]);
     await system.dispose();
   });
+
+  it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("project-slow-subscriber");
+    // Overflow by more than one durable replay page (500 events).
+    const count = ORCHESTRATION_EVENT_PUBSUB_CAPACITY + 510;
+    try {
+      const initial = await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-slow-subscriber-create"),
+          projectId,
+          title: "Slow subscriber",
+          workspaceRoot: "/tmp/slow-subscriber",
+          defaultModelSelection: null,
+          createdAt: now(),
+        }),
+      );
+      const result = await system.run(
+        Effect.gen(function* () {
+          // Attach before loading/processing work, as startup and reactors do.
+          const live = yield* engine.subscribeDomainEvents;
+          for (let i = 0; i < count; i++) {
+            yield* engine.dispatch({
+              type: "project.meta.update",
+              commandId: CommandId.makeUnsafe(`cmd-slow-subscriber-${i}`),
+              projectId,
+              title: `Update ${i}`,
+            });
+          }
+          return Array.from(yield* Stream.runCollect(Stream.take(live, count)));
+        }).pipe(Effect.scoped, Effect.timeoutOption("8 seconds")),
+      );
+      expect(Option.isSome(result)).toBe(true);
+      const events = Option.getOrThrow(result);
+      expect(events.map((event) => event.sequence)).toEqual(
+        Array.from({ length: count }, (_, i) => initial.sequence + i + 1),
+      );
+      expect(events.at(-1)?.payload).toMatchObject({ title: `Update ${count - 1}` });
+    } finally {
+      await system.dispose();
+    }
+  }, 15_000);
 
   it("streams persisted domain events in order", async () => {
     const system = await createOrchestrationSystem();

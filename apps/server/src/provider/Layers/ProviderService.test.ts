@@ -1289,6 +1289,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         new ProviderValidationError({
           operation: "ProviderService.respondToRequest",
           issue: `Cannot respond to stale request 'request-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
+          reason: "stale-interaction",
         }),
       );
       assert.equal(routing.codex.respondToRequest.mock.calls.length, responseCallCount);
@@ -1307,6 +1308,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         new ProviderValidationError({
           operation: "ProviderService.respondToUserInput",
           issue: `Cannot respond to stale request 'user-input-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
+          reason: "stale-interaction",
         }),
       );
       assert.equal(routing.codex.respondToUserInput.mock.calls.length, userInputResponseCallCount);
@@ -1961,6 +1963,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         new ProviderValidationError({
           operation: "ProviderService.sendTurn",
           issue: `Cannot route thread '${session.threadId}' because no persisted provider binding exists.`,
+          reason: "runtime-unavailable",
         }),
       );
     }),
@@ -3158,6 +3161,43 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, initial.threadId);
       }
       assert.equal(routing.claude.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("classifies a lost Claude question runtime without silently recovering it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("lost-question-runtime");
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      yield* routing.claude.stopAll();
+      const starts = routing.claude.startSession.mock.calls.length;
+      const responses = routing.claude.respondToUserInput.mock.calls.length;
+      const result = yield* Effect.result(
+        provider.respondToUserInput({
+          threadId,
+          requestId: asRequestId("lost-question"),
+          lifecycleGeneration: binding.lifecycleGeneration,
+          answers: { Q: "Answer" },
+        }),
+      );
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToUserInput",
+          issue:
+            "Cannot respond to request 'lost-question' because the provider runtime is not active.",
+          reason: "runtime-unavailable",
+        }),
+      );
+      assert.equal(routing.claude.startSession.mock.calls.length, starts);
+      assert.equal(routing.claude.respondToUserInput.mock.calls.length, responses);
+      yield* provider.stopSession({ threadId });
     }),
   );
 
