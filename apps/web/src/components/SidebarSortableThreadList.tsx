@@ -14,11 +14,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ThreadId } from "@synara/contracts";
 import {
@@ -59,10 +55,7 @@ export function SidebarSortableThreadList({
   children,
 }: {
   items: readonly { id: ThreadId; title: string }[];
-  onMove: (input: {
-    activeThreadId: ThreadId;
-    overThreadId: ThreadId;
-  }) => void;
+  onMove: (input: { activeThreadId: ThreadId; overThreadId: ThreadId }) => void;
   onDragStart?: (threadId: ThreadId) => void;
   onDragFinish?: () => void;
   children: ReactNode;

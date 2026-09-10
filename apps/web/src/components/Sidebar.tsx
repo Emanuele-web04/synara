@@ -3887,11 +3887,7 @@ export default function Sidebar() {
     for (const [projectId, projectThreads] of sidebarThreadsByProjectId) {
       byProjectId.set(
         projectId,
-        sortThreadsForSidebar(
-          projectThreads,
-          appSettings.sidebarThreadSortOrder,
-          manualThreadIds,
-        ),
+        sortThreadsForSidebar(projectThreads, appSettings.sidebarThreadSortOrder, manualThreadIds),
       );
     }
     return byProjectId;
@@ -3956,9 +3952,7 @@ export default function Sidebar() {
   );
   const chatReorderScopeThreadIds = useMemo(
     () =>
-      visibleChatThreadRows
-        .filter((row) => !row.thread.parentThreadId)
-        .map((row) => row.thread.id),
+      visibleChatThreadRows.filter((row) => !row.thread.parentThreadId).map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
   // Studio threads, flattened the same way the home Chats list is. Skipped entirely while the
@@ -4707,10 +4701,7 @@ export default function Sidebar() {
               ref={sortable?.setNodeRef}
               style={sortable?.style}
               data-thread-hover-anchor={hoverAnchorId}
-              className={cn(
-                "group/thread-row relative w-full",
-                sortable?.sortableClassName,
-              )}
+              className={cn("group/thread-row relative w-full", sortable?.sortableClassName)}
             />
           }
         >
@@ -5277,13 +5268,7 @@ export default function Sidebar() {
                 }}
               >
                 {visibleEntries.map((entry) =>
-                  renderThreadRow(
-                    entry.thread,
-                    orderedProjectThreadIds,
-                    entry.depth,
-                    false,
-                    true,
-                  ),
+                  renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth, false, true),
                 )}
               </SidebarSortableThreadList>
 
@@ -6321,13 +6306,7 @@ export default function Sidebar() {
                     <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
                       {studioChatThreadRows.length > 0 ? (
                         studioChatThreadRows.map((row) =>
-                          renderThreadRow(
-                            row.thread,
-                            studioChatThreadIds,
-                            row.depth,
-                            true,
-                            true,
-                          ),
+                          renderThreadRow(row.thread, studioChatThreadIds, row.depth, true, true),
                         )
                       ) : (
                         <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
@@ -6599,9 +6578,7 @@ export default function Sidebar() {
                                 className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                                 onMouseDown={preventFocusOnMouseDown}
                                 onClick={() =>
-                                  setChatThreadListExtraPages(
-                                    chatThreadListEffectiveExtraPages + 1,
-                                  )
+                                  setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
                                 }
                               >
                                 <span>Show more</span>

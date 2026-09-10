@@ -2009,10 +2009,7 @@ describe("sortThreadsForSidebar", () => {
         }),
       ],
       "manual",
-      [
-        ThreadId.makeUnsafe("thread-manual-first"),
-        ThreadId.makeUnsafe("thread-manual-second"),
-      ],
+      [ThreadId.makeUnsafe("thread-manual-first"), ThreadId.makeUnsafe("thread-manual-second")],
     );
 
     expect(sorted.map((thread) => thread.id)).toEqual([

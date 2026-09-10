@@ -70,12 +70,8 @@ function pressFocusedKey(code: string, key = code) {
 }
 
 async function dragHandleTo(sourceId: string, targetId: string) {
-  const source = document.querySelector<HTMLElement>(
-    `[data-thread-reorder-handle="${sourceId}"]`,
-  );
-  const target = document.querySelector<HTMLElement>(
-    `[data-thread-reorder-handle="${targetId}"]`,
-  );
+  const source = document.querySelector<HTMLElement>(`[data-thread-reorder-handle="${sourceId}"]`);
+  const target = document.querySelector<HTMLElement>(`[data-thread-reorder-handle="${targetId}"]`);
   if (!source || !target) throw new Error("Expected sortable handles to be rendered");
   const sourceRect = source.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
@@ -137,17 +133,17 @@ describe("SidebarSortableThreadList", () => {
     pressFocusedKey("ArrowDown");
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     pressFocusedKey("Space", " ");
-    await expect.element(page.getByRole("list", { name: "Conversations" })).toHaveTextContent(
-      "BravoAlphaCharlie",
-    );
+    await expect
+      .element(page.getByRole("list", { name: "Conversations" }))
+      .toHaveTextContent("BravoAlphaCharlie");
   });
 
   it("reorders a conversation using the pointer handle", async () => {
     await render(<SortableHarness />);
     await dragHandleTo("thread-a", "thread-c");
-    await expect.element(page.getByRole("list", { name: "Conversations" })).toHaveTextContent(
-      "BravoCharlieAlpha",
-    );
+    await expect
+      .element(page.getByRole("list", { name: "Conversations" }))
+      .toHaveTextContent("BravoCharlieAlpha");
   });
 
   it("keeps the order when a keyboard drag is cancelled", async () => {
@@ -157,8 +153,8 @@ describe("SidebarSortableThreadList", () => {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     pressFocusedKey("ArrowDown");
     pressFocusedKey("Escape");
-    await expect.element(page.getByRole("list", { name: "Conversations" })).toHaveTextContent(
-      "AlphaBravoCharlie",
-    );
+    await expect
+      .element(page.getByRole("list", { name: "Conversations" }))
+      .toHaveTextContent("AlphaBravoCharlie");
   });
 });

@@ -178,12 +178,8 @@ function isoAt(offsetSeconds: number): string {
 }
 
 async function dragSidebarThreadHandle(sourceId: ThreadId, targetId: ThreadId): Promise<void> {
-  const source = document.querySelector<HTMLElement>(
-    `[data-thread-reorder-handle="${sourceId}"]`,
-  );
-  const target = document.querySelector<HTMLElement>(
-    `[data-thread-reorder-handle="${targetId}"]`,
-  );
+  const source = document.querySelector<HTMLElement>(`[data-thread-reorder-handle="${sourceId}"]`);
+  const target = document.querySelector<HTMLElement>(`[data-thread-reorder-handle="${targetId}"]`);
   if (!source || !target) throw new Error("Expected sidebar reorder handles to be rendered");
   const sourceRect = source.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
@@ -6183,7 +6179,11 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(draggableRow).not.toBeNull();
       const splitDragData = new DataTransfer();
       draggableRow?.dispatchEvent(
-        new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: splitDragData }),
+        new DragEvent("dragstart", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: splitDragData,
+        }),
       );
       expect(JSON.parse(splitDragData.getData(THREAD_DRAG_MIME))).toEqual({ threadId: THREAD_ID });
     } finally {
