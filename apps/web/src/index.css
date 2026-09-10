@@ -144,11 +144,11 @@
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
        edge against the sidebar should read as solid. Do not re-unify these. */
-    --seam-line: --alpha(var(--color-black) / 4%);
+    --seam-line: --alpha(var(--color-black) / 5%);
   }
 
   .dark .chat-content-card {
-    --seam-line: --alpha(var(--color-white) / 3%);
+    --seam-line: --alpha(var(--color-white) / 5%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
@@ -381,7 +381,7 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
-  --radius-user-message: 0.8rem;
+  --radius-user-message: 1rem;
   --font-ui-family: var(
     --theme-font-ui-family,
     -apple-system,
@@ -2590,20 +2590,23 @@ diffs-container {
   padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
 }
 
-/* Electron: continuous macOS-style corners (do not stack with corner-shape). */
+/* Composer and user bubbles share continuous corners; their radii remain the fallback.
+   Electron smoothing must not stack with browser corner-shape. */
 :root[data-runtime="electron"] .chat-composer-shell,
 :root[data-runtime="electron"] .chat-composer-surface,
 :root[data-runtime="electron"] .chat-composer-stacked-top,
-:root[data-runtime="electron"] .chat-composer-surface-banner {
+:root[data-runtime="electron"] .chat-composer-surface-banner,
+:root[data-runtime="electron"] .chat-user-message-bubble {
   -electron-corner-smoothing: system-ui;
 }
 
 /* Browser: squircle via corner-shape when supported. */
-@supports (corner-shape: round) {
+@supports (corner-shape: squircle) {
   :root:not([data-runtime="electron"]) .chat-composer-shell,
   :root:not([data-runtime="electron"]) .chat-composer-surface,
   :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
-  :root:not([data-runtime="electron"]) .chat-composer-surface-banner {
+  :root:not([data-runtime="electron"]) .chat-composer-surface-banner,
+  :root:not([data-runtime="electron"]) .chat-user-message-bubble {
     corner-shape: squircle;
   }
 }
