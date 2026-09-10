@@ -10,10 +10,11 @@ import type {
   ProjectReadFileResult,
   ProjectWatchFileInput,
 } from "@synara/contracts";
+import { StrictMode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { page } from "vitest/browser";
+import { page, userEvent, type Locator } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
-import { render } from "vitest-browser-react";
+import { render, cleanup } from "vitest-browser-react";
 
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
@@ -53,19 +54,33 @@ function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectRead
   };
 }
 
+const primaryModifier = /Mac/.test(navigator.platform) ? "Meta" : "Control";
+
+function shortcut(key: string): string {
+  return `{${primaryModifier}>}${key}{/${primaryModifier}}`;
+}
+
+async function replaceEditorContents(editor: Locator, contents: string): Promise<void> {
+  await editor.click();
+  await userEvent.keyboard(shortcut("a"));
+  // Fill replaces DOM text without updating Pierre's document; use native input.
+  await userEvent.keyboard(contents.replace(/[{[]/g, "$&$&").replace(/\n/g, "{Enter}"));
+}
+
 function pressKeyboardSave(element: Element): void {
   element.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "s",
       ctrlKey: true,
       bubbles: true,
+      composed: true,
       cancelable: true,
     }),
   );
 }
 
-afterEach(() => {
-  document.body.innerHTML = "";
+afterEach(async () => {
+  await cleanup();
 });
 
 it("requests only the resolved preview file for gutters and refreshes it on file events", async () => {
@@ -124,8 +139,8 @@ it("tracks dirty state and saves the loaded version with Ctrl+S", async () => {
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
-    await editor.fill("export const value = 2;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await replaceEditorContents(editor, "export const value = 2;\n");
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
 
     pressKeyboardSave(editor.element());
@@ -165,12 +180,12 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await editor.fill("manual edit\n");
+    await replaceEditorContents(editor, "manual edit\n");
     pressKeyboardSave(editor.element());
 
     await expect.element(page.getByRole("alert")).toHaveTextContent(conflictMessage);
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
-    await expect.element(editor).toHaveTextContent("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit");
     expect(writeFile).toHaveBeenCalledTimes(1);
   } finally {
     restoreNativeApi();
@@ -194,8 +209,9 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
       return unsubscribe;
     },
   );
+  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
   const restoreNativeApi = installNativeApi({
-    projects: { readFile, onFileChange },
+    projects: { readFile, onFileChange, writeFile },
   } as unknown as NativeApi);
 
   try {
@@ -206,8 +222,8 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
-    await editor.fill("manual edit\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await replaceEditorContents(editor, "manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
     fileChangeSubscription.listener?.({
@@ -217,7 +233,7 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     });
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await expect.element(editor).toHaveTextContent("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit");
     await expect
       .element(page.getByText("This file changed on disk. Your unsaved edits are preserved."))
       .toBeVisible();
@@ -225,7 +241,19 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     const reloadButton = document.querySelector<HTMLButtonElement>('[role="alert"] button');
     expect(reloadButton).not.toBeNull();
     reloadButton?.click();
-    await expect.element(editor).toHaveTextContent("external edit\n");
+    await expect.element(editor).toHaveTextContent("external edit");
+    await replaceEditorContents(editor, "after reload\n");
+    pressKeyboardSave(editor.element());
+    await vi.waitFor(() =>
+      expect(writeFile).toHaveBeenCalledWith({
+        cwd: WORKSPACE_ROOT,
+        relativePath: FILE_PATH,
+        contents: "after reload\n",
+        expectedVersion: externalVersion,
+        encoding: "utf8",
+        lineEnding: "lf",
+      }),
+    );
   } finally {
     restoreNativeApi();
   }
@@ -248,7 +276,7 @@ it("stops revalidation when a kept-mounted preview becomes hidden", async () => 
 
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveTextContent("export const value = 1;\n");
+      .toHaveTextContent("export const value = 1;");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
     await screen.rerender(
@@ -285,7 +313,7 @@ it("switches the watcher to a workspace path resolved by the file read", async (
 
     await expect
       .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveTextContent("export const value = 1;\n");
+      .toHaveTextContent("export const value = 1;");
     await vi.waitFor(() =>
       expect(onFileChange).toHaveBeenLastCalledWith(
         { cwd: WORKSPACE_ROOT, relativePath: resolvedPath },
@@ -328,8 +356,8 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
-    await editor.fill("manual edit\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    await replaceEditorContents(editor, "manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     fileChangeSubscription.listener?.({
       type: "changed",
@@ -342,7 +370,7 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     await reloadButton.click();
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(3));
-    await expect.element(editor).toHaveTextContent("manual edit\n");
+    await expect.element(editor).toHaveTextContent("manual edit");
     await expect.element(page.getByText("Transient read failure")).toBeVisible();
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
   } finally {
@@ -379,7 +407,7 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
     );
 
     const editor = page.getByRole("textbox", { name: `Edit ${markdownPath}` });
-    await editor.fill("- [ ] updated task\n");
+    await replaceEditorContents(editor, "- [ ] updated task\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await page.getByRole("radio", { name: "Preview" }).click();
@@ -462,11 +490,11 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
       </QueryClientProvider>,
     );
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;\n");
+    await expect.element(editor).toHaveTextContent("export const value = 1;");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: 1 });
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await editor.fill("saved contents\n");
+    await replaceEditorContents(editor, "saved contents\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
@@ -475,8 +503,8 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
     completeRead(loadedFile());
     await pendingRead;
     await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    await expect.element(editor).toHaveTextContent("saved contents\n");
-    await editor.fill("next saved contents\n");
+    await expect.element(editor).toHaveTextContent("saved contents");
+    await replaceEditorContents(editor, "next saved contents\n");
     pressKeyboardSave(editor.element());
     await vi.waitFor(() =>
       expect(writeFile).toHaveBeenNthCalledWith(2, {
@@ -492,5 +520,70 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
     completeRead(loadedFile());
     queryClient.clear();
     restoreNativeApi();
+  }
+});
+
+it("preserves unsaved Markdown edits across Preview and Source", async () => {
+  const readFile = vi
+    .fn()
+    .mockResolvedValue(loadedFile({ relativePath: "README.md", contents: "original\n" }));
+  const writeFile = vi
+    .fn()
+    .mockResolvedValue({ relativePath: "README.md", version: SAVED_VERSION });
+  const restore = installNativeApi({ projects: { readFile, writeFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <StrictMode>
+        <QueryClientProvider client={makeQueryClient()}>
+          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    const editor = page.getByRole("textbox", { name: "Edit README.md" });
+    await editor.click();
+    await userEvent.keyboard(shortcut("a") + "unsaved");
+    await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
+    await expect.element(editor).toHaveTextContent("unsaved");
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    const editorShell = document.querySelector<HTMLElement>(".editor-file-editor__pierre")!;
+    expect(getComputedStyle(editorShell).display).toBe("none");
+    expect(editorShell.getBoundingClientRect().height).toBe(0);
+    await page.getByRole("radio", { name: "Source", exact: true }).click();
+    await expect.element(editor).toHaveTextContent("unsaved");
+  } finally {
+    restore();
+  }
+});
+
+it("preserves edits and focus when a save completes while typing", async () => {
+  let complete!: (v: { relativePath: string; version: string }) => void;
+  const pending = new Promise<{ relativePath: string; version: string }>((r) => (complete = r));
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const writeFile = vi.fn().mockReturnValue(pending);
+  const restore = installNativeApi({ projects: { readFile, writeFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await editor.click();
+    await userEvent.keyboard(shortcut("a") + "first");
+    await userEvent.keyboard(shortcut("s"));
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    await userEvent.keyboard("second");
+    await expect.element(editor).toHaveTextContent("firstsecond");
+    complete({ relativePath: FILE_PATH, version: SAVED_VERSION });
+    await vi.waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    await expect.element(editor).toHaveTextContent("firstsecond");
+    expect(editor.element().getRootNode()).toBeInstanceOf(ShadowRoot);
+    expect((editor.element().getRootNode() as ShadowRoot).activeElement).toBe(editor.element());
+    await userEvent.keyboard(shortcut("z"));
+    await expect.element(editor).not.toHaveTextContent("firstsecond");
+    await userEvent.keyboard(`{${primaryModifier}>}{Shift>}z{/Shift}{/${primaryModifier}}`);
+    await expect.element(editor).toHaveTextContent("firstsecond");
+  } finally {
+    restore();
   }
 });
