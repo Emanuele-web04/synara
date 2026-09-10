@@ -363,7 +363,8 @@ describe("MessagesTimeline", () => {
       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-1.5");
+    expect(markup).toContain("chat-user-message-bubble");
+    expect(markup).toContain("py-2");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
