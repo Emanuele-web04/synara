@@ -2348,7 +2348,15 @@ const make = Effect.gen(function* () {
       // provider callbacks with it, so any interaction it still owns can never
       // be answered. Settle those rows now instead of waiting for a
       // `session.started` that an interrupt alone never produces.
-      if (shouldApplyThreadLifecycle && isTerminalTurnEvent && eventTurnId !== undefined) {
+      // Claude explicitly resolves callbacks when their owning foreground turn
+      // or background agent ends. A foreground terminal event alone does not
+      // establish that its agent-owned requests have become unanswerable.
+      if (
+        shouldApplyThreadLifecycle &&
+        isTerminalTurnEvent &&
+        eventTurnId !== undefined &&
+        event.provider !== "claudeAgent"
+      ) {
         // Turn-scoped by default: overlapping sends share a lifecycle
         // generation, so a sibling turn's interaction must survive this turn's
         // terminal event.

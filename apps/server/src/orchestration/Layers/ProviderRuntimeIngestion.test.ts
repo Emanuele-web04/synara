@@ -1647,6 +1647,49 @@ describe("ProviderRuntimeIngestion", () => {
     expect(failuresAfter).toHaveLength(1);
   });
 
+  it("keeps Claude background approvals until the provider resolves their callbacks", async () => {
+    const harness = await createHarness();
+    const base = {
+      provider: "claudeAgent" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("foreground-with-background-approval"),
+      createdAt: new Date().toISOString(),
+    };
+    harness.emit({ ...base, type: "turn.started", eventId: asEventId("background-start") });
+    harness.emit({
+      ...base,
+      type: "request.opened",
+      eventId: asEventId("background-approval"),
+      requestId: ApprovalRequestId.makeUnsafe("background-approval"),
+      payload: { requestType: "tool_approval", detail: "Background agent tool" },
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "background-approval") === "pending",
+    );
+    harness.emit({
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("foreground-completed"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const pending = await harness.readProjectedThread();
+    expect(pendingInteractionStatus(pending, "background-approval")).toBe("pending");
+    expect(approvalFailureActivities(pending)).toHaveLength(0);
+    harness.emit({
+      ...base,
+      type: "request.resolved",
+      eventId: asEventId("background-resolved"),
+      requestId: ApprovalRequestId.makeUnsafe("background-approval"),
+      payload: { requestType: "tool_approval", decision: "cancel" },
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => thread.hasPendingApprovals === false,
+    );
+  });
+
   it("settles a pending user-input request when its turn ends without a session restart", async () => {
     const harness = await createHarness();
 
