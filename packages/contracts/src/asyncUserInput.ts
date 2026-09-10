@@ -21,7 +21,7 @@ export type AsyncUserInputResponse = typeof AsyncUserInputResponse.Type;
 
 export const AsyncUserInputActivityPayload = Schema.Struct({
   questions: AsyncUserInputQuestions,
-  response: Schema.optional(
+  response: Schema.optionalKey(
     Schema.Struct({
       answers: Schema.Array(TrimmedNonEmptyString),
       messageId: MessageId,

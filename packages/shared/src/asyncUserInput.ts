@@ -10,7 +10,9 @@ const isAsyncUserInputPayload = Schema.is(AsyncUserInputActivityPayload);
 
 type ActivityFields = { readonly kind: string; readonly payload: unknown };
 
-function asyncUserInputPayload(activity: ActivityFields): AsyncUserInputActivityPayload | undefined {
+function asyncUserInputPayload(
+  activity: ActivityFields,
+): AsyncUserInputActivityPayload | undefined {
   return activity.kind === CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND &&
     isAsyncUserInputPayload(activity.payload)
     ? activity.payload

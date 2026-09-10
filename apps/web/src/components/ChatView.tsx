@@ -3490,28 +3490,42 @@ export default function ChatView({
   const asyncResponseThreadId = activeThread?.id;
   const asyncResponseRuntimeMode = activeThread?.runtimeMode;
   const asyncResponseInteractionMode = activeThread?.interactionMode;
-  const onRespondToAsyncUserInput = useCallback<RespondToAsyncUserInput>(async (response) => {
-    const api = readNativeApi();
-    if (!api || !asyncResponseThreadId || !asyncResponseRuntimeMode || !asyncResponseInteractionMode || isSidechatExpired) {
-      throw new Error("This conversation is unavailable. Reconnect and try again.");
-    }
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.start",
-      commandId: CommandId.makeUnsafe(crypto.randomUUID()),
-      threadId: asyncResponseThreadId,
-      asyncUserInputResponse: response,
-      message: {
-        messageId: MessageId.makeUnsafe(crypto.randomUUID()),
-        role: "user",
-        text: response.answers.join("\n\n"),
-        attachments: [],
-      },
-      dispatchMode: "steer",
-      runtimeMode: asyncResponseRuntimeMode,
-      interactionMode: asyncResponseInteractionMode,
-      createdAt: new Date().toISOString(),
-    });
-  }, [asyncResponseThreadId, asyncResponseRuntimeMode, asyncResponseInteractionMode, isSidechatExpired]);
+  const onRespondToAsyncUserInput = useCallback<RespondToAsyncUserInput>(
+    async (response) => {
+      const api = readNativeApi();
+      if (
+        !api ||
+        !asyncResponseThreadId ||
+        !asyncResponseRuntimeMode ||
+        !asyncResponseInteractionMode ||
+        isSidechatExpired
+      ) {
+        throw new Error("This conversation is unavailable. Reconnect and try again.");
+      }
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+        threadId: asyncResponseThreadId,
+        asyncUserInputResponse: response,
+        message: {
+          messageId: MessageId.makeUnsafe(crypto.randomUUID()),
+          role: "user",
+          text: response.answers.join("\n\n"),
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: asyncResponseRuntimeMode,
+        interactionMode: asyncResponseInteractionMode,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [
+      asyncResponseThreadId,
+      asyncResponseRuntimeMode,
+      asyncResponseInteractionMode,
+      isSidechatExpired,
+    ],
+  );
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -3520,7 +3534,12 @@ export default function ChatView({
         agentActivityTimelineState.timelineWorkEntries,
         asyncQuestions,
       ),
-    [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages, asyncQuestions],
+    [
+      activeThread?.proposedPlans,
+      agentActivityTimelineState.timelineWorkEntries,
+      timelineMessages,
+      asyncQuestions,
+    ],
   );
   const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
     () => new Set(optimisticUserMessages.map((message) => message.id)),

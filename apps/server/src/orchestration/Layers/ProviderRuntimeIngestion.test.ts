@@ -2287,37 +2287,66 @@ describe("ProviderRuntimeIngestion", () => {
     const threadId = asThreadId("thread-1");
     const turnId = asTurnId("async-turn");
     harness.emit({
-      type: "turn.started", eventId: asEventId("async-turn-start"),
-      provider: "codex", threadId, turnId, createdAt, payload: {},
+      type: "turn.started",
+      eventId: asEventId("async-turn-start"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt,
+      payload: {},
     });
     harness.emit({
-      type: "content.delta", eventId: asEventId("before-question"),
-      provider: "codex", threadId, turnId, createdAt, itemId: asItemId("working-message"),
+      type: "content.delta",
+      eventId: asEventId("before-question"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt,
+      itemId: asItemId("working-message"),
       payload: { streamKind: "assistant_text", delta: "Investigating. " },
     });
     harness.emit({
-      type: "item.completed", eventId: asEventId("async-question"),
-      provider: "codex", threadId, turnId, createdAt, itemId: asItemId("question-item"),
+      type: "item.completed",
+      eventId: asEventId("async-question"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt,
+      itemId: asItemId("question-item"),
       payload: {
-        itemType: "assistant_message", status: "completed", detail: "Which interaction?",
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "Which interaction?",
         asyncQuestions: [{ title: "Which interaction?", options: null }],
       },
     });
     harness.emit({
-      type: "content.delta", eventId: asEventId("after-question"),
-      provider: "codex", threadId, turnId, createdAt, itemId: asItemId("working-message"),
+      type: "content.delta",
+      eventId: asEventId("after-question"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt,
+      itemId: asItemId("working-message"),
       payload: { streamKind: "assistant_text", delta: "Continuing with independent code." },
     });
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some((activity) => activity.kind === "user-input.async") &&
-      entry.messages.some((message) => message.text.includes("Continuing with independent code.")),
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.activities.some((activity) => activity.kind === "user-input.async") &&
+        entry.messages.some((message) =>
+          message.text.includes("Continuing with independent code."),
+        ),
     );
     expect(thread.messages).toHaveLength(1);
     expect(thread.messages[0]).toMatchObject({
-      text: "Investigating. Continuing with independent code.", streaming: true,
+      text: "Investigating. Continuing with independent code.",
+      streaming: true,
     });
     expect(thread.session).toMatchObject({ status: "running", activeTurnId: turnId });
-    expect(thread.activities.some((activity) => activity.kind === "user-input.requested")).toBe(false);
+    expect(thread.activities.some((activity) => activity.kind === "user-input.requested")).toBe(
+      false,
+    );
   });
 
   it("does not project reasoning content deltas into transcript work rows", async () => {

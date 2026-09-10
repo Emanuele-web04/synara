@@ -2419,12 +2419,14 @@ export function deriveTimelineEntries(
     ),
     sortedTimelineEntries([
       ...workRows,
-      ...asyncQuestions.map((activity): TimelineEntry => ({
-        id: activity.id,
-        kind: "async-question",
-        createdAt: activity.createdAt,
-        activity,
-      })),
+      ...asyncQuestions.map(
+        (activity): TimelineEntry => ({
+          id: activity.id,
+          kind: "async-question",
+          createdAt: activity.createdAt,
+          activity,
+        }),
+      ),
     ]),
   );
 }

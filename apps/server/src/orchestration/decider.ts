@@ -1781,17 +1781,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         : undefined;
       if (asyncResponse) {
         if (
-          (targetThread.session?.providerName ?? targetThread.modelSelection.provider) !== "codex" ||
+          (targetThread.session?.providerName ?? targetThread.modelSelection.provider) !==
+            "codex" ||
           (command.modelSelection ?? targetThread.modelSelection).provider !== "codex" ||
-          !asyncQuestion || !isAsyncUserInputActivity(asyncQuestion) ||
+          !asyncQuestion ||
+          !isAsyncUserInputActivity(asyncQuestion) ||
           asyncQuestion.payload.response ||
           asyncResponse.answers.length !== asyncQuestion.payload.questions.length ||
-          command.sourceProposedPlan || command.reviewTarget ||
+          command.sourceProposedPlan ||
+          command.reviewTarget ||
           command.message.attachments.length > 0
         ) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: "This Codex question is unavailable, already answered, or has incomplete answers.",
+            detail:
+              "This Codex question is unavailable, already answered, or has incomplete answers.",
           });
         }
       }
@@ -1844,9 +1848,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
           : null;
       const dispatchMode = asyncResponse ? "steer" : (command.dispatchMode ?? "queue");
-      const messageText = asyncResponse && asyncQuestion && isAsyncUserInputActivity(asyncQuestion)
-        ? formatAsyncUserInputResponse(asyncQuestion.payload.questions, asyncResponse.answers)
-        : command.message.text;
+      const messageText =
+        asyncResponse && asyncQuestion && isAsyncUserInputActivity(asyncQuestion)
+          ? formatAsyncUserInputResponse(asyncQuestion.payload.questions, asyncResponse.answers)
+          : command.message.text;
       if (messageText.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1973,7 +1978,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 ...asyncQuestion,
                 payload: {
                   questions: asyncQuestion.payload.questions,
-                  response: { answers: asyncResponse.answers, messageId: command.message.messageId },
+                  response: {
+                    answers: asyncResponse.answers,
+                    messageId: command.message.messageId,
+                  },
                 },
               },
             },
@@ -2687,7 +2695,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       // Replayed item completions must never reopen an already-submitted question.
       const activity = isAsyncUserInputActivity(command.activity)
-        ? thread.activities.find((entry) => entry.id === command.activity.id) ?? command.activity
+        ? (thread.activities.find((entry) => entry.id === command.activity.id) ?? command.activity)
         : command.activity;
       const requestId =
         typeof command.activity.payload === "object" &&

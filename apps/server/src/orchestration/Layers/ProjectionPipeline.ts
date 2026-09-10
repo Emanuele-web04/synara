@@ -1454,7 +1454,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                       AND message.message_id = json_extract(activity.payload_json, '$.response.messageId')
                   )
               `.pipe(
-                Effect.mapError(toPersistenceSqlError("ProjectionPipeline.removedAsyncResponses:query")),
+                Effect.mapError(
+                  toPersistenceSqlError("ProjectionPipeline.removedAsyncResponses:query"),
+                ),
               )
             : [];
           const reconciledRows = reopenAsyncUserInputAfterMessageRemoval(

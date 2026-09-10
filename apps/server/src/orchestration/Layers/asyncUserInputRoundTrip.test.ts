@@ -56,141 +56,244 @@ async function createSystem(dbPath: string) {
   };
 }
 
-it.each(["ready", "running"] as const)("persists async questions and admits one answer on a %s thread across restarts", async (status) => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-async-questions-"));
-  const dbPath = path.join(stateDir, "state.sqlite");
-  let system = await createSystem(dbPath);
-  const createdAt = "2026-09-10T12:00:00.000Z";
-  const threadId = ThreadId.makeUnsafe("async-thread");
-  const projectId = ProjectId.makeUnsafe("async-project");
-  const turnId = TurnId.makeUnsafe("original-turn");
-  const [question] = projectProviderRuntimeActivities({
-    type: "item.completed", provider: "codex", threadId, turnId,
-    eventId: EventId.makeUnsafe("async-event"), itemId: RuntimeItemId.makeUnsafe("question-1"),
-    createdAt,
-    payload: {
-      itemType: "assistant_message",
-      asyncQuestions: [{ title: "What triggers it?", options: ["Scrolling", "Tabs"] }],
-    },
-  });
-  expect(question).toBeDefined();
-  const appendQuestion = (commandId: string): OrchestrationCommand => ({
-    type: "thread.activity.append", commandId: CommandId.makeUnsafe(commandId),
-    threadId, activity: question!, createdAt,
-  });
-  const respond = (commandId: string): OrchestrationCommand => ({
-    type: "thread.turn.start", commandId: CommandId.makeUnsafe(commandId), threadId,
-    asyncUserInputResponse: { activityId: question!.id, answers: ["Switching tabs quickly"] },
-    message: { messageId: MessageId.makeUnsafe(commandId), role: "user", text: "client placeholder", attachments: [] },
-    runtimeMode: "approval-required", interactionMode: "default", dispatchMode: "queue", createdAt,
-  });
-  try {
-    await system.run(system.engine.dispatch({
-      type: "project.create", commandId: CommandId.makeUnsafe("create-project"), projectId,
-      title: "Async questions", workspaceRoot: "/tmp/async-project", defaultModelSelection: null, createdAt,
-    }));
-    await system.run(system.engine.dispatch({
-      type: "thread.create", commandId: CommandId.makeUnsafe("create-thread"), threadId, projectId,
-      title: "Async questions", modelSelection: { provider: "codex", model: "gpt-5-codex" },
-      runtimeMode: "approval-required", interactionMode: "default", branch: null, worktreePath: null, createdAt,
-    }));
-    await system.run(system.engine.dispatch({
-      type: "thread.messages.import", commandId: CommandId.makeUnsafe("original-message"),
-      threadId, createdAt,
-      messages: [{ messageId: MessageId.makeUnsafe("original-message"), role: "user",
-        text: "Investigate this issue", createdAt, updatedAt: createdAt }],
-    }));
-    await system.run(system.engine.dispatch({
-      type: "thread.turn.diff.complete", commandId: CommandId.makeUnsafe("original-checkpoint"),
-      threadId, turnId, checkpointTurnCount: 1, checkpointRef: CheckpointRef.makeUnsafe("original-checkpoint"),
-      status: "ready", files: [], completedAt: createdAt, createdAt,
-    }));
-    await system.run(system.engine.dispatch(appendQuestion("question-arrived")));
-    // A long-running agent must not evict the card from the bounded activity window.
-    await system.run(system.sql`
+it.each(["ready", "running"] as const)(
+  "persists async questions and admits one answer on a %s thread across restarts",
+  async (status) => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-async-questions-"));
+    const dbPath = path.join(stateDir, "state.sqlite");
+    let system = await createSystem(dbPath);
+    const createdAt = "2026-09-10T12:00:00.000Z";
+    const threadId = ThreadId.makeUnsafe("async-thread");
+    const projectId = ProjectId.makeUnsafe("async-project");
+    const turnId = TurnId.makeUnsafe("original-turn");
+    const [question] = projectProviderRuntimeActivities({
+      type: "item.completed",
+      provider: "codex",
+      threadId,
+      turnId,
+      eventId: EventId.makeUnsafe("async-event"),
+      itemId: RuntimeItemId.makeUnsafe("question-1"),
+      createdAt,
+      payload: {
+        itemType: "assistant_message",
+        asyncQuestions: [{ title: "What triggers it?", options: ["Scrolling", "Tabs"] }],
+      },
+    });
+    expect(question).toBeDefined();
+    const appendQuestion = (commandId: string): OrchestrationCommand => ({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(commandId),
+      threadId,
+      activity: question!,
+      createdAt,
+    });
+    const respond = (commandId: string): OrchestrationCommand => ({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe(commandId),
+      threadId,
+      asyncUserInputResponse: { activityId: question!.id, answers: ["Switching tabs quickly"] },
+      message: {
+        messageId: MessageId.makeUnsafe(commandId),
+        role: "user",
+        text: "client placeholder",
+        attachments: [],
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      dispatchMode: "queue",
+      createdAt,
+    });
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("create-project"),
+          projectId,
+          title: "Async questions",
+          workspaceRoot: "/tmp/async-project",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("create-thread"),
+          threadId,
+          projectId,
+          title: "Async questions",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.messages.import",
+          commandId: CommandId.makeUnsafe("original-message"),
+          threadId,
+          createdAt,
+          messages: [
+            {
+              messageId: MessageId.makeUnsafe("original-message"),
+              role: "user",
+              text: "Investigate this issue",
+              createdAt,
+              updatedAt: createdAt,
+            },
+          ],
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe("original-checkpoint"),
+          threadId,
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.makeUnsafe("original-checkpoint"),
+          status: "ready",
+          files: [],
+          completedAt: createdAt,
+          createdAt,
+        }),
+      );
+      await system.run(system.engine.dispatch(appendQuestion("question-arrived")));
+      // A long-running agent must not evict the card from the bounded activity window.
+      await system.run(system.sql`
       WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 2200)
       INSERT INTO projection_thread_activities
         (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
       SELECT 'work-' || n, ${threadId}, ${turnId}, 'tool', 'tool.completed', 'Done', '{}', n + 100,
         '2026-09-10T12:01:00.000Z' FROM numbers
     `);
-    const pending = Option.getOrThrow(await system.run(system.query.getThreadDetailById(threadId)));
-    expect(pending.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(question!.payload);
-    expect(pending.hasPendingUserInput).toBe(false);
-    expect(pending.pendingInteractions).toEqual([]);
-    const snapshot = await system.run(system.query.getSnapshot());
-    expect(snapshot.threads[0]?.activities.some((activity) => activity.id === question!.id)).toBe(true);
+      const pending = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(pending.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(
+        question!.payload,
+      );
+      expect(pending.hasPendingUserInput).toBe(false);
+      expect(pending.pendingInteractions).toEqual([]);
+      const snapshot = await system.run(system.query.getSnapshot());
+      expect(snapshot.threads[0]?.activities.some((activity) => activity.id === question!.id)).toBe(
+        true,
+      );
 
-    await system.dispose();
-    system = await createSystem(dbPath);
-    await system.run(system.engine.dispatch({
-      type: "thread.session.set",
-      commandId: CommandId.makeUnsafe("set-session"),
-      threadId,
-      session: {
-        threadId,
-        status,
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        activeTurnId: status === "running" ? turnId : null,
-        lastError: null,
-        updatedAt: createdAt,
-      },
-      createdAt,
-    }));
-    const submissions = await Promise.allSettled([
-      system.run(system.engine.dispatch(respond("answer-tab-a"))),
-      system.run(system.engine.dispatch(respond("answer-tab-b"))),
-    ]);
-    expect(submissions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(submissions.filter((result) => result.status === "rejected")).toHaveLength(1);
-    const answered = Option.getOrThrow(await system.run(system.query.getThreadDetailById(threadId)));
-    expect(answered.messages).toHaveLength(2);
-    const answerMessageId = answered.messages.at(-1)!.id;
-    expect(answered.messages.at(-1)?.text).toBe("What triggers it?\nSwitching tabs quickly");
-    expect(answered.activities.find((activity) => activity.id === question!.id)?.payload).toMatchObject({
-      response: { answers: ["Switching tabs quickly"], messageId: answerMessageId },
-    });
-    const events = Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0))));
-    expect(events.filter((event) => event.type === "thread.turn-start-requested")).toHaveLength(1);
-    expect(events.find((event) => event.type === "thread.turn-start-requested")?.payload).toMatchObject({ dispatchMode: "steer" });
-    expect(events.some((event) => event.type === "thread.turn-interrupt-requested")).toBe(false);
+      await system.dispose();
+      system = await createSystem(dbPath);
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("set-session"),
+          threadId,
+          session: {
+            threadId,
+            status,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: status === "running" ? turnId : null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      const submissions = await Promise.allSettled([
+        system.run(system.engine.dispatch(respond("answer-tab-a"))),
+        system.run(system.engine.dispatch(respond("answer-tab-b"))),
+      ]);
+      expect(submissions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(submissions.filter((result) => result.status === "rejected")).toHaveLength(1);
+      const answered = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(answered.messages).toHaveLength(2);
+      const answerMessageId = answered.messages.at(-1)!.id;
+      expect(answered.messages.at(-1)?.text).toBe("What triggers it?\nSwitching tabs quickly");
+      expect(
+        answered.activities.find((activity) => activity.id === question!.id)?.payload,
+      ).toMatchObject({
+        response: { answers: ["Switching tabs quickly"], messageId: answerMessageId },
+      });
+      const events = Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0))));
+      expect(events.filter((event) => event.type === "thread.turn-start-requested")).toHaveLength(
+        1,
+      );
+      expect(
+        events.find((event) => event.type === "thread.turn-start-requested")?.payload,
+      ).toMatchObject({ dispatchMode: "steer" });
+      expect(events.some((event) => event.type === "thread.turn-interrupt-requested")).toBe(false);
 
-    await system.dispose();
-    system = await createSystem(dbPath);
-    await system.run(system.engine.dispatch(appendQuestion("replayed-item")));
-    await expect(system.run(system.engine.dispatch(respond("answer-after-restart")))).rejects.toThrow("already answered");
-    const restarted = Option.getOrThrow(await system.run(system.query.getThreadDetailById(threadId)));
-    expect(restarted.activities.find((activity) => activity.id === question!.id)?.payload).toMatchObject({ response: { answers: ["Switching tabs quickly"] } });
+      await system.dispose();
+      system = await createSystem(dbPath);
+      await system.run(system.engine.dispatch(appendQuestion("replayed-item")));
+      await expect(
+        system.run(system.engine.dispatch(respond("answer-after-restart"))),
+      ).rejects.toThrow("already answered");
+      const restarted = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(
+        restarted.activities.find((activity) => activity.id === question!.id)?.payload,
+      ).toMatchObject({ response: { answers: ["Switching tabs quickly"] } });
 
-    await system.run(system.engine.dispatch(status === "ready" ? {
-      type: "thread.conversation.rollback.complete", commandId: CommandId.makeUnsafe("remove-answer"),
-      threadId, messageId: answerMessageId, numTurns: 1, removedTurnIds: [TurnId.makeUnsafe("answer-turn")], createdAt,
-    } : {
-      type: "thread.revert.complete", commandId: CommandId.makeUnsafe("remove-answer"),
-      threadId, turnCount: 1, createdAt,
-    }));
-    const reopened = Option.getOrThrow(await system.run(system.query.getThreadDetailById(threadId)));
-    expect(reopened.messages.map((message) => message.id)).toEqual(["original-message"]);
-    expect(reopened.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(question!.payload);
+      await system.run(
+        system.engine.dispatch(
+          status === "ready"
+            ? {
+                type: "thread.conversation.rollback.complete",
+                commandId: CommandId.makeUnsafe("remove-answer"),
+                threadId,
+                messageId: answerMessageId,
+                numTurns: 1,
+                removedTurnIds: [TurnId.makeUnsafe("answer-turn")],
+                createdAt,
+              }
+            : {
+                type: "thread.revert.complete",
+                commandId: CommandId.makeUnsafe("remove-answer"),
+                threadId,
+                turnCount: 1,
+                createdAt,
+              },
+        ),
+      );
+      const reopened = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(reopened.messages.map((message) => message.id)).toEqual(["original-message"]);
+      expect(reopened.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(
+        question!.payload,
+      );
 
-    // The in-memory projector must agree with SQLite when replaying the same history.
-    let replayed = createEmptyReadModel(createdAt);
-    const history = await system.run(Stream.runCollect(system.engine.readEvents(0)));
-    for (const event of history) {
-      replayed = await Effect.runPromise(projectEvent(replayed, event));
+      // The in-memory projector must agree with SQLite when replaying the same history.
+      let replayed = createEmptyReadModel(createdAt);
+      const history = await system.run(Stream.runCollect(system.engine.readEvents(0)));
+      for (const event of history) {
+        replayed = await Effect.runPromise(projectEvent(replayed, event));
+      }
+      expect(
+        replayed.threads[0]?.activities.find((activity) => activity.id === question!.id)?.payload,
+      ).toEqual(question!.payload);
+
+      await system.dispose();
+      system = await createSystem(dbPath);
+      await system.run(system.engine.dispatch(respond("replacement-answer")));
+      const replaced = Option.getOrThrow(
+        await system.run(system.query.getThreadDetailById(threadId)),
+      );
+      expect(
+        replaced.activities.find((activity) => activity.id === question!.id)?.payload,
+      ).toMatchObject({
+        response: { messageId: "replacement-answer" },
+      });
+    } finally {
+      await system.dispose();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
-    expect(replayed.threads[0]?.activities.find((activity) => activity.id === question!.id)?.payload).toEqual(question!.payload);
-
-    await system.dispose();
-    system = await createSystem(dbPath);
-    await system.run(system.engine.dispatch(respond("replacement-answer")));
-    const replaced = Option.getOrThrow(await system.run(system.query.getThreadDetailById(threadId)));
-    expect(replaced.activities.find((activity) => activity.id === question!.id)?.payload).toMatchObject({
-      response: { messageId: "replacement-answer" },
-    });
-  } finally {
-    await system.dispose();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
-});
+  },
+);

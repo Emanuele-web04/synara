@@ -2156,24 +2156,23 @@ describe("sendTurn", () => {
 });
 
 describe("steerTurn", () => {
-  it("starts a turn when a late answer arrives after the originating turn ended", async () => {
+  it("returns control to the reactor when the originating turn already ended", async () => {
     const { manager, sendRequest } = createSendTurnHarness();
-    sendRequest.mockResolvedValueOnce({ turn: { id: "answer-turn" } });
-    await manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" });
-    expect(sendRequest).toHaveBeenCalledWith(expect.anything(), "turn/start", expect.objectContaining({
-      input: [{ type: "text", text: "My answer", text_elements: [] }],
-    }));
+    await expect(
+      manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" }),
+    ).rejects.toMatchObject({ name: "CodexTurnNotActiveError" });
+    expect(sendRequest).not.toHaveBeenCalled();
   });
 
-  it("safely starts a turn if Codex explicitly rejects a steer after turn completion", async () => {
+  it("returns an explicit steer rejection without starting an unprepared turn", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
     context.session.status = "running";
     context.session.activeTurnId = "turn_active";
     sendRequest.mockRejectedValueOnce(new Error("turn/steer failed: no active turn to steer"));
-    sendRequest.mockResolvedValueOnce({ turn: { id: "answer-turn" } });
-    const result = await manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" });
-    expect(result.turnId).toBe("answer-turn");
-    expect(sendRequest.mock.calls.map((call) => call[1])).toEqual(["turn/steer", "turn/start"]);
+    await expect(
+      manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" }),
+    ).rejects.toMatchObject({ name: "CodexTurnNotActiveError" });
+    expect(sendRequest.mock.calls.map((call) => call[1])).toEqual(["turn/steer"]);
   });
 
   it("does not resend an answer after ambiguous delivery failure", async () => {
@@ -2181,7 +2180,9 @@ describe("steerTurn", () => {
     context.session.status = "running";
     context.session.activeTurnId = "turn_active";
     sendRequest.mockRejectedValueOnce(new Error("Timed out waiting for turn/steer."));
-    await expect(manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" })).rejects.toThrow("Timed out");
+    await expect(
+      manager.steerTurn({ threadId: asThreadId("thread_1"), input: "My answer" }),
+    ).rejects.toThrow("Timed out");
     expect(sendRequest).toHaveBeenCalledTimes(1);
   });
 

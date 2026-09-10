@@ -16,7 +16,9 @@ interface AsyncUserInputCardProps {
 export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardProps) {
   const id = useId();
   const { questions, response } = activity.payload;
-  const [choices, setChoices] = useState(() => questions.map((question) => question.options?.[0] ?? ""));
+  const [choices, setChoices] = useState(() =>
+    questions.map((question) => question.options?.[0] ?? ""),
+  );
   const [drafts, setDrafts] = useState(() => questions.map(() => ""));
   const [submitting, setSubmitting] = useState(false);
   const [submission, setSubmission] = useState<{
@@ -27,8 +29,8 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
   const inFlight = useRef(false);
   // Any authoritative payload update supersedes the local submission, including
   // rollback delivered before React has rendered the intermediate answered state.
-  const answered = response?.answers ??
-    (submission?.payload === activity.payload ? submission.answers : null);
+  const answered =
+    response?.answers ?? (submission?.payload === activity.payload ? submission.answers : null);
   const answers = questions.map((_, index) => drafts[index]?.trim() || choices[index] || "");
 
   async function submit() {
@@ -51,7 +53,10 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
     <form
       className={`${COMPOSER_INPUT_SURFACE_CLASS_NAME} space-y-4 p-4`}
       aria-label="Question from Codex"
-      onSubmit={(event) => { event.preventDefault(); void submit(); }}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
     >
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {answered ? <CheckIcon className="size-3.5" /> : null}
@@ -63,7 +68,9 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
             {question.title}
           </legend>
           {answered ? (
-            <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{answered[index]}</p>
+            <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
+              {answered[index]}
+            </p>
           ) : (
             <>
               {question.options?.map((option, optionIndex) => (
@@ -73,11 +80,16 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
                   label={option}
                   selected={!drafts[index]?.trim() && choices[index] === option}
                   onSelect={() => {
-                    setChoices((previous) => previous.map((value, i) => i === index ? option : value));
-                    setDrafts((previous) => previous.map((value, i) => i === index ? "" : value));
+                    setChoices((previous) =>
+                      previous.map((value, i) => (i === index ? option : value)),
+                    );
+                    setDrafts((previous) => previous.map((value, i) => (i === index ? "" : value)));
                   }}
-                  trailing={!drafts[index]?.trim() && choices[index] === option
-                    ? <CheckIcon className="size-3.5 shrink-0" /> : null}
+                  trailing={
+                    !drafts[index]?.trim() && choices[index] === option ? (
+                      <CheckIcon className="size-3.5 shrink-0" />
+                    ) : null
+                  }
                 />
               ))}
               <label htmlFor={`${id}-${index}`} className="block text-xs text-muted-foreground">
@@ -88,7 +100,7 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
                 value={drafts[index] ?? ""}
                 onChange={(event) => {
                   const text = event.target.value;
-                  setDrafts((previous) => previous.map((value, i) => i === index ? text : value));
+                  setDrafts((previous) => previous.map((value, i) => (i === index ? text : value)));
                 }}
                 rows={2}
                 className="w-full resize-y rounded-lg border border-border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -97,10 +109,18 @@ export function AsyncUserInputCard({ activity, onRespond }: AsyncUserInputCardPr
           )}
         </fieldset>
       ))}
-      {error && !answered ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+      {error && !answered ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
       {!answered ? (
         <div className="flex justify-end">
-          <Button type="submit" size="sm" disabled={!onRespond || submitting || answers.some((answer) => !answer)}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!onRespond || submitting || answers.some((answer) => !answer)}
+          >
             {submitting ? "Submitting…" : "Submit answer"}
           </Button>
         </div>

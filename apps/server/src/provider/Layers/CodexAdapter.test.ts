@@ -23,7 +23,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
-import { CodexSessionStartError } from "../../codexErrorClassification.ts";
+import { CodexSessionStartError, CodexTurnNotActiveError } from "../../codexErrorClassification.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -176,6 +176,30 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("preserves only explicit evidence that a steer submitted no input", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      for (const cause of [
+        new CodexTurnNotActiveError("No active turn"),
+        new Error("Timed out waiting for turn/steer."),
+      ]) {
+        validationManager.steerTurnImpl.mockRejectedValueOnce(cause);
+        const result = yield* adapter.steerTurn!({
+          threadId: asThreadId("thread-1"),
+          input: "My answer",
+        }).pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure" || result.failure._tag !== "ProviderAdapterRequestError") {
+          throw new Error("Expected request error");
+        }
+        assert.equal(
+          result.failure.reason,
+          cause instanceof CodexTurnNotActiveError ? "turn-not-active" : undefined,
+        );
+      }
+    }),
+  );
+
   it.effect(
     "preserves startup cleanup evidence without reclassifying unknown process failures",
     () =>
@@ -780,14 +804,22 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         { title: "Anything else?", options: null },
       ];
       const event: ProviderEvent = {
-        id: asEventId("evt-async-start"), kind: "notification", provider: "codex",
-        createdAt: new Date().toISOString(), method: "item/started",
-        threadId: asThreadId("thread-1"), turnId: asTurnId("turn-1"),
+        id: asEventId("evt-async-start"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
         itemId: asItemId("question-1"),
         payload: { item: { type: "agentMessage", id: "question-1", delivery: "async", questions } },
       };
       lifecycleManager.emit("event", event);
-      lifecycleManager.emit("event", { ...event, id: asEventId("evt-async-complete"), method: "item/completed" });
+      lifecycleManager.emit("event", {
+        ...event,
+        id: asEventId("evt-async-complete"),
+        method: "item/completed",
+      });
       const result = yield* Fiber.join(firstEventFiber);
       assert.equal(result._tag, "Some");
       if (result._tag !== "Some") return;

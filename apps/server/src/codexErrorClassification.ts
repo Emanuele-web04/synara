@@ -7,6 +7,11 @@ export class CodexSessionStartError extends Error {
   override readonly name = "CodexSessionStartError";
 }
 
+/** No input was submitted: the caller may prepare and start a replacement turn. */
+export class CodexTurnNotActiveError extends Error {
+  override readonly name = "CodexTurnNotActiveError";
+}
+
 const NON_FATAL_CODEX_ERROR_SNIPPETS = [
   "write_stdin failed: stdin is closed for this session",
 ] as const;

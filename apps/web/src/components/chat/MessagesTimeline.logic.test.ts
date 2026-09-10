@@ -1,4 +1,10 @@
-import { CheckpointRef, EventId, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  OrchestrationProposedPlanId,
+  TurnId,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
@@ -25,21 +31,39 @@ import type { ChatMessage, TurnDiffSummary, WorktreeSetupSnapshot } from "../../
 
 it("keeps async question cards visible after a turn settles and updates submitted state", () => {
   const question: Extract<TimelineEntry, { kind: "async-question" }> = {
-    id: "async-card", kind: "async-question", createdAt: "2026-09-10T12:00:01.000Z",
+    id: "async-card",
+    kind: "async-question",
+    createdAt: "2026-09-10T12:00:01.000Z",
     activity: {
-      id: EventId.makeUnsafe("async-card"), kind: "user-input.async", tone: "info",
-      summary: "Question", createdAt: "2026-09-10T12:00:01.000Z", turnId: null,
+      id: EventId.makeUnsafe("async-card"),
+      kind: "user-input.async",
+      tone: "info",
+      summary: "Question",
+      createdAt: "2026-09-10T12:00:01.000Z",
+      turnId: null,
       payload: { questions: [{ title: "Which interaction?", options: ["Tabs", "Scrolling"] }] },
     },
   };
   const rows = deriveMessagesTimelineRows({
-    timelineEntries: [question], isWorking: false, worktreeSetup: null, worktreeSetupOpen: false,
-    activeTurnStartedAt: null, turnDiffSummaryByAssistantMessageId: new Map(), revertTurnCountByUserMessageId: new Map(),
+    timelineEntries: [question],
+    isWorking: false,
+    worktreeSetup: null,
+    worktreeSetupOpen: false,
+    activeTurnStartedAt: null,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    revertTurnCountByUserMessageId: new Map(),
   });
   expect(rows).toEqual([question]);
-  const submitted = { ...question, activity: { ...question.activity, payload: {
-    ...question.activity.payload, response: { answers: ["Tabs"], messageId: MessageId.makeUnsafe("answer") },
-  } } };
+  const submitted = {
+    ...question,
+    activity: {
+      ...question.activity,
+      payload: {
+        ...question.activity.payload,
+        response: { answers: ["Tabs"], messageId: MessageId.makeUnsafe("answer") },
+      },
+    },
+  };
   const previous = { byId: new Map([[question.id, question]]), result: rows };
   expect(computeStableMessagesTimelineRows([submitted], previous).result).toEqual([submitted]);
 });

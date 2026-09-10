@@ -56,7 +56,11 @@ import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   type AgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
-import { CodexSessionStartError, isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import {
+  CodexSessionStartError,
+  CodexTurnNotActiveError,
+  isNonFatalCodexErrorMessage,
+} from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
@@ -1420,7 +1424,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     const activeTurnId = context.session.activeTurnId;
     if (context.session.status !== "running" || activeTurnId === undefined) {
-      return this.sendTurn(input);
+      throw new CodexTurnNotActiveError("No active Codex turn to steer.");
     }
 
     const turnInput = buildCodexTurnInput(input);
@@ -1448,8 +1452,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // The turn may finish between our live-state check and Codex accepting the
       // steer. Only this explicit rejection proves the input was not submitted;
       // a timeout or transport failure must never trigger a duplicate send.
-      if (error instanceof Error && error.message === "turn/steer failed: no active turn to steer") {
-        return this.sendTurn(input);
+      // The reactor owns replacement turns so their baselines precede execution.
+      if (
+        error instanceof Error &&
+        error.message === "turn/steer failed: no active turn to steer"
+      ) {
+        throw new CodexTurnNotActiveError(error.message, { cause: error });
       }
       throw error;
     }

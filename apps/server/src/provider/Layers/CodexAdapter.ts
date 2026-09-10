@@ -67,6 +67,7 @@ import {
 } from "../../codexGeneratedImages.ts";
 import {
   CodexSessionStartError,
+  CodexTurnNotActiveError,
   isNonFatalCodexErrorMessage,
 } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
@@ -235,6 +236,7 @@ function toRequestError(threadId: ThreadId, method: string, cause: unknown): Pro
     provider: PROVIDER,
     method,
     detail: toMessage(cause, `${method} failed`),
+    ...(cause instanceof CodexTurnNotActiveError ? { reason: "turn-not-active" as const } : {}),
     cause,
   });
 }

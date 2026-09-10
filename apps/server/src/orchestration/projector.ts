@@ -1,4 +1,9 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
+import {
+  CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND,
+  type OrchestrationEvent,
+  type OrchestrationReadModel,
+  type ThreadId,
+} from "@synara/contracts";
 import { reopenAsyncUserInputAfterMessageRemoval } from "@synara/shared/asyncUserInput";
 import {
   OrchestrationCheckpointSummary,
@@ -265,6 +270,18 @@ function compareThreadActivities(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+function capThreadActivities(
+  activities: ReadonlyArray<OrchestrationThread["activities"][number]>,
+): ReadonlyArray<OrchestrationThread["activities"][number]> {
+  const tailStart = activities.length - MAX_THREAD_ACTIVITIES;
+  return tailStart <= 0
+    ? activities
+    : activities.filter(
+        (activity, index) =>
+          index >= tailStart || activity.kind === CODEX_ASYNC_USER_INPUT_ACTIVITY_KIND,
+      );
+}
+
 function upsertThreadActivity(
   activities: ReadonlyArray<OrchestrationThread["activities"][number]>,
   activity: OrchestrationThread["activities"][number],
@@ -273,7 +290,7 @@ function upsertThreadActivity(
   if (existingIndex >= 0 && compareThreadActivities(activities[existingIndex]!, activity) === 0) {
     const next = [...activities];
     next[existingIndex] = activity;
-    return next.slice(-MAX_THREAD_ACTIVITIES);
+    return capThreadActivities(next);
   }
 
   const withoutExisting =
@@ -282,7 +299,7 @@ function upsertThreadActivity(
       : [...activities.slice(0, existingIndex), ...activities.slice(existingIndex + 1)];
   const last = withoutExisting.at(-1);
   if (!last || compareThreadActivities(last, activity) <= 0) {
-    return [...withoutExisting, activity].slice(-MAX_THREAD_ACTIVITIES);
+    return capThreadActivities([...withoutExisting, activity]);
   }
 
   let low = 0;
@@ -295,9 +312,11 @@ function upsertThreadActivity(
       high = middle;
     }
   }
-  return [...withoutExisting.slice(0, low), activity, ...withoutExisting.slice(low)].slice(
-    -MAX_THREAD_ACTIVITIES,
-  );
+  return capThreadActivities([
+    ...withoutExisting.slice(0, low),
+    activity,
+    ...withoutExisting.slice(low),
+  ]);
 }
 
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
@@ -1398,7 +1417,8 @@ export function projectEvent(
           const retainedMessageIds = new Set(rollback.messages.map((message) => message.id));
           const activities = reopenAsyncUserInputAfterMessageRemoval(
             thread.activities.filter(
-              (activity) => activity.turnId === null || !rollback.removedTurnIds.has(activity.turnId),
+              (activity) =>
+                activity.turnId === null || !rollback.removedTurnIds.has(activity.turnId),
             ),
             new Set(
               thread.messages

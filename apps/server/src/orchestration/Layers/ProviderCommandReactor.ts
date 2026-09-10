@@ -2370,10 +2370,6 @@ const make = Effect.gen(function* () {
       });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
-      if ((input.dispatchMode ?? "queue") === "steer") {
-        return;
-      }
-
       const currentThread = yield* resolveThread(input.threadId);
       if (!currentThread) {
         return;
@@ -2426,6 +2422,23 @@ const make = Effect.gen(function* () {
     let pendingContextBootstrapAttempt: PendingContextBootstrapAttempt | undefined;
     let startedTurn: ProviderTurnStartResult | undefined;
 
+    if (input.reviewTarget === undefined && input.dispatchMode === "steer") {
+      startedTurn = yield* providerService
+        .steerTurn({
+          ...providerTurnInput,
+          ...(normalizedInput ? { input: normalizedInput } : {}),
+        })
+        .pipe(
+          Effect.catchTag("ProviderAdapterRequestError", (error) =>
+            error.provider === "codex" &&
+            error.method === "turn/steer" &&
+            error.reason === "turn-not-active"
+              ? Effect.succeed(undefined)
+              : Effect.fail(error),
+          ),
+        );
+    }
+
     if (input.reviewTarget !== undefined) {
       yield* capturePreTurnBaselines;
       startedTurn = yield* providerService
@@ -2434,12 +2447,9 @@ const make = Effect.gen(function* () {
           target: input.reviewTarget,
         })
         .pipe(Effect.onError(() => cancelPendingStudioBaseline));
-    } else if (input.dispatchMode === "steer") {
-      startedTurn = yield* providerService.steerTurn({
-        ...providerTurnInput,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-      });
-    } else {
+    } else if (startedTurn === undefined) {
+      // A rejected Codex steer follows the normal start path, including both
+      // pre-turn baselines and delivery/bootstrap bookkeeping.
       yield* capturePreTurnBaselines;
       const tracksDroidContextAcceptance =
         activeSession?.provider === "droid" &&

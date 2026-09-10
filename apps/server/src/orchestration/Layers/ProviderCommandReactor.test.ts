@@ -405,7 +405,7 @@ describe("ProviderCommandReactor", () => {
         runtimeSessions.push(next);
       }
     };
-    const steerTurn = vi.fn((_: unknown) =>
+    const steerTurn = vi.fn<ProviderServiceShape["steerTurn"]>((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnId: asTurnId("turn-steer-1"),
@@ -8581,6 +8581,105 @@ describe("ProviderCommandReactor", () => {
       input: "steer but nothing is running",
     });
   });
+
+  it.each(["turn-not-active", "timeout"] as const)(
+    "handles a Codex steer %s without bypassing turn baselines",
+    async (failure) => {
+      let releaseGit: () => void = () => {};
+      let releaseStudio: () => void = () => {};
+      const gitGate = new Promise<void>((resolve) => {
+        releaseGit = resolve;
+      });
+      const studioGate = new Promise<void>((resolve) => {
+        releaseStudio = resolve;
+      });
+      const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() =>
+        Effect.promise(() => gitGate),
+      );
+      const startStudioBaseline = vi.fn(() => studioGate);
+      const harness = await createHarness({
+        checkpointStore: {
+          isGitRepository: () => Effect.succeed(true),
+          captureCheckpoint,
+        },
+        studioOutputReactor: {
+          captureBaselineBeforeTurn: () => Effect.promise(startStudioBaseline),
+        },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId("turn-ending"),
+      });
+      harness.steerTurn.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/steer",
+            detail: failure,
+            ...(failure === "turn-not-active" ? { reason: failure } : {}),
+          }),
+        ),
+      );
+      try {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`steer-${failure}`),
+            threadId,
+            message: {
+              messageId: asMessageId(`answer-${failure}`),
+              role: "user",
+              text: "My answer",
+              attachments: [],
+            },
+            dispatchMode: "steer",
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: now,
+          }),
+        );
+        if (failure === "timeout") {
+          await waitFor(async () => {
+            const model = await Effect.runPromise(harness.engine.getReadModel());
+            return (
+              model.threads[0]?.activities.some(
+                (activity) => activity.kind === "provider.turn.start.failed",
+              ) ?? false
+            );
+          });
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          expect(captureCheckpoint).not.toHaveBeenCalled();
+          expect(startStudioBaseline).not.toHaveBeenCalled();
+          return;
+        }
+        await waitFor(
+          () =>
+            captureCheckpoint.mock.calls.length === 1 &&
+            startStudioBaseline.mock.calls.length === 1,
+        );
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        releaseGit();
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        releaseStudio();
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        expect(captureCheckpoint.mock.calls[0]?.[0]).toMatchObject({
+          checkpointRef: expect.stringContaining(
+            `/message-start/${Buffer.from(`answer-${failure}`).toString("base64url")}`,
+          ),
+          skipIfExists: true,
+        });
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({ threadId, input: "My answer" });
+        expect(harness.interruptTurn).not.toHaveBeenCalled();
+      } finally {
+        releaseGit();
+        releaseStudio();
+      }
+    },
+  );
 
   it("steers a running claude turn natively without interrupting it", async () => {
     const harness = await createHarness({

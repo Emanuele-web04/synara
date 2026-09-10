@@ -622,7 +622,10 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
 
 it.effect("preserves async question association through the client command boundary", () =>
   Effect.gen(function* () {
-    const response = { activityId: "codex-async-question:thread:item", answers: ["Switching tabs"] };
+    const response = {
+      activityId: "codex-async-question:thread:item",
+      answers: ["Switching tabs"],
+    };
     const command = yield* decodeClientOrchestrationCommand({
       type: "thread.turn.start",
       commandId: "answer-question",
