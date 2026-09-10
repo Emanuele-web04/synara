@@ -30,6 +30,63 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect(
+    "selects the latest turn per thread with stable ties and preserves historical update time",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_state`;
+        yield* sql`DELETE FROM projection_turns`;
+        yield* sql`DELETE FROM projection_thread_sessions`;
+        yield* sql`DELETE FROM projection_thread_messages`;
+        yield* sql`DELETE FROM projection_thread_activities`;
+        yield* sql`DELETE FROM projection_thread_proposed_plans`;
+        yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES ('latest-project', 'Latest', '/tmp/latest', '[]',
+          '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z')
+      `;
+        yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, latest_turn_id, created_at, updated_at
+        ) VALUES
+          ('latest-a', 'latest-project', 'A', '{"provider":"pi","model":"openai/gpt-4o"}',
+            'turn-old', '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z'),
+          ('latest-b', 'latest-project', 'B', '{"provider":"pi","model":"openai/gpt-4o"}',
+            NULL, '2026-09-10T00:00:00.000Z', '2026-09-10T00:00:00.000Z')
+      `;
+        yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, completed_at, checkpoint_files_json
+        ) VALUES
+          ('latest-a', 'turn-old', 'completed', '2026-09-10T00:00:01.000Z', '2026-09-10T00:00:09.000Z', '[]'),
+          ('latest-a', 'turn-a', 'completed', '2026-09-10T00:00:02.000Z', NULL, '[]'),
+          ('latest-a', 'turn-z', 'running', '2026-09-10T00:00:02.000Z', NULL, '[]'),
+          ('latest-a', NULL, 'pending', '2026-09-10T00:00:10.000Z', NULL, '[]'),
+          ('latest-b', 'turn-old', 'completed', '2026-09-10T00:00:03.000Z', NULL, '[]')
+      `;
+        for (const snapshot of [
+          yield* query.getSnapshot(),
+          yield* query.getShellSnapshot(),
+          yield* query.getCommandReadModel(),
+        ]) {
+          assert.equal(
+            snapshot.threads.find((thread) => thread.id === "latest-a")?.latestTurn?.turnId,
+            "turn-z",
+          );
+          assert.equal(
+            snapshot.threads.find((thread) => thread.id === "latest-b")?.latestTurn?.turnId,
+            "turn-old",
+          );
+          assert.equal(snapshot.updatedAt, "2026-09-10T00:00:09.000Z");
+        }
+      }),
+  );
+
   it.effect("marks only an empty shell with an active durable project for repair", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
