@@ -18,7 +18,18 @@ import {
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@synara/contracts";
-import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
+import {
+  Cache,
+  Cause,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Stream,
+} from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -3290,10 +3301,50 @@ const make = Effect.gen(function* () {
         ...(streamPersistedEvents === undefined ? {} : { streamPersistedEvents }),
         append: (event) => runtimeEvents.append(event),
       });
+      // Live notifications only raise the drain fence and wake one long-lived
+      // drain fiber; they never run a drain themselves. The fiber keeps going
+      // while newer notifications moved the fence, so events that arrive while
+      // a drain is in flight are processed as pages (and acknowledged once per
+      // page) instead of one drain and one acknowledgement per notification.
+      // With no backlog this still drains one event at a time; the batching
+      // engages exactly when ingestion falls behind the providers.
+      let requestedLiveFence = 0;
+      const liveDrainWakeups = yield* Queue.sliding<void>(1);
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.gen(function* () {
+            yield* Queue.take(liveDrainWakeups);
+            while (true) {
+              const fence = requestedLiveFence;
+              yield* drainRuntimeJournalThrough(fence).pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.logWarning("provider runtime event journal ingestion failed", {
+                        throughSequence: fence,
+                        cause: Cause.pretty(cause),
+                      }),
+                ),
+              );
+              if (requestedLiveFence <= fence) return;
+              // A blocked page yields to the safety poller instead of spinning.
+              const cursor = yield* runtimeEvents.getConsumerCursor(
+                PROVIDER_RUNTIME_INGESTION_CONSUMER,
+              );
+              if (cursor < fence) return;
+            }
+          }),
+        ),
+      );
       yield* Effect.forkScoped(
         Stream.runForEach(persistedRuntimeEvents, (persisted) =>
           Deferred.await(startupRuntimeReplayComplete).pipe(
-            Effect.andThen(drainRuntimeJournalThrough(persisted.sequence)),
+            Effect.andThen(
+              Effect.sync(() => {
+                requestedLiveFence = Math.max(requestedLiveFence, persisted.sequence);
+              }),
+            ),
+            Effect.andThen(Queue.offer(liveDrainWakeups, undefined)),
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.failCause(cause)
