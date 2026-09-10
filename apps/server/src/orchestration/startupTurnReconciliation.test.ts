@@ -121,6 +121,7 @@ describe("planRestartTurnReconciliation", () => {
           requestId: ApprovalRequestId.makeUnsafe("approval-mixed"),
           lifecycleGeneration: null,
           status: "uncertain",
+          createdAt: "2026-06-13T09:00:01.000Z",
         },
       ],
     });
@@ -146,6 +147,7 @@ describe("planRestartTurnReconciliation", () => {
             requestId: ApprovalRequestId.makeUnsafe(`approval-${status}`),
             lifecycleGeneration: "generation-a",
             status,
+            createdAt: "2026-06-13T09:00:01.000Z",
           },
         ],
       });
@@ -185,6 +187,84 @@ describe("planRestartTurnReconciliation", () => {
     });
 
     expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([]);
+  });
+
+  it.each([
+    { name: "no terminal failure", generation: "generation-a", staleAt: null, expected: 1 },
+    {
+      name: "already stale current generation",
+      generation: "generation-a",
+      staleAt: "2026-06-13T09:00:02.000Z",
+      expected: 0,
+    },
+    {
+      name: "stale previous generation",
+      generation: "generation-old",
+      staleAt: "2026-06-13T09:00:02.000Z",
+      expected: 1,
+    },
+    {
+      name: "old legacy failure before request-ID reuse",
+      generation: undefined,
+      staleAt: "2026-06-13T08:00:00.000Z",
+      expected: 1,
+    },
+    {
+      name: "legacy failure after this request",
+      generation: undefined,
+      staleAt: "2026-06-13T09:00:02.000Z",
+      expected: 0,
+    },
+  ])("reconciles uncertain user input with $name", ({ generation, staleAt, expected }) => {
+    const requestId = ApprovalRequestId.makeUnsafe("uncertain-input");
+    const thread = makeThread("uncertain-input-thread", {
+      activities:
+        staleAt === null
+          ? []
+          : [
+              {
+                ...makeActivity(
+                  "input-already-stale",
+                  "provider.user-input.respond.failed",
+                  {
+                    requestId,
+                    ...(generation === undefined ? {} : { lifecycleGeneration: generation }),
+                    detail: "Stale pending user-input request: uncertain-input.",
+                  },
+                  1,
+                ),
+                createdAt: staleAt,
+              },
+            ],
+      pendingInteractions: [
+        {
+          interactionKind: "userInput",
+          requestId,
+          lifecycleGeneration: "generation-a",
+          status: "uncertain",
+          createdAt: "2026-06-13T09:00:01.000Z",
+        },
+      ],
+    });
+
+    const commands = planRestartTurnReconciliation({ threads: [thread], now: NOW });
+    expect(commands).toHaveLength(expected);
+    for (const command of commands) {
+      expect(command).toMatchObject({
+        type: "thread.activity.append",
+        activity: {
+          kind: "provider.user-input.respond.failed",
+          payload: { requestId, lifecycleGeneration: "generation-a" },
+        },
+      });
+      if (command.type !== "thread.activity.append") throw new Error("Expected stale cleanup");
+      expect(
+        planRestartTurnReconciliation({
+          threads: [{ ...thread, activities: [...(thread.activities ?? []), command.activity] }],
+          now: "2026-06-15T10:00:00.000Z",
+        }),
+      ).toEqual([]);
+    }
   });
 
   it("clears a dangling active turn id while preserving the terminal error session", () => {

@@ -84,28 +84,6 @@ const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
 
-// Provider activities arrive with a durable runtime-journal sequence, while
-// server-authored activities have no sequence of their own. Once a thread has
-// entered the runtime sequence domain, place an unsequenced activity directly
-// after its current tail instead of falling back to the unrelated orchestration
-// event counter and accidentally sorting the new row into old history.
-function nextThreadActivitySequence(
-  activities: OrchestrationThread["activities"],
-): number | undefined {
-  let latestSequence: number | undefined;
-  for (const activity of activities) {
-    if (
-      activity.sequence !== undefined &&
-      (latestSequence === undefined || activity.sequence > latestSequence)
-    ) {
-      latestSequence = activity.sequence;
-    }
-  }
-  return latestSequence !== undefined && latestSequence < Number.MAX_SAFE_INTEGER
-    ? latestSequence + 1
-    : undefined;
-}
-
 function validateSidechatExecutionAvailable(
   command: Pick<OrchestrationCommand, "type">,
   thread: Pick<OrchestrationThread, "sidechatExpiredAt">,
@@ -2641,16 +2619,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.activity.append": {
-      const thread = yield* requireThread({
+      yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const fallbackSequence = nextThreadActivitySequence(thread.activities);
-      const activity =
-        command.activity.sequence !== undefined || fallbackSequence === undefined
-          ? command.activity
-          : { ...command.activity, sequence: fallbackSequence };
+      const activity = command.activity;
       const requestId =
         typeof activity.payload === "object" &&
         activity.payload !== null &&
