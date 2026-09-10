@@ -30,12 +30,14 @@
  */
 import type {
   OrchestrationCommand,
+  OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
   OrchestrationSession,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
+import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import {
   buildStalePendingRequestFailureDetail,
   derivePendingThreadRequestIds,
@@ -71,6 +73,14 @@ export interface ReconcilableThread {
   readonly activities?: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
+  readonly pendingInteractions?:
+    | ReadonlyArray<
+        Pick<
+          OrchestrationPendingInteraction,
+          "interactionKind" | "requestId" | "lifecycleGeneration" | "status" | "createdAt"
+        >
+      >
+    | undefined;
 }
 
 /**
@@ -96,10 +106,39 @@ function planStalePendingRequestCommands(input: {
   readonly thread: ReconcilableThread;
   readonly now: string;
 }): ReadonlyArray<ThreadActivityAppendCommand> {
+  const commands: ThreadActivityAppendCommand[] = [];
+  if (input.thread.pendingInteractions !== undefined) {
+    const isAlreadyStale = createStalePendingInteractionMatcher(input.thread.activities ?? []);
+    for (const interaction of input.thread.pendingInteractions) {
+      // A process restart loses every live provider callback. Pending,
+      // responding, and previously retryable rows are therefore no longer
+      // answerable. Uncertain user-input responses are also retryable unless
+      // their callback has already been explicitly invalidated.
+      if (
+        interaction.status === "confirmed" ||
+        (interaction.status === "uncertain" &&
+          (interaction.interactionKind === "approval" || isAlreadyStale(interaction)))
+      ) {
+        continue;
+      }
+      commands.push(
+        buildStalePendingRequestCommand({
+          threadId: input.thread.id,
+          now: input.now,
+          requestKind: interaction.interactionKind === "approval" ? "approval" : "user-input",
+          requestId: interaction.requestId,
+          ...(interaction.lifecycleGeneration !== null
+            ? { lifecycleGeneration: interaction.lifecycleGeneration }
+            : {}),
+        }),
+      );
+    }
+    return commands;
+  }
+
   const pendingRequestIds = derivePendingThreadRequestIds({
     activities: input.thread.activities ?? [],
   });
-  const commands: ThreadActivityAppendCommand[] = [];
   for (const requestId of pendingRequestIds.approvalRequestIds) {
     commands.push(
       buildStalePendingRequestCommand({
@@ -155,6 +194,7 @@ function buildStalePendingRequestCommand(input: {
   readonly now: string;
   readonly requestKind: PendingThreadRequestKind;
   readonly requestId: string;
+  readonly lifecycleGeneration?: string;
 }): ThreadActivityAppendCommand {
   const commandKey = [
     "restart-reconcile",
@@ -178,6 +218,9 @@ function buildStalePendingRequestCommand(input: {
       payload: {
         detail: buildStalePendingRequestFailureDetail(input.requestKind, input.requestId),
         requestId: input.requestId,
+        ...(input.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: input.lifecycleGeneration }
+          : {}),
       },
       turnId: null,
       createdAt: input.now,
