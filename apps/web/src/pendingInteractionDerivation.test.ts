@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  CommandId,
   ThreadId,
   TurnId,
   type OrchestrationPendingInteraction,
@@ -54,9 +55,16 @@ describe("derivePendingApprovals", () => {
     expect(
       derivePendingApprovals(activities, [makePendingInteraction("approval", "uncertain")]),
     ).toEqual([]);
-    expect(
-      derivePendingApprovals(activities, [makePendingInteraction("approval", "retryable")]),
-    ).toHaveLength(1);
+    const retryable = derivePendingApprovals(activities, [
+      makePendingInteraction("approval", "retryable", {
+        responseCommandId: CommandId.makeUnsafe("approval-response-attempt-1"),
+        responseRequestedAt: "2026-02-23T00:00:02.000Z",
+      }),
+    ]);
+    expect(retryable).toHaveLength(1);
+    expect(retryable[0]?.responseAttemptKey).toBe(
+      JSON.stringify(["approval-response-attempt-1", "2026-02-23T00:00:02.000Z"]),
+    );
     expect(
       derivePendingApprovals(activities, [makePendingInteraction("approval", "pending")], {
         authoritativeHasPending: false,

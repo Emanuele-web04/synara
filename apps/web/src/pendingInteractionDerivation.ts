@@ -17,6 +17,8 @@ import { orderedActivities } from "./workLog";
 export interface PendingApproval {
   requestId: ApprovalRequestId;
   lifecycleGeneration?: string;
+  /** Changes only when the durable retryable response attempt changes. */
+  responseAttemptKey?: string;
   requestKind: "command" | "file-read" | "file-change" | "permissions";
   createdAt: string;
   detail?: string;
@@ -286,7 +288,7 @@ export function derivePendingApprovals(
   settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
   options?: PendingInteractionDerivationOptions,
 ): PendingApproval[] {
-  return replayPendingInteractions(
+  const approvals = replayPendingInteractions(
     activities,
     settlements,
     {
@@ -329,6 +331,30 @@ export function derivePendingApprovals(
     },
     options,
   );
+  if (settlements === undefined) {
+    return approvals;
+  }
+
+  const retryableAttemptKeys = new Map<string, string>();
+  for (const settlement of settlements) {
+    if (settlement.interactionKind !== "approval" || settlement.status !== "retryable") {
+      continue;
+    }
+    retryableAttemptKeys.set(
+      pendingRequestInstanceKey(
+        settlement.requestId,
+        settlement.lifecycleGeneration ?? undefined,
+      ),
+      JSON.stringify([settlement.responseCommandId, settlement.responseRequestedAt]),
+    );
+  }
+
+  return approvals.map((approval) => {
+    const responseAttemptKey = retryableAttemptKeys.get(
+      pendingRequestInstanceKey(approval.requestId, approval.lifecycleGeneration),
+    );
+    return responseAttemptKey === undefined ? approval : { ...approval, responseAttemptKey };
+  });
 }
 
 export function derivePendingUserInputs(
