@@ -852,6 +852,9 @@ export function createWsNativeApi(): NativeApi {
       onEvent: deviceEventListeners.subscribe,
     },
     browser: {
+      ...(window.desktopBridge?.browser?.vault
+        ? { vault: window.desktopBridge.browser.vault }
+        : {}),
       open: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.open(input);
@@ -926,6 +929,7 @@ export function createWsNativeApi(): NativeApi {
         }
         throw new Error("Browser screenshots require the desktop app.");
       },
+      capturePreview: async (input) => window.desktopBridge?.browser.capturePreview(input) ?? null,
       navigate: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.navigate(input);
