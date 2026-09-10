@@ -180,9 +180,13 @@ describe("EnvironmentPullRequestSection", () => {
       await renderSection(queryClient);
 
       const stateLabel = state === "merged" ? "Merged" : "Closed";
-      const prRow = page.getByRole("button", { name: `#321 Keep PR context visible ${stateLabel}` });
+      const prRow = page.getByRole("button", {
+        name: `#321 Keep PR context visible ${stateLabel}`,
+      });
       await expect.element(prRow).toBeVisible();
-      await expect.element(page.getByText(`${stateLabel} on GitHub`, { exact: true })).toBeVisible();
+      await expect
+        .element(page.getByText(`${stateLabel} on GitHub`, { exact: true }))
+        .toBeVisible();
       expect(queryClient.isFetching()).toBe(0);
       expect(getPullRequestSnapshot).not.toHaveBeenCalled();
 
