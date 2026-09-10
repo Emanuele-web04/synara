@@ -174,7 +174,93 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     }
   });
 
-  it("loads an adopted agent popup once and keeps its deferred downloads contained", async () => {
+  it.each([
+    { nested: false, delayed: false },
+    { nested: false, delayed: true },
+    { nested: true, delayed: true },
+  ])("contains embedded popup downloads until human takeover: %j", async ({ nested, delayed }) => {
+    const source = new FakeWebContents(201);
+    const child = new FakeWebContents(202);
+    const grandchild = new FakeWebContents(203);
+    for (const webContents of [source, child, ...(nested ? [grandchild] : [])]) {
+      webContentsViewConstructor.mockReturnValueOnce({
+        webContents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+      });
+    }
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    try {
+      const state = manager.open({ threadId: THREAD_ID });
+      manager.setPanelBounds({
+        threadId: THREAD_ID,
+        surface: "native",
+        bounds: { x: 0, y: 50, width: 600, height: 600 },
+      });
+      const release = manager.trackAutomationDownload(
+        { threadId: THREAD_ID, tabId: state.activeTabId! },
+        vi.fn(),
+      );
+      const openPopup = (opener: FakeWebContents, popup: FakeWebContents) => {
+        const decision = opener.windowOpenHandler!({
+          url: "https://example.test/popup",
+          frameName: "auth",
+          features: "width=480,height=640",
+          disposition: "new-window",
+        });
+        expect(decision.action).toBe("allow");
+        expect(decision.createWindow).toBeTypeOf("function");
+        expect(decision.createWindow!({ webContents: popup } as never)).toBe(popup);
+      };
+      openPopup(source, child);
+      if (delayed) release();
+      if (nested) openPopup(child, grandchild);
+      // Downloads can begin before the deferred tab publication, or long
+      // after the original host observer has finished.
+      if (delayed) await new Promise<void>((resolve) => setImmediate(resolve));
+      const target = nested ? grandchild : child;
+      const download = { preventDefault: vi.fn() };
+      willDownloadListener.current!(download, {}, target);
+      expect(download.preventDefault).toHaveBeenCalledOnce();
+      release();
+
+      target.emit(
+        "before-mouse-event",
+        {},
+        {
+          type: "mouseDown",
+          button: "left",
+          x: 20,
+          y: 20,
+        },
+      );
+      const manualDownload = { preventDefault: vi.fn() };
+      willDownloadListener.current!(manualDownload, {}, target);
+      expect(manualDownload.preventDefault).not.toHaveBeenCalled();
+      // A popup opened after genuine human input must not inherit a spent
+      // automation epoch either.
+      if (!nested) {
+        webContentsViewConstructor.mockReturnValueOnce({
+          webContents: grandchild,
+          setBounds: vi.fn(),
+          setVisible: vi.fn(),
+          setBorderRadius: vi.fn(),
+        });
+        openPopup(child, grandchild);
+        const manualChildDownload = { preventDefault: vi.fn() };
+        willDownloadListener.current!(manualChildDownload, {}, grandchild);
+        expect(manualChildDownload.preventDefault).not.toHaveBeenCalled();
+      }
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("loads an adopted agent tab once and keeps its deferred downloads contained", async () => {
     const source = new FakeWebContents(97);
     const contents = new FakeWebContents(98);
     let popupUrl = "";

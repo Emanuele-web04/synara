@@ -792,6 +792,7 @@ export class DesktopBrowserManager {
     state.tabs.push(tab);
     runtime.popupOpenerTabId = opener.tabId;
     this.runtimes.set(runtime.key, runtime);
+    this.inheritAutomationDownloadProvenance(opener, runtime.key);
     this.clearTabSuspendTimer(opener.threadId, opener.tabId);
     const close = (event: Electron.Event) => {
       event.preventDefault();
@@ -881,6 +882,15 @@ export class DesktopBrowserManager {
       threadId: context.threadId,
       sourceTabId: context.tabId,
     });
+  }
+
+  private inheritAutomationDownloadProvenance(opener: OAuthPopupContext, childKey: string): void {
+    const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(
+      buildRuntimeKey(opener.threadId, opener.tabId),
+    );
+    if (provenance?.humanControlEpoch === this.getAutomationHumanControlEpoch(opener.threadId)) {
+      this.automationSideEffectProvenanceByRuntimeKey.set(childKey, { ...provenance });
+    }
   }
 
   private scheduleWindowOpenTab(input: {
@@ -1005,9 +1015,10 @@ export class DesktopBrowserManager {
     pending.tab.runtimeSurface = "native";
     const openedRuntimeKey = buildRuntimeKey(pending.threadId, pending.tab.id);
     this.automationRuntimeKeys.add(openedRuntimeKey);
-    const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(key);
-    if (provenance)
-      this.automationSideEffectProvenanceByRuntimeKey.set(openedRuntimeKey, { ...provenance });
+    this.inheritAutomationDownloadProvenance(
+      { threadId: pending.threadId, tabId: pending.sourceTabId },
+      openedRuntimeKey,
+    );
     syncThreadLastError(state);
     this.markThreadStateChanged(pending.threadId);
     // The host can now reconcile openedTabId from canonical state, but the

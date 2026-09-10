@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, type WebContentsView } from "electron";
 import { strict as assert } from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
@@ -19,6 +19,14 @@ void (async () => {
   }, 30_000);
   watchdog.unref();
   const server = createServer((request, response) => {
+    if (request.url === "/download") {
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="synthetic-popup.txt"',
+      });
+      response.end("synthetic popup download");
+      return;
+    }
     response.setHeader("Content-Type", "text/html");
     response.end(
       request.url === "/popup"
@@ -70,9 +78,15 @@ void (async () => {
         ),
       ),
     );
-    assert.ok(
-      window.contentView.children.some((view) => view.getBounds().x === -10000),
-      "Preview page is outside native hit testing",
+    assert.equal(
+      (window.contentView.children[0] as WebContentsView).webContents,
+      source.webContents,
+      "Preview page remains attached for capture",
+    );
+    assert.equal(
+      window.contentView.children[0]!.getVisible(),
+      false,
+      "Preview page is hidden from native hit testing",
     );
     manager.setPanelBounds({
       threadId,
@@ -84,6 +98,10 @@ void (async () => {
       source.webContents,
     );
     assert.equal(await manager.capturePreview({ threadId, tabId: source.tabId }), null);
+    const releaseDownloads = manager.trackAutomationDownload(
+      { threadId, tabId: source.tabId },
+      () => {},
+    );
     await source.webContents.executeJavaScript(
       'window.open("/popup", "auth", "width=480,height=640"); true;',
       true,
@@ -112,12 +130,31 @@ void (async () => {
       pixels.some((value) => value !== pixels[0]),
       "Popup renders nonblank pixels",
     );
+    releaseDownloads();
+    let downloadPrevented: boolean | undefined;
+    const observeDownload = (event: Electron.Event) => {
+      downloadPrevented = event.defaultPrevented;
+      // Contain the synthetic download even if the production policy regresses.
+      event.preventDefault();
+    };
+    child.session.once("will-download", observeDownload);
+    try {
+      await child.executeJavaScript('location.assign("/download"); true;');
+      await waitFor(() => downloadPrevented !== undefined);
+      assert.equal(
+        downloadPrevented,
+        true,
+        "Delayed agent popup download is prevented by the host",
+      );
+    } finally {
+      child.session.removeListener("will-download", observeDownload);
+    }
     await child.executeJavaScript("window.finish(); true;").catch(() => {});
     await waitFor(() => manager.getState({ threadId }).tabs.length === 1);
     await waitFor(() => source.webContents.executeJavaScript("window.completed"));
     assert.equal(manager.getState({ threadId }).activeTabId, source.tabId);
     console.log(
-      "PASS: embedded rendering, original opener, shared session, postMessage callback, close returns to opener, no external window",
+      "PASS: embedded rendering, original opener, shared session, delayed download denial, postMessage callback, close returns to opener, no external window",
     );
   } catch (error) {
     exitCode = 1;

@@ -68,21 +68,39 @@ void (async () => {
     assert.ok(partitioned.every((cookie) => cookie.partitionKey?.hasCrossSiteAncestor));
     console.log(JSON.stringify({ count: cookies.length, fields: Object.keys(cookies[0] ?? {}) }));
     stage = "initialize";
-    const restore = new BrowserSessionRestore(join(home, "restore"), backend, {
+    const keyStore = {
       // Mirror production's backend gate: on Linux the basic_text backend is
       // not secure, so this smoke must not report a secure-restore pass there.
       available: async () =>
         safeStorage.isEncryptionAvailable() &&
         (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),
-      encrypt: (value) => safeStorage.encryptString(value),
-      decrypt: (value) => safeStorage.decryptString(value),
-    });
+      encrypt: (value: string) => safeStorage.encryptString(value),
+      decrypt: (value: Buffer) => safeStorage.decryptString(value),
+    };
+    const restore = new BrowserSessionRestore(join(home, "restore"), backend, keyStore);
     await restore.initialize();
     stage = "remember";
     await restore.rememberImport(["example.test"]);
     stage = "shutdown";
     await restore.shutdown();
-    console.log("Session restoration native smoke passed");
+    stage = "replay";
+    await session
+      .fromPartition("persist:session-smoke")
+      .clearStorageData({ storages: ["cookies"] });
+    const restartedBackend = createCookieSessionBackend("persist:session-smoke");
+    assert.equal((await restartedBackend.read()).length, 0);
+    const restarted = new BrowserSessionRestore(join(home, "restore"), restartedBackend, keyStore);
+    await restarted.initialize();
+    const replayed = await restartedBackend.read();
+    const identity = (cookie: unknown) => {
+      const entry = cookie as { name: string; value: string; partitionKey?: unknown };
+      return JSON.stringify([entry.name, entry.value, entry.partitionKey]);
+    };
+    assert.deepEqual(replayed.map(identity).sort(), cookies.map(identity).sort());
+    await restarted.shutdown();
+    console.log(
+      "Session restoration native smoke passed: encrypted checkpoint and replay, including partitioned cookies",
+    );
     app.exit(0);
   } catch (error) {
     console.log(

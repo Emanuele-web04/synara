@@ -204,11 +204,10 @@ export class BrowserVault {
       try {
         await this.persist();
       } catch (error) {
-        // The credential committed but its provenance did not. A stored login
-        // without a source breaks ownership accounting after restart, so roll
-        // the record back instead of keeping a half-saved state.
-        await this.vault.ownerRemove(result.id).catch(() => {});
-        this.sources.delete(result.id);
+        // The password is already durably saved. Removing it is not rollback:
+        // an upsert may have replaced an existing login. Retain the password
+        // and in-memory provenance so a later successful write can persist it.
+        this.changed();
         throw error;
       }
     }

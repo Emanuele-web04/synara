@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,6 +23,58 @@ const origin = "https://login.example.test";
 const page = (url = origin) => ({ getURL: () => url, isDestroyed: () => false });
 
 describe("browser vault", () => {
+  it.each([false, true])(
+    "preserves saved passwords when provenance persistence fails (update=%s)",
+    async (update) => {
+      const { home, vault } = await fixture();
+      let restored: BrowserVault | undefined;
+      try {
+        await vault.configure({ agentUse: true, offerSave: true, autosave: false });
+        if (update) {
+          await vault.saveCaptured(
+            origin,
+            { username: "human", password: "old-synthetic" },
+            "user",
+          );
+        }
+        const originalId = (await vault.snapshot()).logins[0]?.id;
+        const preferencesPath = join(home, "preferences.json");
+        const preferences = await readFile(preferencesPath, "utf8");
+        await rm(preferencesPath);
+        await mkdir(preferencesPath);
+        await expect(
+          vault.saveCaptured(origin, { username: "human", password: "new-synthetic" }, "user"),
+        ).rejects.toThrow();
+        const snapshot = await vault.snapshot();
+        expect(snapshot.logins).toHaveLength(1);
+        const id = snapshot.logins[0]!.id;
+        if (update) expect(id).toBe(originalId);
+        expect((await vault.reveal({ id, password: master })).password).toBe("new-synthetic");
+
+        // Restore the last successfully written preferences, as after a
+        // transient filesystem failure. The encrypted record survives restart
+        // even if its first provenance write never reached disk.
+        await rm(preferencesPath, { recursive: true });
+        await writeFile(preferencesPath, preferences);
+        restored = new BrowserVault(home);
+        await restored.unlock(master);
+        expect((await restored.snapshot()).logins).toMatchObject([
+          { id, source: update ? "user" : "unknown" },
+        ]);
+        expect((await restored.reveal({ id, password: master })).password).toBe("new-synthetic");
+        restored.dispose();
+        restored = undefined;
+        await vault.saveCaptured(origin, { username: "human", password: "new-synthetic" }, "user");
+        restored = new BrowserVault(home);
+        await restored.unlock(master);
+        expect((await restored.snapshot()).logins).toMatchObject([{ id, source: "user" }]);
+      } finally {
+        vault.dispose();
+        restored?.dispose();
+      }
+    },
+  );
+
   it("does not enable saving or agent access after a failed settings write", async () => {
     const { home, vault } = await fixture();
     await vault.configure({ agentUse: false, offerSave: false, autosave: false });
